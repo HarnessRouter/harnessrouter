@@ -180,14 +180,14 @@ def test_a_continued_mimo_turn_after_an_edit_carries_the_edit(turn, monkeypatch)
     monkeypatch.setattr(server, "_opencode_has_session", lambda env, sid, share="": sid == "ses_1")
     turn("mimo", "Rule A.")
     turn("mimo", "Rule A.", resume="ses_1")
-    assert turn.handed == "next message"
+    assert turn.handed == '"next message"'          # run's quoted form of its message
     cmd = turn("mimo", "Rule B.", resume="ses_1")
     assert cmd[cmd.index("-s") + 1] == "ses_1"
     got = turn.handed
-    assert got.endswith("next message") and "Rule B." in got and "Rule A." not in got
+    assert got.endswith('next message"') and "Rule B." in got and "Rule A." not in got
     assert not any("Rule B." in a or "next message" in a for a in cmd), "both go on stdin"
     cmd = turn("mimo", "Rule C.", resume="ses_gone")
-    assert turn.handed == "next message", "a session the store does not hold starts fresh and reads the file"
+    assert turn.handed == '"next message"', "a session the store does not hold starts fresh and reads the file"
 
 
 def test_a_continued_dcode_turn_after_an_edit_carries_the_edit(turn, monkeypatch):

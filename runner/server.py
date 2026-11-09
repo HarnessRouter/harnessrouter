@@ -4371,6 +4371,7 @@ _TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr
 # _run_hermes_bg).
 _TURN_PROMPT: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_prompt", default=None)
 PROMPT_LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_launcher.py")
+PROMPT_LAUNCHER_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_launcher.mjs")
 PROMPT_ARG = "{hr:prompt}"   # prompt_launcher.py's placeholder for the file's text
 PROMPT_DIR = ".hr-prompt"    # in the session's tmp/
 _IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x400, 0x8000
@@ -4422,6 +4423,7 @@ def _prompt_handover(cwd: str, text: str, stdin: bool | str = False) -> str:
     name = f"prompt-{uuid.uuid4().hex}"
     path = os.path.join(cwd, "tmp", PROMPT_DIR, name)
     with _fs_as(uid):
+        made_tmp = not os.path.lexists(os.path.join(cwd, "tmp"))
         dfd = _prompt_folder(cwd, uid)
         try:
             fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
@@ -4439,6 +4441,7 @@ def _prompt_handover(cwd: str, text: str, stdin: bool | str = False) -> str:
             if stdin:
                 with _fs_as(uid):
                     os.unlink(name, dir_fd=dfd)
+                _prompt_folder_drop(cwd, uid, made_tmp)
             if held is None:          # a builder called on its own: nothing to hand it to
                 os.close(fd)
                 os.close(dfd)
@@ -4450,7 +4453,7 @@ def _prompt_handover(cwd: str, text: str, stdin: bool | str = False) -> str:
         os.close(dfd)
         raise
     _prompt_discard(held)     # one per turn
-    held.update(cwd=cwd, uid=uid, path=path, name=name, dfd=dfd, stdin=stdin, fd=fd)
+    held.update(cwd=cwd, uid=uid, path=path, name=name, dfd=dfd, stdin=stdin, fd=fd, made_tmp=made_tmp)
     if not stdin:
         _prompt_watch(held)
         held["fd"] = None
@@ -4484,6 +4487,23 @@ def _prompt_pipe(cwd: str, text: str) -> str:
     return ""
 
 
+def _prompt_folder_drop(cwd: str, uid: int | None, made_tmp: bool) -> None:
+    """Take the prompt folder away once it holds nothing, and tmp/ with it when the handover made it. A CLI
+    that shows the model its workspace tree (Qwen Code, Gemini CLI) lists what is there when it starts, and
+    the folder showed up in that tree (measured on recorded requests), where it was not before prompts were
+    handed over this way. Only an empty folder goes; as the session."""
+    if not cwd:
+        return
+    with _fs_as(uid):
+        try:
+            os.rmdir(os.path.join(cwd, "tmp", PROMPT_DIR))
+        except OSError:
+            return
+        if made_tmp:
+            with contextlib.suppress(OSError):
+                os.rmdir(os.path.join(cwd, "tmp"))
+
+
 def _prompt_watch(held: dict) -> None:
     """For a CLI handed its prompt file by path: remove the file as soon as the CLI has read it, at the first
     close that follows a read (inotify, on the file the descriptor names, so no path is looked up again).
@@ -4499,6 +4519,7 @@ def _prompt_watch(held: dict) -> None:
         return
     stop = threading.Event()
     name, dfd, uid = held["name"], held["dfd"], held["uid"]
+    cwd, made_tmp = held["cwd"], held.get("made_tmp", False)
 
     def run() -> None:
         seen_read = False
@@ -4519,6 +4540,7 @@ def _prompt_watch(held: dict) -> None:
                 if done:
                     with _fs_as(uid), contextlib.suppress(OSError):
                         os.unlink(name, dir_fd=dfd)
+                    _prompt_folder_drop(cwd, uid, made_tmp)
                     return
         finally:
             os.close(ifd)
@@ -4553,6 +4575,7 @@ def _prompt_discard(held: dict | None) -> None:
         if name:
             with _fs_as(held.get("uid")), contextlib.suppress(OSError):
                 os.unlink(name, dir_fd=dfd)
+            _prompt_folder_drop(held.get("cwd") or "", held.get("uid"), held.get("made_tmp", False))
         if not (watch and watch[1].is_alive()):       # never under a watcher still using it
             os.close(dfd)
     held.pop("path", None)
@@ -8945,6 +8968,13 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
     (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
+def _qwen_entry(env: dict) -> str:
+    """The script `qwen` runs, found on the turn's own PATH (the bin entry is a link to it), for
+    prompt_launcher.mjs to import; `qwen` itself when there is none to find."""
+    found = shutil.which("qwen", path=env.get("PATH") or os.environ.get("PATH"))
+    return os.path.realpath(found) if found else "qwen"
+
+
 def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                 tools_disabled: list[str] | None = None, own_memory_off: bool = False) -> list[str]:
@@ -8969,10 +8999,17 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_BASE_URL"] = auth.base_url
     _qwen_settings(home, mcp_servers, tools_disabled, own_memory_off=own_memory_off)
-    # The prompt is handed over on stdin, not on the command line (_prompt_handover): with stdin not a
-    # terminal, Qwen Code runs headless and takes stdin as its input.
-    _prompt_handover(cwd, prompt, stdin=True)
-    cmd = ["qwen", "-o", "stream-json", "-m", model,
+    # The prompt is handed over by file, not on the command line (_prompt_handover). Qwen Code takes a
+    # typed prompt only as -p TEXT, so the CLI is started through prompt_launcher.mjs, which sets its argv
+    # in-process from the file: the command line names the file, never its text, and the CLI stores the
+    # user's message exactly as -p's was. Both other ways in change what it stores or tells the model
+    # (measured on recorded requests): plain stdin is stored as `${stdin}\n\n`, a blank line after every
+    # message, and a stream-json user message turns its system prompt into an interactive host's, which
+    # invites questions a turn cannot answer. QWEN_CODE_NO_RELAUNCH keeps the CLI in this process: a
+    # relaunch would start a child with the in-process argv on its command line.
+    env["QWEN_CODE_NO_RELAUNCH"] = "1"
+    cmd = ["node", PROMPT_LAUNCHER_JS, _prompt_handover(cwd, prompt), _qwen_entry(env), "-p", PROMPT_ARG,
+           "-o", "stream-json", "-m", model,
            # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
            # without it every -r run dies "No auth type is selected"); fresh runs take it too for
            # one deterministic path.
@@ -10654,9 +10691,19 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
         print(f"[resume] opencode: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
     # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` folds piped
-    # stdin into its message.
-    _prompt_handover(cwd, prompt, stdin=True)
+    # stdin into its message, as it is. Its message from arguments is quoted (_opencode_typed), and that is
+    # the form every conversation before this one stored, so the text on stdin takes it too.
+    _prompt_handover(cwd, _opencode_typed(prompt), stdin=True)
     return cmd
+
+
+def _opencode_typed(prompt: str) -> str:
+    """The user's message as `run` builds it from its message arguments (one argument, here): an argument
+    with a space in it is wrapped in double quotes, its own double quotes escaped (opencode's and mimo's
+    run.ts, `includes(" ")`). Measured on recorded requests: on stdin the text is taken as it is, so the
+    model would read every message after this change without the quotes it read on every one before,
+    and a conversation restored from its checkpoint would mix the two."""
+    return f'"{prompt.replace(chr(34), chr(92) + chr(34))}"' if " " in prompt else prompt
 
 
 # ── MiMo Code (XiaomiMiMo/MiMo-Code, npm @mimo-ai/cli, binary `mimo`) ────────────────────────
@@ -10761,8 +10808,8 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         print(f"[resume] mimo: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
     # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` folds piped
-    # stdin into its message.
-    _prompt_handover(cwd, prompt, stdin=True)
+    # stdin into its message, as it is; in the quoted form its arguments make, as opencode's (_opencode_typed).
+    _prompt_handover(cwd, _opencode_typed(prompt), stdin=True)
     return cmd
 
 

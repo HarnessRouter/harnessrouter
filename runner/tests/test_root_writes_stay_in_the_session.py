@@ -484,7 +484,7 @@ if report["stdin"] or report["files"]:
     time.sleep(6)          # a turn: alive while its command line is read
 """
 _ON_PATH = ["claude", "codex", "pi", "omp", "qwen", "gemini", "cline", "opencode", "mimo", "kilo", "mcode", "goose",
-            "grok"]
+            "grok", "node"]
 _PROMPT_BASES = {  # base: (provider, auth)
     "claude": ("anthropic", {"api_key": "k-0123456789abcdef"}),
     "codex": ("openai", _KEYED), "pi": ("openai-api", _KEYED), "omp": ("openai-api", _KEYED),

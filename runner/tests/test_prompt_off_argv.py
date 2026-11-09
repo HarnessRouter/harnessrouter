@@ -9,6 +9,7 @@ turns for real, as the session, and reads their command lines as another uid.
 import json
 import os
 import pathlib
+import shutil
 import stat
 import subprocess
 import sys
@@ -57,9 +58,9 @@ def _file_named_in(cmd: list[str], d: str) -> pathlib.Path:
     return files[0]
 
 
-STDIN = ["claude", "codex", "pi", "omp", "qwen", "gemini", "opencode", "mimo", "kilo", "minimax", "docker-agent"]
+STDIN = ["claude", "codex", "pi", "omp", "gemini", "opencode", "mimo", "kilo", "minimax", "docker-agent"]
 PIPE = ["cline"]
-BY_PATH = ["grok", "goose", "vibe", "opensquilla"]
+BY_PATH = ["grok", "goose", "vibe", "opensquilla", "qwen"]
 
 
 def _folder_is_private(d: str) -> None:
@@ -76,8 +77,8 @@ def test_the_prompt_goes_on_stdin_and_nothing_of_it_stays_on_disk(backend):
     assert p.parent == pathlib.Path(d, "tmp", server.PROMPT_DIR)
     assert not p.exists(), "removed before the CLI starts: the CLI reads the open descriptor"
     assert stat.S_IMODE(os.fstat(held["fd"]).st_mode) == 0o600
-    _folder_is_private(d)
-    assert os.read(held["fd"], 1 << 16).decode() == MARK          # what the CLI reads, from the start
+    assert not pathlib.Path(d, "tmp", server.PROMPT_DIR).exists(), "the folder made for it goes with it"
+    assert MARK in os.read(held["fd"], 1 << 16).decode()          # what the CLI reads, from the start
     server._prompt_discard(held)
     assert held.get("fd") is None and held.get("dfd") is None
 
@@ -153,7 +154,9 @@ def test_the_flags_each_cli_reads_the_file_with():
              "goose": lambda c, p: c[c.index("-i") + 1] == p,
              "vibe": lambda c, p: c[c.index("--prompt-file") + 1] == p,
              "opensquilla": lambda c, p: c[1:5] == [server.PROMPT_LAUNCHER, p, "opensquilla.cli.main:app",
-                                                    server.OPENSQUILLA_BIN] and server.PROMPT_ARG in c}
+                                                    server.OPENSQUILLA_BIN] and server.PROMPT_ARG in c,
+             "qwen": lambda c, p: c[:3] == ["node", server.PROMPT_LAUNCHER_JS, p]
+                                  and c[c.index("-p") + 1] == server.PROMPT_ARG}
     for backend, ok in flags.items():
         cmd, held, d = _build(backend)
         assert ok(cmd, str(_file_named_in(cmd, d))), (backend, cmd)
@@ -172,7 +175,7 @@ def test_the_changed_instructions_travel_with_the_prompt(backend, monkeypatch):
         return
     assert not any("EDITED RULES 55e1" in a or MARK in a for a in cmd), cmd
     text = handed.text(held)
-    assert "EDITED RULES 55e1" in text and text.endswith(MARK), "the note leads the prompt, off the command line"
+    assert "EDITED RULES 55e1" in text and text.rstrip('"').endswith(MARK), "the note leads the prompt, off the command line"
     server._prompt_discard(held)
 
 
@@ -349,3 +352,83 @@ def test_the_stdin_flags_each_cli_needs():
     cmd, held, _ = _build("docker-agent")
     assert "--prompt-file" not in cmd and cmd[-1].endswith("/agent.yaml")    # the agent file, then no message
     server._prompt_discard(held)
+
+
+def test_a_tmp_folder_the_handover_made_goes_with_it_so_no_cli_lists_it(tmp_path):
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        server._prompt_handover(str(tmp_path), MARK, stdin=True)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    assert os.listdir(tmp_path) == []
+    server._prompt_discard(held)
+
+
+def test_a_tmp_folder_the_session_had_stays_and_only_the_prompt_folder_goes(tmp_path):
+    (tmp_path / "tmp" / "kept").mkdir(parents=True)
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        server._prompt_handover(str(tmp_path), MARK, stdin=True)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    assert sorted(os.listdir(tmp_path / "tmp")) == ["kept"]
+    server._prompt_discard(held)
+    assert sorted(os.listdir(tmp_path / "tmp")) == ["kept"]
+
+
+def test_what_each_cli_is_handed_is_the_message_it_stored_from_its_arguments():
+    """Measured on recorded requests, 0.40.2 against this: opencode and mimo store the message from their
+    arguments wrapped in quotes and stdin's as it is, so stdin gets the quoted form; Qwen Code stores plain
+    stdin with a blank line after it, and its stream-json input changes its system prompt, so it is given
+    -p in-process through prompt_launcher.mjs."""
+    for backend in ("opencode", "mimo"):
+        cmd, held, _ = _build(backend, prompt='say "hi" twice')
+        assert handed.text(held) == '"say \\"hi\\" twice"', backend
+        server._prompt_discard(held)
+        cmd, held, _ = _build(backend, prompt="one-word")
+        assert handed.text(held) == "one-word", backend           # no space: as it is, as from arguments
+        server._prompt_discard(held)
+    env: dict = {}
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        cmd = server._build_qwen("openai-api", KEY, server.BACKENDS["qwen"]["default_model"], MARK, tempfile.mkdtemp(), env)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    assert "--input-format" not in cmd and cmd[cmd.index("-p") + 1] == server.PROMPT_ARG
+    assert handed.text(held) == MARK                                  # -p's text, exactly, in-process
+    assert env["QWEN_CODE_NO_RELAUNCH"] == "1"                       # no child with that argv on its command line
+    server._prompt_discard(held)
+
+
+node = pytest.mark.skipif(not shutil.which("node"), reason="no node here")
+
+
+@node
+def test_the_node_launcher_runs_the_entry_script_with_the_prompt_in_its_own_argv(tmp_path):
+    entry = tmp_path / "fakecli.mjs"
+    entry.write_text("process.stdout.write(JSON.stringify(process.argv.slice(1)));\n")
+    prompt = tmp_path / "p.txt"
+    prompt.write_text(MARK + "\nsecond line")
+    out = subprocess.run(["node", server.PROMPT_LAUNCHER_JS, str(prompt), str(entry), "-p", server.PROMPT_ARG,
+                          "-o", "stream-json"], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == [str(entry), "-p", MARK + "\nsecond line", "-o", "stream-json"]
+    assert not prompt.exists(), "the launcher removes the file once it has read it"
+
+
+@node
+def test_the_node_launcher_names_the_file_and_never_its_text_on_its_command_line(tmp_path):
+    entry = tmp_path / "fakecli.mjs"
+    entry.write_text("import { readFileSync } from 'node:fs';\n"
+                     "process.stdout.write(readFileSync('/proc/self/cmdline', 'utf8'));\n")
+    prompt = tmp_path / "p.txt"
+    prompt.write_text(MARK)
+    if not os.path.exists("/proc/self/cmdline"):
+        pytest.skip("no /proc here")
+    out = subprocess.run(["node", server.PROMPT_LAUNCHER_JS, str(prompt), str(entry), "-p", server.PROMPT_ARG],
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert MARK not in out.stdout and server.PROMPT_ARG in out.stdout

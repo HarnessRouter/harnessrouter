@@ -99,7 +99,7 @@ def test_mimo_argv_is_opencodes_with_its_own_spellings():
     # NOT opencode's --auto / --session: the fork renamed both.
     assert "--auto" not in cmd
     # The prompt is handed over on stdin, from a file of the session's own, not on the command line.
-    assert "do it" not in cmd and _handed(d) == ["do it"]
+    assert "do it" not in cmd and _handed(d) == ['"do it"']    # quoted, as run quotes its arguments
     # Its own config env var and file name, so two backends in one workspace cannot collide.
     assert env["MIMOCODE_CONFIG"].endswith("/.harness/mimo.json")
     assert (pathlib.Path(d) / ".harness" / "mimo.json").is_file()

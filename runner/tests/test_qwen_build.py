@@ -7,6 +7,7 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import handed  # noqa: E402
 from server import Auth, _agent_doc_path, _build_qwen, _claude_passthrough, BACKENDS  # noqa: E402
+import server  # noqa: E402
 
 
 def _handed(d) -> list[str]:
@@ -26,8 +27,9 @@ def test_argv_is_headless_stream_json_with_explicit_auth_type():
     """--auth-type is load bearing: without it every -r run on 0.22.1 dies
     'No auth type is selected' — verified live, both directions."""
     cmd, d, _ = _argv()
-    assert cmd[:3] == ["qwen", "-o", "stream-json"]
-    assert "-p" not in cmd and "do it" not in cmd and _handed(d) == ["do it"]   # read on stdin, headless
+    # started through prompt_launcher.mjs, which gives it -p TEXT in-process from a file of the session's own
+    assert cmd[:2] == ["node", server.PROMPT_LAUNCHER_JS] and "do it" not in cmd
+    assert cmd[4:8] == ["-p", server.PROMPT_ARG, "-o", "stream-json"] and _handed(d) == ["do it"]
     assert "--auth-type" in cmd and "openai" in cmd
 
 

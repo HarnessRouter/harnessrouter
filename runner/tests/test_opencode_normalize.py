@@ -204,7 +204,7 @@ def test_argv_is_a_headless_json_run():
     cmd, d, _ = _argv()
     assert cmd[:4] == ["opencode", "run", "--format", "json"]
     assert "--model" in cmd and "hr/gpt-5.4" in cmd
-    assert "do it" not in cmd and _handed(d) == ["do it"]     # read on stdin, from the session's own file
+    assert "do it" not in cmd and _handed(d) == ['"do it"']   # on stdin, in the quoted form run gives its arguments
 
 
 def test_argv_disables_plugins():
@@ -242,7 +242,7 @@ def test_resume_is_dropped_when_the_session_is_not_in_this_workspace():
     auth = Auth(api_key="sk-test", base_url="https://relay.example/v1")
     cmd = handed.build(_build_opencode, "openai-api", auth, "gpt-5.4", "do it", d, env, resume_session_id="ses_gone")
     assert "--session" not in cmd and "ses_gone" not in cmd
-    assert _handed(d) == ["do it"]   # the turn still runs
+    assert _handed(d) == ['"do it"']   # the turn still runs
 
 
 def test_resume_finds_a_session_still_sitting_in_the_write_ahead_log():
