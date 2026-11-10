@@ -23961,24 +23961,28 @@ async def _memories_gone_with(org: str, hid: str, principals: list[str], budget:
         for m in due:
             mid = str(m["id"])
             if not ({mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid, strict=True))} & held):
-                go.append(mid)
+                go.append(m)
     except Exception as e:  # noqa: BLE001 - nothing is deleted on a read that couldn't answer
         print(f"[memories] {hid}: no memory was deleted with it, a read couldn't answer: {type(e).__name__}", flush=True)
         return _MEMORY_UNCHECKED
     gone = 0
-    for i, mid in enumerate(go):
+    for i, m in enumerate(go):
+        mid = str(m["id"])
         if budget.get("n", 0) >= _MEMORY_SWEEP_CAP:
             print(f"[memories] the sweep stopped at {_MEMORY_SWEEP_CAP} memories: {len(go) - i} more of {org}'s "
                   f"wait for the next sweep, and {hid} with them", flush=True)
             return _MEMORY_CAPPED
-        gm = await memory_plane._load(org, mid)
-        if gm is None:
-            continue                                  # went with one deleted before it in this sweep
         try:
-            # as the deleter, where the memory is: the agent's own workspace, which they deleted it from
-            below = await memory_plane.delete(org, mid, memory_plane.placed(principals, memory_plane.place_of(gm)))
+            if await memory_plane._load(org, mid) is None:
+                continue                              # went with one deleted before it in this sweep
+            # as the deleter, in the memory's own workspace as the strict read above found it (the agent's): the
+            # workspace is never a second read, so a read that fails can't make it "another workspace's"
+            below = await memory_plane.delete(org, mid, memory_plane.placed(principals, memory_plane.place_of(m)))
         except memory_plane.MemoryError:
             continue                                  # theirs to delete, not this deleter's; or a read below it failed
+        except Exception as e:  # noqa: BLE001 - nothing more is deleted on a read that couldn't answer; the agent waits
+            print(f"[memories] {hid}: {mid} was not deleted with it, a read couldn't answer: {type(e).__name__}", flush=True)
+            return _MEMORY_UNCHECKED
         budget["n"] = budget.get("n", 0) + 1
         gone += 1
         print(f"[memories] {hid}: {mid} went with it ({len(below)} with the people's memories below)", flush=True)
