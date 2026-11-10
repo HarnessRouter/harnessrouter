@@ -435,8 +435,9 @@ install_base() {
 # chowns. Everything else runs as the base's own install uid: a package manager filling a tree (npm ci
 # and every tarball it extracts, npm rebuild and the one install script it runs, an override's npm
 # install with its scripts, pip and any sdist it builds), tar unpacking a release archive (iu_untar),
-# and every check that runs an installed file. One step still runs as root, System One's `playwright
-# install-deps` (it calls apt); scripts/check-install-pins.py names it, and that list only shrinks.
+# and every check that runs an installed file. Nothing an install brought runs as root any more:
+# scripts/check-install-pins.py holds that, and its list of exceptions (ROOT_RUNS) is empty. The last
+# one, System One's `playwright install-deps`, is now apt with a list written here (chromium_libs).
 #
 # One uid per base (INSTALL_UID_BASE + its place in INSTALL_UID_ORDER, below the session uids), so a
 # package in one base cannot reach another base's tree, and the uid owns a directory only while it
@@ -954,11 +955,37 @@ export PLAYWRIGHT_BROWSERS_PATH="$TOOLS/ms-playwright"
 # none of its libraries (measured: libatk, libatspi, libXcomposite "not found", and every launch
 # died before CDP came up). They are installed per container, keyed on a marker in the container's
 # own filesystem: on the first install, and on every start that finds the venv already there.
+#
+# They are Debian's, by apt, from the list written here, not by `playwright install-deps`: that ran
+# the venv's driver as root, code an install brought (#623, step 3), to arrive at this same apt
+# command; apt runs only what Debian signed. The list is Playwright $SYSTEMONE_PLAYWRIGHT_PIN's own
+# for this image's Debian 13 (its nativeDeps table, `debian13-x64`, the `tools` and `chromium`
+# packages; `debian13-arm64` is the same list), the packages `install-deps chromium` asks apt for.
+# scripts/check-chromium-libs.py holds the list to the pinned Playwright's: in the tests job against
+# Playwright's source at that tag, and in the release gate against the driver the venv installed, on
+# the Debian the container runs, where it also reads that every package is installed. A Playwright
+# bump that changes its list fails there until this list moves with it.
+CHROMIUM_LIBS=(
+  # tools
+  xvfb fonts-noto-color-emoji fonts-unifont libfontconfig1 libfreetype6 xfonts-scalable fonts-liberation
+  fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf fonts-freefont-ttf
+  # chromium
+  libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3
+  libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1
+  libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
+)
 CHROMIUM_LIBS_MARK=/var/lib/harnessrouter/chromium-libs
 chromium_libs() {
   [ -f "$CHROMIUM_LIBS_MARK" ] && return 0
-  echo "[harnessrouter]   installing the system libraries Chromium links against (this container)…"
-  "$TOOLS/systemone-venv/bin/playwright" install-deps chromium >/dev/null 2>&1 || return 1
+  echo "[harnessrouter]   installing the system libraries Chromium links against (this container: ${#CHROMIUM_LIBS[@]} Debian packages, by apt)…"
+  # apt's lists are fetched for this and removed after, as the image's own apt steps do; its output
+  # is shown only when it fails, the way try_install shows an installer's.
+  if ! cl_out="$(DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 \
+                 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${CHROMIUM_LIBS[@]}" 2>&1)"; then
+    printf '%s\n' "$cl_out" | tail -n 8 | sed 's/^/[harnessrouter]     /'
+    rm -rf /var/lib/apt/lists/*; return 1
+  fi
+  rm -rf /var/lib/apt/lists/*
   mkdir -p "$(dirname "$CHROMIUM_LIBS_MARK")" && : > "$CHROMIUM_LIBS_MARK"
 }
 install_systemone() {
