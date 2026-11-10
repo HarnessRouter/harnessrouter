@@ -15880,6 +15880,31 @@ _turns_lock = threading.Lock()
 _TURN_MARK = "HR_TURN_ID"
 
 
+# The tmux socket directory openhands' driver makes for a turn (tempfile.mkdtemp(prefix="oh", dir="/tmp"),
+# runner/openhands_driver.py): /tmp/oh and mkdtemp's letters, digits and underscores, and nothing else.
+_TURN_TMUX_DIR = re.compile(r"/tmp/oh[a-z0-9_]+")
+
+
+def _remove_turn_tmux_dir(d: str, uid: int) -> bool:
+    """Remove a tmux socket directory a turn's process named in its TMUX_TMPDIR. The value comes from the
+    session's own process, so it is treated as the session's input: the RAW value must be exactly the
+    shape the driver makes (judged before any normalising), it must be a real directory (not a link)
+    owned by the uid of the process that named it, and the removal runs as that uid (_fs_as), so it can
+    take nothing the process could not have removed itself. rmtree walks by descriptor and refuses a
+    directory swapped for a link under it."""
+    if not _TURN_TMUX_DIR.fullmatch(d):
+        return False
+    try:
+        st = os.lstat(d)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+        return False
+    with _fs_as(uid):
+        shutil.rmtree(d, ignore_errors=True)
+    return True
+
+
 def _sweep_turn_processes(turn_id: str) -> int:
     """Kill every process still carrying this turn's marker, and remove the tmux socket
     directory such a process names. The group kill misses a process that put itself in a new
@@ -15892,28 +15917,28 @@ def _sweep_turn_processes(turn_id: str) -> int:
         return 0
     want = f"{_TURN_MARK}={turn_id}".encode()
     killed = 0
-    dirs: set[str] = set()
+    dirs: set[tuple[str, int]] = set()          # (the directory a process named, that process's uid)
     me = os.getpid()
     for entry in os.listdir("/proc") if os.path.isdir("/proc") else []:
         if not entry.isdigit() or int(entry) == me:
             continue
         try:
             environ = pathlib.Path("/proc", entry, "environ").read_bytes()
+            uid = os.stat(f"/proc/{entry}").st_uid
         except OSError:
             continue
         if want not in environ.split(b"\0"):
             continue
         for kv in environ.split(b"\0"):
             if kv.startswith(b"TMUX_TMPDIR="):
-                dirs.add(kv.split(b"=", 1)[1].decode(errors="replace"))
+                dirs.add((kv.split(b"=", 1)[1].decode(errors="replace"), uid))
         try:
             os.kill(int(entry), signal.SIGKILL)
             killed += 1
         except OSError:
             pass
-    for d in dirs:
-        if d.startswith("/tmp/oh"):
-            shutil.rmtree(d, ignore_errors=True)
+    for d, uid in dirs:
+        _remove_turn_tmux_dir(d, uid)
     return killed
 
 
