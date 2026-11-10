@@ -1,4 +1,4 @@
-// BFF proxy to the AgentStudio Workflow Engine (ACA).
+// BFF proxy to the engine service.
 //
 // Same-origin /api/engine/* from the browser -> the engine, server-side. The
 // engine URL (and any future internal key) stay on the server. Used by the auth

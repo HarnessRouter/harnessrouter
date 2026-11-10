@@ -40,10 +40,35 @@ each Python package's beside it in site-packages.
     highlight.js         BSD-3-Clause
     Mermaid              MIT
     Apache ECharts       Apache-2.0
+    Tiptap, ProseMirror  MIT
+    Yjs, y-prosemirror, y-protocols, lib0
+                         MIT
+    Cytoscape.js, cytoscape-edgehandles
+                         MIT
+    d3-force             ISC
+    Lucide               ISC
+    marked, Turndown, node-diff3, zeed-dom
+                         MIT
+    domino               BSD-2-Clause
 
   Operating system
     The image is built on Debian. Its system packages, some under copyleft licenses such as the
     GPL and LGPL, are unchanged and carry their own terms in /usr/share/doc.
+
+MEMORY VENDORS — NOT REDISTRIBUTED
+----------------------------------
+deploy/memories runs these as separate services, from their own published images or source, when
+you choose to. None of their code is in this repository or in the image. HarnessRouter reaches
+them over the network.
+
+  Mem0                       Apache-2.0
+  Graphiti (graphiti-core)   Apache-2.0
+  Hindsight                  MIT
+  ReMe                       Apache-2.0
+  pgvector, PostgreSQL       PostgreSQL License
+  LadybugDB (ladybug)        MIT, "Copyright (c) 2022-2025 Kùzu Inc., Copyright (c) 2025-2026 Ladybug
+                             Memory Inc." Graphiti's store in that compose file. Its full text
+                             extension (MIT) is fetched when that image is built.
 
 AGENT RUNTIMES — NOT REDISTRIBUTED
 ----------------------------------
@@ -96,6 +121,11 @@ run, by you, under their own licenses:
                               3.14.9, pinned by the sha256 that release publishes. Installed
                               beside dcode's venv only, because deepagents-code 0.2 requires
                               Python 3.14; the rest of the image keeps its own interpreter.
+  Roder (roder)               MIT (RoderAI/roder; the 0.4.8 release archive from its GitHub
+                              releases, tag roder/v0.4.8, pinned by version and by the digests
+                              committed in docker/entrypoint.sh). Opt-in: installed only when
+                              HR_BACKENDS names it. No mark of its own is redistributed: the
+                              console falls back to its generic glyph.
 
 Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
 public image; hermes-agent's publisher declared no license before 0.19.0. Installing the

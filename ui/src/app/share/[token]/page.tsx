@@ -3,14 +3,17 @@
 // the gateway serves it only while sharing is enabled. Shows the conversation (user/assistant
 // turns, markdown-rendered) and every workspace artifact, files open inline via the public
 // share file route, so html pages render in the browser with their relative assets loading.
+// A reply's link to a file of the task opens that file the same way (#594).
 import '@/app/revamp.css';
 import 'iconify-icon';   // registers the web component, this page renders outside the app Shell
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { keepSandbox } from '@/components/hrui/setup/TaskThread';
 import { minutesAndSeconds } from '@/lib/duration';
+import { isSandboxHref, pathSegments, replyFilePath } from '@/lib/reply-links';
 
 interface ShareMeta { session_id?: string; title?: string; status?: string; model?: string;
   backend?: string; harness_id?: string; harness_name?: string; event_count?: number; elapsed?: number; finished_at?: number }
@@ -73,14 +76,29 @@ export default function SharePage() {
     return () => { alive = false; };
   }, [token, turnsTry]);
 
-  // Canonical artifact address: /{harness}/{session}/workspace/{path} (single cached
-  // shared-flag check server-side). Token route stays as the fallback while meta loads.
-  const fileUrl = useMemo(() => (path: string) => {
-    const enc = path.split('/').map(encodeURIComponent).join('/');
-    if (meta?.harness_id && meta?.session_id)
-      return `/${encodeURIComponent(meta.harness_id)}/${encodeURIComponent(meta.session_id)}/workspace/${enc}`;
-    return `/api/share/${encodeURIComponent(token)}/f/${enc}`;
-  }, [token, meta]);
+  // Every file opens through this link's own file route: the token is what the server checks, so
+  // a link-holder reads what the share shows and nothing more. It used to move to the task's file
+  // address, /{harness}/{session}/workspace/{path}, once the meta loaded; a self-hosted box asks for
+  // its sign-in at that address, so anyone without one was sent to a sign-in page instead of the file.
+  const fileUrl = useMemo(() => (path: string) => `/api/share/${encodeURIComponent(token)}/f/${pathSegments(path)}`, [token]);
+  // A reply's links to the task's own files (lib/reply-links) open them here too, in a new tab; a name
+  // the task did not make is plain text. Before, they resolved against this page's own address, as if
+  // the file's name were a share link, and opened a page saying the shared Task is unavailable.
+  const made = useMemo(() => {
+    const out = new Set<string>();
+    for (const f of files || []) if (f.path) out.add(f.path);
+    for (const t of turns || []) for (const f of t.files || []) if (f.filename) out.add(f.filename);
+    return Array.from(out);
+  }, [files, turns]);
+  const replyParts = useMemo<Components>(() => ({
+    a: ({ href, title, children }) => {
+      const path = replyFilePath(href, made);
+      if (path === '') return <>{children}</>;
+      if (path) return <a href={fileUrl(path)} target="_blank" rel="noreferrer">{children}</a>;
+      if (href && isSandboxHref(href)) return <>{children}</>;
+      return <a href={href} title={title}>{children}</a>;
+    },
+  }), [made, fileUrl]);
 
   if (metaFailed && !meta) {
     return (
@@ -135,7 +153,7 @@ export default function SharePage() {
               {t.user && <div className="share-user"><div className="share-user-bubble">{t.user}</div></div>}
               {t.assistant && (
                 <div className="share-asst">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{t.assistant}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={keepSandbox} components={replyParts}>{t.assistant}</ReactMarkdown>
                 </div>
               )}
             </div>

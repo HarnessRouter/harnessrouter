@@ -18,6 +18,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
 import { relayContentSecurityPolicy } from '@/lib/public-artifact-response';
+import { oddSegment } from '@/lib/relay-path';
 
 // A header value is bytes, not text: `Headers.set` throws a TypeError the moment a filename
 // carries a Chinese character or an emoji, and the download dies with it. RFC 6266 is the way
@@ -64,7 +65,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ sid: string
   const { sid, path } = await ctx.params;
   // Next has already URL-decoded each segment; rejoin to the path the agent wrote.
   const wanted = (path || []).join('/');
-  if (!sid || !wanted) return new NextResponse('Not found', { status: 404 });
+  // The session id goes into the gateway URL below, where fetch() would resolve a '..' in it: every
+  // segment is checked by the API proxy's rule (lib/relay-path), and a session id is a name, never a
+  // path. A refusal is the same 404 as a file that is not there, before anything is fetched.
+  if (!sid || !wanted || oddSegment(sid) || sid.includes('/') || (path || []).some(oddSegment)) {
+    return new NextResponse('Not found', { status: 404 });
+  }
 
   const headers = gwHeaders(req);
   const listed = await fetch(`${GATEWAY}/v1/sessions/${encodeURIComponent(sid)}/files`,

@@ -278,7 +278,7 @@ def test_an_adopted_turn_says_it_too_and_keeps_it_on_the_record(monkeypatch):
         order.append("collect")
         return [dict(big)]
 
-    async def checkpoint(sid, rec):
+    async def checkpoint(sid, rec, *, response_id=""):
         order.append("save")
         rec["checkpointed"] = True
     stored: dict = {}

@@ -1,8 +1,8 @@
 /** @jest-environment jsdom */
 // Extensions › Environments' list and its New environment: a row is what the service lists (where tasks
-// find it, who uses it, its files, its declared packages, its state); New environment from a git
-// repository makes it, imports the repository at the branch or tag given, builds it and opens it on
-// Builds; one from nothing opens on Files. The service is lib/environments, answered with its shapes.
+// find it, who uses it, its files, its declared packages, its state); New environment asks a name and a
+// description and nothing else (Richard, 11-09), makes it empty, and opens it on Files, where adding
+// files comes first. The service is lib/environments, answered with its shapes.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Environment } from '@/lib/environments';
@@ -40,8 +40,8 @@ const flush = async () => { for (let i = 0; i < 12; i++) await act(async () => {
 const button = (text: string) => Array.from(document.querySelectorAll('button')).find((b) => b.textContent === text) as HTMLButtonElement | undefined;
 async function click(b: HTMLElement | undefined) { if (!b) throw new Error('no such button'); await act(async () => { b.click(); }); await flush(); }
 async function typeIn(id: string, value: string) {
-  const input = document.getElementById(id) as HTMLInputElement;
-  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+  const input = document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement;
+  const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')!.set!;
   await act(async () => { set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
 }
 async function render(envs: Environment[]) {
@@ -96,71 +96,89 @@ it('says nothing under a ready state unless a newer build failed', async () => {
   expect(el.querySelector('.eo-c-st')?.textContent).toBe('Ready');
 });
 
-it('makes one from a git repository, imports it at the branch given, builds it and opens it on Builds', async () => {
-  const made = ENV({ id: 'henv_9', name: 'site', mount: '/env/site', status: 'empty', version: null, latestVersion: null, files: { count: 0, bytes: 0 }, declared: { pip: [], npm: [], apt: [] }, build: null });
-  m.createEnvironment.mockResolvedValue(made);
-  m.importEnvironmentGit.mockResolvedValue({ written: 40, count: 40, bytes: 1000 });
-  m.buildEnvironment.mockResolvedValue({ version: 1, status: 'building' });
-  m.getEnvironment.mockResolvedValue({ ...made, status: 'building', latestVersion: 1, files: { count: 40, bytes: 1000 }, build: { version: 1, status: 'building' } });
-  const reload = await render([ENV()]);
-  await click(button('New environment'));
 
-  await click(button('Create environment'));
-  expect(document.querySelector('.eo-new .eo-msg')?.textContent).toBe('Give the environment a name.');
-  await typeIn('eonName', 'Docs-Repo');
-  await click(button('Create environment'));
-  expect(document.querySelector('.eo-new .eo-msg')?.textContent).toBe('“Docs-Repo” is already taken. Use another name.');
-  await typeIn('eonName', 'site');
-  await typeIn('eonUrl', 'not a repo');
-  await click(button('Create environment'));
-  expect(document.querySelector('.eo-new .eo-msg')?.textContent).toBe('Paste a git repository address, like https://github.com/your-org/project.');
-  expect(m.createEnvironment).not.toHaveBeenCalled();
+describe('New environment', () => {
+  const dialog = () => document.querySelector('.eo-create') as HTMLElement | null;
+  const MADE = () => ENV({ id: 'henv_9', name: 'site', slug: 'site', description: 'Docs site', mount: '/env/site', status: 'empty', version: null, latestVersion: null,
+    files: { count: 0, bytes: 0 }, declared: { pip: [], npm: [], apt: [] }, build: null });
 
-  await typeIn('eonUrl', 'github.com/acme/site');
-  await typeIn('eonRef', 'v2');
-  await click(button('Create environment'));
-  expect(m.createEnvironment).toHaveBeenCalledWith({ name: 'site', description: '', entry: '' });
-  expect(m.importEnvironmentGit).toHaveBeenCalledWith('henv_9', 'https://github.com/acme/site', 'v2', false);
-  expect(m.buildEnvironment).toHaveBeenCalledWith('henv_9');
-  expect(reload).toHaveBeenCalled();
-  expect(document.querySelector('.eo-new')).toBeNull();
-  expect(document.querySelector('.eo-tabs [aria-selected="true"]')?.textContent).toContain('Builds');
-  expect(window.location.search).toBe('?tab=envs&env=henv_9');
-});
+  it('asks a name and a description, each under its label on its own row, and nothing else', async () => {
+    await render([ENV()]);
+    await click(button('New environment'));
+    const d = dialog() as HTMLElement;
+    expect(d.getAttribute('role')).toBe('dialog');
+    // the title row holds the title and the close button only
+    const top = d.querySelector('.sheet-top') as HTMLElement;
+    expect(top.querySelector('h3')?.textContent).toBe('New environment');
+    expect(Array.from(top.querySelectorAll('button')).map((b) => b.getAttribute('aria-label'))).toEqual(['Close']);
+    expect(top.querySelector('input, textarea, select')).toBeNull();
+    // two fields, stacked, each a label above its field
+    expect(Array.from(d.querySelectorAll('input, textarea, select')).map((f) => f.id)).toEqual(['eonName', 'eonDesc']);
+    const rows = Array.from(d.querySelectorAll(':scope > .set-f'));
+    expect(rows.map((r) => r.firstElementChild?.tagName)).toEqual(['LABEL', 'LABEL']);
+    expect(rows.map((r) => r.firstElementChild?.textContent)).toEqual(['Name', 'Description optional']);
+    expect(rows[1].querySelector('textarea')?.getAttribute('rows')).toBe('3');
+    // none of what it used to ask before the environment existed
+    for (const gone of ['Start from', 'Git repository', 'Archive', 'Folder', 'Nothing yet', 'Repository address', 'Branch or tag', 'How it is run']) {
+      expect(d.textContent).not.toContain(gone);
+    }
+    expect(d.querySelector('[role="radiogroup"], details, input[type="file"]')).toBeNull();
+    // Cancel, then the primary action
+    expect(Array.from(d.querySelectorAll('.sheet-actions button')).map((b) => b.textContent)).toEqual(['Cancel', 'Create environment']);
+    await click(button('Cancel'));
+    expect(dialog()).toBeNull();
+  });
 
-it('opens one made from nothing on Files, where the project goes in', async () => {
-  const made = ENV({ id: 'henv_8', name: 'blank', status: 'empty', version: null, latestVersion: null, files: { count: 0, bytes: 0 }, declared: { pip: [], npm: [], apt: [] }, build: null });
-  m.createEnvironment.mockResolvedValue(made);
-  m.getEnvironment.mockResolvedValue(made);
-  await render([]);
-  await click(button('New environment'));
-  await typeIn('eonName', 'blank');
-  await click(button('Nothing yet'));
-  await click(button('Create environment'));
-  expect(m.importEnvironmentGit).not.toHaveBeenCalled();
-  expect(m.buildEnvironment).not.toHaveBeenCalled();
-  expect(document.querySelector('.eo-nofiles')?.textContent).toBe('No files yet. Import a project');
-  expect(button('Build')).toBeUndefined();                           // nothing to build until files are in: not offered
-});
+  it('refuses a missing or taken name under the field, without asking the service', async () => {
+    await render([ENV()]);
+    await click(button('New environment'));
+    await click(button('Create environment'));
+    expect(document.getElementById('eonErr')?.textContent).toBe('Give the environment a name.');
+    expect(document.getElementById('eonName')?.getAttribute('aria-invalid')).toBe('true');
+    await typeIn('eonName', 'Docs-Repo');
+    expect(document.getElementById('eonErr')).toBeNull();               // typing clears it
+    await click(button('Create environment'));
+    expect(document.getElementById('eonErr')?.textContent).toBe('“Docs-Repo” is already taken. Use another name.');
+    expect(m.createEnvironment).not.toHaveBeenCalled();
+  });
 
-it('makes one from a folder with every file in it, its own name dropped, then builds it', async () => {
-  const made = ENV({ id: 'henv_7', name: 'proj', status: 'empty', version: null, latestVersion: null, files: { count: 0, bytes: 0 }, declared: { pip: [], npm: [], apt: [] }, build: null });
-  m.createEnvironment.mockResolvedValue(made);
-  m.writeEnvironmentFile.mockResolvedValue({});
-  m.buildEnvironment.mockResolvedValue({ version: 1, status: 'building' });
-  m.getEnvironment.mockResolvedValue({ ...made, status: 'building', latestVersion: 1, build: { version: 1, status: 'building' } });
-  await render([]);
-  await click(button('New environment'));
-  await typeIn('eonName', 'proj');
-  await click(button('Folder'));
-  expect(document.querySelector('.eo-new')?.textContent).not.toContain('node_modules');
-  const input = document.querySelector('.eo-new input[webkitdirectory]') as HTMLInputElement;
-  const files = ['proj/run.py', 'proj/node_modules/x/index.js', 'proj/.git/HEAD', 'proj/.venv/bin/python']
-    .map((p) => Object.defineProperty(new File(['x'], p.split('/').pop() as string), 'webkitRelativePath', { value: p }));
-  Object.defineProperty(input, 'files', { value: files, configurable: true });
-  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
-  expect(document.querySelector('.eo-pick .set-help')?.textContent).toBe('proj · 4 files');
-  await click(button('Create environment'));
-  expect(m.writeEnvironmentFile.mock.calls.map((c) => c[1])).toEqual(['run.py', 'node_modules/x/index.js', '.git/HEAD', '.venv/bin/python']);
-  expect(m.buildEnvironment).toHaveBeenCalledWith('henv_7');
+  it('makes it empty from the name and description, then opens it on Files, adding files first', async () => {
+    const made = MADE();
+    m.createEnvironment.mockResolvedValue(made);
+    m.getEnvironment.mockResolvedValue(made);
+    const reload = await render([ENV()]);
+    await click(button('New environment'));
+    await typeIn('eonName', '  site ');
+    await typeIn('eonDesc', ' Docs site ');
+    await click(button('Create environment'));
+    expect(m.createEnvironment).toHaveBeenCalledTimes(1);
+    expect(m.createEnvironment).toHaveBeenCalledWith({ name: 'site', description: 'Docs site' });
+    // nothing else is done to it: no files, no build
+    expect(m.importEnvironmentGit).not.toHaveBeenCalled();
+    expect(m.importEnvironmentArchive).not.toHaveBeenCalled();
+    expect(m.writeEnvironmentFile).not.toHaveBeenCalled();
+    expect(m.buildEnvironment).not.toHaveBeenCalled();
+    expect(reload).toHaveBeenCalled();
+    expect(dialog()).toBeNull();
+    // its own sheet, on Files, with Packages next
+    expect(window.location.search).toBe('?tab=envs&env=henv_9');
+    expect(document.getElementById('eoh')?.textContent).toBe('site');
+    expect(Array.from(document.querySelectorAll('.eo-tabs [role="tab"]')).slice(0, 2).map((t) => t.textContent)).toEqual(['Files0', 'Packages0']);
+    expect(document.querySelector('.eo-tabs [aria-selected="true"]')?.textContent).toContain('Files');
+    expect(document.querySelector('.eo-nofiles h4')?.textContent).toBe('Add files');
+    expect(Array.from(document.querySelectorAll('.eo-start-act button')).map((b) => b.textContent)).toEqual(['Upload files', 'Upload a folder']);
+    expect(button('Build')).toBeUndefined();                           // nothing to build until files are in: not offered
+  });
+
+  it('says the service’s refusal under the name and stays open', async () => {
+    m.createEnvironment.mockRejectedValue(Object.assign(new Error('An environment is already mounted'), { status: 409 }));
+    await render([]);
+    await click(button('New environment'));
+    await typeIn('eonName', 'site');
+    await click(button('Create environment'));
+    expect(document.getElementById('eonErr')?.textContent).toBe('An environment named like “site” already exists. Use another name.');
+    expect(dialog()).not.toBeNull();
+    expect(button('Create environment')?.disabled).toBe(false);
+    expect(window.location.search).toBe('?tab=envs');
+  });
 });

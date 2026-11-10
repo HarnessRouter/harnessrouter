@@ -104,6 +104,10 @@
         "session_sharing": {
           "type": "boolean"
         },
+        "session_branching": {
+          "type": "boolean",
+          "description": "A task with `branch: true` beside `previous_response_id` starts a new session from that\nresponse's committed files and transcript, leaving the original as it was. See Sessions §1.1.\nOptional at every class.\n"
+        },
         "idempotency": {
           "type": "boolean"
         },
@@ -774,6 +778,11 @@
             "null"
           ]
         },
+        "branch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Create a new session from the previous response's committed user files and transcript (Sessions §1.1), on a server that reports the session_branching capability. Only true opts in; null is the same as absent; true without previous_response_id, or any other non-boolean value, is 400 invalid_input (param branch)."
+        },
         "instructions": {
           "type": "string"
         },
@@ -921,6 +930,10 @@
           "properties": {
             "session_id": {
               "type": "string"
+            },
+            "branched_from": {
+              "type": "string",
+              "description": "The response id this task branched from (Sessions §1.1). Only on the response that branched, not on later responses in its session."
             },
             "environment": {
               "type": "string",
@@ -1812,6 +1825,27 @@
         "harness_id": {
           "type": "string"
         },
+        "branched_from": {
+          "type": "object",
+          "required": [
+            "response_id",
+            "session_id"
+          ],
+          "properties": {
+            "response_id": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "turn": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Where that response stood in its session, counting from 1 (Sessions §3)."
+            }
+          },
+          "additionalProperties": false
+        },
         "environment": {
           "type": "string",
           "description": "The environment the session's turns read",
@@ -1937,6 +1971,7 @@
             "harness_busy",
             "plugin_conflict",
             "idempotency_key_reused",
+            "branch_unavailable",
             "input_not_pending",
             "input_request_expired",
             "input_response_invalid",

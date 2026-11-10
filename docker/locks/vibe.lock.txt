@@ -35,10 +35,11 @@ cachetools==7.0.6 \
     --hash=sha256:4e94956cfdd3086f12042cdd29318f5ced3893014f7d0d059bf3ead3f85b7f8b \
     --hash=sha256:e5d524d36d65703a87243a26ff08ad84f73352adbeafb1cde81e207b456aaf24
     # via mistral-vibe
-certifi==2026.7.22 \
-    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
-    --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
+certifi==2026.10.19 \
+    --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
+    --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
     # via
+    #   --override docker/locks/vibe.overrides
     #   httpcore
     #   httpx
     #   mistral-vibe
@@ -483,10 +484,12 @@ markdownify==1.2.3 \
     --hash=sha256:1a176f05522c8a2cb1dd3ab9d307dcdadbed5c26ae717855bfc42b3b6d38d937 \
     --hash=sha256:a189a0bedfd14009030fde5f85bb6f77c56897cb839b5c25315dd7d4e3e290ba
     # via mistral-vibe
-mcp==1.28.1 \
-    --hash=sha256:2726bca5e7193f61c5dde8b12500a6de2d9acf6d1a1c0be9e8c2e706437991df \
-    --hash=sha256:d51e36a5f5644faea4f85ea649bfffa6bc6c26770d42798ad6a3de3d2ba69683
-    # via mistral-vibe
+mcp==1.30.0 \
+    --hash=sha256:445414625fce5c295faa505bb11bacece661ab6f4028d57c935db57820b7a3e4 \
+    --hash=sha256:666edb5009503e1047c9d60346a756f94b261f05cc2625f23d41c728ffc484d0
+    # via
+    #   --override docker/locks/vibe.overrides
+    #   mistral-vibe
 mdit-py-plugins==0.5.0 \
     --hash=sha256:07a08422fc1936a5d26d146759e9155ea466e842f5ab2f7d2266dd084c8dab1f \
     --hash=sha256:f4918cb50119f50446560513a8e311d574ff6aaed72606ddae6d35716fe809c6
@@ -539,7 +542,7 @@ mistral-vibe==3.0.2 \
     --hash=sha256:cb62be5743194f84a63d3e955afeeedd3e3741442fd19b118ec43ec532ddacd3 \
     --hash=sha256:da09a8a218a152e86ce7b853083b97e99b31f211cdd090c18f504542ff265c77 \
     --hash=sha256:e2713fb1d16ba7506a08e2c5e75cd267e1de9296726323a4a5423fd1681c2855
-    # via -r vibe.in
+    # via -r docker/locks/vibe.in
 mistralai==2.6.0 \
     --hash=sha256:4b7202b0cab84ea03f8ff4a933c8cfc615b3057520d9d76467c07aa23939dab2 \
     --hash=sha256:531a86292ad498fc0fcd6dfcd480a3f4db9e92f558e14ffb22172824831e3a6e

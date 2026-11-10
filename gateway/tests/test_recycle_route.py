@@ -34,7 +34,6 @@ def test_recycle_hydrates_without_probe_and_without_checkpoint(monkeypatch):
     monkeypatch.setattr(app, "_sandbox", sandbox)
     monkeypatch.setattr(app, "_hydrate_relay", relay)
     monkeypatch.setattr(app, "_checkpoint", checkpoint)
-    monkeypatch.setattr(app, "COLLAB_URL", "")
     out = asyncio.run(app.recycle_session_sandbox("hsess1"))
     assert calls == [("relay", "hsess1")]
     assert out["hydrated"] is True and out["hydrate"]["restored"] is True
@@ -69,7 +68,6 @@ def test_hydrate_probe_still_used_for_ordinary_turns(monkeypatch):
     monkeypatch.setattr(app, "_vertex_get", vertex_get)
     monkeypatch.setattr(app, "_sandbox", sandbox)
     monkeypatch.setattr(app, "_hydrate_relay", relay)
-    monkeypatch.setattr(app, "COLLAB_URL", "")
     rec = {}
     asyncio.run(app._hydrate("hsess1", rec))
     assert calls == [("probe", "abc123")] and rec["hydrated"] is True and rec["hydrate"]["skipped"] is True

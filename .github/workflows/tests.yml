@@ -38,6 +38,25 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/test-star-badge.py
 
+  # What a fresh volume installs at first start is pinned: no `releases/latest`, no npm or pip
+  # install without an exact version (or a hashed lock), no sums file fetched beside its asset, no
+  # curl | sh (#623). The self-test first, so a check that can no longer fail fails here.
+  install-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-check-install-pins.py
+      - run: python3 scripts/check-install-pins.py
+      - run: python3 scripts/test-install-env.py
+
+  # deploy/memories/up.sh, the parts that need no Docker: .env at mode 600, which container is
+  # HarnessRouter, and that the image never carries a .env from the engines' folder.
+  memories-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-memories-deploy.py
+
   gateway:
     runs-on: ubuntu-latest
     steps:
@@ -61,6 +80,8 @@ jobs:
       # the benchmark suite's rules are pinned by its tests; they read the gateway's vendor tables
       # from source (scripts/support-matrix/samemodel.py) and need nothing the gateway job lacks
       - run: python -m pytest scripts/benchmark -q
+      # the memories matrix runner against a memory server and an agent written in its own test
+      - run: python -m pytest scripts/support-matrix/memories -q
 
   runner:
     runs-on: ubuntu-latest
@@ -73,7 +94,7 @@ jobs:
           cache-dependency-path: runner/requirements.txt
       # httpx: the runner suite drives the app through FastAPI's TestClient, which needs it. The
       # runner itself does not, so it stays out of requirements.txt and lives with pytest here.
-      # The System One Harness is on the runner's venv in the image (docker/entrypoint.sh pins the tag);
+      # The System One Harness is on the runner's venv in the image (docker/entrypoint.sh pins the commit v0.4.0 named);
       # the driver's tests import it, and skip without it, so the suite installs the same pin.
       # CheetahClaws the same way: its driver tests run the pinned package against a stub endpoint
       # (they skip without it), and it resolves beside the runner's own pins (pip check is clean).
@@ -81,8 +102,29 @@ jobs:
       # and the driver's tests run it as a subprocess against a stub Managed API.
       # boto3 (botocore inside): the relay signs Bedrock calls itself, and its tests check every signature
       # against botocore's own for the same request; without it they skip.
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
+      # The tests that hold the runner's work in a session's tree to the session's own identity need root on
+      # Linux and skip anywhere else, so the step above skips them. This step runs that file as root, with the
+      # job's own python and packages. HR_REQUIRE_ROOT_TESTS=1 makes a run that is not root fail instead of
+      # skip, so this step can never quietly go back to skipping; -p no:cacheprovider leaves no root-owned
+      # cache in the checkout.
+      - run: sudo -E env "PATH=$PATH" HR_REQUIRE_ROOT_TESTS=1 python -m pytest runner/tests/test_root_writes_stay_in_the_session.py -q -rs -p no:cacheprovider
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            gateway/requirements.txt
+            runner/requirements.txt
+      # Real gateway + HTTP runner + Git, with a synthetic executable at the provider boundary.
+      - run: pip install -r gateway/requirements.txt -r runner/requirements.txt pytest pytest-asyncio httpx
+      - run: python -m pytest tests/integration -q
 
   conformance:
     runs-on: ubuntu-latest

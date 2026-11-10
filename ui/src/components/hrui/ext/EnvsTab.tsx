@@ -3,16 +3,15 @@
 // with the old console's whole environment experience in it (Richard, 10-18: "把之前原来那个版本的东西
 // 给弄过来 … 用新的设计 first principle"). The workspace's environments as the service lists them
 // (lib/environments.ts), one row each: its name and where tasks find it, the setups that use it, its
-// files, its declared packages per manager and its state. New environment starts from a git repository
-// (address and branch or tag), an archive, a folder, or nothing; once its files are in it is built,
-// so its packages are installed once. A row opens the environment's own sheet (EnvSheet: files,
+// files, its declared packages per manager and its state. New environment asks only a name and a
+// description (Richard, 11-09: "just give name and description"); it is made empty and opens on its own
+// sheet, where files and packages go in. A row opens the environment's own sheet (EnvSheet: files,
 // packages, builds and versions, details), and the address remembers it (?env=<id>). Remove first
 // takes it off every setup that reads it, as the design says, then removes it. An older console's
 // link to one environment (/environments/<id>) lands here with ?env=<id> and opens it.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  listEnvironments, createEnvironment, deleteEnvironment, importEnvironmentGit, importEnvironmentArchive, writeEnvironmentFile, buildEnvironment,
-  environmentHarnesses, fmtBytes, type Environment,
+  listEnvironments, createEnvironment, deleteEnvironment, importEnvironmentGit, importEnvironmentArchive, writeEnvironmentFile, buildEnvironment, environmentHarnesses, fmtBytes, type Environment,
 } from '@/lib/environments';
 import { getCustom, saveCustom, type CustomHarness } from '@/lib/harness';
 import { readSettled } from '@/lib/settle';
@@ -22,8 +21,9 @@ import { ConfirmSheet, Sheet, SheetTop } from '../Sheet';
 import { usedText, plural, PLUS, ReadFailed } from './shared';
 import { Skel, SkRows } from '../Skel';
 import { EnvSheet, type EnvTab, type EnvUser } from './EnvSheet';
-import { MANAGERS, folderFiles, gitUrl, limitOf, sayFail, statusOf, statusView, uploadSummary } from './envModel';
+import { MANAGERS, folderFiles, gitUrl, limitOf, uploadSummary, sayFail, statusOf, statusView } from './envModel';
 import './envs.css';
+import { Markup } from '../Markup';
 
 export interface EnvironmentsData { envs: Environment[] | null; failed: boolean; reload: () => Promise<void>; retry: () => void }
 
@@ -133,7 +133,7 @@ export function EnvsTab({ data, setups, reloadSetups }: {
                 return (
                   <div key={e.id} className="row eo-row">
                     <span className="t lib-t">
-                      <span className="lib-ic" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon(e.status === 'ready' || e.status === 'building' ? 'built' : 'empty', 'tool') }} />
+                      <Markup className="lib-ic" html={partIcon(e.status === 'ready' || e.status === 'building' ? 'built' : 'empty', 'tool')} />
                       <span className="eo-row-t">
                         <b><button type="button" className="eo-name" onClick={() => open(e.id)}>{e.name}</button></b>
                         <small className="sub2 mono">{e.mount}<span className="eo-narrow"> · {plural(e.files.count, 'file')} · {pkgLine(e)}</span></small>
@@ -153,12 +153,12 @@ export function EnvsTab({ data, setups, reloadSetups }: {
             </div>
           </div>
         ) : (
-          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'tool') }} /><span>暂无环境。</span></div>
+          <div className="empty-list es"><Markup className="es-art" html={partIcon('empty', 'tool')} /><span>No environments yet.</span></div>
         )}
 
       {creating ? (
         <NewEnvSheet taken={names.map((n) => n.name)} onClose={() => setCreating(false)}
-          onCreated={(e, tab, notice) => { setCreating(false); void reload(); open(e.id, tab, notice); }} />
+          onCreated={(e) => { setCreating(false); void reload(); open(e.id, 'files'); }} />
       ) : null}
 
       {opened ? (
@@ -180,8 +180,12 @@ export function EnvsTab({ data, setups, reloadSetups }: {
 
 // ── New environment ───────────────────────────────────────────────────────────────────────────────
 
+/** New environment: a name and, if the person wants, a description; nothing else (Richard, 11-09: "just give name
+ *  and description"). It is made empty and opens on its own sheet, on Files, where files and packages go in. The
+ *  product's own form sheet, as Add MCP server and Connect a plugin draw it: the title alone on its row, each field
+ *  under its label at full width, Cancel then the primary action; a bottom sheet on a phone. */
 type Src = 'git' | 'archive' | 'folder' | 'empty';
-const SRC: [Src, string][] = [['git', 'Git repository'], ['archive', 'Archive'], ['folder', 'Folder'], ['empty', 'Nothing yet']];
+const SRC: [Src, string][] = [['git', 'Git 仓库'], ['archive', '压缩包'], ['folder', '文件夹'], ['empty', '空环境']];
 
 export function NewEnvSheet({ taken, onClose, onCreated }: {
   taken: string[]; onClose: () => void;

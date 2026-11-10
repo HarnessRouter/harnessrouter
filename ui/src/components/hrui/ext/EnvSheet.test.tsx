@@ -230,6 +230,71 @@ describe('files', () => {
     expect(document.querySelector('.eo-files-pane > .eo-msg')?.textContent).toBe('5 files uploaded. Build to use them.');
   });
 
+  const filesInput = () => document.querySelector('input[type="file"][multiple]:not([webkitdirectory])') as HTMLInputElement;
+  const tools = () => Array.from(document.querySelectorAll('.eo-bar .eo-tool')).map((b) => b.textContent);
+
+  it('an empty one’s Files is adding files: upload files or a folder, with a new file, Packages and More options a click away', async () => {
+    env = ENV({ status: 'empty', version: null, latestVersion: null, files: { count: 0, bytes: 0 }, packages: [], declared: { pip: [], npm: [], apt: [] }, versions: [], build: null });
+    m.listEnvironmentFiles.mockResolvedValue({ entries: [], count: 0, bytes: 0 });
+    m.writeEnvironmentFile.mockResolvedValue({});
+    await open('files');
+    // the block is the whole tab: no bar, no import, nothing to find yet
+    expect(document.querySelector('.eo-bar')).toBeNull();
+    expect(document.getElementById('eoImp')).toBeNull();
+    expect(document.querySelector('.eo-nofiles h4')?.textContent).toBe('Add files');
+    expect(document.querySelector('.eo-nofiles p')?.textContent).toContain('requirements.txt');
+    expect(Array.from(document.querySelectorAll('.eo-start-act button')).map((b) => b.textContent)).toEqual(['Upload files', 'Upload a folder']);
+
+    // Upload files opens the file picker; what is picked is uploaded as it is
+    const pickFiles = jest.spyOn(filesInput(), 'click').mockImplementation(() => {});
+    const pickFolder = jest.spyOn(folderInput(), 'click').mockImplementation(() => {});
+    await click(button('Upload files'));
+    expect(pickFiles).toHaveBeenCalledTimes(1);
+    await click(button('Upload a folder'));
+    expect(pickFolder).toHaveBeenCalledTimes(1);
+    await act(async () => { pick(filesInput(), ['run.py', 'requirements.txt']); });
+    await flush();
+    expect(m.writeEnvironmentFile.mock.calls.map((c) => c[1])).toEqual(['run.py', 'requirements.txt']);
+    expect(document.querySelector('.eo-files-pane > .eo-msg')?.textContent).toBe('2 files uploaded. Build to use them.');
+  });
+
+  it('More options opens and closes the import from a git repository or an archive', async () => {
+    env = ENV({ status: 'empty', version: null, latestVersion: null, files: { count: 0, bytes: 0 }, packages: [], declared: { pip: [], npm: [], apt: [] }, versions: [], build: null });
+    m.listEnvironmentFiles.mockResolvedValue({ entries: [], count: 0, bytes: 0 });
+    await open('files');
+    const more = document.querySelector('.eo-nofiles [aria-expanded]') as HTMLButtonElement;
+    expect(more.textContent).toBe('More options');
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    await click(more);
+    const panel = document.getElementById('eoImp') as HTMLElement;
+    expect(Array.from(panel.querySelectorAll('[role="radio"]')).map((b) => b.textContent)).toEqual(['Git repository', 'Archive']);
+    // the bar comes with it, its More options open; closing it there brings Add files back
+    const barMore = document.querySelector('.eo-bar [aria-expanded]') as HTMLButtonElement;
+    expect(barMore.getAttribute('aria-expanded')).toBe('true');
+    expect(barMore.getAttribute('aria-controls')).toBe('eoImp');
+    await click(barMore);
+    expect(document.getElementById('eoImp')).toBeNull();
+    expect(document.querySelector('.eo-nofiles h4')?.textContent).toBe('Add files');
+
+    // Packages, from the same block
+    await click(button('Packages'));
+    expect(document.querySelector('.eo-tabs [aria-selected="true"]')?.textContent).toContain('Packages');
+  });
+
+  it('with files in, the bar puts the uploads first and keeps the import under More options', async () => {
+    m.importEnvironmentGit.mockResolvedValue({ written: 4, count: 6, bytes: 100 });
+    await open('files');
+    expect(tools()).toEqual(['Upload files', 'Upload a folder', 'New file', 'New folder', 'More options']);
+    expect(button('Import')).toBeUndefined();
+    expect(document.getElementById('eoImp')).toBeNull();
+    await click(Array.from(document.querySelectorAll('.eo-bar .eo-tool')).find((b) => b.textContent === 'More options') as HTMLButtonElement);
+    await typeIn(document.getElementById('eoGitU') as HTMLInputElement, 'github.com/acme/site');
+    await click(button('Import'));
+    expect(m.importEnvironmentGit).toHaveBeenCalledWith('henv_1', 'https://github.com/acme/site', '', false);
+    expect(document.getElementById('eoImp')).toBeNull();
+    expect(document.querySelector('.eo-files-pane > .eo-msg')?.textContent).toBe('Imported 4 files. Build to use them.');
+  });
+
   const FILES = [
     { path: 'run.py', dir: false, bytes: 8, mtime: 0 }, { path: 'logo.png', dir: false, bytes: 37000, mtime: 0 },
     { path: 'guide.pdf', dir: false, bytes: 52000, mtime: 0 }, { path: 'model.bin', dir: false, bytes: 900, mtime: 0 },

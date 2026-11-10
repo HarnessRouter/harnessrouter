@@ -8,11 +8,13 @@ import '../hrui-console.css';
 import './auth.css';
 import { useMemo, type ChangeEvent, type ReactNode, type Ref } from 'react';
 import { auMark } from './art';
+import { useHtml } from '../Markup';
 
 /** The page: the grid behind, one card in the middle. `n` is how many of the three bricks are built
  *  (3 on every screen here). */
 export function AuthFrame({ n, children }: { n: number; children: ReactNode }) {
   const svg = useMemo(() => auMark(n), [n]);
+  const markHtml = useHtml(svg);
   return (
     <div id="hrui" data-theme="light">
       <div className="auth-layer">
@@ -22,7 +24,7 @@ export function AuthFrame({ n, children }: { n: number; children: ReactNode }) {
             <i className="tk tl" /><i className="tk tr" /><i className="tk bl" /><i className="tk br" />
             <div className="au-head">
               <div className="au-brand hexa-brand" aria-label="Hexa"><img src="/hexa-mark.svg" alt="" width={28} height={28} /><span>Hexa</span></div>
-              <span className="au-markw" aria-hidden="true" dangerouslySetInnerHTML={{ __html: svg }} />
+              <span className="au-markw" aria-hidden="true" dangerouslySetInnerHTML={markHtml} />
             </div>
             {children}
           </div>

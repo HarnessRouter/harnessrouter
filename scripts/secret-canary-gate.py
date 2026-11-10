@@ -469,8 +469,14 @@ def main() -> int:
     items = b.get("data") or b.get("bases") or []
     only = {x for x in args.only.split(",") if x}
     items = [x for x in items if (not only or x.get("id") in only)]
-    run = [x for x in items if x.get("id") not in NOT_RUN]
-    print(f"bases: {len(items)} | running {len(run)} | named as not run: {sorted(set(x.get('id') for x in items) & set(NOT_RUN))}", flush=True)
+    # An opt-in base this instance doesn't hold (status "not_installed", e.g. roder outside HR_BACKENDS)
+    # has no session to read: named, not run. Every DEFAULT base is held to installing by the release
+    # gate's own step before this one, so a default base that failed to install never reaches here as
+    # a quiet skip.
+    absent = {x.get("id"): x.get("statusReason") or "not installed" for x in items if x.get("status") == "not_installed"}
+    run = [x for x in items if x.get("id") not in NOT_RUN and x.get("id") not in absent]
+    print(f"bases: {len(items)} | running {len(run)} | named as not run: {sorted(set(x.get('id') for x in items) & set(NOT_RUN))}"
+          f" | not installed here: {sorted(absent)}", flush=True)
     if not run:
         print("BLIND: no base to run")
         return 1

@@ -1,0 +1,4 @@
+openhands-agent-server==1.49.2
+openhands-tools==1.49.2
+openhands-sdk==1.49.2
+litellm==1.94.3

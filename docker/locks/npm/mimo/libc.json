@@ -1,0 +1,5 @@
+{
+  "@mimo-ai/mimocode-linux-arm64-musl": ["musl"],
+  "@mimo-ai/mimocode-linux-x64-musl": ["musl"],
+  "@mimo-ai/mimocode-linux-x64-baseline-musl": ["musl"]
+}

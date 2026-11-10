@@ -1,0 +1,3 @@
+# Agent Zero v2.13's requirements.txt pins mcp==1.27.0, so runner/agentzero-constraints.txt alone cannot
+# move it. mcp 1.30.0, the last 1.x, fixes the SDK's session-ownership, redirect and token-audience bugs.
+mcp==1.30.0

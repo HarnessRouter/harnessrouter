@@ -11,12 +11,12 @@ import { instructionFileLabel, type CustomHarness, type McpServer } from '@/lib/
 import { isServiceEntry } from './setupParts';
 import { SET_UP_APP_EVENT } from '../start/NextBar';
 
-export type LayerKey = 'instructions' | 'harness' | 'caps' | 'runtime';
+export type LayerKey = 'instructions' | 'harness' | 'caps' | 'memory' | 'runtime';
 /** The layers in the order the rail and the narrow chips list them, top first (Richard, 2026-10-18):
- *  Instructions, then Agent harness (the agent harness and its model, one layer), Capabilities, and
- *  Environment & limits last. The Agent stack still draws them as a stack, the agent harness at its
+ *  Instructions, then Agent harness (the agent harness and its model, one layer), Capabilities, Memory
+ *  (the design's place for it, after Capabilities), and Environment & limits last. The Agent stack still draws them as a stack, the agent harness at its
  *  foot (tower.ts); only the list's order is this one. */
-export const SET_LAYERS: [LayerKey, string][] = [['instructions', 'Instructions'], ['harness', 'Agent harness'], ['caps', 'Capabilities'], ['runtime', 'Environment & limits']];
+export const SET_LAYERS: [LayerKey, string][] = [['instructions', 'Instructions'], ['harness', 'Agent harness'], ['caps', 'Capabilities'], ['memory', 'Memory'], ['runtime', 'Environment & limits']];
 export const isLayer = (v: string | null | undefined): v is LayerKey => SET_LAYERS.some(([k]) => k === v);
 /** The layer an address (?layer=) opens: the Model layer of an older link is part of Agent harness
  *  now, and an address with none (or one not known) opens the first. */
@@ -38,7 +38,7 @@ export interface Cfg {
 export type CfgKey = keyof Cfg;
 export const SET_KEYS: CfgKey[] = ['name', 'model', 'thinking', 'agentsMd', 'mins', 'turns', 'tools', 'mcp', 'vars', 'headers'];
 export const LAYER_KEYS: Record<LayerKey, CfgKey[]> = {
-  instructions: ['agentsMd'], harness: ['name', 'model', 'thinking'], caps: ['tools', 'mcp'], runtime: ['vars', 'headers', 'mins', 'turns'],
+  instructions: ['agentsMd'], harness: ['name', 'model', 'thinking'], caps: ['tools', 'mcp'], memory: [], runtime: ['vars', 'headers', 'mins', 'turns'],
 };
 
 /** The plugins binding is this service's own entry on the record, listed as plugins (setupParts.ts)
@@ -118,6 +118,7 @@ export function brickLayer(tw: string): LayerKey | null {
   if (tw === 'b-runtime' || tw === 'model') return 'harness';
   if (tw === 'task') return 'instructions';
   if (tw === 'skill' || tw === 'plugin' || tw === 'mcp') return 'caps';
+  if (tw === 'memory') return 'memory';
   if (tw === 'env' || tw === 'backend' || /^b-/.test(tw)) return 'runtime';
   return null;
 }

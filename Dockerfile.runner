@@ -19,6 +19,12 @@
 # image layer. It belongs to this image, not the gateway: a browser a harness drives to verify its
 # own output runs in the session, which is here.
 
+FROM python:3.12-slim AS prompt-argv
+RUN apt-get update -y && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY runner/prompt_argv.c /src/prompt_argv.c
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -o /src/prompt_argv.so /src/prompt_argv.c
+
 FROM python:3.12-slim
 
 ARG WITH_BROWSER=0
@@ -81,6 +87,7 @@ RUN chmod +x /tmp/install-skills.sh \
     && rm -f /tmp/install-skills.sh
 
 COPY runner/ /app/runner/
+COPY --from=prompt-argv /src/prompt_argv.so /app/runner/prompt_argv.so
 COPY docker/entrypoint.sh /app/entrypoint.sh
 # Apache-2.0 asks that these travel with a copy, and NOTICE is what says what this image carries.
 COPY LICENSE NOTICE /app/

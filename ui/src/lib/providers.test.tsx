@@ -66,3 +66,12 @@ test('reads that keep failing end as failed: the keys are not known, never "ever
   expect(seen.connectionFor('claude-sonnet-4')).toBeNull();
   expect(seen.hasConnections).toBe(false);
 });
+
+test('a key its provider refused is named as refused, so a surface asks to reconnect it rather than to add a key', async () => {
+  fetchMock.mockResolvedValue(json({ integrations: [{ name: 'HarnessRouter API', provider: 'harnessrouter', key_state: 'refused' },
+    { name: 'mine', provider: 'anthropic' }], model_map: {} }));
+  await mount();
+  await settle();
+  expect(seen.refused).toEqual([{ name: 'HarnessRouter API', provider: 'harnessrouter' }]);
+  expect(seen.hasConnections).toBe(true);
+});

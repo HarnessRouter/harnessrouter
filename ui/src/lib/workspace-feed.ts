@@ -111,8 +111,8 @@ export function framesBetween(seen: Map<string, Seen>, cards: TraceCard[], since
   return out.sort((a, b) => a.at - b.at);
 }
 
-async function readCards(h: Record<string, string>, signal: AbortSignal): Promise<TraceCard[]> {
-  const q = new URLSearchParams({ org: h['x-harness-org'], limit: String(WINDOW) });
+async function readCards(h: Record<string, string>, signal?: AbortSignal, limit = WINDOW): Promise<TraceCard[]> {
+  const q = new URLSearchParams({ org: h['x-harness-org'], limit: String(limit) });
   appendWorkspaceQuery(q);
   const r = await harnessFetch(`/api/harness/v1/traces?${q.toString()}`, { headers: h, cache: 'no-store', signal });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);

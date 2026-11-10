@@ -46,6 +46,16 @@ RUN npm run build
 # The bundles have no room for their packages' notices, and those licences ask that a copy carries them.
 RUN node scripts/third-party-licenses.mjs > THIRD-PARTY-console.txt
 
+# ── the prompt hand-over for native CLIs ──────────────────────────────────────
+# runner/prompt_argv.c: the library that hands jcode its prompt from a file instead of from its command line
+# (what `ps` lists). Built on the runtime's own base, so it links against the glibc it runs with; the compiler
+# stays in this stage and only the library is copied out.
+FROM python:3.12-slim AS prompt-argv
+RUN apt-get update -y && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY runner/prompt_argv.c /src/prompt_argv.c
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -o /src/prompt_argv.so /src/prompt_argv.c
+
 # ── runtime ───────────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
@@ -168,12 +178,17 @@ RUN chmod +x /tmp/install-kits.sh \
 
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/
+COPY --from=prompt-argv /src/prompt_argv.so /app/runner/prompt_argv.so
 COPY docker/entrypoint.sh /app/entrypoint.sh
 # The hash-locked dependency trees the first-boot installer fills vibe's, fast-agent's and dcode's
 # venvs from (pip --require-hashes): part of this reviewed image, never fetched at boot.
 COPY docker/locks/ /app/locks/
 COPY docker/hr-retention /usr/local/bin/hr-retention
 RUN chmod +x /app/entrypoint.sh /usr/local/bin/hr-retention
+# The memory engines' stack, so nobody needs a clone to start them: `docker cp <container>:/app/deploy/memories .`
+# then `./memories/up.sh` on the host. Files only, root's like the rest of /app (below): nothing in the
+# container runs them, and up.sh runs on the host, where Docker is. Its .env is never copied (.dockerignore).
+COPY deploy/memories/ /app/deploy/memories/
 
 # Next.js standalone output: server + only the modules it actually needs.
 COPY --from=ui /ui/.next/standalone /app/ui/
@@ -198,18 +213,24 @@ COPY --from=ui /ui/THIRD-PARTY-console.txt /app/THIRD-PARTY-console.txt
 # the runner from here, and a product user that can write them is root at the next start (reported
 # privately, GHSA-mm72-wr37-26pv). The gateway's and the console's own code are root's too: neither
 # writes there at run time but for Next's cache, and code that cannot change itself cannot keep a
-# compromise across a restart. Compiled here because `agent` cannot write __pycache__.
+# compromise across a restart. Compiled here because `agent` cannot write __pycache__. The prompt
+# launchers (runner/prompt_launcher.py and .mjs, prompt_preload.cjs, prompt_argv.so) run as each session's uid, so
+# they are read-only to everyone.
 RUN useradd -m -u 10001 agent \
     && rm -rf /home/agent/.npm /root/.npm \
     && mkdir -p /data /app/ui/.next/cache \
     && chown -R root:root /app \
     && chmod -R go-w,a+rX /app \
+    && chmod 0444 /app/runner/prompt_launcher.py /app/runner/prompt_launcher.mjs /app/runner/prompt_preload.cjs \
+    && chmod 0555 /app/runner/prompt_argv.so \
     && python -m compileall -q /app/gateway /app/runner \
     && chown -R agent:agent /data /home/agent /app/ui/.next/cache \
     && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits
 
 EXPOSE 3000
 VOLUME ["/data"]
+# How deploy/memories/up.sh finds a running HarnessRouter, whatever the image is named or tagged.
+LABEL io.harnessrouter.role=instance
 
 # The UI is the only published port. The gateway and runner stay on loopback — nothing else
 # needs to be reachable from outside the container.

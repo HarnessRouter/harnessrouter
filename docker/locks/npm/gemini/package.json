@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "@google/gemini-cli": "0.58.0"
+  }
+}

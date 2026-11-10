@@ -78,8 +78,8 @@ export function kitTower(kit: Kit, rt: { label: string; model: string } | null):
   ['b-runtime', 'model', 'task', 'backend'].forEach((k) => { st[k] = 'built'; });
   st.product = 'empty'; st.live = 'empty';
   SUBS.forEach(([k]) => { st[k] = 'built'; });
-  const parts = { skill: (kit.skills || []).length, plugin: 0, mcp: kit.database ? 1 : 0, env: 0 };
-  PARTS.forEach(([k]) => { st[k] = parts[k] > 0 ? 'built' : 'empty'; });
+  const parts: Tower['parts'] = { skill: (kit.skills || []).length, plugin: 0, mcp: kit.database ? 1 : 0, env: 0 };
+  PARTS.forEach(([k]) => { st[k] = (parts[k] || 0) > 0 ? 'built' : 'empty'; });
   return { harness: rt?.label || '', model: rt?.model || '', parts, st };
 }
 

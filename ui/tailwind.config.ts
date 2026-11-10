@@ -9,10 +9,9 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Primary brand colors — Epsilla / AgentStudio brand purple.
-        // Source of truth: frontend/src/studio/styles/tokens.css
-        // (--brand #6E55FF, --brand-ink #4A37CC). Do not reintroduce the
-        // old #a855f7/#d946ef palette — that was a deprecated design draft.
+        // Primary scale, purple (500 #6e55ff, 700 #4a37cc). The console's own brand
+        // tokens (--brand, --brand-ink) live in src/studio/styles/tokens.css. Do not
+        // reintroduce the old #a855f7/#d946ef palette, a deprecated design draft.
         primary: {
           50: '#f5f2ff',
           100: '#eeeaff',

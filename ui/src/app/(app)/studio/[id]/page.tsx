@@ -23,6 +23,7 @@ import { useSetup } from '@/components/hrui/setups';
 import type { TraceCard } from '@/lib/revamp-data';
 import { AgentHead, StackPanel, useMedia, useSideOff, type SetupTab } from '@/components/hrui/setup/parts';
 import { Playground, type Slot } from '@/components/hrui/setup/Playground';
+import type { BranchDraft } from '@/components/hrui/setup/branch';
 import { SetupSettings } from '@/components/hrui/setup/SetupSettings';
 import { hasSettingsDraft, layerOf, useBrickNav, type CapTab, type LayerKey } from '@/components/hrui/setup/settingsModel';
 import { SetUpApp } from '@/components/hrui/SetUpApp';
@@ -125,6 +126,14 @@ export default function SetupPage() {
   const newTest = () => {
     setPreview(null); setPicked(true);
     setSlot({ key: `n${Date.now()}`, resume: null }); setTestSid(null);
+    router.replace(pgHref(null), { scroll: false });
+    requestAnimationFrame(() => document.getElementById('input')?.focus());
+  };
+  // a reply's Branch: a new conversation holding its task up to that reply. No task exists until its
+  // first message, so the address is a new task's until then, as for New task
+  const branchTest = (branch: BranchDraft) => {
+    setPreview(null); setPicked(true);
+    setSlot({ key: `b${Date.now()}`, resume: null, branch }); setTestSid(null);
     router.replace(pgHref(null), { scroll: false });
     requestAnimationFrame(() => document.getElementById('input')?.focus());
   };
@@ -335,7 +344,7 @@ export default function SetupPage() {
               <div className="convo" hidden={linkFailed}>
                 <Playground r={row} onRan={() => { setNudge((n) => n + 1); reload(); }}
                   onPreview={(files, key) => setPreview({ files, key })} previewKey={preview?.key || null}
-                  slot={slot} onBorn={bornTest} onLive={setWorking} onFollowUp={() => newTest()} handedRec={handedRec}
+                  slot={slot} onBorn={bornTest} onLive={setWorking} onFollowUp={() => newTest()} onBranch={branchTest} taskHref={pgHref} handedRec={handedRec}
                   onReplay={(on) => { setReplaying(on); if (on) setPlayed(true); }}
                   taskTitle={barCard?.title?.trim() || undefined} />
               </div>

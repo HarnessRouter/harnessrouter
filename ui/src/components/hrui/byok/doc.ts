@@ -30,6 +30,8 @@ export interface Integration {
   image_models?: ModelRow[];
   /** what is left on a HarnessRouter API key's account, read by the server; absent while unknown */
   balance?: { usd: number; is_deficit: boolean; as_of: string };
+  /** 'refused': HarnessRouter Cloud answered the last read with this key by refusing it (absent otherwise) */
+  key_state?: 'refused';
 }
 export interface ProviderField { key: string; label: string; placeholder?: string }
 export interface CatalogEntry {
@@ -70,6 +72,11 @@ export const SECRET = '__secret__';
 /** The provider whose key comes from the HarnessRouter hand-off (POST /v1/admin/connect). */
 export const HOSTED = 'harnessrouter';
 export const isEntra = (i: Integration) => i.config?.auth === 'entra';
+/** The request headers on a connection (set through the API), read back as names with each value the sentinel. */
+export const connHeaders = (i?: Integration): Record<string, string> | undefined => {
+  const h: unknown = (i?.config as Record<string, unknown> | undefined)?.headers;
+  return h && typeof h === 'object' && !Array.isArray(h) && Object.keys(h).length ? (h as Record<string, string>) : undefined;
+};
 export const servable = (i: Integration) => (i.models || []).map((m) => m.canonical);
 export const servableImages = (i: Integration) => (i.image_models || []).map((m) => m.canonical);
 

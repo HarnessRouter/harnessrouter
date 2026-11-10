@@ -1,7 +1,7 @@
 'use client';
-// The console's frame: a 64px rail on the left (the mark, the workspace, five places, the team's letter, the
+// The console's frame: a 64px rail on the left (the mark, the workspace, six places, the team's letter, the
 // account) and the page beside it. Every page draws its own top. The workspace and account menus open beside
-// the rail. On a phone the rail is a bottom bar of three places and More; Add-ons, API Keys and the letter are
+// the rail. On a phone the rail is a bottom bar of four places and More; Add-ons, API Keys and the letter are
 // in More there.
 import './hrui.css';
 import './hrui-console.css';
@@ -28,9 +28,11 @@ export const LINKS = {
 // it (they are in More there)
 type Place = { key: string; href: string; label: string; icon: React.ReactNode; aria?: string; nav: string };
 const PLACES: Place[] = [
-  { key: 'studio', href: '/studio', label: '工作台', icon: Ic.studio, aria: '工作台', nav: 'agents' },
-  { key: 'shop', href: '/shop', label: 'Agent 中心', icon: Ic.shop, nav: 'harbor' },
+  { key: 'start', href: '/start', label: '开始', icon: Ic.start, nav: 'start' },
+  { key: 'studio', href: '/studio', label: '工作台', icon: Ic.studio, aria: 'Harness Studio', nav: 'agents' },
+  { key: 'memories', href: '/memories', label: '记忆', icon: Ic.memories, nav: 'memories' },
   { key: 'extensions', href: '/extensions', label: '扩展', icon: Ic.extensions, nav: 'library' },   // 'Extensions' was too long for the rail (Richard, 10-21)
+  { key: 'shop', href: '/shop', label: 'Agent 商店', icon: Ic.shop, nav: 'harbor' },
   { key: 'keys', href: '/keys', label: 'API 密钥', icon: Ic.keys, nav: 'keys' },
 ];
 

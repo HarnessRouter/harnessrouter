@@ -26,6 +26,7 @@ import { HealthPill } from '@/components/hrui/setup/parts';
 import { onFeedTurn } from '@/lib/feed-turns';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import { NewSetup } from '@/components/hrui/NewSetup';
+import { pickUpBuilds } from '@/components/hrui/start/build';
 import { Skel, SkCards, SkRows, SkLine } from '@/components/hrui/Skel';
 import { openWorkspaceMenu } from '@/components/hrui/WorkspaceSheets';
 
@@ -80,6 +81,9 @@ export default function StudioPage() {
   const { rows, error, refresh, paused, reconnect } = useSetups({ live: true, scope: current.id });
   // a turn of a setup starting or ending, on any feed this tab holds: that setup's row is read again
   useEffect(() => onFeedTurn((_sid, harness) => { if (harness) refresh(harness); }), [refresh]);
+  // a setup this tab began building and then left (a page load away from its page) is asked for by its
+  // build's key: once the server has saved it, the list reads it in (start/build.ts pickUpBuilds)
+  useEffect(() => { pickUpBuilds(); }, []);
   const [vm, setVm] = useState<'cards' | 'list'>('cards');
   useEffect(() => { try { if (localStorage.getItem(VM_KEY) === 'list') setVm('list'); } catch { /* none */ } }, []);
   const pick = (v: 'cards' | 'list') => { setVm(v); try { localStorage.setItem(VM_KEY, v); } catch { /* none */ } };

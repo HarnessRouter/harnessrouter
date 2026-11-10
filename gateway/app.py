@@ -1,15 +1,16 @@
-"""harness-gateway — thin, stateless control plane for Harness-as-a-Service.
+"""harness-gateway: thin, stateless control plane in front of the runner.
 
-Responsibilities (see docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md):
-  - Allocate an isolated sandbox per session from the ACA Dynamic Sessions pool and proxy
-    turns into the in-sandbox runner (`{POOL}/turn?identifier=<session_id>`, Entra token
-    aud `dynamicsessions.io` via the gateway's managed identity).
-  - Credential BROKER over the existing Vault service: resolve a provider *connection*
+Responsibilities:
+  - Route each session to a runner and proxy turns into it
+    (`{POOL}/turn?identifier=<session_id>`). Self-hosted, the pool is one runner process; a
+    deployment can put a session pool in front of runner replicas instead.
+  - Credential BROKER over the configured secret store: resolve a provider *connection*
     (org-own first, a shared `global` pool as fallback) and try an ordered fallback chain.
-  - Concurrency gating (global + per-tenant); session state externalized to VectorGraph
-    (`HarnessSession` vertex) so any replica serves any session.
+  - Concurrency gating (global + per-org); session state lives in the backing store
+    (`HarnessSession` record) so any replica serves any session.
 
-State lives in VectorGraph + git + Blob, never in-process — this service is replaceable.
+State lives in the backing stores (records, blobs, secrets) and git, never in-process, so this
+service is replaceable.
 """
 from __future__ import annotations
 
@@ -56,6 +57,17 @@ import plugs_plane           # the plugs surface: the vendor tools behind the ho
 from public_artifacts import public_artifact_headers
 import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
+import memory_routes        # the Harness Memories sub-protocol (tree, access, provider seam)
+import memory_plane
+import memory_live          # what changes in a memory, told to whoever has it open
+import memory_tools
+import memory_local
+import memory_graphiti
+import memory_hindsight
+import memory_mem0
+import memory_reme
+import memory_relay      # memory vendors' servers call the model relay with a service credential
+import memory_choice     # which memory engine an agent gets, from what it is for
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 import setup_compose         # New setup: the rules every built configuration is held to
 import setup_builder         # New setup: the built-in builder, saving into the person's workspace
@@ -75,9 +87,9 @@ BILLING_INTERNAL_KEY = os.environ.get("BILLING_INTERNAL_KEY", "")
 ENGINE_URL = os.environ.get("ENGINE_URL", "").rstrip("/")
 
 # ── backing stores (graph / blob / secrets) ───────────────────────────────────────
-# THE seam between this gateway and everything it persists to. Production ("vg") is the
-# AgentStudio infra — vg-gateway's Cosmos graph + Azure blob, and the vault service. Local
-# ("local") is SQLite + filesystem + env vars, so a clone runs with no cloud at all. Selected by
+# THE seam between this gateway and everything it persists to. "local" is SQLite + filesystem +
+# env vars, so a clone runs with no cloud at all; "vg" is a deployment's remote graph, blob and
+# secret services, whose client this repository does not ship (see backing.py). Selected by
 # HR_BACKING; unset ⇒ vg when VG_GATEWAY_URL is configured, local otherwise. Call sites below use
 # only the semantic interface (get/upsert/find/add_edge, blob get/put/list) and never build
 # backend queries — that is what makes the two interchangeable.
@@ -335,8 +347,8 @@ AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")        # UAMI client id 
 DEFAULT_BACKEND = os.environ.get("HARNESS_DEFAULT_BACKEND", "claude")
 # Concurrency: gate turns so we never exceed the session pool's sandbox ceiling, but allow many
 # sessions per org to run at once (a single user routinely fires off several tasks in parallel).
-# Concurrency caps are a back-pressure ceiling, not the scaling limit — the Dynamic Sessions pool
-# scales sandboxes on demand (maxConcurrentSessions). Keep these high so a burst of turns runs
+# Concurrency caps are a back-pressure ceiling, not the scaling limit: a hosted session pool
+# scales sandboxes on demand. Keep these high so a burst of turns runs
 # concurrently and waits for the pool to scale, rather than being queued/starved in-process.
 # Self-hosted, the ceiling is this ONE machine rather than a pool that scales on demand, so 512
 # would just be 512 agent CLIs contending for the same cores. The limit is therefore resolved at
@@ -464,13 +476,9 @@ RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(64 *
 # into a turn, so their cap above is not bound to this one.)
 _UPLOAD_MAX_BYTES = int(os.environ.get("HARNESS_UPLOAD_MAX_BYTES", str(25 * 1024 * 1024)))
 RESP_BLOB_KB = os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")  # response records + container files
-# Durable session-workspace store (git checkpoint tarball per session) lives in vg-gateway blob
-# storage under this "graph" namespace: <KB>/sessions/<sid>/workspace.tgz.
+# Durable session-workspace store (git checkpoint tarball per session) lives in the blob store
+# under this namespace: <KB>/sessions/<sid>/workspace.tgz.
 BLOB_KB = os.environ.get("HARNESS_BLOB_KB", "harness-sessions")
-# Realtime blackboard: the Company Brain Hocuspocus wss endpoint the in-sandbox sidecar connects to.
-# At session-create the gateway mints a Brain doc (under the DEFAULT tenant, so the studio editor —
-# which opens by bare ULID — resolves the SAME room) and uses its ULID as the room. Empty = disabled.
-COLLAB_URL = os.environ.get("COLLAB_URL", "").rstrip("/")        # wss://<company-brain-fqdn>
 # Public base for URLs we hand back to clients (annotations, files listings). The content
 # proxy stays header-authenticated; this only makes the returned links resolvable OUTSIDE
 # the backend host (set it to your public base URL). Empty -> host-relative.
@@ -487,9 +495,6 @@ DEFAULT_MAX_STEP = int(os.environ.get("HARNESS_DEFAULT_MAX_STEP", "400"))
 
 def _file_url(container_id: str, file_id: str) -> str:
     return f"{PUBLIC_BASE_URL}/v1/containers/{container_id}/files/{file_id}/content"
-COLLAB_TOKEN = os.environ.get("COLLAB_TOKEN", "")
-BRAIN_INTERNAL_KEY = os.environ.get("BRAIN_INTERNAL_KEY", "")   # brain REST is internal-key gated
-BRAIN_HTTP = COLLAB_URL.replace("wss://", "https://", 1).replace("ws://", "http://", 1)  # mint via REST
 # Traces: full session transcripts persist to a dedicated blob KB, keyed for native per-org
 # reverse-chronological pagination (the Traces app's source of truth). Key = <org>/<inv_ts>_<sid>/...
 # where inv_ts = (TS_MAX - created_ms) zero-padded — ABS lists ASCENDING-lexical, so inverted == newest-first.
@@ -577,7 +582,7 @@ _adopting: set = set()  # session ids with a detached orphan-adoption harvest in
 # upsert silently un-cancels the session and the CLI runs the whole task anyway. ONE signal, two
 # tiers: this in-process flag (instant, same-replica) + the durable per-response cancel latch
 # (cross-replica). _stop_session always sets both, so the turn loop no longer reads the vertex
-# status to catch a cross-replica session cancel (HR-INF-010 — that Gremlin read is gone).
+# status to catch a cross-replica session cancel (HR-INF-010: that graph read is gone).
 _cancel_req: dict[str, float] = {}  # sid -> when Stop was requested
 # Artifact-serving hot caches (per replica). The workspace tar is downloaded ONCE per session
 # and reused for every file open on that session (a share page opening 20 files used to pull
@@ -637,8 +642,9 @@ _WS_FILES_CACHE: dict[str, tuple[float, dict[str, bytes]]] = {}
 _WS_FILES_TTL, _WS_FILES_MAX = 300.0, 4
 _WS_FILE_CAP, _WS_TOTAL_CAP = 32 * 1024 * 1024, 192 * 1024 * 1024
 # Request idempotency: a repeated request with the same Idempotency-Key returns the FIRST
-# request's response instead of starting a second run. The durable control store (Cosmos) is the
-# SINGLE authority (create_item = atomic reservation) — there is no in-process/blob/Redis mirror.
+# request's response instead of starting a second run. The durable control store
+# (control_store.py) is the SINGLE authority (create_item = atomic reservation) — there is no
+# in-process/blob/Redis mirror.
 _IDEM_TTL = 3600.0
 
 
@@ -662,7 +668,9 @@ def _req_hash(body: "CreateResponseBody") -> str:
              "previous_response_id": body.previous_response_id, "backend": body.backend,
              "tools": body.tools, "max_output_tokens": body.max_output_tokens,
              "max_step": body.max_step, "metadata": meta,
-             **({"reasoning": body.reasoning} if body.reasoning else {})}
+             **({"reasoning": body.reasoning} if body.reasoning else {}),
+             **({"user": body.user} if body.user else {}),
+             **({"branch": True} if body.branch is True else {})}
     return hashlib.sha256(json.dumps(canon, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -672,7 +680,11 @@ def _harness_req_hash(body: "HarnessBody") -> str:
     Taken BEFORE the prepare steps, which rewrite the body in place: _skills_prepare offloads a
     large bundle to a blob and _plugins_prepare replaces files with a handle. Hashed afterwards, a
     retry would look like a different request and be refused 409 instead of replayed."""
-    return hashlib.sha256(json.dumps(body.model_dump(), sort_keys=True, default=str).encode()).hexdigest()
+    d = body.model_dump()
+    for k in ("memory", "memory_hint"):
+        if d.get(k) is None:
+            d.pop(k, None)
+    return hashlib.sha256(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
 
 REDIS_URL = os.environ.get("HARNESS_REDIS_URL", "")
 # Per-session execution lease (HR-INF-012). Modes: off | observe | enforce.
@@ -887,6 +899,46 @@ def _relay_client() -> httpx.AsyncClient:
     return _relay_http
 
 
+def _relay_checked_client(fresh: bool = False) -> httpx.AsyncClient:
+    """The relay's two clients (_relay_client, _relay_fresh_client), for a connection an organization
+    supplied itself: the same timeouts and pool sizes, every socket opened through _CheckedNetwork,
+    which resolves the name once, refuses any internal answer and connects to the very address it
+    classified (a DNS rebind cannot swap it), and no redirect followed. Before, the relay sent an
+    organization's own base_url to whatever it resolved to, this deployment's own networks included."""
+    key = "relay-fresh" if fresh else "relay"
+    c = _checked_clients.get(key)
+    if c is None:
+        limits = (httpx.Limits(max_connections=100, max_keepalive_connections=0) if fresh
+                  else httpx.Limits(max_connections=400, max_keepalive_connections=100))
+        transport = httpx.AsyncHTTPTransport(limits=limits)
+        transport._pool._network_backend = _CheckedNetwork(always=False)
+        c = _checked_clients[key] = httpx.AsyncClient(
+            transport=transport, follow_redirects=False,
+            timeout=httpx.Timeout(connect=30, read=3600, write=600, pool=60))
+    return c
+
+
+def _org_endpoint_problem(url: str) -> str | None:
+    """What makes an address an organization typed for its own connection unusable here before any
+    socket opens, or None: not http(s), no host, a user name or password in it, or a query or a
+    fragment. With "?" at its end, the path this relay appends would turn into a query string, and a
+    call would reach any path of the host. Where the address points is classified when the socket
+    opens (_relay_checked_client)."""
+    try:
+        u = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return "it is not a valid address"
+    if u.scheme not in ("http", "https"):
+        return "it must start with https://"
+    if not u.hostname:
+        return "it has no host"
+    if u.username or u.password or "@" in u.netloc:
+        return "it must not contain a user name or password"
+    if u.query or u.fragment or "?" in str(url) or "#" in str(url):
+        return "it must not contain ? or #"
+    return None
+
+
 def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
@@ -903,9 +955,9 @@ def _runner_turn_recorded(sid: str) -> None:
 
 
 @contextlib.asynccontextmanager
-async def _turn_slot(org: str, sid: str):
+async def _turn_slot(org: str, sid: str, *, heartbeat: bool = True):
     """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
-    turn WAITS for them.
+    turn WAITS for them. The one place the gates are taken.
 
     A turn is marked `starting` when it is accepted, and on one container the gates admit as many
     turns as the box has cores, so a busy box queues the rest. A queued turn is alive, but it has no
@@ -920,10 +972,15 @@ async def _turn_slot(org: str, sid: str):
     sweep has neither a runner turn to ask nor a heartbeat from the poll loop, and "no runner turn on
     record" read a live turn restoring a large workspace as gone (CAT, 2026-10-21; restores past the
     120 s stale window were measured on the hosted service). It stops when the poll loop takes over
-    (_runner_turn_recorded) or the slot is released."""
+    (_runner_turn_recorded) or the slot is released.
+
+    `heartbeat=False` is a branch's preparation (_branch_prepare): the same capacity, taken before
+    its new session exists. Nothing sweeps a session that is not there yet, and a beat would write
+    the vertex of one that is not published, and never may be."""
     beat_s = max(1, _RECONCILE_STALE_S // 4)
     on_record = asyncio.Event()
-    _RUNNER_TURN_ON[sid] = on_record
+    if heartbeat:
+        _RUNNER_TURN_ON[sid] = on_record
 
     async def beat():
         while True:
@@ -937,13 +994,14 @@ async def _turn_slot(org: str, sid: str):
             except Exception:  # noqa: BLE001 — a missed beat is retried on the next one
                 pass
 
-    t = asyncio.create_task(beat())
+    t = asyncio.create_task(beat()) if heartbeat else None
     try:
         async with _global_sem(), _tenant_sem(org):
             yield
     finally:
         on_record.set()
-        t.cancel()
+        if t is not None:
+            t.cancel()
         if _RUNNER_TURN_ON.get(sid) is on_record:
             _RUNNER_TURN_ON.pop(sid, None)
 
@@ -1030,6 +1088,8 @@ async def _vault_put_credential(tenant: str, name: str, value: str, param: str |
                         "Refusing to store this credential: HR_SECRET_KEY is not set, so it could only be "
                         "written to disk in plaintext. Set HR_SECRET_KEY to a passphrase and restart.", param)
     await _vault_put(tenant, name, value)
+    # what was sealed here is removed, exactly, from anything this process relays or keeps in a memory
+    media_plane.remember_secret(value)
 
 
 async def _vault_delete(tenant: str, name: str) -> None:
@@ -1320,7 +1380,22 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # (see _entra_token). What it holds is not a key to hand over but an application's secret that
     # buys a token good for about an hour, and a turn may run for six: the broker asks again when
     # the token ages, on every call, and the agent never holds the token or the secret.
-    if SANDBOX_TRUST == "owner" and not _entra_conn(conn):
+    #
+    # A connection that carries request headers is brokered here too, for the same reason: a header
+    # value is often a gateway's credential (cf-aig-authorization, Helicone-Auth), and the broker is
+    # the one place every base's requests pass, so the agent never holds it (see _conn_headers).
+    #
+    # And a custom connection whose address is the full request URL ("Use Full URL"): every agent CLI
+    # appends its own resource (/chat/completions, /responses, /v1/messages) to the base it is given,
+    # so the address can be used as it is only where every base's model calls pass, the broker
+    # (_conn_request_url). Handed over, the key went to the stored URL with a resource appended.
+    #
+    # And a custom connection in the Anthropic Messages format, whose key goes in x-api-key alone
+    # (_with_credential). Handed over, it reached the endpoint from the runner's relay in x-api-key AND
+    # as a Bearer, the shape the relay keeps for an aggregator's Messages surface, which reads a Bearer;
+    # the relay cannot tell the two apart, and the broker can.
+    if (SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn)
+            and not _conn_full_url(conn) and not _conn_custom_messages(conn)):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -1328,8 +1403,10 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
 
     backend = str(conn.get("backend") or "")
     if backend in _NATIVE_ONLY_BACKENDS:
+        why = ("its connection carries request headers, which only the broker sends"
+               if SANDBOX_TRUST == "owner" else "HR_SANDBOX_TRUST=owner runs it")
         print(f"[broker] refusing to build sandbox auth for backend={backend!r}: it speaks the "
-              f"provider's native API, which is not brokered (HR_SANDBOX_TRUST=owner runs it)", flush=True)
+              f"provider's native API, which is not brokered ({why})", flush=True)
         return None
     # Normalised: a connection saved as "TokenRouter" must not skip brokering on a casing mismatch.
     provider = str(conn.get("provider") or "").strip().lower()
@@ -1344,6 +1421,9 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
         return None
     out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""), effort)
     out["base_url"] = f"{_sandbox_broker_origin()}/v1/llm"
+    # `full_url` describes the connection's own address, which the broker uses; the base handed over
+    # is the broker's, to which the CLI appends its resource as it does to any base.
+    out.pop("full_url", None)
     return out
 
 
@@ -1362,7 +1442,10 @@ def _sandbox_broker_origin() -> str:
 def _conn_public(conn: dict) -> dict:
     """Connection metadata with secret fields stripped (for admin listing)."""
     secret = {"api_key", "aws_secret_access_key", "aws_session_token", "aws_bearer_token", "gcp_sa_json"}
-    return {k: v for k, v in conn.items() if k not in secret}
+    out = {k: v for k, v in conn.items() if k not in secret and k != "headers"}
+    if _conn_headers_public(conn.get("headers")):
+        out["headers"] = _conn_headers_public(conn.get("headers"))
+    return out
 
 
 # ── token-provider integrations (global model→provider routing) ──────────────────────
@@ -1541,6 +1624,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # sends no body with the 404). A gemini model reaches this base through an aggregator that
     # serves /responses instead — which the Vercel column did, on nine gemini ids.
     ("harnessrouter", "dcode"): "tokenrouter",
+    # Roder drives the same Responses endpoints through its custom provider, so its rows are
+    # dcode's: OpenRouter and a custom Responses endpoint on `openai-api`, the aggregators on
+    # `tokenrouter`. No Anthropic or Google row, for dcode's reason.
+    ("openai", "roder"): "openai",             ("azure-foundry", "roder"): "azure",
+    ("openrouter", "roder"): "openai-api",     ("custom", "roder"): "openai-api",
+    ("tokenrouter", "roder"): "tokenrouter",   ("vercel", "roder"): "tokenrouter",
+    ("llmtr", "roder"): "tokenrouter",         ("harnessrouter", "roder"): "tokenrouter",
     # No vtcode rows: VT Code is not in this tree. It was built, measured (a column of 55 green
     # rows out of 56) and then taken out whole, because in `vtcode exec` a harness's MCP servers
     # cannot reach the model — the CLI spawns the server its config names and never sends
@@ -2078,7 +2168,7 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
                         params: dict | None = None, *, attempts: int = 28, base: float = 0.75) -> dict:
     """Call the sandbox and parse JSON, retrying transient failures with exponential backoff.
 
-    Under a burst of concurrent sessions the Dynamic Sessions pool allocates cold sandboxes on demand
+    Under a burst of concurrent sessions a hosted session pool allocates cold sandboxes on demand
     and can briefly return an empty / non-JSON body or a 429/5xx while one spins up (and a follow-up
     must additionally rehydrate a possibly-large workspace). WAIT for that scale-up rather than fail —
     treating a cold start as a hard error was the dominant concurrency failure.
@@ -2111,7 +2201,7 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
     raise RuntimeError(f"sandbox {path} failed after {i + 1} of {attempts} tries ({last})")
 
 
-# ── durable session workspace (git checkpoint tarball in vg-gateway blob storage) ──
+# ── durable session workspace (git checkpoint tarball in the blob store) ──
 def _ws_blob(sid: str) -> str:
     return f"sessions/{sid}/workspace.tgz"
 
@@ -2157,10 +2247,15 @@ async def _blob_put(file_id: str, data: bytes, kb: str = BLOB_KB) -> bool:
     return await BACKING.blob.put(kb, file_id, data)
 
 
-async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
+def _ckpt_params(sid: str, commit: bool) -> dict:
+    """The runner's /checkpoint query. commit=0 takes the tarball without committing (mid-turn)."""
+    return {"identifier": sid} if commit else {"identifier": sid, "commit": "0"}
+
+
+async def _checkpoint_relay(sid: str, commit: bool = True) -> tuple[bool, int, str, str, str]:
     """Stream the workspace tar from the runner /checkpoint straight into the VG blob PUT without
     ever holding the whole tarball in gateway memory (HR-INF-015). Folds sha256 + byte count over
-    the stream as it flows. Returns (ok, nbytes, ws_sha, git_head). A 1 GiB workspace no longer
+    the stream as it flows. Returns (ok, nbytes, ws_sha, git_head, git_commit). A 1 GiB workspace no longer
     materializes a full copy in the gateway (it did on every turn end, for every session).
 
     Safety (verified): the runner sends a fixed Content-Length, so a short read makes aiter_bytes
@@ -2173,28 +2268,29 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
         # laptop workspace is not the GB-scale tarball the streaming path exists for.
         try:
             rc0 = _relay_client()
-            r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
+            r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
             if r0.status_code >= 400 or not r0.content:
-                return False, 0, "", ""
+                return False, 0, "", "", ""
             ok0 = await BACKING.blob.put(BLOB_KB, _ws_blob(sid), r0.content)
             return (ok0, len(r0.content), hashlib.sha256(r0.content).hexdigest() if ok0 else "",
-                    r0.headers.get("X-Git-Head", ""))
+                    r0.headers.get("X-Git-Head", ""), r0.headers.get("X-Git-Commit", ""))
         except Exception:  # noqa: BLE001 — same contract as the streaming path: failure = no advance
-            return False, 0, "", ""
+            return False, 0, "", "", ""
     h = hashlib.sha256()
     nbytes = 0
-    git_head = ""
+    git_head = git_commit = ""
     rc = _relay_client()
 
     async def _pipe():
-        nonlocal nbytes, git_head
-        req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
+        nonlocal nbytes, git_head, git_commit
+        req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
         resp = await rc.send(req, stream=True)
         try:
             resp.raise_for_status()
             git_head = resp.headers.get("X-Git-Head", "")
+            git_commit = resp.headers.get("X-Git-Commit", "")
             async for chunk in resp.aiter_bytes():
                 nbytes += len(chunk)
                 h.update(chunk)
@@ -2205,10 +2301,10 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
     put = await rc.put(_blob_url(_ws_blob(sid)),
                        headers=_blob_headers("application/octet-stream"), content=_pipe())
     ok = put.status_code < 400 and nbytes > 0
-    return ok, nbytes, (h.hexdigest() if nbytes else ""), git_head
+    return ok, nbytes, (h.hexdigest() if nbytes else ""), git_head, git_commit
 
 
-async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
+async def _hydrate_relay(sid: str, params: dict | None, *, source_sid: str | None = None) -> httpx.Response:
     """Stream the workspace tar from VG blob storage straight into the runner /hydrate POST body
     (HR-INF-015 reverse path) — no full-tarball buffer in the gateway. Uses the dedicated relay pool.
 
@@ -2218,14 +2314,14 @@ async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
     if not _blob_streaming():
         # Local backing: read the checkpoint (absent → empty body → runner starts fresh, the same
         # meaning a 404 carries on the streaming path) and post it buffered.
-        tar = await BACKING.blob.get(BLOB_KB, _ws_blob(sid))
+        tar = await BACKING.blob.get(BLOB_KB, _ws_blob(source_sid or sid))
         return await _relay_client().request(
             "POST", f"{POOL_ENDPOINT}/hydrate", params={"identifier": sid, **(params or {})},
             headers=_pool_headers(), content=tar or b"")
     rc = _relay_client()
 
     async def _pipe():
-        resp = await _blob_open_stream(_ws_blob(sid), client=rc)
+        resp = await _blob_open_stream(_ws_blob(source_sid or sid), client=rc)
         try:
             if resp.status_code == 404:
                 return                       # genuine no-checkpoint → empty body → fresh workspace
@@ -2734,24 +2830,6 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
         pass
 
 
-async def _brain_mint_room(sid: str) -> str | None:
-    """Mint a Company Brain doc for the session's blackboard and return its ULID (the Hocuspocus
-    room). Minted under the DEFAULT tenant (no ?tenant) so the room is a BARE ULID — which is what
-    the studio CollaborativeMarkdownEditor opens. Best-effort; never blocks session create."""
-    if not BRAIN_HTTP:
-        return None
-    try:
-        r = await _client().put(f"{BRAIN_HTTP}/v1/doc",
-                                json={"relpath": f"sessions/{sid}/BLACKBOARD.md",
-                                      "title": f"Harness session {sid[:12]}", "kind": "doc", "body": ""},
-                                headers={"x-internal-key": BRAIN_INTERNAL_KEY}, timeout=20)
-        if r.status_code < 400:
-            return (r.json() or {}).get("id")
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
 _HYDRATE_FAILED_MESSAGE = "This task's files and conversation could not be restored just now, so nothing ran. Try again in a moment."
 
 
@@ -2759,8 +2837,7 @@ _HYDRATE_PAUSES = (1.0, 3.0, 6.0, 12.0, 24.0, 48.0, None)     # seven tries, 94 
 
 
 async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
-    """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
-    pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
+    """Restore the session's last checkpoint into the sandbox /workspace before the turn runs.
     `force` skips the warm-sandbox probe: the workspace is wiped and restored from the durable
     checkpoint even when the sandbox still holds it (a recycle on purpose)."""
     params = {}
@@ -2779,7 +2856,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         if want_sha and not force:
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
-                                    params={**(params or {}), "probe": want_sha})
+                                    params={"probe": want_sha})
                 pj = pr.json() if pr.headers.get("content-type", "").startswith("application/json") else {}
                 if pr.status_code < 400 and pj.get("skipped"):
                     rec["hydrated"] = True
@@ -2799,7 +2876,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         for attempt, pause in enumerate(_HYDRATE_PAUSES):
             refused = False
             try:
-                r = await _hydrate_relay(sid, params)
+                r = await _hydrate_relay(sid, None)
             except Exception as e:  # noqa: BLE001
                 # The relay itself raised: the sandbox dropped the streaming POST under a burst, or
                 # the blob read failed. Twelve restores in two minutes went this way on hosted while
@@ -2823,11 +2900,12 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             if pause is not None:
                 await asyncio.sleep(pause)
         if rec["hydrated"]:
-            # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
-            # turn. Anything an app wrote since then has just been wiped out of it, so put it back
+            # The workspace is now EXACTLY the checkpoint, which is taken at the end of a turn (or
+            # during one, #505). Anything an app wrote since then has just been wiped out of it, so put it back
             # before the agent opens the file. The warm-resume branch above returns early and never
             # reaches this: that workspace was never wiped, so it still holds those writes.
-            rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
+            rec["app_writes_reapplied"] = await _reapply_app_writes(
+                sid, float(v.get("ws_mid_turn_at") or 0))
         if not rec["hydrated"] and want_sha:
             # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, every time. The turn
             # must not run on this workspace (the caller refuses it), and this turn must never
@@ -2849,8 +2927,67 @@ def _hydrate_reason(rec: dict) -> str:
     return err or "unknown"
 
 
-async def _checkpoint(sid: str, rec: dict) -> None:
-    """Pull the committed /workspace from the sandbox and persist it to durable blob storage."""
+def _branch_point_key(rid: str) -> str:
+    """Where a response's branch point is kept (Sessions §1.1), in the response store under a prefix
+    of its own: not beside the response records in responses/, whose namespace is theirs."""
+    return f"branch-points/{rid}.json"
+
+
+# The point a record from before records carried their own (`_branch_point`) was answered with by
+# the store (_branch_point_of), None for none: read once per replica, not at every read of the turns.
+# Such a record has ended, and its point is written before its end and removed only with it, so the
+# answer holds; it is forgotten whenever the record (_resp_cache_forget) or the point is written here.
+_BRANCH_SEEN: "collections.OrderedDict[str, dict | None]" = collections.OrderedDict()
+
+
+def _branch_seen_forget(rid: str) -> None:
+    _BRANCH_SEEN.pop(rid, None)
+
+
+async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: str, ws_sha: str) -> dict | None:
+    """The commit an end-of-turn checkpoint closed on, kept as the response's branch point. Answers
+    the point once it is kept, None when there is none: the turn's record carries the answer as
+    `_branch_point` (_branch_point_of), so a branch, and a session's turns, read it from there.
+
+    Only the point: the runner checks it against the HEAD of the checkpoint it is given, so no
+    copy of the session's latest commit is kept in step with the tarball (one was, written after
+    it, and a put that failed, or a branch that read it while a new turn checkpointed, made every
+    point 409 until the next turn). Nor is the response's place in its session: that is read when
+    a branch is made (_branch_prepare_inner reads and sorts the session's responses anyway), so a
+    turn's end reads nothing back from the store for it. Optional: a failure is recorded on the
+    turn's record, never raised, since the durable checkpoint has already succeeded. A runner that
+    sends no full commit (one from before branching) leaves no point, and a branch from this
+    response is then branch_unavailable. The point is kept in the store as well as on the record: a
+    record from before the record carried it is answered from the store (_branch_point_of)."""
+    if not re.fullmatch(r"[0-9a-f]{40}", git_commit or ""):
+        return None
+    point = {"commit": git_commit, "ws_sha": ws_sha, "session_id": sid,
+             "response_id": response_id, "backend": rec.get("backend") or ""}
+    _branch_seen_forget(response_id)
+    try:
+        if await _blob_put(_branch_point_key(response_id), json.dumps(point).encode(), kb=RESP_BLOB_KB):
+            return point
+    except Exception:  # noqa: BLE001
+        pass
+    rec["branch_checkpoint_unavailable"] = True
+    return None
+
+
+async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_id: str = "") -> dict | None:
+    """Pull the committed /workspace from the sandbox and persist it to durable blob storage.
+
+    `mid_turn`: taken after a tool step while the turn runs (_step_checkpoint_maybe, #505). It does
+    not commit, and the session records when it was taken (ws_mid_turn_at, read by
+    _reapply_app_writes). The end-of-turn checkpoint first settles any mid-turn one, so it is
+    always the last write, and clears the stamp.
+
+    `response_id`: the turn this end-of-turn checkpoint closes. Its commit is saved as that
+    response's branch point (Sessions §1.1). A mid-turn checkpoint never saves one: it commits
+    nothing, and the turn has not ended. Answers the branch point it kept, None when it kept none
+    (a mid-turn checkpoint, a skipped or failed one, a runner that sends no full commit)."""
+    point = None
+    if not mid_turn:
+        await _step_checkpoint_settle(sid)
     _ws_tar_evict(sid)             # workspace changed — next file open refetches
     _WS_FILES_CACHE.pop(sid, None)
     _bus_publish("_ctrl", "_ctrl", "", sid, "", {"type": "hr.ctrl.ws_invalidate"})  # all replicas
@@ -2860,7 +2997,7 @@ async def _checkpoint(sid: str, rec: dict) -> None:
         # the good durable blob from it would destroy the user's work. Skip the checkpoint entirely.
         if rec.get("hydrate_failed_with_checkpoint"):
             rec["checkpoint_skipped_hydrate_failed"] = True
-            return
+            return None
         # Fence backstop (HR-INF-012): if a NEWER turn has taken the session lease, THIS turn's
         # workspace is superseded — writing it would clobber the newer turn's checkpoint
         # (last-writer-wins). Checked BEFORE the relay so a superseded turn doesn't even pull the
@@ -2872,11 +3009,12 @@ async def _checkpoint(sid: str, rec: dict) -> None:
                     print(f"[lease] stale checkpoint sid={sid} mode={LEASE_MODE} fence={_fence}", flush=True)
                     if LEASE_MODE == "enforce":
                         rec["checkpoint_skipped_stale"] = True
-                        return
+                        return None
             except Exception:  # noqa: BLE001
                 pass
         # Stream runner tar -> VG blob without buffering the whole workspace (HR-INF-015).
-        ok, nbytes, ws_sha, git_head = await _checkpoint_relay(sid)
+        taken_at = time.time()     # before the tar: what an app wrote before this is in it
+        ok, nbytes, ws_sha, git_head, git_commit = await _checkpoint_relay(sid, commit=not mid_turn)
         if nbytes > 0:
             rec["checkpoint_bytes"] = nbytes
             rec["checkpointed"] = ok
@@ -2886,11 +3024,123 @@ async def _checkpoint(sid: str, rec: dict) -> None:
             if ok:
                 rec["ws_sha"] = ws_sha
                 await _vertex_upsert(sid, {"checkpoint_bytes": str(nbytes), "git_head": git_head,
-                                           "ws_sha": ws_sha})
+                                           "ws_sha": ws_sha,
+                                           "ws_mid_turn_at": str(taken_at) if mid_turn else ""})
+                if response_id and not mid_turn:
+                    point = await _branch_point_put(sid, rec, response_id, git_commit, ws_sha)
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
         rec["checkpoint_error"] = str(e)[:200]
+    return point
+
+
+# ── checkpoints while a turn runs (#505) ──────────────────────────────────────────
+# A workspace was checkpointed only when its turn ended, so a sandbox that died mid-turn took every
+# step since the last turn with it: hosted, the workspace and its marker live in the sandbox's /tmp.
+# A checkpoint is now also taken after a completed tool step, in the background, one at a time per
+# session and at most one per interval. A step inside the interval is not dropped: it is saved when
+# the interval ends, so the last step before a long one (a build, a sleep) is in a checkpoint too.
+# Self-hosted, the workspace on /data already outlives a restart (#530), so the default is on only
+# where the workspace is a checkpoint tarball (the vg backing).
+_STEP_CKPT = os.environ.get("HR_STEP_CHECKPOINT", "").strip().lower()
+STEP_CKPT_EVERY_S = float(os.environ.get("HR_STEP_CHECKPOINT_EVERY_S", "30"))
+# A workspace whose checkpoint is bigger than this is checkpointed when the turn ends only: the
+# tarball is pulled and uploaded whole each time.
+STEP_CKPT_MAX_BYTES = int(os.environ.get("HR_STEP_CHECKPOINT_MAX_BYTES", str(256 * 1024 * 1024)))
+# sid -> the running turn's worker: {"rec" (the turn's record), "task", "dirty" (a step not yet
+# saved), "busy" (a checkpoint is being written), "last" (when the last one started), "off" (over
+# the size limit)}
+_step_ckpt: dict[str, dict] = {}
+
+
+def _step_ckpt_enabled() -> bool:
+    if _STEP_CKPT in ("1", "true", "on", "yes"):
+        return True
+    if _STEP_CKPT in ("0", "false", "off", "no"):
+        return False
+    return BACKING.mode == "vg"
+
+
+def _tool_step_done(events: list) -> bool:
+    """Whether these events finish a tool step: a tool's result, in the Claude-shaped stream every
+    normaliser emits (the block _blocks_from_canonical turns into a tool_result)."""
+    for ev in events:
+        if not isinstance(ev, dict) or ev.get("type") != "user":
+            continue
+        content = (ev.get("message") or {}).get("content")
+        if isinstance(content, list) and any(isinstance(c, dict) and c.get("type") == "tool_result"
+                                             for c in content):
+            return True
+    return False
+
+
+def _step_checkpoint_maybe(sid: str, rec: dict, events: list) -> None:
+    """Called with each batch of a running turn's events. Never waits: the stream is not held for a
+    tarball."""
+    if not events or not _step_ckpt_enabled() or not _tool_step_done(events):
+        return
+    st = _step_ckpt.get(sid)
+    if st is None or st["rec"] is not rec:
+        # A new turn starts its own; a worker an earlier turn left behind (it ended without the
+        # end-of-turn checkpoint that settles it) is stopped unless it is writing.
+        if st is not None and st["task"] is not None and not st["busy"]:
+            st["task"].cancel()
+        st = _step_ckpt[sid] = {"rec": rec, "task": None, "dirty": False, "busy": False,
+                                "last": 0.0, "off": False}
+    if st["off"]:
+        return
+    st["dirty"] = True
+    if st["task"] is None or st["task"].done():
+        st["task"] = asyncio.create_task(_step_checkpoint_run(sid, rec, st))
+
+
+async def _step_checkpoint_run(sid: str, rec: dict, st: dict) -> None:
+    try:
+        while st["dirty"] and not st["off"]:
+            wait = st["last"] + STEP_CKPT_EVERY_S - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            st["dirty"] = False
+            st["last"] = time.time()
+            st["busy"] = True
+            try:
+                await _step_checkpoint(sid, rec, st)
+            finally:
+                st["busy"] = False
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:  # noqa: BLE001 — a mid-turn checkpoint never fails the turn
+        print(f"[checkpoint] mid-turn sid={sid} {type(e).__name__}: {str(e)[:160]}", flush=True)
+
+
+async def _step_checkpoint(sid: str, rec: dict, st: dict) -> None:
+    size = rec.get("_step_ckpt_bytes")
+    if size is None:
+        size = int(float(((await _vertex_get(sid)) or {}).get("checkpoint_bytes") or 0))
+    if size > STEP_CKPT_MAX_BYTES:
+        st["off"] = True
+        return
+    # Written into a record of its own: a mid-turn outcome must not stand in for the turn's
+    # (checkpoint_error is never cleared by a later success). The guards it reads are the turn's.
+    out = {k: rec[k] for k in ("lease_fence", "tenant", "hydrate_failed_with_checkpoint") if k in rec}
+    await _checkpoint(sid, out, mid_turn=True)
+    rec["_step_ckpt_bytes"] = int(out.get("checkpoint_bytes") or size)
+    if out.get("checkpointed"):
+        rec["step_checkpoints"] = int(rec.get("step_checkpoints") or 0) + 1
+
+
+async def _step_checkpoint_settle(sid: str) -> None:
+    """Before the end-of-turn checkpoint: one being written is waited for, so the end-of-turn one is
+    the last write; one waiting out its interval is dropped, since the end-of-turn one covers it."""
+    st = _step_ckpt.pop(sid, None)
+    t = st["task"] if st else None
+    if t is None or t.done():
+        return
+    st["dirty"] = False
+    if not st["busy"]:
+        t.cancel()
+    await asyncio.wait({t})
 
 
 # ── HarnessSession vertex (best-effort; never blocks a turn) ──────────────────────
@@ -3013,13 +3263,29 @@ async def _trace_terminal_status(base: str, since_ms: int = 0) -> str | None:
     return None
 
 
+# A memory tool's answer is kept on a reopened turn, so it can still say what a recall found ("Found 3 things",
+# "Recalled 3 things"): the memory_* tools of the memories server, under whatever prefix the agent's CLI gives a
+# server's tools (memories.memory_recall, mcp__memories__memory_recall, memories_2/memory_recall). At most this many
+# bytes of each, redacted as everything a memory keeps is. Any other tool's output is not kept here.
+_MEMORY_TOOL = re.compile(r"(?:^|__|\.|:|/)memory_[a-z_]+$")
+_TURN_TOOL_OUTPUT_MAX = 8 * 1024
+
+
+def _turn_tool_output(text) -> str:
+    out = _memory_redact(str(text or ""))
+    raw = out.encode()
+    return out if len(raw) <= _TURN_TOOL_OUTPUT_MAX else raw[:_TURN_TOOL_OUTPUT_MAX].decode("utf-8", "ignore")
+
+
 def _output_to_turn_fields(output: list[dict]) -> tuple[str, list[dict], list[dict]]:
     """Project a Responses output[] into the (assistant_text, tools, files) the Workbench renders.
     ONE parser, shared by the finalized-record path and the in-flight trace-replay path, so both
-    render a turn identically."""
+    render a turn identically. A memory tool's call carries its answer as `output` (_MEMORY_TOOL)."""
     asst_parts: list[str] = []
     tools: list[dict] = []
     files: list[dict] = []
+    answers = {str(o.get("call_id") or ""): o.get("output") for o in (output or [])
+               if isinstance(o, dict) and o.get("type") == "function_call_output" and o.get("call_id")}
     for o in (output or []):
         t = o.get("type")
         if t == "message":
@@ -3035,7 +3301,11 @@ def _output_to_turn_fields(output: list[dict]) -> tuple[str, list[dict], list[di
                                           "filename": a.get("filename"),
                                           "download_url": _file_url(a.get("container_id") or "", a.get("file_id") or "")})
         elif t == "function_call":
-            tools.append({"name": o.get("name"), "arguments": o.get("arguments", "")})
+            tool = {"name": o.get("name"), "arguments": o.get("arguments", "")}
+            said = answers.get(str(o.get("call_id") or ""))
+            if said is not None and _MEMORY_TOOL.search(str(o.get("name") or "")):
+                tool["output"] = _turn_tool_output(said)
+            tools.append(tool)
     return "\n\n".join(asst_parts), tools, files
 
 
@@ -3141,7 +3411,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     model = str(v.get("model") or "")
     harness_id = tr["harness_id"]
     member = tr["member"]
-    translator = _RespTranslator(resp_id, model, None, True, time.time(), sid=sid,
+    translator = _RespTranslator(resp_id, model,
+                                 (_orig_rec or {}).get("previous_response_id"),
+                                 (_orig_rec or {}).get("store", True),
+                                 (_orig_rec or {}).get("created_at") or time.time(), sid=sid,
                                  # The original owner computed this from the request body, which
                                  # this replica never saw. Without it, the settle below overwrites
                                  # the stored record and the marker vanishes exactly when a turn is
@@ -3149,6 +3422,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
                                  # the running snapshot and then not on the terminal record, which
                                  # reads as the field having been honoured after all (tasks.md 1.1).
                                  ignored=((_orig_rec or {}).get("metadata") or {}).get("ignored_fields"))
+    translator.branched_from = str(((_orig_rec or {}).get("metadata") or {}).get("branched_from") or "")
     # Resume at the PER-TURN harvest cursor (the sandbox indexes /turn/{rt}?since=N in THIS turn's
     # own event space — NOT the session-wide trace count). The primary loop persists it after each
     # ack'd flush; poll since=cursor so no already-flushed event is re-written or re-emitted. If it
@@ -3200,6 +3474,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
                             _emit(oev)
                     except Exception:  # noqa: BLE001
                         continue
+                _step_checkpoint_maybe(sid, rec, new)    # as on the primary loop (#505)
                 # Advance the durable per-turn cursor as WE harvest, so if this adopter also dies a
                 # third replica resumes correctly (adoption chains without re-flushing).
                 try:
@@ -3253,7 +3528,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     await _browser_close(sid, "turn_end")
     # Saved before the answer completes, as on the primary path: whether a file too large to
     # attach is in the task's files is known only once the save has landed (_too_large_saved).
-    await _checkpoint(sid, rec)
+    translator.ended_checkpoint(await _checkpoint(sid, rec, response_id=resp_id))
     try:
         _too_large_saved(produced, rec)
         # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
@@ -3273,7 +3548,9 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     try:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
-                  "_member": member}
+                  "_member": member, "_input": (_orig_rec or {}).get("_input") or [],
+                  "_backend": (_orig_rec or {}).get("_backend") or rec.get("backend") or "",
+                  **translator.branch_mark()}
         if _status == "incomplete" and translator.input_request:
             # the question the turn ended on, for the answer to be checked against (§3.2)
             stored["_pending_input"] = translator.pending_input()
@@ -3287,7 +3564,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             if _status == "incomplete" and translator.input_request:
                 # ...and so is the question: its message and its item are the gateway's as well (§3.2)
                 stored["output"] += translator.output[-2:]
-        await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
+        await _resp_put(resp_id, stored, org, sid, (_orig_rec or {}).get("previous_response_id"),
+                        _status, (_orig_rec or {}).get("created_at") or translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
     if fence:
@@ -3622,8 +3900,8 @@ async def _start_reconcile() -> None:
     async def loop() -> None:
         while True:
             try:
-                # Single-flight across replicas (HR-INF-010): the sweep is a full-label Gremlin scan
-                # on the shared partition; running it on every replica every cycle was O(replicas)
+                # Single-flight across replicas (HR-INF-010): the sweep is a full-label graph scan
+                # on a shared store; running it on every replica every cycle was O(replicas)
                 # identical scans. A one-shot TTL lock elects one sweeper per cycle. Safe because the
                 # sweep is an idempotent healer of orphaned 'running' vertices derived from durable
                 # blob truth — a skipped cycle only delays healing (nothing depends on multiplicity),
@@ -3710,7 +3988,7 @@ def _turn_harness_check(harness_id: str, hv: dict | None) -> None:
 async def _harness_vertex(harness_id: str) -> dict | None:
     """Read a Harness vertex (HR tenant) as a flat dict — its config (mcp_servers, skills props)."""
     # harness_id is caller-controlled (metadata / X-Harness-Id) and now drives BILLING — keep it to
-    # the id charset (chrn<hex> / builtin slugs) so it can never smuggle Gremlin syntax.
+    # the id charset (chrn<hex> / builtin slugs) so it can never smuggle query syntax.
     if not harness_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", harness_id):
         return None
     # The label scope is load-bearing: harness_id is caller-controlled, and billing keys off this
@@ -3943,6 +4221,8 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             # services. That is the lesson of 2026-07-25, and it is a property of first-party
             # servers rather than of databases. What the sandbox holds is a capability scoped to
             # this harness, this session and the record this entry's auth names, and it expires.
+            if _hosted_server_name(s) == _MEMORIES_SERVER and not _memories_go_with(v, org):
+                continue            # not the harness's own organization: never the owner's memory (_memories_go_with)
             key = _vault_key(s.get("auth"))
             if not key.startswith(_HOSTED_SECRET_PREFIX):
                 print(f"[mcp] '{s.get('name')}' on {harness_id} points here but names no record "
@@ -4076,7 +4356,9 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
     if not takes_skills:
         skills_out = []        # nothing on this base can read a skill; see _BASE_CATALOG["systemone"]
 
-    disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
+    # As the pinned CLI names them: a harness saved before 0.41.3 may hold ids it does not (_stored_tools_current).
+    disabled_tools = [t for t in _stored_tools_current(_backend_of_harness(v), _arr("disabled_tools"))
+                      if isinstance(t, str)]
     return mcp_out, skills_out, suppressed, disabled_tools, plugins_out
 
 
@@ -4092,7 +4374,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
 # account" are very different grants.
 #
 # The surface below is the complete documented one for every brokered provider, taken from what the
-# runner actually configures (harness_runner/server.py): Claude Code speaks the Anthropic Messages
+# runner actually configures (runner/server.py): Claude Code speaks the Anthropic Messages
 # API, Codex speaks Responses or Chat Completions, hermes speaks Chat Completions. Matching is on
 # the suffix AFTER the v1/ collapse, so it is the same string for every base_url shape.
 #
@@ -4117,6 +4399,32 @@ _BROKER_IMAGE_PATHS = {"images/generations", "images/edits", "images/variations"
 HR_BROKER_IMAGES = os.environ.get("HR_BROKER_IMAGES", "0").strip().lower() in ("1", "on", "true")
 
 
+# The resource each custom format's clients call, as the broker sees it after its v1/ collapse: the paths
+# the console's form says are appended to an address that is not a full URL.
+_FULL_URL_RESOURCE = {"openai": "chat/completions", "responses": "responses", "anthropic": "messages"}
+
+
+def _conn_full_url(conn: dict | None) -> bool:
+    """Whether a connection's address is the full request URL: "Use Full URL" on a custom connection
+    (stored "1"). Read under the vendor's own name, which a turn's connection carries as `_vendor`
+    beside the runner's name for it, and the broker's as `provider`."""
+    c = conn or {}
+    vendor = str(c.get("_vendor") or c.get("provider") or "").strip().lower()
+    return vendor == "custom" and str(c.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _conn_request_url(conn: dict, base: str, suffix: str) -> str | None:
+    """Where a call for `suffix` goes on this connection, before any query: the connection's base with
+    the suffix joined, as always; or, when the connection's address is the full request URL, that
+    address exactly, for the one resource its API format names. Any other path has no address on such
+    a connection (the stored URL is no model list, token count or compaction, and no other format's
+    endpoint): None, and the caller sends nothing."""
+    if not _conn_full_url(conn):
+        return f"{base}/{suffix}" if suffix else base
+    fmt = str(conn.get("api_format") or "openai").strip().lower()
+    return base if suffix.strip("/").lower() == _FULL_URL_RESOURCE.get(fmt) else None
+
+
 def _broker_path_allowed(suffix: str) -> bool:
     """True if this upstream path is part of the inference surface."""
     s = (suffix or "").strip("/").lower()
@@ -4139,6 +4447,48 @@ _RELAY_OURS = frozenset({"x-internal-key", "cookie", "proxy-authorization", "for
                          "cf-connecting-ip", "true-client-ip", "x-client-ip"})
 
 
+# The headers a provider reads a key from. The caller's are never forwarded (_BROKER_HOP), and the
+# connection's own key goes in exactly one of them (_with_credential).
+_CREDENTIAL_HEADERS = ("authorization", "api-key", "x-api-key", "x-goog-api-key")
+
+
+def _conn_custom_messages(conn: dict) -> bool:
+    """Whether a connection is a custom one declared in the Anthropic Messages format. Read under the vendor's
+    own name, which a turn's connection carries as `_vendor` beside the runner's name for it."""
+    vendor = str(conn.get("_vendor") or conn.get("provider") or "").strip().lower()
+    return vendor == "custom" and str(conn.get("api_format") or "").strip().lower() == "anthropic"
+
+
+def _conn_reads_x_api_key(conn: dict) -> bool:
+    """Whether a connection's API reads its key from x-api-key, as Anthropic's Messages API does: Anthropic's
+    own connection, and a custom one declared in the Anthropic format."""
+    provider = str(conn.get("provider") or "").strip().lower()
+    vendor = str(conn.get("_vendor") or provider).strip().lower()
+    return "anthropic" in (provider, vendor) or _conn_custom_messages(conn)
+
+
+async def _with_credential(headers: dict, conn: dict) -> dict:
+    """The connection's stored credential on an outbound request, in the one header its API reads and in no
+    other: an Azure resource's api-key (or a Microsoft Entra token as a Bearer), x-api-key for an Anthropic
+    Messages API, a Bearer for everything else. Any credential header already present goes first, so a key
+    never travels in two headers, and the caller's credential (a turn's, as Bearer and x-api-key both) never
+    travels at all. The broker and the memory relay both send through here."""
+    for name in [k for k in headers if k.lower() in _CREDENTIAL_HEADERS]:
+        del headers[name]
+    key = str(conn.get("api_key") or "")
+    provider = str(conn.get("provider") or "").strip().lower()
+    if provider in ("azure", "azure-foundry"):
+        if _entra_conn(conn):
+            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
+        else:
+            headers["api-key"] = key
+    elif _conn_reads_x_api_key(conn):
+        headers["x-api-key"] = key
+    else:
+        headers["authorization"] = f"Bearer {key}"
+    return headers
+
+
 def _relay_out_headers(incoming) -> dict:
     """The caller's headers that may go on to a provider: never the hop or auth names (the connection's own
     credential replaces them), never ours, never one carrying this process's own secret."""
@@ -4152,6 +4502,120 @@ def _relay_out_headers(incoming) -> dict:
             continue
         out[k] = val
     return out
+
+
+# ── request headers on a connection ─────────────────────────────────────────────────────────
+# A gateway in front of a provider often wants a header beside the key: Cloudflare AI Gateway's
+# cf-aig-authorization, Helicone's Helicone-Auth, Portkey's x-portkey-*, OpenRouter's HTTP-Referer and
+# X-Title, an internal gateway's X-Project. A connection carries them as `headers`, and the broker adds
+# them to every request it forwards on that connection. They are applied HERE and nowhere else: every
+# base reaches its provider through the broker (the loopback relay forwards to it), so this is one place
+# rather than one per CLI. A header value is often a credential, so it is held the way the key is: never
+# handed to the sandbox (a connection with headers is brokered in owner trust too, see _auth_from_conn),
+# masked on read, and typed again when the connection's address changes.
+_CONN_HEADERS_MAX = 20
+_CONN_HEADERS_MAX_BYTES = 8192
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")     # a token, RFC 9110 §5.6.2
+_HEADER_VALUE_BAD = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")         # a control character (a tab is allowed)
+# What the gateway sets itself and a connection must never replace: the credential, the hop, the body's
+# framing, the turn's trace context, and our own names.
+_CONN_HEADERS_RESERVED = frozenset({*_BROKER_HOP, *_RELAY_OURS, "content-type", "content-encoding",
+                                    "accept-encoding", "te", "trailer", "upgrade", "expect", "via",
+                                    "proxy-connection", "traceparent", "tracestate", "baggage"})
+# And by prefix, in any case: our own names, a proxy's or a forwarding hop's (a connection speaks for no
+# client and no hop), AWS's request signing (Bedrock is refused below; no other provider reads them), and
+# Cloudflare's (the client address, the edge's request and worker markers, the Access assertion it hands
+# an origin). A customer's own extra credential for their own address is what this feature is for and stays
+# allowed: Cloudflare AI Gateway's cf-aig-authorization, an Access service token's cf-access-client-id and
+# -secret, an API management subscription key.
+_CONN_HEADERS_RESERVED_PREFIX = (*_RELAY_OURS_PREFIX, "x-internal-", "proxy-", "x-forwarded-", "x-amz-", "cf-")
+_CONN_HEADERS_CUSTOMER_PREFIX = ("cf-aig-", "cf-access-client-")
+# Providers whose requests are not the broker's to carry: Bedrock signs its own (a header added after
+# the signature is one the signature does not cover), Qoder's runtime and the media providers are other
+# APIs. Refused at write with the reason rather than saved and never sent.
+_CONN_HEADERS_REFUSED_PROVIDERS = frozenset({"bedrock", "vertex", "qoder", "elevenlabs"})
+
+
+def _conn_header_problem(name: str, value, carried_ok: bool) -> str:
+    """Why one header cannot be sent, "" when it can."""
+    if not _HEADER_NAME_RE.match(name):
+        return f"{name!r} is not a header name"
+    low = name.lower()
+    if low in _CONN_HEADERS_RESERVED or (low.startswith(_CONN_HEADERS_RESERVED_PREFIX)
+                                         and not low.startswith(_CONN_HEADERS_CUSTOMER_PREFIX)):
+        return f"the {name} header is set by the gateway, not by a connection"
+    if not isinstance(value, str):
+        return f"the {name} header's value is text"
+    if value == _SECRET_SENTINEL:
+        return "" if carried_ok else f"the {name} header has no value"
+    if not value.strip():
+        return f"the {name} header has no value"
+    if _HEADER_VALUE_BAD.search(value):
+        return f"the {name} header's value holds a line break or another control character"
+    return ""
+
+
+def _conn_headers_error(provider: str, headers, carried_ok: bool = True) -> str:
+    """Why a connection's headers cannot be saved, "" when they can. `carried_ok` accepts the sentinel
+    for a value the console did not see (an integration's saved header, kept on an unchanged save)."""
+    if headers is None or headers == {}:
+        return ""
+    if not isinstance(headers, dict):
+        return "headers is an object of header names and their values"
+    prov = str(provider or "").strip().lower()
+    if prov in _CONN_HEADERS_REFUSED_PROVIDERS:
+        return f"request headers are not available on a {prov} connection, which the model broker does not carry"
+    if len(headers) > _CONN_HEADERS_MAX:
+        return f"at most {_CONN_HEADERS_MAX} request headers"
+    seen: set[str] = set()
+    size = 0
+    for k, v in headers.items():
+        name = str(k).strip()
+        why = _conn_header_problem(name, v, carried_ok)
+        if why:
+            return why
+        if name.lower() in seen:
+            return f"the {name} header is given twice"
+        seen.add(name.lower())
+        size += len(name) + len(v)
+    if size > _CONN_HEADERS_MAX_BYTES:
+        return f"the request headers are longer than {_CONN_HEADERS_MAX_BYTES} bytes together"
+    return ""
+
+
+def _conn_headers(conn: dict | None) -> dict[str, str]:
+    """The connection's headers as they go upstream. Each is checked again here, not only at write: a
+    connection can arrive from an environment connector or a store written before the check, and a name
+    that slipped through must never replace the key's header or forge a second line."""
+    raw = (conn or {}).get("headers")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        name = str(k).strip()
+        if _conn_header_problem(name, v, carried_ok=False) or name.lower() in {n.lower() for n in out}:
+            print(f"[broker] connection {str((conn or {}).get('name') or '')!r}: header {name!r} not sent "
+                  f"(not a header the gateway lets a connection set)", flush=True)
+            continue
+        out[name] = v.strip()
+    return out
+
+
+def _with_conn_headers(headers: dict, conn: dict | None) -> dict:
+    """`headers` with the connection's own on top: a connection's header replaces the client's header of
+    the same name, in whatever case either was written."""
+    for name, value in _conn_headers(conn).items():
+        for k in [k for k in headers if k.lower() == name.lower()]:
+            del headers[k]
+        headers[name] = value
+    return headers
+
+
+def _conn_headers_public(headers) -> dict | None:
+    """A connection's headers as a reader sees them: the names, each value the sentinel."""
+    if not isinstance(headers, dict) or not headers:
+        return None
+    return {str(k): _SECRET_SENTINEL for k in headers}
 
 
 # What the broker removes from a request, by request shape and by key, and nothing else:
@@ -4572,7 +5036,10 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     """What a turn says when the provider refused the org's own connection. A connection that signs
     in with Microsoft Entra has no key: what was refused is the application, by Entra (a wrong
     directory, id or secret) or by the resource (no role on it), and the provider's words say which."""
-    provider = str((conn or {}).get("provider") or "your provider")
+    # The vendor the operator connected, not the name the runner speaks it as: an integration's
+    # connection carries the runner's wiring (`provider`, e.g. "tokenrouter" for any OpenAI-format
+    # custom endpoint on some bases) and keeps the vendor in `_vendor`.
+    provider = str((conn or {}).get("_vendor") or (conn or {}).get("provider") or "your provider")
     what = "connection" if str((conn or {}).get("auth") or "").strip().lower() == "entra" else "key"
     return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
 
@@ -4653,8 +5120,14 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
         # provider here is the INTEGRATION's own type — it selects the upstream auth header, which
         # is all the broker needs (the runner-side wiring already happened at turn start).
         cfg["provider"] = (integ.get("provider") or "").lower()
+        # the integrations here are the operator's own (one document, the platform's): never an address an
+        # organization typed
+        cfg["_org_supplied"] = False
         return _with_provider_base(cfg)
-    conn, _ = await _get_connection(org, conn_name)
+    conn, src = await _get_connection(org, conn_name)
+    if conn:
+        # an address an organization typed (its own tenant's connection) is checked where the relay opens it
+        conn = {**conn, "_org_supplied": bool(src) and src != GLOBAL_TENANT}
     return _with_provider_base(conn)
 
 
@@ -4762,8 +5235,141 @@ async def _entra_token(conn: dict) -> str:
         return token
 
 
+# ── memory services on the model relay (memory_relay) ──────────────────────────────────────────────
+# A memory vendor's server calls /v1/llm with an `hrm_` credential instead of a provider key: each call names one of its
+# service's models and goes through this instance's key for that model. Set up and withdrawn by the operator (internal
+# routes below); the registry is a vault document, so a credential is checked on every call.
+# The keys memory services may use, in order (provider types or key names); unset = any key, the model's maker first.
+# A test instance sets "vercel,azure-foundry" so its vendors spend gateway credit, never a provider's own key.
+HR_MEMORY_RELAY_KEYS = [x.strip() for x in os.environ.get("HR_MEMORY_RELAY_KEYS", "").split(",") if x.strip()]
+
+
+async def _memory_services() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, memory_relay.REGISTRY_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+        return doc if isinstance(doc, dict) else {}
+    except ValueError:
+        return {}
+
+
+class MemoryServiceIn(BaseModel):
+    vendor: str
+    llm_model: str
+    embedding_model: str
+    small_model: str = ""
+
+
+@app.post("/v1/memory-services", dependencies=[Depends(_internal_only)])
+async def memory_service_create(b: MemoryServiceIn) -> dict:
+    """A memory service and its credential, which is answered once here and kept nowhere else (it is the gateway's
+    signature over the id, so the vendor's server holds it, from the vault)."""
+    if b.vendor not in memory_relay.VENDORS:
+        raise HTTPException(400, f"vendor must be one of {', '.join(memory_relay.VENDORS)}")
+    catalog, integrations = await _effective_model_map(), await _integrations_doc()
+    for field, want in (("llm_model", "chat"), ("small_model", "chat"), ("embedding_model", "embedding")):
+        model = getattr(b, field)
+        if not model and field == "small_model":
+            continue
+        if memory_relay.kind_of(model, catalog) != want:
+            raise HTTPException(400, f"{field}: {model!r} is not a {want} model a memory service can use")
+        if not memory_relay.pick(model, integrations, catalog, _integration_models, HR_MEMORY_RELAY_KEYS):
+            raise HTTPException(400, f"{field}: no key here serves {model}")
+    doc = await _memory_services()
+    sid = memory_relay.new_id()
+    doc[sid] = memory_relay.service_record(b.vendor, b.llm_model, b.embedding_model, b.small_model)
+    await _vault_put(GLOBAL_TENANT, memory_relay.REGISTRY_KEY, json.dumps(doc))
+    return {"id": sid, "credential": memory_relay.mint(_memory_relay_key(), sid), **doc[sid]}
+
+
+@app.get("/v1/memory-services", dependencies=[Depends(_internal_only)])
+async def memory_service_list() -> dict:
+    return {"data": [{"id": k, **v} for k, v in (await _memory_services()).items()]}
+
+
+@app.post("/v1/memory-services/{sid}/revoke", dependencies=[Depends(_internal_only)])
+async def memory_service_revoke(sid: str) -> dict:
+    doc = await _memory_services()
+    if sid not in doc:
+        raise HTTPException(404, "no such memory service")
+    doc[sid]["revoked"] = True
+    await _vault_put(GLOBAL_TENANT, memory_relay.REGISTRY_KEY, json.dumps(doc))
+    return {"id": sid, **doc[sid]}
+
+
+def _memory_relay_key() -> bytes:
+    """What memory service credentials are signed with. Not the internal key: a self-hosted container makes that one
+    afresh at every start (docker/entrypoint.sh), so after a restart every engine's credential was refused and its
+    memories silently stopped being read. This one is derived from HR_SECRET_KEY, which is kept on the data volume, with
+    a label of its own, so it lasts as long as the secrets it sits beside and is never that key itself. A credential is
+    withdrawn through the registry's `revoked`, as before."""
+    base = os.environ.get("HR_SECRET_KEY", "") or _UNSET_KEY_FALLBACK
+    return hmac.new(base.encode(), b"harnessrouter memory relay v1", hashlib.sha256).digest()
+
+
+async def _memory_relay(tok: str, path: str, request: Request):
+    """A memory service's call: its own models only, on the inference paths only, through the key that serves the
+    model, which is named the way that key names it. The agents' turn credential plays no part, and neither does any
+    organization's own connection: only this instance's keys (the integrations an operator set) serve a service."""
+    sid = memory_relay.verify(_memory_relay_key(), tok)
+    svc = (await _memory_services()).get(sid) if sid else None
+    if not svc or svc.get("revoked"):
+        raise HTTPException(401, "invalid memory service credential")
+    suffix = path[3:] if path.startswith("v1/") else path
+    kind = memory_relay.PATHS.get(suffix)
+    if request.method != "POST" or not kind:
+        raise HTTPException(403, "this path is not available to a memory service")
+    raw = await request.body()
+    model = memory_relay.model_in(raw)
+    catalog = await _effective_model_map()
+    if model not in memory_relay.models_of(svc) or memory_relay.kind_of(model, catalog) != kind:
+        raise HTTPException(403, f"this memory service doesn't use {model or 'that model'} here")
+    got = memory_relay.pick(model, await _integrations_doc(), catalog, _integration_models, HR_MEMORY_RELAY_KEYS)
+    if not got:
+        raise HTTPException(502, f"no key here serves {model}")
+    integ, pid = got
+    conn = _with_provider_base({**dict(integ.get("config") or {}), "provider": str(integ.get("provider") or "").lower()}) or {}
+    provider = str(conn.get("provider") or "")
+    base = _provider_base_url(provider, str(conn.get("base_url") or ""))
+    if not base:
+        raise HTTPException(502, "that key has no address")
+    headers = await _with_credential(_relay_out_headers(request.headers), conn)
+    body = _strip_unsupported(memory_relay.with_model(raw, pid), provider=provider, byok=True, path=suffix, keep_thinking=False)
+    url = _conn_request_url(conn, base, suffix)
+    if url is None:
+        raise HTTPException(502, f"that key's address is a full request URL, with no address for {suffix}")
+    rc = _relay_client()
+    up = await rc.send(rc.build_request("POST", url, headers=headers, content=body), stream=True)
+    print(f"[memory-relay] {sid} {svc.get('vendor')} {suffix} {model} -> {integ.get('name')} {up.status_code}", flush=True)
+
+    async def pump():
+        try:
+            async for chunk in up.aiter_raw():
+                yield chunk
+        finally:
+            await up.aclose()
+    out = {k: val for k, val in up.headers.items() if k.lower() not in ("content-length", "transfer-encoding", "connection")}
+    return StreamingResponse(pump(), status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
+
+
+async def _broker_send(rc: httpx.AsyncClient, req: httpx.Request, org_supplied: bool, sid: str) -> httpx.Response:
+    """The broker's send, first or again. Where an organization's own address resolved inside this deployment's
+    networks, _CheckedNetwork refused the socket: that is said as such, a 403 with the reason, on every send."""
+    try:
+        return await rc.send(req, stream=True)
+    except httpx.ConnectError as e:
+        why = str(e)
+        if not (org_supplied and why.startswith("that address cannot be used: ")):
+            raise
+        # the reason goes to the caller; the log line names the session only (nothing read off the connection)
+        print(f"[relay] refused an organization's connection address at the socket sid={sid}", flush=True)
+        raise HTTPException(403, f"This connection's address can't be used: {why.removeprefix('that address cannot be used: ')}.") from None
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
+    if _broker_token(request).startswith(memory_relay.PREFIX):
+        return await _memory_relay(_broker_token(request), path, request)
     claims = _verify_turn_cred(_broker_token(request))
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
@@ -4776,6 +5382,14 @@ async def llm_broker(path: str, request: Request):
     base = _provider_base_url(str(conn.get("provider") or ""), str(conn.get("base_url") or ""))
     if not base:
         raise HTTPException(502, "connection has no base_url")
+    # An organization's own connection goes where its address resolves to only when that is outside this
+    # deployment's networks, and only as an address: _org_endpoint_problem now, _relay_checked_client at the socket.
+    org_supplied = bool(conn.get("_org_supplied")) and not _pool_is_local()
+    if org_supplied:
+        why = _org_endpoint_problem(base)
+        if why:
+            print(f"[relay] refused an organization's connection address as written sid={sid}", flush=True)
+            raise HTTPException(403, f"This connection's address can't be used: {why}.")
     # CLIs append their own version segment (…/v1/messages, …/v1/responses) while provider
     # base_urls already end in /v1 — collapse the duplicate rather than 404 upstream.
     suffix = path[3:] if path.startswith("v1/") else path
@@ -4784,23 +5398,21 @@ async def llm_broker(path: str, request: Request):
               f"mode={HR_BROKER_PATHS}", flush=True)
         if HR_BROKER_PATHS == "enforce":
             raise HTTPException(403, "this path is not available through the model broker")
-    url = f"{base}/{suffix}" if suffix else base
+    url = _conn_request_url(conn, base, suffix)
+    if url is None:
+        print(f"[broker] {suffix!r} has no address on a connection whose address is a full request URL "
+              f"(sid={sid}); nothing sent", flush=True)
+        raise HTTPException(404, "This connection's address is the full request URL for its API format, "
+                                 "so this path has no address on it.")
     if request.url.query:
-        url = f"{url}?{request.url.query}"
+        # a stored full URL may carry its own query (an api-version); the client's joins it
+        url = f"{url}{'&' if _conn_full_url(conn) and '?' in url else '?'}{request.url.query}"
 
-    headers = _relay_out_headers(request.headers)
-    key = str(conn.get("api_key") or "")
+    headers = await _with_credential(_relay_out_headers(request.headers), conn)
     provider = str(conn.get("provider") or "")
-    # Present the real credential the way THIS provider expects it.
-    if provider in ("azure", "azure-foundry"):
-        if _entra_conn(conn):
-            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
-        else:
-            headers["api-key"] = key
-    elif provider == "anthropic":
-        headers["x-api-key"] = key
-    else:
-        headers["authorization"] = f"Bearer {key}"
+    # The connection's own headers (a gateway's project or auth header), after the credential: none of
+    # them may name the credential's header, so none can replace it.
+    _with_conn_headers(headers, conn)
 
     body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix,
                               keep_thinking=bool(_turn_cred_level(_broker_token(request))))
@@ -4808,9 +5420,9 @@ async def llm_broker(path: str, request: Request):
         body = _google_with_signatures(body, sid)
     if provider in _STRICT_GEMINI_CHANNELS and "gemini" in _body_model_name(body).lower():
         body = _with_gemini_schemas(body)
-    rc = _relay_client()
+    rc = _relay_checked_client() if org_supplied else _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
-    up = await rc.send(req, stream=True)
+    up = await _broker_send(rc, req, org_supplied, sid)
     if provider == "google" and up.status_code == 400:
         # Google's OpenAI-compatible endpoint refuses a request that names any field it does not
         # know ("Unknown name \"store\": Cannot find field."), and the harnesses send OpenAI's
@@ -4825,7 +5437,7 @@ async def llm_broker(path: str, request: Request):
             body = _without_field(body, unknown)
             print(f"[broker] google refused field {unknown!r}; sent again without it sid={sid}", flush=True)
             req = rc.build_request(request.method, url, headers=headers, content=body or None)
-            up = await rc.send(req, stream=True)
+            up = await _broker_send(rc, req, org_supplied, sid)
             if up.status_code != 400:
                 break
             refused = await up.aread()
@@ -4851,7 +5463,7 @@ async def llm_broker(path: str, request: Request):
             print(f"[broker] {provider} refused reasoning_effort's thinking shape for {_body_model_name(body)!r}; "
                   f"sent again without it sid={sid}", flush=True)
             req = rc.build_request(request.method, url, headers=headers, content=body or None)
-            up = await rc.send(req, stream=True)
+            up = await _broker_send(rc, req, org_supplied, sid)
         else:
             return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
                             headers={k: val for k, val in up.headers.items()
@@ -4896,11 +5508,11 @@ async def llm_broker(path: str, request: Request):
 #      retry. Added the structured error envelope. The old `detail` string is still emitted beside
 #      it, because clients in the wild read it — it is documented as deprecated, not removed under
 #      them.
-UHP_VERSION = "2026-09-28"
+UHP_VERSION = "2026-10-04"
 # Both versions, one code path: 2026-09-12 is additive to 2026-08-11 (plugins, and nothing
 # the earlier version defined changes shape), so the same objects answer either request and
 # the header is the only thing that differs. VERSIONING.md, server rule 3.
-UHP_VERSIONS = [UHP_VERSION, "2026-09-12", "2026-08-11"]
+UHP_VERSIONS = [UHP_VERSION, "2026-09-28", "2026-09-12", "2026-08-11"]
 # The Agent Plugins manifest schemas this server installs (Plugins §7). A package targeting
 # another version is refused with unsupported_plugin_schema naming this list.
 UHP_PLUGIN_SCHEMAS = ["https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"]
@@ -4935,6 +5547,11 @@ UHP_CAPABILITIES = {
     # `input_response` item on the next request, chained on the response. Served to the bases in
     # _INPUT_REQUEST_BASES (GET /v1/bases says which).
     "input_requests": True,
+    "memories": True,
+    # Sessions §1.1: `branch: true` beside previous_response_id starts a new session from that
+    # response's committed files and transcript (_branch_source, _branch_prepare). Optional at every
+    # class (VERSIONING: within a version only optional things are added), so it is a capability.
+    "session_branching": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 # The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
@@ -5085,7 +5702,7 @@ async def readyz(response: Response) -> dict:
     checks: dict = {}
     ok = True
     # Blob/graph plane: a RAISING probe (the normal _blob_list swallows errors and returns
-    # empty, so it could never fail readiness). This does the keyed vg-gateway round-trip and
+    # empty, so it could never fail readiness). This does a keyed round-trip to the store and
     # treats a non-2xx / unreachable / unconfigured plane as NOT ready.
     try:
         await asyncio.wait_for(BACKING.blob.probe(), timeout=5)
@@ -5386,6 +6003,8 @@ async def session_detail(sid: str, request: Request) -> dict:
     org, v = await _owned_session(request, sid)
     out = {"session_id": sid,
            **{k: val for k, val in v.items() if k not in ("id", "pk", "label")}}
+    if "branched_from" in out:
+        out["branched_from"] = _branch_origin(out["branched_from"])
     base = _prefix_from_vertex(sid, v)
     if base:
         mb = await _blob_get(_manifest_key(base), kb=TRACE_KB)
@@ -5823,6 +6442,7 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
         for rid in await _session_records("HarnessResponse", "session_id", sid, index):
             _resp_cache_forget(rid)
             await _blob_delete(f"responses/{rid}.json", kb=RESP_BLOB_KB)
+            await _blob_delete(_branch_point_key(rid), kb=RESP_BLOB_KB)
             await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
@@ -5872,11 +6492,20 @@ class ConnBody(BaseModel):
     gcp_region: str | None = None
     gcp_sa_json: str | None = None
     wire_api: str | None = None
+    # Request headers the broker adds upstream (see _conn_headers): {name: value}.
+    headers: dict[str, str] | None = None
 
 
 @app.put("/v1/orgs/{org}/connections/{name}", dependencies=[Depends(_internal_only)])
 async def put_connection(org: str, name: str, body: ConnBody) -> dict:
+    why = _conn_headers_error(body.provider, body.headers, carried_ok=False)
+    if why:
+        raise HTTPException(400, f"connection '{name}': {why}")
     conn = {"name": name, **{k: v for k, v in body.model_dump().items() if v is not None}}
+    if conn.get("headers"):
+        conn["headers"] = {str(k).strip(): v.strip() for k, v in conn["headers"].items()}
+    else:
+        conn.pop("headers", None)
     await _vault_put_credential(org, f"harness-conn-{name}", json.dumps(conn), "api_key")
     return {"ok": True, "org": org, "connection": _conn_public(conn)}
 
@@ -5978,7 +6607,7 @@ _PROVIDER_CATALOG: dict[str, dict] = {
     # endpoint fixed by this gateway (the person never types it). The key comes from the hosted
     # "get a key" flow through /v1/admin/connect, or is pasted. Keys read sk-hr-<64 hex>.
     "harnessrouter": {
-        "label": "云端模型 API",
+        "label": "HarnessRouter API",
         "base_url": HR_HOSTED_PROVIDER_BASE,
         "fields": [],
         "secret": "api_key",
@@ -6137,11 +6766,9 @@ _CUSTOM_FORMAT_BACKENDS = {
                "vibe", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
-    # The OpenAI Responses API: what codex speaks, and — since this batch — dcode, whose
-    # langchain-openai model posts to /v1/responses on every turn (measured through a recording
-    # proxy and again through the runner's own relay). A custom integration declaring
-    # chat/completions cannot serve it, which is why dcode is in this set and in neither other one.
-    "responses": {"codex", "dcode"},
+    # The OpenAI Responses API: codex, dcode and roder use it natively; omp and pi can select it for a
+    # custom connection, whose explicit format takes precedence over model-family inference.
+    "responses": {"codex", "dcode", "roder", "omp", "pi"},
 }
 
 
@@ -6266,6 +6893,10 @@ def _integration_public(integ: dict) -> dict:
     for k in _INTEGRATION_SECRET_FIELDS:
         if cfg.get(k):
             cfg[k] = _SECRET_SENTINEL
+    if "headers" in cfg:
+        hdrs = _conn_headers_public(cfg.pop("headers"))
+        if hdrs:
+            cfg["headers"] = hdrs
     return {**integ, "config": cfg,
             "models": [{"canonical": c, "provider_id": v}
                        for c, v in _integration_models(integ).items()],
@@ -6312,14 +6943,36 @@ async def _media_chains_public() -> list[dict]:
     return out
 
 
+def _hosted_key_of(integ: dict) -> str:
+    return str(((integ or {}).get("config") or {}).get("api_key") or "").strip()
+
+
+async def _hosted_connection_read(integrations: list[dict]) -> dict | None:
+    """The HarnessRouter API connection whose key reads Cloud's model list, after refreshing that list
+    with it; None when no connection holds a key Cloud takes. Only a connection that holds a key is
+    asked with (a pairing for Deploy to Cloud alone leaves none), and one Cloud refused last time is
+    asked after the others: the first one in the document was always the one asked, so a refused key
+    ahead of a good one kept the list empty however many times the person connected again."""
+    keyed = [i for i in integrations if str(i.get("provider") or "").lower() == "harnessrouter" and _hosted_key_of(i)]
+    for i in sorted(keyed, key=lambda x: _hosted_key_refused(_hosted_key_of(x))):   # stable: document order otherwise
+        await _hosted_models_refresh(_hosted_key_of(i), models_url=str((i.get("config") or {}).get("models_url") or ""))
+        if not _hosted_key_refused(_hosted_key_of(i)):
+            return i
+    return None
+
+
 @app.get("/v1/admin/integrations")
 async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
     integrations = await _integrations_doc()
-    hosted = next((i for i in integrations if str(i.get("provider") or "").lower() == "harnessrouter"), None)
+    hosted = await _hosted_connection_read(integrations)
     hosted_cfg = (hosted or {}).get("config") or {}
-    await _hosted_models_refresh(str(hosted_cfg.get("api_key") or ""), models_url=str(hosted_cfg.get("models_url") or ""))
     public = [_integration_public(i) for i in integrations]
+    for row, i in zip(public, integrations):
+        # a key Cloud refused is said as that, on its own row: the console asks to reconnect THAT key,
+        # with the reason, instead of offering a new pairing that leaves the refused one in front
+        if str(i.get("provider") or "").lower() == "harnessrouter" and _hosted_key_refused(_hosted_key_of(i)):
+            row["key_state"] = "refused"
     if hosted:
         # What is left to spend on the hosted account, read here with the stored key so the key never
         # reaches the browser; absent (never a stale or made-up figure) when the read fails.
@@ -6342,11 +6995,13 @@ async def _hosted_balance(api_key: str, balance_url: str = "") -> dict | None:
     """GET <balance_url> with the stored key → {"usd", "is_deficit", "as_of"} or None. The hosted side
     holds the figure for up to a minute; 401 (bad key) and 503 (ledger not answering) both mean
     "show nothing", so does any other failure."""
-    if not api_key:
+    if not api_key or _hosted_key_refused(api_key):
         return None
     try:
         async with httpx.AsyncClient(timeout=6.0) as c:
             r = await c.get(balance_url or HR_HOSTED_BALANCE_URL, headers={"authorization": f"Bearer {api_key}"})
+        if r.status_code in (401, 403):
+            _hosted_read_failed(api_key, r.status_code, f"the balance answered HTTP {r.status_code}")
         if r.status_code != 200:
             return None
         j = r.json()
@@ -6551,6 +7206,27 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
                     raise HTTPException(400, f"integration '{name}': missing {k}")
                 cfg[k] = prior_cfg[k]
                 carried.append(k)
+        # Request headers (see _conn_headers). A value is a secret like the key: it comes back as the
+        # sentinel, and the sentinel saves the stored value under that name again.
+        if "headers" in cfg:
+            why = _conn_headers_error(provider, cfg["headers"])
+            if why:
+                raise HTTPException(400, f"integration '{name}': {why}")
+            prior_h = {str(k).lower(): v for k, v in (prior_cfg.get("headers") or {}).items()}
+            kept: dict[str, str] = {}
+            for k, v in cfg["headers"].items():
+                hname = str(k).strip()
+                if v == _SECRET_SENTINEL:
+                    if not prior_h.get(hname.lower()):
+                        raise HTTPException(400, f"integration '{name}': type the {hname} header's value")
+                    kept[hname] = prior_h[hname.lower()]
+                    carried.append(f"headers.{hname}")
+                else:
+                    kept[hname] = v.strip()
+            if kept:
+                cfg["headers"] = kept
+            else:
+                cfg.pop("headers")
         # A stored key goes only where it was typed for. A save that kept it while changing the address (or the
         # provider) sent the key on to wherever the new one pointed, read by nobody but spent by its new owner: the
         # hosted service refuses it, and so does this one. The address compared is the effective one, the
@@ -6560,7 +7236,9 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
             def _addr(c: dict, prov: str) -> str:
                 return str(c.get("base_url") or (_PROVIDER_CATALOG.get(prov) or {}).get("base_url") or "").strip().rstrip("/")
             if prior_provider != provider or _addr(cfg, provider) != _addr(prior_cfg, prior_provider):
-                raise HTTPException(400, f"integration '{name}': its address changed, so type its key again to save it.")
+                raise HTTPException(400, f"integration '{name}': its address changed, so type its key again to save it."
+                                    if any(not c.startswith("headers.") for c in carried) else
+                                    f"integration '{name}': its address changed, so type its header values again to save it.")
         # How the connection signs in: an API key (nothing said, as before) or Microsoft Entra.
         how = str(cfg.get("auth") or "").strip().lower()
         if how in ("", "key", "api_key"):
@@ -6874,12 +7552,21 @@ class _RespTranslator:
     def __init__(self, resp_id: str, model: str, prev: str | None, store: bool, created_at: float,
                  sid: str = "", ignored: list[str] | None = None):
         self.resp_id, self.model, self.prev, self.store, self.created_at = resp_id, model, prev, store, created_at
+        self.branched_from = ""
+        # The branch point the turn's end-of-turn checkpoint kept (Sessions §1.1), or None when it
+        # kept none; known only once that checkpoint has run (ended_checkpoint). The stored record
+        # carries it from then on (branch_mark), so whether the response can be branched is read
+        # from the record itself (_branch_point_of).
+        self.branch_point: dict | None = None
+        self.branch_point_known = False
         self.sid = sid   # surfaced in response.metadata so the client can highlight/track the session
         # Request fields we accepted and did not act on (tasks.md 1.1). `tools` and `include` are
         # reserved and ignored (1.4), and ignoring has to be observable: a silently dropped field
         # is indistinguishable from an honoured one, which is the same reasoning that puts model
         # substitution in metadata.
         self.ignored: list[str] = list(ignored or [])
+        # What memory did for this task, when there is something to say ({"skipped": why}): metadata.memory.
+        self.memory_note: dict | None = None
         # WHY an incomplete turn is incomplete. The console showed one banner for every
         # incomplete — "hit its step or time limit" — including turns that hit neither (a
         # replica restart under a live turn settles as incomplete). A wrong diagnosis shown
@@ -6930,8 +7617,20 @@ class _RespTranslator:
         self.seq += 1
         return e
 
+    def ended_checkpoint(self, point: dict | None) -> None:
+        """The turn's end-of-turn checkpoint has run, and kept `point` (None: no branch point)."""
+        self.branch_point, self.branch_point_known = point, True
+
+    def branch_mark(self) -> dict:
+        """What the stored record says of its branch point: `_branch_point`, the point or None, once
+        the end-of-turn checkpoint has run; nothing before (a running turn, a turn that never
+        reached it), which _branch_point_of answers from the store."""
+        return {"_branch_point": self.branch_point} if self.branch_point_known else {}
+
     def _response_obj(self, status: str) -> dict:
         meta: dict = {}
+        if self.branched_from:
+            meta["branched_from"] = self.branched_from
         if self.sid:
             meta["session_id"] = self.sid
         if self.environment:
@@ -6942,6 +7641,8 @@ class _RespTranslator:
             meta["charge"] = self.charge
         if self.voided_input_requests:
             meta["voided_input_requests"] = list(self.voided_input_requests)
+        if getattr(self, "memory_note", None):
+            meta["memory"] = dict(self.memory_note)
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
                 "status": status, "error": self.error,
                 "incomplete_details": ({"reason": self.incomplete_reason, "handoff": self.handoff}
@@ -7430,7 +8131,9 @@ def _input_history(inp, org: str = "") -> tuple[list[dict], object]:
 
 
 async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: str, backend: str,
-                              before: float, store: bool) -> list[str]:
+                              before: float, store: bool,
+                              copied_inputs: list[list[dict]] | None = None,
+                              copied_outputs: list[list[dict]] | None = None) -> list[str]:
     """A new task's earlier turns (_input_history, each with its `input` items) as its first response
     records, oldest first, each a millisecond apart and before `before` (the turn's own created_at),
     so the thread sorts them ahead of it. Completed, no model, no usage: nothing ran, so nothing is
@@ -7445,12 +8148,13 @@ async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: 
         stored = {"id": rid, "object": "response", "created_at": int(at), "status": "completed", "error": None,
                   "served_model": None, "reasoning": None, "incomplete_details": None,
                   "previous_response_id": None, "model": "", "store": store,
-                  "output": ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
+                  "output": copied_outputs[i] if copied_outputs is not None else ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
                                "role": "assistant", "content": [{"type": "output_text", "text": said, "annotations": []}]}]
                              if said else []),
                   "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                   "metadata": {"session_id": sid, "imported": True},
-                  "_session_id": sid, "_org": org, "_member": member, "_input": t.get("input") or [],
+                  "_session_id": sid, "_org": org, "_member": member,
+                  "_input": copied_inputs[i] if copied_inputs is not None else t.get("input") or [],
                   "_backend": backend, "_imported": True}
         async with sem:
             if not await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB):
@@ -7810,10 +8514,47 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
 
 
 # HarnessRouter serves canonical ids and its list is maintained there, not here: the gateway reads
-# it (at start, on a connect that handed over a key, and hourly on the admin read), keeps the last
-# good read, and the vendor table is that read. An empty read is empty: nothing is listed unprobed.
+# it (on a connect that handed over a key, and hourly on the admin read), keeps the last good read,
+# and the vendor table is that read. An empty read is empty: nothing is listed unprobed.
+#
+# Cloud lists models for a key's organization only: GET /v1/models without a key is a 401, every
+# time. Through 0.39.0 this asked without one whenever no HarnessRouter API connection held a key
+# (an instance that never connected, or one that connected only to Deploy to Cloud, whose key is
+# the deploy destination's and is never a connection), and a failure was not remembered, so every
+# console page with a model picker asked again: one instance made 1010 such calls in four days
+# (hosted, 2026-11-08). Now the list is asked for with a key or not at all, a failed read is not
+# asked again for _HOSTED_MODELS_RETRY_S per key (logged once), and Cloud refusing a key is kept
+# as that key's state so the console can say so (_hosted_key_refused).
 _HOSTED_MODELS: dict = {"ids": [], "at": 0.0}
 _HOSTED_MODELS_TTL = 3600.0
+_HOSTED_MODELS_RETRY_S = float(os.environ.get("HR_HOSTED_MODELS_RETRY_S", "600"))
+_HOSTED_MODELS_FAILS: dict[str, dict] = {}   # key fingerprint -> {"at", "status", "why"}: the last failed read
+
+
+def _hosted_key_fp(api_key: str) -> str:
+    """A key named in memory and in a log line: 16 hex of its SHA-256, never the key."""
+    return hashlib.sha256(str(api_key or "").encode()).hexdigest()[:16]
+
+
+def _hosted_key_refused(api_key: str) -> bool:
+    """Cloud answered 401 or 403 to this key the last time it was asked (the model list or the
+    balance), and has not taken it since."""
+    f = _HOSTED_MODELS_FAILS.get(_hosted_key_fp(api_key)) if api_key else None
+    return bool(f) and f.get("status") in (401, 403)
+
+
+def _hosted_read_failed(api_key: str, status: int, why: str) -> None:
+    """Remember a failed read for this key, and say so once: a line when it starts failing or fails
+    differently, none while it keeps failing the same way."""
+    fp = _hosted_key_fp(api_key)
+    prev = _HOSTED_MODELS_FAILS.get(fp)
+    if not prev or prev.get("why") != why:
+        refused = " (Cloud refused the key)" if status in (401, 403) else ""
+        print(f"[hosted] key {fp[:8]}: {why}{refused}; the model list is asked again in "
+              f"{int(_HOSTED_MODELS_RETRY_S)} s at the earliest", flush=True)
+    if len(_HOSTED_MODELS_FAILS) > 256:
+        _HOSTED_MODELS_FAILS.clear()
+    _HOSTED_MODELS_FAILS[fp] = {"at": time.time(), "status": status, "why": why}
 
 
 def _hosted_models_parse(doc) -> list[str]:
@@ -7836,25 +8577,39 @@ def _hosted_models_parse(doc) -> list[str]:
 
 
 async def _hosted_models_refresh(api_key: str = "", force: bool = False, models_url: str = "") -> list[str]:
-    """Read the hosted model list (the union of every backend's available ids for this key's
-    org) and make it this provider's vendor table. Keeps the last good read on any failure; the
-    key is sent when one is known (the list is computed for the key's org)."""
-    if not force and _HOSTED_MODELS["ids"] and time.time() - _HOSTED_MODELS["at"] < _HOSTED_MODELS_TTL:
+    """Read the hosted model list (the union of every backend's available ids for this key's org)
+    and make it this provider's vendor table. Keeps the last good read on any failure. Never asked
+    without a key (Cloud answers that 401), and a read that failed for a key is not asked again for
+    _HOSTED_MODELS_RETRY_S, unless `force` (a key that was just handed over)."""
+    if not api_key:
         return _HOSTED_MODELS["ids"]
-    headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
+    now = time.time()
+    if not force and _HOSTED_MODELS["ids"] and now - _HOSTED_MODELS["at"] < _HOSTED_MODELS_TTL:
+        return _HOSTED_MODELS["ids"]
+    fp = _hosted_key_fp(api_key)
+    failed = _HOSTED_MODELS_FAILS.get(fp)
+    if not force and failed and now - float(failed.get("at") or 0) < _HOSTED_MODELS_RETRY_S:
+        return _HOSTED_MODELS["ids"]
+    status, ids = 0, []
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get(models_url or HR_HOSTED_MODELS_URL, headers=headers)
-        if r.status_code >= 400:
-            print(f"[hosted] model list answered HTTP {r.status_code}", flush=True)
+            r = await c.get(models_url or HR_HOSTED_MODELS_URL, headers={"authorization": f"Bearer {api_key}"})
+        status = r.status_code
+        if status >= 400:
+            _hosted_read_failed(api_key, status, f"the model list answered HTTP {status}")
             return _HOSTED_MODELS["ids"]
         ids = _hosted_models_parse(r.json())
     except Exception as e:  # noqa: BLE001
-        print(f"[hosted] model list unreachable: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        _hosted_read_failed(api_key, status, f"the model list was not read ({type(e).__name__})")
         return _HOSTED_MODELS["ids"]
-    if ids:
-        _HOSTED_MODELS.update({"ids": ids, "at": time.time()})
-        _VENDOR_MODELS["harnessrouter"] = {m: m for m in ids}
+    if not ids:
+        _hosted_read_failed(api_key, status, "the model list came back empty")
+        return _HOSTED_MODELS["ids"]
+    if failed:
+        print(f"[hosted] key {fp[:8]}: the model list read again ({len(ids)} models)", flush=True)
+    _HOSTED_MODELS_FAILS.pop(fp, None)
+    _HOSTED_MODELS.update({"ids": ids, "at": time.time()})
+    _VENDOR_MODELS["harnessrouter"] = {m: m for m in ids}
     return _HOSTED_MODELS["ids"]
 
 
@@ -8587,6 +9342,17 @@ for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
     # gpt-5.4 by default, but dcode: see _GPT_6_1_DEFAULT below
     _MODEL_CATALOG[_b] = {"default": "gpt-6.1-sol" if _b == "dcode" else "gpt-5.4",
                           "models": list(_MODEL_CATALOG["kimi"]["models"])}
+# Roder drives the Responses API as dcode does, but it is opt-in and still qualifying: it offers the
+# one model its process suite has run until its live provider column is measured, so it is named in
+# _STILL_QUALIFYING below rather than held to the family rules a measured base keeps.
+_MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
+# Bases still qualifying their wider catalog. Each offers only the models measured on it so far, and
+# its default was chosen for that start rather than measured across every provider column, so the
+# catalog-wide rules for a measured base (gpt-6.1-sol leads the gpt-6 family wherever it is offered,
+# and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
+# place that exception is written; a base leaves the set when its live column is in.
+_STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
+
 # _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
 # on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
 # opencode, kilo, omp, goose, aider, agentzero and mimo, and dcode, which drives the Responses API (2026-10-27,
@@ -8973,6 +9739,10 @@ _CHANNEL_REFUSES[("harnessrouter", "dcode")] = frozenset({
     "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview"})
 
 
+# Roder uses the same Responses routes; these are channel refusals, not Roder measurements.
+for _channel in ("tokenrouter", "harnessrouter"):
+    _CHANNEL_REFUSES[(_channel, "roder")] = _CHANNEL_REFUSES[(_channel, "dcode")]
+
 def _channel_refuses(provider: str, backend: str, model: str) -> bool:
     """Whether a connection of `provider` refuses `model` for `backend` (_CHANNEL_REFUSES)."""
     return (model or "").strip() in _CHANNEL_REFUSES.get((str(provider or "").lower(), backend), frozenset())
@@ -8996,6 +9766,38 @@ def _conn_serves(conn: dict, friendly: str) -> bool:
     if not m:
         return True                      # no model requested: the connection default decides
     return m in table or m in table.values()
+
+
+def _installed_backends() -> frozenset[str] | None:
+    """The backends this instance installed, as docker/entrypoint.sh found them once its installs
+    were done: the list it prints as "backends available", exported as HR_BACKENDS_INSTALLED. None
+    where nothing installs bases at start (a runner started some other way, a hosted pool): an
+    absent list says nothing about what is installed, so nothing is withheld on it."""
+    raw = os.environ.get("HR_BACKENDS_INSTALLED")
+    if raw is None:
+        return None
+    return frozenset(b.strip() for b in raw.split(",") if b.strip())
+
+
+def _backend_installed(backend: str) -> bool:
+    """Whether a turn on `backend` can start here. A catalog base that is opt-in (roder) or whose
+    install failed is in the catalog on every instance and on the volume of only some."""
+    have = _installed_backends()
+    return have is None or str(backend or "") in have
+
+
+def _not_installed_reason(label: str, backend: str) -> str:
+    """What a person reads about a base this instance does not have, and what changes that."""
+    return (f"{label} is not installed on this instance. An administrator can add {backend} "
+            "to HR_BACKENDS and restart it.")
+
+
+def _require_installed(backend: str) -> None:
+    """Refuse a turn on a base this instance does not hold, in words and before anything is
+    allocated, rather than letting the runner fail to start it."""
+    if not _backend_installed(backend):
+        label = next((str(b["label"]) for b in _BASE_CATALOG.values() if b.get("backend") == backend), backend)
+        raise HTTPException(400, _not_installed_reason(label, backend))
 
 
 def _backend_of_builtin(harness_id: str) -> str:
@@ -9258,6 +10060,7 @@ _RESP_CACHE_MAX = 4000
 
 def _resp_cache_forget(rid: str) -> None:
     _RESP_CACHE.pop(rid, None)
+    _branch_seen_forget(rid)
 
 
 async def _resp_get(rid: str, *, strict: bool = False) -> dict | None:
@@ -9457,11 +10260,322 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
     return out
 
 
+def _branch_origin(value) -> dict:
+    try:
+        origin = json.loads(value) if isinstance(value, str) else value
+        if (isinstance(origin, dict) and isinstance(origin.get("response_id"), str)
+                and isinstance(origin.get("session_id"), str)):
+            out = {"response_id": origin["response_id"], "session_id": origin["session_id"]}
+            # Where on the original line the branch starts (Sessions §3), from 1. Absent rather
+            # than guessed when the stored origin has none.
+            if type(origin.get("turn")) is int and origin["turn"] >= 1:
+                out["turn"] = origin["turn"]
+            return out
+    except (TypeError, ValueError):
+        pass
+    return {}
+
+
+# A response can be branched from once its turn has ended, however it ended (Sessions §1.1).
+_BRANCH_FROM_STATUS = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+
+def _branch_ended(rec: dict) -> bool:
+    return _UHP_STATUS.get(str(rec.get("status"))) in _BRANCH_FROM_STATUS
+
+
+def _branch_point_valid(point, rid: str, sid: str) -> dict | None:
+    """`point` when it is response `rid`'s branch point in session `sid`, on a full commit; else None."""
+    if (isinstance(point, dict) and point.get("response_id") == rid and point.get("session_id") == sid
+            and isinstance(point.get("commit"), str) and re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
+        return point
+    return None
+
+
+async def _branch_point_of(rid: str, rec: dict, *, strict: bool = False) -> dict | None:
+    """The point response `rid` (its record, `rec`) can be branched from, or None when it can't be:
+    the one test of whether a response can be branched. The branch route refuses with 409
+    branch_unavailable exactly where this answers None (_branch_source), and a session's turns
+    carry it as `branchable` (_session_turns_data), so the two never disagree.
+
+    A response can be branched once its turn has ended (completed, failed, cancelled or incomplete)
+    and the turn's end-of-turn checkpoint kept a point. A turn the task was started with ran nothing
+    here and has none. A record written since records carry their point (`_branch_point`, the point
+    or None) answers from itself, with no read. An older one, and one settled before its turn's
+    checkpoint ran, answers from the point in the store, read once per replica (_BRANCH_SEEN).
+    strict: a read of the store that failed raises, for the route's 503; otherwise it answers None,
+    and the answer is not kept."""
+    if not _branch_ended(rec) or rec.get("_imported"):
+        return None
+    sid = str(rec.get("_session_id") or "")
+    if "_branch_point" in rec:
+        return _branch_point_valid(rec["_branch_point"], rid, sid)
+    if rid in _BRANCH_SEEN:
+        _BRANCH_SEEN.move_to_end(rid)
+        return _BRANCH_SEEN[rid]
+    try:
+        raw = await _blob_get_or_raise(_branch_point_key(rid), kb=RESP_BLOB_KB)
+    except Exception:
+        if strict:
+            raise
+        return None
+    try:
+        point = _branch_point_valid(json.loads(raw or b"null"), rid, sid)
+    except ValueError:
+        point = None
+    _BRANCH_SEEN[rid] = point
+    while len(_BRANCH_SEEN) > _RESP_CACHE_MAX:
+        _BRANCH_SEEN.popitem(last=False)
+    return point
+
+
+async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> dict:
+    """Authorize before disclosing whether a response can be restored."""
+    try:
+        rec = await _resp_get(rid, strict=True)
+        sid = str((rec or {}).get("_session_id") or "")
+        vertex = await _vertex_get(sid) if sid else None
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The source session could not be read. Try again.") from error
+    if (not rec or rec.get("_deleted") or rec.get("_org") != org or not vertex or vertex.get("tenant") != org
+            or vertex.get("status") == "deleted" or not _scope_keeps(caller, vertex.get("workspace"))
+            or str(vertex.get("harness_id") or "") != harness_id):
+        raise uhp_error(404, "session_not_found", "No session with that id.")
+    try:
+        point = await _branch_point_of(rid, rec, strict=True)
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The checkpoint could not be read. Try again.") from error
+    if point is None:
+        raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint." if _branch_ended(rec)
+                        else "Only a completed response checkpoint can be branched.")
+    return {"point": point, "source_sid": sid,
+            "backend": str(point.get("backend") or vertex.get("backend") or ""),
+            "workspace": str(vertex.get("workspace") or "")}
+
+
+# A branch copies the files its imported turns captured (_branch_artifacts), so their citations do
+# not depend on the source session. Each capture is at most RESP_MAX_FILE_BYTES and a turn has up to
+# RESP_MAX_FILES of them, so a long session's copies had no bound but the session's length: bounded
+# now, in count and in bytes, inside the preparation's deadline. Past either bound a capture is not
+# copied: its citation names the file's path in the branch's restored files instead (as one of an
+# excluded file does), which reads what the branch point committed at that path, or not found.
+BRANCH_COPY_MAX_FILES = int(os.environ.get("HR_BRANCH_COPY_MAX_FILES", "100"))
+BRANCH_COPY_MAX_BYTES = int(os.environ.get("HR_BRANCH_COPY_MAX_BYTES", str(256 * 1024 * 1024)))
+# One deadline over a branch's whole preparation (_branch_prepare): the restore and its retries,
+# the new checkpoint, the copies and the imported turns. The request that asked waits on it in
+# every response mode, before anything is acknowledged.
+BRANCH_PREPARE_TIMEOUT_S = float(os.environ.get("HR_BRANCH_PREPARE_TIMEOUT_S", "300"))
+
+
+async def _branch_artifacts(history: list[dict], source: str, target: str,
+                            org: str, caller: dict) -> list[dict]:
+    """Give imported citations target-owned paths or immutable copies, never source aliases.
+    At most BRANCH_COPY_MAX_FILES copies and BRANCH_COPY_MAX_BYTES in all; past them, the path."""
+    result = json.loads(json.dumps(history))  # Never mutate cached original response records.
+    copied: dict[tuple[str, str], str | None] = {}
+    budget = {"files": BRANCH_COPY_MAX_FILES, "bytes": BRANCH_COPY_MAX_BYTES}
+
+    async def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                await visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        container, file_id = value.get("container_id"), value.get("file_id")
+        if (isinstance(container, str) and isinstance(file_id, str)
+                and re.fullmatch(r"[A-Za-z0-9_-]+", container)
+                and re.fullmatch(r"[A-Za-z0-9_-]+", file_id)):
+            key = (container, file_id)
+            if key not in copied:
+                owner = await _vertex_get(container)
+                calibration = caller.get("calibration") or {}
+                allowed = (owner and owner.get("tenant") == org and owner.get("status") != "deleted"
+                           and _scope_keeps(caller, owner.get("workspace"))
+                           and (not calibration or owner.get("harness_id") == calibration.get("inner")))
+                copied[key] = None
+                if allowed and file_id.startswith("wf_"):
+                    # Path ids resolve against the restored committed tree, not the source's tip.
+                    path = _wf_path(file_id)
+                    if path and _ws_visible(path):
+                        copied[key] = file_id
+                elif allowed:
+                    raw_meta = await _blob_get_or_raise(f"containers/{container}/{file_id}.meta", kb=RESP_BLOB_KB)
+                    meta = json.loads(raw_meta) if raw_meta else {
+                        "filename": value.get("filename") or file_id,
+                        "media_type": "application/octet-stream"}
+                    filename = str(meta.get("filename") or file_id)
+                    if not _ws_visible(filename):
+                        # Preserve the citation but never carry excluded bytes through an old capture.
+                        copied[key] = _wf_id(filename)
+                    elif budget["files"] <= 0:
+                        copied[key] = _wf_id(filename)       # past the count: the path, unread
+                    else:
+                        data = await _blob_get_or_raise(f"containers/{container}/{file_id}", kb=RESP_BLOB_KB)
+                        if data is not None and len(data) > budget["bytes"]:
+                            copied[key] = _wf_id(filename)   # past the bytes: the path
+                        elif data is not None:
+                            budget["files"] -= 1
+                            budget["bytes"] -= len(data)
+                            new_id = _rid("cfile")
+                            # Imported captures must never be reapplied as later app edits.
+                            meta["source"] = "branch"
+                            if not await _blob_put(f"containers/{target}/{new_id}", data, kb=RESP_BLOB_KB):
+                                raise uhp_error(503, "server_error", "A branch artifact could not be saved.")
+                            if not await _blob_put(f"containers/{target}/{new_id}.meta", json.dumps(meta).encode(), kb=RESP_BLOB_KB):
+                                raise uhp_error(503, "server_error", "A branch artifact's metadata could not be saved.")
+                            copied[key] = new_id
+            if copied[key] is not None:
+                value["container_id"], value["file_id"] = target, copied[key]
+                value["download_url"] = _file_url(target, copied[key])
+        for item in value.values():
+            await visit(item)
+
+    for turn in result:
+        await visit(turn.get("output") or [])
+    return result
+
+
+def _uhp_raised(error: HTTPException) -> bool:
+    """An error this module raised through uhp_error, its message already the one to give."""
+    return isinstance(error.detail, dict) and bool(error.detail.get("__uhp__"))
+
+
+async def _branch_prepare(info: dict, target: str, org: str, member: str, backend: str,
+                          harness_id: str, harness_name: str, workspace: str, caller: dict,
+                          before: float, store: bool) -> list[dict]:
+    """_branch_prepare_inner under one deadline, BRANCH_PREPARE_TIMEOUT_S. Every failure is an
+    HTTP error: 409 branch_unavailable when the point can't be a branch, otherwise a retryable 503."""
+    try:
+        return await asyncio.wait_for(
+            _branch_prepare_inner(info, target, org, member, backend, harness_id, harness_name,
+                                  workspace, caller, before, store),
+            timeout=BRANCH_PREPARE_TIMEOUT_S)
+    except TimeoutError as error:
+        raise uhp_error(503, "server_error", "The branch could not be prepared in time. "
+                                             "No session was created. Try again.") from error
+    except HTTPException as error:
+        if error.status_code >= 500 and not (error.status_code == 503 and _uhp_raised(error)):
+            raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
+        raise
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
+
+
+def _runner_said(response: httpx.Response, key: str):
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001
+        return None
+    return body.get(key) if isinstance(body, dict) else None
+
+
+async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, backend: str,
+                          harness_id: str, harness_name: str, workspace: str, caller: dict,
+                          before: float, store: bool) -> list[dict]:
+    """Restore into a new sandbox before publishing the new session or accepting a turn."""
+    point = info["point"]
+    source_sid, rid = info["source_sid"], point["response_id"]
+    # Read the full durable transcript before target work. No storage truncation or later turns.
+    rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": source_sid})
+    rows.sort(key=lambda row: float(row.get("created_at") or 0))
+    ids = [str(row.get("id")) for row in rows]
+    if rid not in ids:
+        raise uhp_error(409, "branch_unavailable", "The response's original history is unavailable.")
+    # Where the point stands in its session, from 1 (Sessions §3): its place among these rows,
+    # read here rather than at every turn's end (_branch_point_put).
+    position = ids.index(rid) + 1
+    history = []
+    for row in rows[:ids.index(rid) + 1]:
+        response_id = str(row.get("id"))
+        if row.get("status") == "deleted":
+            if response_id == rid:
+                raise uhp_error(409, "branch_unavailable", "The selected response was deleted.")
+            continue
+        rec = await _resp_get(response_id, strict=True)
+        if not rec or rec.get("_session_id") != source_sid or rec.get("_org") != org:
+            raise uhp_error(409, "branch_unavailable", "The response's original history is unavailable.")
+        if rec.get("_deleted") or rec.get("status") == "deleted":
+            if response_id == rid:
+                raise uhp_error(409, "branch_unavailable", "The selected response was deleted.")
+            continue
+        user_parts = []
+        for item in rec.get("_input") or []:
+            content = item.get("content")
+            if isinstance(content, str):
+                user_parts.append(content)
+            elif isinstance(content, list):
+                user_parts.extend(str(part.get("text") or "") for part in content
+                                  if isinstance(part, dict) and part.get("type") == "input_text")
+        user = "\n".join(user_parts)
+        assistant, _, _ = _output_to_turn_fields(rec.get("output") or [])
+        history.append({"user": user, "assistant": assistant, "input": rec.get("_input") or [],
+                        "output": rec.get("output") or []})
+    # No `branch_head`: the runner checks the point against the HEAD of the checkpoint it is
+    # sent, whichever turn last wrote it (see _branch_point_put).
+    params = {"branch_commit": point["commit"],
+              "branch_backend": info["backend"]}
+    try:
+        # From the first restore on, a failure removes whatever the target holds (the cleanup
+        # below), the sandbox's folder included: a refusal, a deadline, an unconfirmed restore.
+        response = None
+        for pause in _HYDRATE_PAUSES:
+            try:
+                response = await _hydrate_relay(target, params, source_sid=source_sid)
+                if response.status_code == 409:
+                    raise uhp_error(409, "branch_unavailable", "The committed files cannot be restored.")
+                if response.status_code < 400:
+                    break
+                if _runner_said(response, "detail") == "branch_restore_failed":
+                    # The restore ran past its time or out of disk: the same again on a resend,
+                    # after the whole upload again, so it is not resent.
+                    raise uhp_error(503, "server_error", "The branch's files could not be restored "
+                                                         "within the server's limits. Try again later.")
+            except HTTPException:
+                raise
+            except Exception:
+                response = None
+            if pause is not None:
+                await asyncio.sleep(pause)
+        if response is None or response.status_code >= 400:
+            raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.")
+        if _runner_said(response, "branched") is not True:
+            # A sandbox from before branching ignores branch_commit, restores the source's latest
+            # workspace whole and answers 200: a branch with the wrong files, in silence. Only a
+            # sandbox that restored the point says `branched: true`.
+            raise uhp_error(503, "server_error", "The branch could not be prepared: the sandbox did not "
+                                                 "confirm it restored this response's files, and may "
+                                                 "predate branching. No session was created.")
+        ok, nbytes, ws_sha, git_head, _ = await _checkpoint_relay(target)
+        if not ok or not nbytes:
+            raise uhp_error(503, "server_error", "The branch workspace could not be saved.")
+        history = await _branch_artifacts(history, source_sid, target, org, caller)
+        # Complete the imported records before the session can be listed or read.
+        await _imported_turns_put(history, sid=target, org=org, member=member, backend=backend,
+                                  before=before, store=store,
+                                  copied_inputs=[turn["input"] for turn in history],
+                                  copied_outputs=[turn["output"] for turn in history])
+        await _resp_resolve_session(org, member, None, backend, harness_id=harness_id,
+                                   harness_name=harness_name, workspace=workspace, caller=caller,
+                                   new_sid=target)
+        await _vertex_upsert(target, {"ws_sha": ws_sha, "git_head": git_head,
+                                      "checkpoint_bytes": str(nbytes),
+                                      "branched_from": json.dumps({"response_id": rid, "session_id": source_sid,
+                                                                   "turn": position})})
+        await _vg_edge("BRANCHED_FROM", target, rid)
+        _session_trace[target]["branched_from"] = rid
+        return history
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await _session_purge(target, await _vertex_get(target))
+        raise
+
+
 # ── session resolution (previous_response_id → reuse prior session for continuity) ──────
 async def _resp_resolve_session(org: str, member: str, prev: str | None, backend_hint: str,
                                 harness_id: str = "", harness_name: str = "",
                                 session_hint: str = "", workspace: str = "",
-                                caller: dict | None = None) -> tuple[str, str | None]:
+                                caller: dict | None = None, new_sid: str = "") -> tuple[str, str | None]:
     # Continue an existing conversation by (1) the response-id chain, or (2) an explicit session id.
     # (2) is the robust path: the client always knows which conversation it's in, so a follow-up never
     # forks a new empty session just because previous_response_id was momentarily unavailable.
@@ -9471,6 +10585,9 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
         # Workspace sticks to the session: the vertex's stamp wins (set at creation/backfill);
         # the caller's workspace only fills the gap for pre-stamping sessions.
         tr["workspace"] = str((v or {}).get("workspace") or "") or tr.get("workspace") or workspace or ""
+        origin = _branch_origin((v or {}).get("branched_from"))
+        if origin:
+            tr["branched_from"] = origin.get("response_id", "")
         # The vertex names the harness the session belongs to, and every app route addressed to a
         # harness refuses a session that names none — correctly, since an unnamed session cannot be
         # proved to be this harness's. But the stamp is written at CREATION only, and this is the
@@ -9519,17 +10636,16 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
             # billed, and rewrote the task's card as if it were live (2026-09-07)
             raise uhp_error(404, "session_not_found", "No session with that id.")
         raise uhp_error(404, "session_not_found", "No session with that id.")
-    sid = "hsess" + uuid.uuid4().hex
+    sid = new_sid or "hsess" + uuid.uuid4().hex
     created = time.time()
     inv = _inv_ts(created)
     trace_prefix = f"{org}/{inv}_{sid}"
     _session_trace[sid] = {"prefix": trace_prefix, "org": org, "since": 0, "chunk": 0, "count": 0,
                            "member": member, "harness_id": harness_id, "harness_name": harness_name,
                            "workspace": workspace or ""}
-    room = await _brain_mint_room(sid)   # persisted on the vertex (brain_room) below — the durable copy
     await _vertex_upsert(sid, {"tenant": org, "member_id": member or "", "backend": backend_hint,
                                "conv_id": "", "status": "created", "created_at": str(created),
-                               "created_at_inv": inv, "trace_blob": trace_prefix, "brain_room": room or "",
+                               "created_at_inv": inv, "trace_blob": trace_prefix,
                                "harness_id": harness_id or "", "harness_name": harness_name or "",
                                "workspace": workspace or ""})
     # Stamp the ownership/usage topology: Account OWNS HarnessSession USES Harness (HR tenant).
@@ -9572,7 +10688,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         environment: dict | None = None,
                         trace_ctx: dict | None = None,
                         extra_env: dict | None = None,
-                        extra_secret: list[str] | None = None) -> tuple[str, list[dict], dict]:
+                        extra_secret: list[str] | None = None,
+                        task_memory: str = "", task_person: dict | None = None) -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -9627,15 +10744,31 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                "heartbeat": str(time.time()), "runner_turn_id": "", "end_reason": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
+    # Memory, begun here and not after the restore: whose task it is (the session keeps it, for the tools and the
+    # observation that follow), then the Memory section and what the agent already knows, as a task that runs while
+    # the workspace is restored and the sandbox made ready. It is awaited where the instructions are written. The
+    # session's memory properties are written before the task starts and never by it, so nothing it reads is
+    # written beside it. After the lease: a turn refused there leaves the running turn's memory alone.
+    if task_memory:
+        await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
+    await _memories_person_begin(org, harness_id, hv, sid, task_person or {}, translator, rec)
+    _mem_start = asyncio.create_task(_memories_turn_start(harness_id, org, hv, sid, user_text)) if harness_id else None
+    if _mem_start is not None:
+        _mem_start.add_done_callback(lambda t: t.cancelled() or t.exception())   # a turn that ended first never reads it
     # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
     # before this turn was stamped running finishes before the restore reads the workspace, and one
     # that comes after waits, reads the session again under the lock, and is refused (_ws_busy_now).
     # In this process only, like the lock itself.
-    async with _ws_change_lock(sid):
-        if environment:
-            rec["environment"] = environment
-        await _hydrate(sid, rec)
+    try:
+        async with _ws_change_lock(sid):
+            if environment:
+                rec["environment"] = environment
+            await _hydrate(sid, rec)
+    except BaseException:
+        _memories_turn_start_drop(_mem_start)
+        raise
     if rec.get("hydrate_failed_with_checkpoint"):
+        _memories_turn_start_drop(_mem_start)
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
         # on the wiped workspace started the conversation over without a word (2026-09-06); an
         # error the person can retry is the honest answer.
@@ -9663,8 +10796,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # HR-INF-010: the caller (create_response) already read this harness's vertex — thread it in
     # instead of re-reading it twice more here. Beyond cutting reads, a same-request snapshot means
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
-    mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
-    turn_env, turn_secret = await _harness_env(hv, org, hdr_vals)
+    try:
+        mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
+        turn_env, turn_secret = await _harness_env(hv, org, hdr_vals)
+    except BaseException:
+        _memories_turn_start_drop(_mem_start)
+        raise
     if extra_env:
         # ...and a secret answer to the harness's question (Tasks §3.2), for this turn only, under
         # a name the prompt gives; a secret's value is redacted from everything read back.
@@ -9683,14 +10820,35 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # The harness's configured instructions are the agent's CLAUDE.md (claude) / AGENTS.md (codex) —
     # written into the workspace by the runner, NOT injected as a system prompt. The model keeps the
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
-    agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
-                                      await _harness_plug_types(harness_id, org, hv))
+    try:
+        agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
+                                          await _harness_plug_types(harness_id, org, hv))
+    except BaseException:
+        _memories_turn_start_drop(_mem_start)
+        raise
+    # The Memory section: the attached memories with their descriptions, what each provider marks as always
+    # relevant, and what the agent already knows that may matter for this turn, recalled for it with the turn's own
+    # words (in a person's task, that person's and the agent's own; never when memory is off for the task). Started
+    # above, beside the restore (_memories_turn_start). Its size is recorded on the turn, per memory, in tokens.
+    _mem_section, _mem_primed, _mem_recalled = (await _mem_start) if _mem_start is not None else ("", {}, 0)
+    if _mem_section:
+        agent_doc = (agent_doc + "\n\n" + _mem_section).strip()
+        rec["memories"] = {"primed_tokens": _mem_primed, **({"recalled_at_start": _mem_recalled} if _mem_recalled else {})}
+        if _mem_recalled:
+            # on the turn's record, read back by GET /v1/sessions/{sid}/turns as memory.recalled_at_start, and on the
+            # response's metadata.memory
+            translator.memory_note = {**(translator.memory_note or {}), "recalled_at_start": _mem_recalled}
+            await _turn_memory_recalled(translator.resp_id, _mem_recalled)
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
     # the request — the workspace and AGENTS.md still carry the working context.
     runner_prompt = prompt
-    if backend in _NO_RESUME_BACKENDS and resume:
+    if not resume and (_session_trace.get(sid) or {}).get("branched_from"):
+        # A lost first native turn must not silently lose the branch's transcript either.
+        _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS, strict=True)).get("turns") or []
+        runner_prompt = _history_prompt([t for t in _hist if t["id"] != translator.resp_id], prompt)
+    elif backend in _NO_RESUME_BACKENDS and resume:
         try:
             _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS)).get("turns") or []
             runner_prompt = _history_prompt(_hist, prompt)
@@ -9948,6 +11106,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         await emit(oev)
                 fed_upto = n_total
                 pending.extend(new)
+                _step_checkpoint_maybe(sid, rec, new)    # a finished tool step is saved (#505)
             # HR-INF-014: the durable trace is the authority and must not lose events. It is written
             # once per interval rather than once per answer (a stream of token deltas would otherwise
             # be a chunk each), and at the turn's end; a failed write keeps `pending` for the next.
@@ -10055,7 +11214,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         rec["charge"] = translator.charge      # a remote runtime's own bill for the turn, beside the tokens
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
-    await _checkpoint(sid, rec)
+    translator.ended_checkpoint(await _checkpoint(sid, rec, response_id=translator.resp_id))
     _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
@@ -10069,6 +11228,19 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             await control_store.lease_release(org, sid, translator.resp_id, rec["lease_fence"])
         except Exception:  # noqa: BLE001
             pass
+    _corrected = sid in _memory_corrected
+    _memory_corrected.discard(sid)
+    if status == "completed" and harness_id and "memories" in rec and not _corrected:
+        # Not awaited: the turn isn't complete until this returns, and some vendors extract with a model
+        # before they answer. Measured on real turns: 5.5 s on Graphiti and 7.2 s on ReMe after the last words.
+        _t = asyncio.create_task(_memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator),
+                                                   resp_id=translator.resp_id))
+        _inflight.add(_t)
+        _t.add_done_callback(_inflight.discard)
+    elif harness_id and "memories" in rec:
+        _t = asyncio.create_task(_memories_note_kept(org, sid, translator.resp_id))
+        _inflight.add(_t)
+        _t.add_done_callback(_inflight.discard)
     return status, produced, rec
 
 
@@ -10109,10 +11281,10 @@ async def _apikey_resolve(tok: str) -> dict | None:
     if not tok:
         return None
     sha = _hash_key(tok)
-    # HR-INF-010: hot path = control-store point-read (off the shared Gremlin partition). The
+    # HR-INF-010: hot path = control-store point-read (off the graph). The
     # store is a write-through cache of the graph key record kept in sync by mint/revoke; a HIT is
     # authoritative (revocation dual-writes it). A MISS (or store-down) falls back to the graph and
-    # backfills, so pre-existing keys migrate on first use and Gremlin is never hit for them again.
+    # backfills, so pre-existing keys migrate on first use and the graph is never read for them again.
     if control_store.enabled():
         doc = await control_store.apikey_get(sha)
         if doc is not None:
@@ -10121,13 +11293,14 @@ async def _apikey_resolve(tok: str) -> dict | None:
             _touch_apikey(sha)
             return {"org": doc.get("org", ""), "member": doc.get("member", ""),
                     "workspace": doc.get("workspace", "") or "",
-                    "workspace_default": bool(doc.get("workspace_default")), "via": "api_key"}
+                    "workspace_default": bool(doc.get("workspace_default")), "via": "api_key", "key_id": sha}
     v = await _vertex_get(sha)
     if v and v.get("kind") == "harness_api_key" and str(v.get("revoked")) not in ("1", "true", "True"):
         _touch_apikey(sha)
         p = {"org": v.get("org", ""), "member": v.get("member", ""),
              "workspace": v.get("workspace", "") or "",
-             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True"), "via": "api_key"}
+             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True"), "via": "api_key",
+             "key_id": sha}
         if control_store.enabled():
             try:
                 # create_only: never overwrite an existing doc — a revoke tombstone may have landed
@@ -10165,6 +11338,11 @@ def _verify_login_jwt(auth: str) -> dict | None:
 
 async def _principal(request: Request) -> dict:
     h = request.headers
+    # A memory service's credential (memory_relay) is for the model relay's inference paths (llm_broker), and
+    # nothing that resolves a caller ever takes it: not as a key, and not beside the internal key, which a
+    # console in front of this gateway can attach to a request it relays.
+    if _broker_token(request).startswith(memory_relay.PREFIX):
+        raise HTTPException(401, "A memory service's credential reaches the model relay and nothing else.")
     if INTERNAL_KEY and h.get("x-harness-internal", "") == INTERNAL_KEY:
         hdr = {"org": h.get("x-harness-org", ""), "member": h.get("x-harness-member", ""),
                "workspace": h.get("x-harness-workspace", ""),
@@ -10230,6 +11408,7 @@ async def _owned_org(request: Request, org: str) -> dict:
 # Richard's rule (2026-10-08), the hosted service's too, and published in the self-hosting guide:
 #   for good, at once:          tasks (sessions, with everything they left), API keys, credentials
 #   30 days, restorable, gone:  harnesses, responses deleted on their own, environments, uploads
+#                               (a harness with the memory made for it and its people's: _memories_gone_with)
 # Each delete does its own "at once" part. This sweep removes what has come due: what a delete
 # could not finish, the marker a deleted session keeps for a day, and every 30-day kind past its
 # 30 days. It runs when the server starts and every day after, so the first start of a version
@@ -10302,13 +11481,15 @@ async def _retention_due(kind: str, now: int) -> tuple[list[dict], int]:
         # of its last edit and the last task it ran, which the delete came after (Richard,
         # 2026-10-08, "Last activity"). Its last edit alone can be months before a delete made
         # yesterday by someone who had kept using it.
+        # Both reads strict: which agents are past their 30 days decides whose memory goes with them
+        # (_memories_gone_with), and a failed read of the tasks would make an old agent due early.
         last_task: dict[str, int] = {}
-        for sv in await BACKING.graph.find("HarnessSession"):
+        for sv in await BACKING.graph.find_strict("HarnessSession"):
             h = str(sv.get("harness_id") or "")
             if h:
                 t = max(_stamp_ms(sv.get("updated_at")), _stamp_ms(sv.get("created_at")))
                 last_task[h] = max(last_task.get(h, 0), t)
-        for r in await BACKING.graph.find("Harness", {"deleted": "1"}):
+        for r in await BACKING.graph.find_strict("Harness", {"deleted": "1"}):
             if not _stamp_ms(r.get("deleted_at")):
                 r = {**r, "_last_activity": str(max(_stamp_ms(r.get("updated_at")), _stamp_ms(r.get("created_at")),
                                                     last_task.get(str(r.get("id") or ""), 0)) or "")}
@@ -10351,7 +11532,8 @@ async def _harness_blob_refs() -> "collections.Counter[str]":
     """How many harness records name each bundle. A client may write a bundle's id onto another
     harness, so a removed harness's bundle goes only when no record left names it."""
     refs: "collections.Counter[str]" = collections.Counter()
-    for h in await BACKING.graph.find("Harness"):
+    # strict: a failed read taken as "no record names it" would delete bundles other harnesses still use
+    for h in await BACKING.graph.find_strict("Harness"):
         refs.update(_harness_blobs(h))
     return refs
 
@@ -10374,9 +11556,16 @@ async def _retention_remove(kind: str, item: dict, ctx: dict) -> str | None:
     elif kind == "responses":
         _resp_cache_forget(iid)
         await _blob_delete(f"responses/{iid}.json", kb=RESP_BLOB_KB)
+        await _blob_delete(_branch_point_key(iid), kb=RESP_BLOB_KB)
         await BACKING.graph.delete(iid, "HarnessResponse")
     elif kind == "harnesses":
         org = str(row.get("org") or "")
+        # Its memory goes first, as whoever deleted it: kept with it until now (_harness_delete). One that
+        # couldn't be checked, or past the sweep's cap, leaves the agent for the next sweep, where it is again.
+        why = await _memories_gone_with(org, iid, [str(x) for x in _json_list(row.get("deleted_by"))],
+                                        ctx.setdefault("memories", {"n": 0}))
+        if why:
+            return why
         # credentials were removed at the delete; again here for a harness deleted before that
         await _hosted_scrub_removed(org, iid, _mcp_list(row), [])
         for c in await BACKING.graph.find(_CONNECTION_LABEL, {"harness": iid}):
@@ -10412,7 +11601,14 @@ async def _retention_sweep(dry_run: bool, kinds: list[str] | None = None, limit:
     done = True
     ctx: dict = {}
     for kind in kinds or _RETENTION_KINDS:
-        due, no_time = await _retention_due(kind, now)
+        try:
+            due, no_time = await _retention_due(kind, now)
+        except Exception as e:  # noqa: BLE001 — a strict read that couldn't answer: this kind waits, the rest go on
+            print(f"[retention] what of {kind} is due couldn't be read: {type(e).__name__}", flush=True)
+            out["left"][kind] = "what is due couldn't be read just now"
+            listed[kind] = []
+            done = False
+            continue
         batch = due[:limit] if limit else due
         if len(batch) < len(due):
             done = False
@@ -10492,7 +11688,19 @@ async def retention_restore(body: RetentionRestoreBody) -> dict:
                 for r in await BACKING.graph.find("Environment", {"slug": str(v.get("slug") or "")})):
             raise uhp_error(409, "environment_exists",
                             f"Another environment is mounted at /env/{v.get('slug')} now; rename it first.", "id")
-        await _vg_upsert(label, iid, {"deleted": "0", "deleted_at": "", "updated_at": str(_now_ms())})
+        # A harness comes back with its memory and its people's memories: they were kept with it (_harness_delete).
+        # Who deleted it goes too, so a later delete is that person's.
+        await _vg_upsert(label, iid, {"deleted": "0", "deleted_at": "", "updated_at": str(_now_ms()),
+                                      **({"deleted_by": ""} if label == "Harness" else {})})
+        if label == "Harness":
+            # and the tools it reaches them through, whose binding the delete removed with its credentials
+            # (_hosted_scrub_removed): a memory kept for it and out of its reach would not be its memory back
+            org = str(v.get("org") or "")
+            try:
+                if await memory_plane.granted(org, _agent(iid)):
+                    await _memories_on_grant(org, _agent(iid))
+            except Exception as e:  # noqa: BLE001 - the agent is back; its tools are given again at its next grant
+                print(f"[memories] {iid}: restored without its memory tools: {type(e).__name__}", flush=True)
     elif kind == "uploads":
         meta = await _upload_meta(iid)
         if not meta or not meta.get("deleted_at") or await _blob_get(f"uploads/{iid}", kb=RESP_BLOB_KB) is None:
@@ -10688,6 +11896,7 @@ class CreateResponseBody(BaseModel):
     input: object = None
     stream: bool = False
     previous_response_id: str | None = None
+    branch: object = None
     store: bool = True
     instructions: str | None = None
     max_output_tokens: int | None = None
@@ -10699,6 +11908,9 @@ class CreateResponseBody(BaseModel):
     max_step: int | None = None         # per-request agent step budget (claude --max-turns)
     timeout_seconds: int | None = None  # per-request wall-clock cap for the turn
     reasoning: dict | None = None       # {"effort": level}: how much the model thinks this turn (the Responses API's field)
+    # Who the task is for, as the integrator names them (the Responses API's field): opaque, kept as given. An agent
+    # that keeps each person's memory apart keeps this person's here (memory_plane.end_user_node).
+    user: str | None = Field(default=None, max_length=256)
 
 
 # Request fields the gateway accepts and does not act on, so a request that carries one is told so in
@@ -10712,6 +11924,7 @@ _UNAPPLIED_REQUEST_FIELDS = ("tools", "include", "max_output_tokens")
 def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     """The fields of this request the gateway will not act on, in a stable order; `None` means the
     client did not send the field, so it is not named."""
+    # `branch` is never in this list: it is acted on, or the request is refused (create_response).
     return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
 
 
@@ -10805,6 +12018,16 @@ async def create_response(body: CreateResponseBody, request: Request):
     org, member = principal.get("org", ""), principal.get("member", "")
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
+    # A request that asks for a branch and can't have one is refused, never run some other way
+    # (Sessions §1.1). Ignoring it used to be the rule, and with a session hint the task then ran
+    # as a new turn of the very session the client asked to leave alone, which no later answer
+    # can undo. Checked here, before anything is read or claimed: the body alone decides it.
+    if body.branch is not None and body.branch is not False:
+        if body.branch is not True:
+            raise uhp_error(400, "invalid_input", "branch is true or false.", "branch")
+        if not body.previous_response_id:
+            raise uhp_error(400, "invalid_input", "A branch starts from the response named in "
+                                                  "previous_response_id.", "branch")
     meta = body.metadata or {}
     probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
@@ -10821,6 +12044,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         _pv = await _vertex_get(_psid) if _psid else None
         harness_id = str((_pv or {}).get("harness_id") or "")
     harness_name = str(meta.get("harness_name") or "")
+    branching = body.branch is True and bool(body.previous_response_id)
     # A calibration credential is held to its one harness HERE, before the idempotency replay below
     # hands back a stored response and before any session is touched: a refusal that comes after a
     # read or a write is not a refusal. It starts runs on that harness, and continues only a
@@ -10834,7 +12058,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if _cal and body.previous_response_id and not await _calibration_holds_response(
             _calibration_inner(principal), await _resp_get(body.previous_response_id)):
         raise uhp_error(404, "response_not_found", "No response with that id.", "previous_response_id")
-    if _cal and str(meta.get("session_id") or "") and not await _calibration_holds_session(
+    if _cal and not branching and str(meta.get("session_id") or "") and not await _calibration_holds_session(
             _calibration_inner(principal), str(meta.get("session_id") or "")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "metadata.session_id")
     # Request idempotency: the durable control store is the SINGLE authority (create_item = atomic
@@ -10873,6 +12097,11 @@ async def create_response(body: CreateResponseBody, request: Request):
         # rather than run without the project the task named.
         raise uhp_error(400, "environment_unsupported",
                         "This harness runs in a remote runtime and cannot mount an environment.", "environment")
+    # One more memory for this task, named by id in metadata.memory: checked against the HARNESS's
+    # privileges here, before anything is allocated (Memories §9).
+    task_memory = await _task_memory_for_turn(org, harness_id, body)
+    # Who it is for, when its agent keeps each person's memory apart (memory_plane.end_user_node).
+    task_person = await _task_person(org, harness_id, hv, body, principal)
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -10883,6 +12112,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # SEPARATE Stripe Connect flow — a different fund system, not this credit gate.)
     billing_org = (str(hv.get("org") or "") if hv else "") or org
     await _credit_gate(billing_org)
+    branch_info = await _branch_source(body.previous_response_id, org, harness_id, principal) if branching else None
     # Caller-selected model: the top-level OpenAI `model` field (what the console + API users send),
     # then request metadata. When omitted, fall back to the harness's saved default_model so every
     # session of a custom harness inherits its configured default.
@@ -10924,6 +12154,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # harness's fixed backend, not allowed to silently re-route to a different one.
     backend = (_backend_of_harness(hv) or _backend_of_builtin(harness_id)
                or _route_backend(model_req or body.model, body.backend))
+    _require_installed(backend)
     # Server-side model permission (CT-124): a model this backend cannot serve is refused here.
     model_req = await _resolve_model_policy(model_req, hv, backend, org)
     want_partial = _want_partial(backend, meta)
@@ -10991,6 +12222,12 @@ async def create_response(body: CreateResponseBody, request: Request):
     if answer is not None and not body.previous_response_id:
         raise uhp_error(400, "invalid_input", "An input_response answers the response named in "
                                               "previous_response_id.", "previous_response_id")
+    if answer is not None and branching:
+        # The two can't combine: an answer continues the session that asked, a branch leaves it as
+        # it was. A malformed request, so 400, the same as an answer with no response to answer;
+        # the question itself may well be pending, which `input_not_pending` would deny.
+        raise uhp_error(400, "invalid_input", "A branch does not answer the original response's "
+                                              "question. Send the input_response without branch.", "branch")
     if not body.previous_response_id and not str(meta.get("session_id") or "").strip():
         history, live_input = _input_history(body.input, org)
     prompt, files_in, input_items = _parse_input(live_input)
@@ -11020,11 +12257,14 @@ async def create_response(body: CreateResponseBody, request: Request):
     # session_hint: the client's known active session — a fallback continuity signal so a
     # follow-up never forks a new session when previous_response_id was lost client-side
     # (interrupted stream, tab switch). The resolver validates org ownership before reuse.
-    sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
-                                              harness_id=harness_id, harness_name=harness_name,
-                                              session_hint=str(meta.get("session_id") or ""),
-                                              workspace=str(principal.get("workspace") or ""),
-                                              caller=principal)
+    if branching:
+        sid, resume = "hsess" + uuid.uuid4().hex, None
+    else:
+        sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
+                                                  harness_id=harness_id, harness_name=harness_name,
+                                                  session_hint=str(meta.get("session_id") or ""),
+                                                  workspace=str(principal.get("workspace") or ""),
+                                                  caller=principal)
     # The previous response's question (Tasks §3.2), now that the response is known to be the
     # caller's: an answer is checked and claimed, and the answer becomes this turn's message,
     # carrying the question with it; any other input voids the question, and the response says
@@ -11040,7 +12280,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if answer is not None or (not body.previous_response_id and str(meta.get("session_id") or "").strip()):
         with contextlib.suppress(Exception):
             _newest = str((await _session_turns_data(sid)).get("last_response_id") or "")
-    _chained = body.previous_response_id or _newest
+    _chained = None if branching else body.previous_response_id or _newest
     if _chained:
         _prev = await _resp_get(_chained)
         _pend = (_prev or {}).get("_pending_input") if isinstance(_prev, dict) else None
@@ -11088,6 +12328,19 @@ async def create_response(body: CreateResponseBody, request: Request):
             if str(existing.get("req_hash") or "") not in ("", idem_rhash or ""):
                 raise HTTPException(409, "Idempotency-Key reused with a different request payload")
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
+    if branching:
+        try:
+            # The same capacity gates as a turn, without publishing a heartbeat-only session.
+            async with _turn_slot(org, sid, heartbeat=False):
+                history = await _branch_prepare(branch_info, sid, org, member, backend, harness_id,
+                                                harness_name, branch_info["workspace"], principal,
+                                                created_at, body.store)
+            _session_trace[sid]["billing_org"] = billing_org
+        except BaseException:
+            if idem_key and idem_sha_v is not None:
+                with contextlib.suppress(Exception):
+                    await control_store.idem_release(org, idem_sha_v, resp_id)
+            raise
     # This turn owns the session from HERE: clear a leftover Stop flag (it belonged to the
     # previous turn) and mark the vertex starting so cancel_session sees a live turn during
     # the entire warmup window — even while this task waits on the concurrency gates. Stamp
@@ -11126,6 +12379,11 @@ async def create_response(body: CreateResponseBody, request: Request):
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
         _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
+        # Only the response that branched says where it came from (Sessions §1.1). The session
+        # keeps the origin for the rest of its life (its detail, and the trace the transcript
+        # fallback in _resp_execute reads), but a later turn in it is a continuation like any
+        # other: naming the origin there too read as a new branch at every turn.
+        tr.branched_from = str(body.previous_response_id or "") if branching else ""
         tr.environment = str((environment or {}).get("id") or "")
         tr.voided_input_requests = voided     # the question this turn passed over, named (§3.2)
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
@@ -11146,7 +12404,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             pending = tr.pending_input() if status == "incomplete" else None
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
                       "_member": member, "_input": input_items, "_backend": backend,
-                      **({"_pending_input": pending} if pending else {}),
+                      **({"_pending_input": pending} if pending else {}), **tr.branch_mark(),
                       **{"_" + k: v for k, v in trace_ctx.items()}}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
             if pending and control_store.enabled():
@@ -11156,7 +12414,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 with contextlib.suppress(Exception):
                     await control_store.resp_set_pending_input(org, resp_id, pending["id"], _INPUT_REQUEST_TTL_S)
 
-        if history:
+        if history and not branching:
             # the task's first turns, the conversation it was started with, written before this
             # turn's own record: the thread reads whole from its first read, and a write that fails
             # refuses the turn here (the guard below releases what it holds)
@@ -11211,7 +12469,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                        trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
+                        trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
+                        task_person=task_person)
                     end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
@@ -11266,7 +12525,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                            trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
+                            trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
+                        task_person=task_person)
                         end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
@@ -11327,7 +12587,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
+                trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
+                        task_person=task_person)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
@@ -11569,7 +12830,7 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     ?limit=N returns only the LAST N turns (HR-INF-015: bounds the per-open blob fan-out on
     long-horizon sessions; 0/absent = all, preserving existing callers)."""
     _org, v = await _owned_session(request, sid)   # LIVE-B: enforce org ownership before returning content
-    return await _session_turns_data(sid, limit=limit, strict=True, v=v)
+    return await _session_turns_data(sid, limit=limit, strict=True, v=v, branchable=True)
 
 
 def _unix_s(ts) -> int | None:
@@ -11593,7 +12854,34 @@ _turns_reads = _OpsDrops("turns", 60, ("index_failed", "record_failed", "from_se
 _TURNS_UNREADABLE = "This conversation could not be loaded just now. Try again in a moment."
 
 
-async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None) -> dict:
+def _turn_memory_of(row: dict) -> dict:
+    """A turn's `memory`, from its index row: its note ({remembered, records, pending} or {skipped}), with
+    `recalled_at_start` when findings were recalled for it at its start."""
+    note = _json_obj(row.get("memory_note"))
+    try:
+        n = int(str(row.get("memory_recalled") or "0"))
+    except ValueError:
+        n = 0
+    return {**note, "recalled_at_start": n} if n > 0 else note
+
+
+def _turn_elapsed(rec: dict) -> float | None:
+    """Seconds a finished turn took, from its own record: accepted (_created_ms) to settled (_completed_at), to the
+    tenth. None while it runs and on a record that never said when it ended."""
+    if str(rec.get("status") or "") in _TURN_LIVE:
+        return None
+    try:
+        began = int(rec.get("_created_ms") or 0) / 1000 or float(rec.get("created_at") or 0)
+        ended = float(rec.get("_completed_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    return round(ended - began, 1) if began > 0 and ended >= began else None
+
+
+async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None,
+                              branchable: bool = False) -> dict:
+    """`branchable`: each turn says whether a branch can be made from it (_branch_point_of), for the
+    session's own readers; a share link's reader and the gateway's own reads of a history don't ask."""
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
     safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
@@ -11609,6 +12897,9 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
     ids = [str(x.get("id")) for x in rows if x.get("id")]
     # each row's birth as the index holds it: a turn's time when its record carries none
     born = {str(x.get("id")): x.get("created_at") for x in rows if x.get("id")}
+    # what memory kept in each turn, or why it was skipped (_turn_memory_note), and how many findings were recalled
+    # for it at its start (_turn_memory_recalled), from the same rows
+    mem_notes = {str(x.get("id")): _turn_memory_of(x) for x in rows if x.get("id") and (x.get("memory_note") or x.get("memory_recalled"))}
     if v is None and strict:
         v = await _vertex_get(sid) or {}
     # The session's current turn when the index does not hold it. Counted only once its record shows:
@@ -11636,6 +12927,17 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
         _turns_reads.bump("record_failed")
         print(f"[turns] a turn's record could not be read sid={safe_sid}: {type(e).__name__}", flush=True)
         raise uhp_error(503, "server_error", _TURNS_UNREADABLE) from e
+    # Whether each turn can be branched, by the branch route's own test. A record answers it itself; one
+    # from before records said so reads its point from the store, those reads bounded and in parallel as
+    # the records' are, and kept (_branch_point_of). A point that could not be read is not offered.
+    can_branch: dict[str, bool] = {}
+    if branchable:
+        async def _can(rid: str, rec: dict) -> tuple[str, bool]:
+            async with _sem:
+                return rid, await _branch_point_of(rid, rec) is not None
+
+        can_branch = dict(await asyncio.gather(*(_can(rid, rec) for rid, rec in zip(ids, recs)
+                                                 if rec and not rec.get("_deleted"))))
     for rid, rec in zip(ids, recs):
         if not rec or rec.get("_deleted"):
             continue
@@ -11693,9 +12995,15 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
                       "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
                       "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
                                        else _unix_s(rec.get("_completed_at"))),
+                      # and what it took, in seconds to the tenth (a reopened turn says "Done in 12.4 s", not "Done")
+                      "elapsed": _turn_elapsed(rec),
+                      # what memory kept in it ({remembered, records}) or why it was skipped ({skipped})
+                      "memory": mem_notes.get(rid) or None,
                       # a turn the task was started with (Tasks §2.1): nothing ran, nothing was spent
                       "imported": bool(rec.get("_imported")),
                       **({"cost_usd": 0.0} if rec.get("_imported") else {}),
+                      # a branch can be made from it (Sessions §1.1): the branch route's own test, on this record
+                      **({"branchable": can_branch.get(rid, False)} if branchable else {}),
                       "_model": rec.get("model") or "",
                       "_since_ms": _turn_since_ms(rec, for_result=False)})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
@@ -11755,9 +13063,13 @@ async def delete_response(response_id: str, request: Request):
     now = _now_ms()
     rec["_deleted"] = True
     rec["_deleted_at"] = now
+    # its branch point goes now (below), and from the record too: one restored within its 30 days
+    # can't be branched, as it couldn't be before records carried their point (_branch_point_of)
+    rec["_branch_point"] = None
     try:
         _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
+        await _blob_delete(_branch_point_key(response_id), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
     await _vg_upsert("HarnessResponse", response_id, {"status": "deleted", "deleted_at": str(now)})
@@ -11853,7 +13165,9 @@ async def _session_shared(sid: str) -> bool:
 async def workspace_by_path(harness_id: str, sid: str, path: str) -> Response:
     """Canonical artifact URL: /{harness}/{session}/workspace/{path}. Access is one fresh
     session-level check: is the session shared? (The console BFF maps its same-shaped route
-    here.) harness_id is part of the address, not the auth — the sid is the lookup key."""
+    here for anyone it cannot vouch for; a self-hosted console's signed-in member goes to /a/
+    instead, #594.) harness_id is part of the address, not the auth — the sid is the lookup key.
+    This route never reads a caller: a sign-in sent here changes nothing."""
     if not await _session_shared(sid):
         raise HTTPException(404, "file not found")
     return await _serve_workspace_path(sid, path, public=True)
@@ -11861,11 +13175,13 @@ async def workspace_by_path(harness_id: str, sid: str, path: str) -> Response:
 
 @app.get("/a/{sid}/{path:path}")
 async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
-    """Authenticated artifact-by-path: org members open workspace files directly (inline)."""
-    p = await _principal(request)
-    v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
-        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    """Authenticated artifact-by-path: org members open workspace files directly (inline).
+
+    The same check as the content route beside it (_owned_session), not a copy of part of it: this
+    route checked the organization and the workspace and stopped, so a deleted task's files went on
+    opening here while GET /v1/containers/{sid}/files/{id}/content refused them. The console's reply
+    links read here now (#594), so the two signed-in addresses answer alike."""
+    await _owned_session(request, sid)
     return await _serve_workspace_path(sid, path)
 
 
@@ -12011,12 +13327,33 @@ async def share_meta(token: str) -> dict:
     return {k: m.get(k) for k in _SHARE_META_FIELDS} | {"session_id": sid}
 
 
+# A memory step as a share link shows it: that memory was used, never what or which.
+_SHARED_MEMORY_STEP = {"name": "memory", "arguments": ""}
+
+
+def _turns_for_a_link(data: dict) -> dict:
+    """A conversation as a share link shows it, to anyone who holds the link. A memory tool's step (_MEMORY_TOOL) is the
+    person's and the operator's to read, never a link-holder's: its answer is what a recall found in the person's
+    memory and the agent's, from tasks the link was never about; its arguments are the fact a remember kept (often about
+    the person, or about someone else) or what a recall looked up about someone; and its ids are internal. So a memory
+    step is only "memory" here, with no arguments, no answer and no ids, and the turn's memory note says how many things
+    were kept or recalled, never which records in which memory. Every other tool shows as it always has."""
+    for t in data.get("turns") or []:
+        t["tools"] = [(dict(_SHARED_MEMORY_STEP) if _MEMORY_TOOL.search(str(x.get("name") or ""))
+                       else {k: v for k, v in x.items() if k != "output"}) if isinstance(x, dict) else x
+                      for x in t.get("tools") or []]
+        note = t.get("memory")
+        if isinstance(note, dict):
+            t["memory"] = {k: v for k, v in note.items() if k != "records"} or None
+    return data
+
+
 @app.get("/share/{token}/turns")
 async def share_turns(token: str) -> dict:
     sid = await _share_sid(token)
     if not sid:
         raise HTTPException(404, "share not found")
-    return await _session_turns_data(sid, strict=True)
+    return _turns_for_a_link(await _session_turns_data(sid, strict=True))
 
 
 @app.get("/share/{token}/files")
@@ -12477,8 +13814,10 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
     return (await _capture_state(sid))[0]
 
 
-async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
-    """(_newest_captures, the tombstones: path -> when it was removed).
+async def _capture_state(sid: str, stamps: dict[str, float] | None = None
+                         ) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
+    """(_newest_captures, the tombstones: path -> when it was removed). `stamps`, when given, is
+    filled with when each returned capture was written.
 
     The captures are the window they always were (a first page of 200 metas). The tombstones are
     kept under their own prefix and read IN FULL: inside that window a tombstone could fall out of
@@ -12520,6 +13859,8 @@ async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[st
                            meta.get("source") == "app")
     if tombs:
         out = {n: v for n, v in out.items() if not _tombstoned(n, newest[n], tombs)}
+    if stamps is not None:
+        stamps.update({n: newest[n] for n in out})
     return out, tombs
 
 
@@ -12613,25 +13954,36 @@ async def _cfile_by_name(sid: str) -> dict[str, str]:
     return {name: cid for name, (cid, _app) in (await _newest_captures(sid)).items()}
 
 
-async def _reapply_app_writes(sid: str) -> int:
+async def _reapply_app_writes(sid: str, mid_turn_at: float = 0.0) -> int:
     """Put back the files an APP wrote since the last checkpoint, into a freshly hydrated workspace.
 
-    Hydrate restores the checkpoint, and the checkpoint is only ever taken when a TURN ends. So a
-    sheet somebody edited between turns is not in it: without this the agent would open the older
+    Hydrate restores the checkpoint, and the checkpoint is taken while a TURN runs or when it ends.
+    So a sheet somebody edited between turns is not in it: without this the agent would open the older
     copy, write it back, and the person's rows would be gone — the same loss the durable capture
     fixes for reads, arriving one turn later instead.
 
     The test is deliberately conservative: re-apply ONLY where the app's capture is the newest one
     for that filename. If the agent touched the same file in its last turn, its capture is newer,
     the checkpoint already holds it, and this leaves it alone. That way the repair can never be the
-    thing that overwrites the agent's work."""
+    thing that overwrites the agent's work.
+
+    `mid_turn_at`: the checkpoint restored was taken WHILE a turn ran, at that time (#505), and that
+    turn never ended: its sandbox died. The test above leans on the agent's edits being captured when
+    its turn ends, so here they are in the checkpoint and in no capture, and the app's older capture
+    still reads as the newest — re-applying it would put the app's copy over the agent's edit. An
+    app cannot write while a turn runs (_refuse_if_busy), so a capture written before the checkpoint
+    was taken is already in it, or the agent changed it since; only a newer one is put back."""
+    stamps: dict[str, float] = {}
     try:
-        caps = await _newest_captures(sid)
+        caps = ((await _capture_state(sid, stamps))[0] if mid_turn_at
+                else await _newest_captures(sid))
     except Exception:  # noqa: BLE001 — blob store unavailable: the turn still runs
         return 0
     n = 0
     for name, (cid, from_app) in caps.items():
         if not from_app or not _ws_path_allowed(name):    # an app's write of this kind from before the rule stays out
+            continue
+        if mid_turn_at and stamps.get(name, 0.0) <= mid_turn_at:
             continue
         try:
             got = await _container_file_bytes(sid, cid)
@@ -13404,22 +14756,26 @@ async def revoke_key(org: str, kid: str, request: Request) -> dict:
 
 def _parse_jsonrpc(text: str) -> dict:
     """A streamable-HTTP MCP endpoint answers either as plain JSON or as SSE (`data: {…}`
-    lines). Return the first JSON-RPC object found, whichever form."""
+    events). Return the first JSON-RPC object found, whichever form."""
     t = (text or "").strip()
     if t.startswith("{"):
         try:
             return json.loads(t)
         except Exception:  # noqa: BLE001
             pass
-    for line in t.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
-            body = line[5:].strip()
-            if body.startswith("{"):
-                try:
-                    return json.loads(body)
-                except Exception:  # noqa: BLE001
-                    continue
+    # SSE joins all data fields in an event with LF before interpreting the payload.
+    # Keep accepting a final event without a blank line, as this complete-body probe
+    # did for single-line responses; it is not an incremental stream reader.
+    for event in t.replace("\r\n", "\n").replace("\r", "\n").split("\n\n"):
+        data = [line[5:].removeprefix(" ") for line in event.split("\n") if line.startswith("data:")]
+        if not data:
+            continue
+        try:
+            obj = json.loads("\n".join(data))
+        except Exception:  # noqa: BLE001 - a hostile server's nesting depth is a RecursionError
+            continue
+        if isinstance(obj, dict):
+            return obj
     return {}
 
 
@@ -13586,7 +14942,7 @@ async def _sql_peer_check(addr: str) -> str | None:
 
 sql_plane.PEER_CHECK = _sql_peer_check
 
-_checked_clients: dict[bool, httpx.AsyncClient] = {}
+_checked_clients: dict[bool | str, httpx.AsyncClient] = {}
 
 
 def _checked_http(always: bool = False) -> httpx.AsyncClient:
@@ -13614,6 +14970,39 @@ def _checked_transport(always: bool, limits: httpx.Limits | None = None) -> http
 # On a shared deployment that was a way into the private network; GitHub, Vercel and Microsoft are
 # public and pass the same check.
 plugs_plane.checked_transport = lambda: _checked_transport(False)
+# The memory vendors' clients likewise: a vendor's address is one a member typed, kept, and called on every read and
+# write after it, and what it answers is shown to the reader. Checked when saved (put_plug) and again at each connect here.
+# On a self-hosted instance the check refuses nothing (_CheckedNetwork with always=False), so there the client is left
+# as it was, which keeps its environment proxy: a box that reaches the Mem0 Platform through one still does.
+for _m in (memory_mem0, memory_graphiti, memory_hindsight, memory_reme):
+    _m.checked_transport = lambda: None if _pool_is_local() else _checked_transport(False)
+
+
+# One answer of the connection probe, at most. The server is whoever the caller named, so an answer
+# that runs on (or an SSE stream that never ends) is a failed probe, not memory or a wait the gateway
+# gives it. A tools/list this large is far past any server's; 20 s is the probe's old per-read wait.
+_MCP_PROBE_MAX_BYTES = 4 * 1024 * 1024
+_MCP_PROBE_WAIT_S = 30
+
+
+class _McpProbeRefused(Exception):
+    pass
+
+
+async def _mcp_probe_post(c: httpx.AsyncClient, url: str, headers: dict, msg: dict) -> tuple[int, httpx.Headers, str]:
+    """POST one probe message; (status, headers, text) of an answer read to its end, within the caps."""
+    async def read() -> tuple[int, httpx.Headers, str]:
+        async with c.stream("POST", url, headers=headers, content=json.dumps(msg), timeout=20) as r:
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf += chunk
+                if len(buf) > _MCP_PROBE_MAX_BYTES:
+                    raise _McpProbeRefused(f"the answer is larger than {_MCP_PROBE_MAX_BYTES // (1024 * 1024)} MiB")
+            return r.status_code, r.headers, buf.decode(r.charset_encoding or "utf-8", "replace")
+    try:
+        return await asyncio.wait_for(read(), _MCP_PROBE_WAIT_S)
+    except asyncio.TimeoutError:
+        raise _McpProbeRefused(f"no complete answer within {_MCP_PROBE_WAIT_S} s") from None
 
 
 async def _mcp_list_tools(url: str, token: str) -> dict:
@@ -13631,23 +15020,27 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
                        "clientInfo": {"name": "harnessrouter", "version": "1"}}}
     try:
-        r = await c.post(url, headers=headers, content=json.dumps(init), timeout=20)
+        status, rh, text = await _mcp_probe_post(c, url, headers, init)
+    except _McpProbeRefused as e:
+        return {"ok": False, "error": f"initialize: {e}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"unreachable: {str(e)[:140]}"}
-    if r.status_code >= 400:
-        return {"ok": False, "error": f"initialize returned HTTP {r.status_code}"}
-    init_res = _parse_jsonrpc(r.text)
+    if status >= 400:
+        return {"ok": False, "error": f"initialize returned HTTP {status}"}
+    init_res = _parse_jsonrpc(text)
     server = ((init_res.get("result") or {}).get("serverInfo") or {}).get("name") or ""
     h2 = dict(headers)
-    sid = r.headers.get("mcp-session-id")
+    sid = rh.get("mcp-session-id")
     if sid:
         h2["mcp-session-id"] = sid
     try:
-        await c.post(url, headers=h2, content=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}), timeout=20)
-        r2 = await c.post(url, headers=h2, content=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}), timeout=20)
+        await _mcp_probe_post(c, url, h2, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        _, _, text2 = await _mcp_probe_post(c, url, h2, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    except _McpProbeRefused as e:
+        return {"ok": False, "error": f"tools/list: {e}", "server": server}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"tools/list failed: {str(e)[:140]}"}
-    tl = _parse_jsonrpc(r2.text)
+    tl = _parse_jsonrpc(text2)
     if tl.get("error"):
         return {"ok": False, "error": str(tl["error"])[:160], "server": server}
     tools = [{"name": t.get("name", ""), "description": (t.get("description") or "")[:200]}
@@ -13952,6 +15345,7 @@ _HOSTED_NOT_CONNECTED = {
     "database": ("database_not_connected", _NOT_CONNECTED),
     "media": ("media_not_connected", "No media tools are connected to this agent yet."),
     "plugs": ("plugs_not_connected", "No plugins are connected to this agent yet."),
+    "memories": ("memories_not_attached", "This agent holds no memory yet."),
 }
 
 
@@ -17554,6 +18948,15 @@ _PLUG_FORMS: dict[str, dict] = {
     # "delegated" (each person signs in with Microsoft once; the record then holds one refresh
     # token per person under rt-<member slug>) or "application" (client credentials).
     "microsoft365": {"secrets": ["client_secret"], "config": ["tenant_id", "client_id", "mode"], "source": "local"},
+    # A memory provider: the workspace's own account at a memory service, connected the way every
+    # plug is (its key in the secret store, never on the record). It offers an agent no tools of
+    # its own: memories kept there are attached to a harness through /v1/harnesses/{id}/memories.
+    # A key where the service has one; the address of your own server where it runs on your machines
+    # (mem0's own service needs only a key, and an address means your mem0 server instead).
+    "mem0": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "source": "local", "kind": "memory"},
+    "graphiti": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
+    "hindsight": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
+    "reme": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
 }
 
 
@@ -17636,19 +19039,25 @@ def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, sta
             "config_fields": list(form["config"]), "version": int((rec or {}).get("version") or 0),
             "tools": len(plugs_plane.tools_of(plug_type)),
             **({"attention": str((rec or {}).get("attention") or "")} if (rec or {}).get("attention") else {}),
+            **({"inherited": True, "note": _memory_inherited_words(plug_type)} if (rec or {}).get("inherited") else {}),
             **({"pricing": browser_plane.pricing()} if plug_type == plugs_plane.BROWSER else {})}
 
 
+def _memory_inherited_words(engine: str) -> str:
+    return f"This workspace uses this instance's {memory_choice.LABEL.get(engine, engine)} (inherited)."
+
+
 @app.get("/v1/plugs")
-async def list_plugs(request: Request) -> dict:
+async def list_plugs(request: Request, kind: str = "") -> dict:
     """The plugin catalog for the caller's workspace: every type this instance serves, with its
-    state here (connected, disabled, needs_auth, missing)."""
+    state here (connected, disabled, needs_auth, missing). `kind=memory` lists the memory
+    providers instead, which are connected here and attached as memories, not as tools."""
     _caller = await _pub_principal(request)
     org, _ = _caller["org"], _caller.get("member", "")
     workspace = _plug_workspace(request, _caller)
     out = []
-    for t in _PLUG_FORMS:
-        status, rec = await _plug_lookup(org, workspace, t)
+    for t in [t for t, f in _PLUG_FORMS.items() if str(f.get("kind") or "") == kind]:
+        status, rec = await (_memory_engine_lookup if kind == "memory" else _plug_lookup)(org, workspace, t)
         out.append(_plug_public(org, workspace, t, rec, status))
     return {"workspace": workspace, "plugs": out}
 
@@ -17666,8 +19075,25 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
     if not form:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type",
                         {"supported": sorted(_PLUG_FORMS)})
-    workspace = _plug_workspace(request, _caller)
+    return await _plug_save(org, _plug_workspace(request, _caller), plug_type, body)
+
+
+async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -> dict:
+    """put_plug's write, for one workspace: a person's request, or an engine found beside this instance
+    (_memory_discover), each held to every check."""
+    form = _PLUG_FORMS[plug_type]
     _status, prev = await _plug_lookup_local(org, workspace, plug_type)
+    if (body.enabled and not body.secrets and not body.config and _memory_inherits(workspace, plug_type)
+            and not (prev or {}).get("key_refs") and not str(((prev or {}).get("config") or {}).get("base_url") or "")):
+        # on, with no address or key of its own: the instance's engine, as before it was turned off. A record of its
+        # own with nothing in it would read needs_auth and hide the instance's engine for good.
+        if prev:
+            vid = _plug_vid(org, workspace, plug_type, prev)
+            await BACKING.graph.delete(vid, _PLUG_LABEL)
+            _plug_fields_cache.pop(vid, None)
+        status2, rec = await _memory_engine_lookup(org, workspace, plug_type)
+        print(f"[plugs] {workspace}: {plug_type} uses the instance's ({status2})", flush=True)
+        return _plug_public(org, workspace, plug_type, rec, status2)
     config = dict((prev or {}).get("config") or {})
     for k, v in (body.config or {}).items():
         if k not in form["config"]:
@@ -17685,6 +19111,30 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         config.setdefault("deny_domains", [])
         config["proxy"] = False
     refs = {str(r.get("field")): str(r.get("ref")) for r in ((prev or {}).get("key_refs") or []) if isinstance(r, dict)}
+    if form.get("kind") == "memory" and (str((body.secrets or {}).get("api_key") or "").strip() or str(config.get("base_url") or "").strip()):
+        # A memory engine's key and address are tried at the engine BEFORE they are kept. What it
+        # refuses is refused here, with the engine's reason, and whatever was working stays: the
+        # memories on it must not go dark because someone pasted a wrong key.
+        base_url = str(config.get("base_url") or "").strip()
+        if base_url:
+            if await _ssrf_check(base_url):
+                raise uhp_error(422, "memory_invalid", "That address can't be used here: it must be https, on a public address.", "config.base_url")
+            own = _own_service_address(base_url)
+            if own:
+                raise uhp_error(422, "memory_invalid", f"That address can't be used: {own}.", "config.base_url")
+        given = str((body.secrets or {}).get("api_key") or "").strip()
+        if not given and "api_key" in refs:
+            given = await _vault_get(org, refs["api_key"]) or ""
+        refusal = await _MEMORY_CHECKS[plug_type](given, base_url)
+        if not refusal:
+            # answering is not working: a record is kept, read back and deleted before the connection is
+            refusal = await _memory_round_trip(plug_type, given, base_url, org)
+        if refusal:
+            refusal = memory_plane.clean_text(refusal)
+            for m in await BACKING.graph.find("Memory", {"org": org, "workspace": workspace, "provider": plug_type}):
+                # the memories on it say why, where they are read; it isn't a write that failed: what worked still does
+                await memory_plane.mark(org, str(m["id"]), refusal, write=False)
+            raise uhp_error(422, "memory_invalid", refusal, "secrets.api_key" if given else "config.base_url")
     for field, value in (body.secrets or {}).items():
         if field not in form["secrets"]:
             raise uhp_error(400, "invalid_input", f"{plug_type} takes no secret {field!r}.", "secrets")
@@ -17693,7 +19143,8 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plug_type)}-{_plug_safe(field)}"
         await _vault_put_credential(org, ref, value.strip(), "secrets")
         refs[field] = ref
-    missing = [f for f in form["secrets"] if f not in refs]
+    missing = [f for f in form["secrets"] if f not in refs and f not in form.get("optional", ())]
+    missing += [f for f in form.get("requires", ()) if not str(config.get(f) or "").strip()]
     status = "disabled" if not body.enabled else ("needs_auth" if missing else "connected")
     attention = ""
     if plug_type == plugs_plane.MICROSOFT365 and body.enabled and not missing:
@@ -17711,6 +19162,162 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
     status2, rec = await _plug_lookup_local(org, workspace, plug_type)
     print(f"[plugs] {workspace}: {plug_type} {status2} (v{version})", flush=True)
     return _plug_public(org, workspace, plug_type, rec, status2)
+
+
+# ── a memory engine's connection: a real round trip ───────────────────────────────────────────
+# An engine that answers its health route may still be unable to keep anything: no model key to read with, a
+# database that isn't there. So a connection is kept only after a record has been written to it, read back and
+# deleted. The record goes into a memory of its own that no person or agent has (its id is made here and used
+# once), its title carries the probe's mark (memory_plane.PROBE_PREFIX) so no recall or listing ever answers with
+# it, and it and its memory are deleted in a `finally`, whichever step failed.
+# Every engine also reads what it is given in the background (a copy it extracts from), and that can land after the
+# probe's memory was dropped: it is dropped once more a while later.
+_PROBE_SWEEP_S = float(os.environ.get("HR_MEMORY_PROBE_SWEEP_S", "120"))
+_PROBE_SWEEPS: set = set()
+_MODEL_TROUBLE = re.compile(r"(?i)api[ _-]?key|\b40[13]\b|unauthori[sz]ed|authenticat|openai|\bmodel\b|embedding|\bllm\b|quota|insufficient")
+
+
+def _memory_probe_provider(engine: str, key: str, base: str, org: str):
+    if engine == "mem0":
+        return memory_mem0.Mem0Server(key, base) if base else memory_mem0.Mem0(key)
+    if engine == "graphiti":
+        return memory_graphiti.Graphiti(base, key, org)
+    if engine == "hindsight":
+        return memory_hindsight.Hindsight(base, key)
+    return memory_reme.ReMe(base, key)
+
+
+async def _memory_round_trip(engine: str, key: str, base: str, org: str) -> str:
+    """'' when the engine keeps a record and gives it back; else why not, in a sentence the person connecting it can
+    act on (deploy/memories/up.sh prints it as it is)."""
+    label = memory_choice.LABEL.get(engine, engine)
+    prov = _memory_probe_provider(engine, key, base, org)
+    mid = "hmem_" + "0" * 8 + uuid.uuid4().hex[:24]
+    made: dict = {}
+    try:
+        await prov.create(mid, {"id": mid, "name": "connection check", "description": ""})
+        made = await prov.remember(mid, memory_plane._record_in({
+            "type": "note", "title": memory_plane.PROBE_PREFIX + " connection check",
+            "content": "HarnessRouter checked that this engine keeps a record and reads it back."}),
+            {"kind": "provider", "id": "harnessrouter"}) or {}
+        if not made.get("id") or not await prov.get(mid, str(made["id"])):
+            return (f"{label} took a record but couldn't give it back, so it wasn't connected. Look at {label}'s own log, "
+                    "then connect it again.")
+        return ""
+    except Exception as e:  # noqa: BLE001 - whatever stopped the round trip is the reason
+        said = " ".join(str(getattr(e, "message", "") or e or type(e).__name__).split())[:200]
+        if _MODEL_TROUBLE.search(said):
+            return (f"{label} answers, but it can't read with a model: it has no working model key. Run "
+                    f"{memory_choice.START_COMMAND} again, or give {label} a model key, then connect it.")
+        return f"{label} answers, but it couldn't keep a record ({said}). Look at {label}'s own log, then connect it again."
+    finally:
+        if made.get("id"):
+            try:
+                await prov.erase(mid, [str(made["id"])])
+            except Exception:  # noqa: BLE001 - the memory itself goes next, and the record with it
+                pass
+        try:
+            await prov.drop(mid)
+        except Exception:  # noqa: BLE001
+            print(f"[memories] the connection check's probe memory on {engine} could not be dropped", flush=True)
+        if _PROBE_SWEEP_S > 0:
+            async def again():
+                await asyncio.sleep(_PROBE_SWEEP_S)
+                with contextlib.suppress(Exception):
+                    await prov.drop(mid)
+            t = asyncio.create_task(again())
+            _PROBE_SWEEPS.add(t)
+            t.add_done_callback(_PROBE_SWEEPS.discard)
+
+
+# ── engines found beside this instance ───────────────────────────────────────────────────────
+# On an instance with one operator (_pool_is_local), the engines the bundled stack runs (deploy/memories) are
+# found by their fixed names on the memories network, at start and when the operator asks. Only those addresses
+# are ever tried, nothing a caller sends; and only the engines that need no key are connected here: Mem0 and
+# Graphiti take a key deploy/memories/up.sh made, so it connects them itself, and here they are reported running.
+# Never on a shared pool, where those names would be someone else's.
+_MEMORY_STACK = {"mem0": "http://mem0:8000", "graphiti": "http://graphiti:8000",
+                 "hindsight": "http://hindsight:8888", "reme": "http://reme:2333"}
+_MEMORY_STACK_KEYLESS = ("hindsight", "reme")
+_SELFHOST_ORG = "local"          # the organization the self-hosted console is (ui/src/lib/edition.ts LOCAL_ORG)
+_MEMORY_DISCOVERY: list = []     # the start's discovery, kept referenced while it runs
+
+
+async def _memory_discover(org: str, workspace: str) -> list[dict]:
+    if not _pool_is_local():
+        raise uhp_error(403, "forbidden", "Engines are found only on an instance with one operator.")
+    out = []
+    failing = await _memory_engines_failing(org, workspace)
+    for engine, url in _MEMORY_STACK.items():
+        label = memory_choice.LABEL[engine]
+        status, _rec = await _memory_engine_lookup(org, workspace, engine)
+        if status == "connected" and (_rec or {}).get("inherited") and engine not in failing:
+            out.append({"engine": engine, "state": "connected", "inherited": True, "message": _memory_inherited_words(engine)})
+            continue
+        if status == "connected" and engine in failing:
+            # connected and answering is not working: its writes have been failing, so agents are not given it
+            out.append({"engine": engine, "state": "failing", "reason": failing[engine],
+                        "message": _memory_engine_failing_words(engine, failing[engine])})
+            continue
+        if status == "connected":
+            out.append({"engine": engine, "state": "connected", "message": f"{label} is connected."})
+            continue
+        try:
+            why = await asyncio.wait_for(_MEMORY_CHECKS[engine]("", url), _ENGINE_CHECK_S)
+        except Exception as e:  # noqa: BLE001
+            why = f"could not be reached: {type(e).__name__}"
+        if why and "refused" not in why:
+            out.append({"engine": engine, "state": "not_running", "message": f"{label} isn't running here."})
+            continue
+        if engine not in _MEMORY_STACK_KEYLESS:
+            out.append({"engine": engine, "state": "running",
+                        "message": f"{label} is running. Connect it with {memory_choice.START_COMMAND}, which has its key."})
+            continue
+        try:
+            await _plug_save(org, workspace, engine, PlugBody(config={"base_url": url}))
+            out.append({"engine": engine, "state": "connected", "message": f"{label} was found and connected."})
+        except HTTPException as e:
+            said = e.detail.get("message") if isinstance(e.detail, dict) else str(e.detail)
+            out.append({"engine": engine, "state": "refused", "message": str(said or f"{label} couldn't be connected.")})
+    for x in out:
+        if x["state"] == "connected":
+            _ENGINE_UP.pop((org, workspace, x["engine"]), None)     # asked afresh the next time an agent is made
+    return out
+
+
+@app.post("/v1/memory-services/discover")
+async def memory_services_discover(request: Request) -> dict:
+    """Find the engines running beside this instance and connect the ones that need no key. The operator's, from
+    the console; it takes no address, no host and no port: it looks only where the bundled stack runs."""
+    p = await _require_integrations_admin(request)
+    if p.get("via") == "api_key" or p.get("calibration") or not p.get("org"):
+        raise HTTPException(403, "This runs from the console, signed in as yourself.")
+    raw = (await request.body()).strip()
+    try:
+        body = json.loads(raw) if raw else {}
+    except ValueError:
+        body = None
+    if body != {} or request.query_params:
+        raise uhp_error(422, "invalid_input", "Finding engines takes no address: it looks only where this instance's own "
+                                              "engines run.", "body")
+    if not _pool_is_local():
+        raise uhp_error(403, "forbidden", "Engines are found only on an instance with one operator.")
+    return {"object": "list", "data": await _memory_discover(str(p["org"]), _plug_workspace(request, p))}
+
+
+@app.on_event("startup")
+async def _memory_discover_at_start() -> None:
+    """At start, on an instance with one operator: the engines beside it are found for its console's organization."""
+    if os.environ.get("HR_MEMORY_DISCOVER", "1") == "0" or not _pool_is_local():
+        return
+
+    async def go():
+        try:
+            found = await _memory_discover(_SELFHOST_ORG, "default")
+            print("[memories] engines beside this instance: " + ", ".join(f"{x['engine']} {x['state']}" for x in found), flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[memories] engines were not looked for at start: {type(e).__name__}", flush=True)
+    _MEMORY_DISCOVERY.append(asyncio.create_task(go()))
 
 
 # ── Microsoft 365 sign-in: the registry runs the authorization-code flow for each person ──────
@@ -17949,14 +19556,22 @@ async def delete_plug(plug_type: str, request: Request) -> dict:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
     workspace = _plug_workspace(request, _caller)
     _status, rec = await _plug_lookup_local(org, workspace, plug_type)
-    if not rec:
-        raise uhp_error(404, "plug_not_connected", f"No {plugs_plane.TYPES[plug_type]} plugin is connected for this workspace.", "plug_type")
-    for r in rec.get("key_refs") or []:
-        if isinstance(r, dict) and r.get("ref"):
-            await _vault_delete(org, str(r["ref"]))
-    vid = _plug_vid(org, workspace, plug_type, rec)
-    await BACKING.graph.delete(vid, _PLUG_LABEL)
-    _plug_fields_cache.pop(vid, None)
+    inherits = _memory_inherits(workspace, plug_type)
+    if not rec and not inherits:
+        what = plugs_plane.TYPES.get(plug_type) or memory_choice.LABEL.get(plug_type, plug_type)   # an engine's is a 404 too
+        raise uhp_error(404, "plug_not_connected", f"No {what} plugin is connected for this workspace.", "plug_type")
+    if rec:
+        for r in rec.get("key_refs") or []:
+            if isinstance(r, dict) and r.get("ref"):
+                await _vault_delete(org, str(r["ref"]))
+        vid = _plug_vid(org, workspace, plug_type, rec)
+        await BACKING.graph.delete(vid, _PLUG_LABEL)
+        _plug_fields_cache.pop(vid, None)
+    if inherits:
+        # removed here means off here: absent, the instance's engine would quietly take its place
+        await _plug_save(org, workspace, plug_type, PlugBody(enabled=False))
+        print(f"[plugs] {workspace}: {plug_type} removed, off here", flush=True)
+        return {"type": plug_type, "workspace": workspace, "removed": True, "status": "disabled"}
     print(f"[plugs] {workspace}: {plug_type} removed", flush=True)
     return {"type": plug_type, "workspace": workspace, "removed": True}
 
@@ -18854,7 +20469,7 @@ def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
 # `tools` carries BOTH the real name and how far disabling it actually goes, because those differ by
 # runtime and the console must not imply a guarantee the runtime cannot keep (see the protocol's
 # harnesses.md §4.3):
-#   hard        — the CLI enforces it (claude: --disallowedTools takes these exact names).
+#   hard        — the CLI enforces it (claude: a permissions.deny rule takes these exact names).
 #   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
 _BASE_CATALOG: dict[str, dict] = {
     "codex": {
@@ -18863,8 +20478,13 @@ _BASE_CATALOG: dict[str, dict] = {
                           "a real git workspace with shell access, reading and editing files and "
                           "running commands to complete the task, returning reviewable diffs and "
                           "results."),
-        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("read_file", "File Read"),
-                  ("write_file", "File Write"), ("git", "Git")],
+        # The core tools a codex 0.154 turn offers (the runner's CODEX_TOOLS). "shell" is the id
+        # harnesses store for the shell, which 0.154 sends the model as exec_command and write_stdin;
+        # the runner switches it off by either name, and web_search too. apply_patch, update_plan and
+        # view_image have no switch, so the base stays "instruction". It has no read_file, write_file
+        # or git tool: reading, writing and git go through the shell.
+        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("update_plan", "Plan"),
+                  ("view_image", "View Image"), ("web_search", "Web Search")],
         "tool_enforcement": "instruction",
     },
     "claude-code": {
@@ -18872,11 +20492,14 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are Claude Code, an agentic coding assistant. You work on a real "
                           "local git working tree with bash, edit files, run tests, and use "
                           "sub-agents to complete engineering tasks end to end."),
-        # These are the names Claude Code's --disallowedTools accepts. They are the real thing, not
-        # display labels: a label with a suffix would silently fail to match and disable nothing.
+        # These are the names a permissions.deny rule takes (the runner's CLAUDE_TOOLS, 2.1.280). They
+        # are the real thing, not display labels: a label with a suffix would silently fail to match
+        # and disable nothing. "Task" is the subagent tool's earlier name and the id harnesses store;
+        # the runner writes it as Agent (_CLAUDE_TOOL_RENAMES). NotebookEdit writes files too, so with
+        # Edit and Write off it is the one left that does.
         "tools": [("Bash", "Bash"), ("Read", "Read"), ("Edit", "Edit"), ("Write", "Write"),
-                  ("Grep", "Grep"), ("Glob", "Glob"), ("WebFetch", "WebFetch"),
-                  ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
+                  ("NotebookEdit", "Notebook Edit"), ("Grep", "Grep"), ("Glob", "Glob"),
+                  ("WebFetch", "WebFetch"), ("WebSearch", "WebSearch"), ("Task", "Subagents")],
         "tool_enforcement": "hard",
         "input_requests": True,     # the runner serves `ask_user` here (Tasks §3.2, #476)
     },
@@ -18888,6 +20511,9 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("terminal", "Terminal"), ("read_file", "File Read"), ("write_file", "File Write"),
                   ("patch", "Patch"), ("search_files", "Search"), ("web_search", "Web Search"),
                   ("web_extract", "Web Extract")],
+        # "instruction": hermes switches toolsets, not tools. Terminal is withheld (its toolset holds
+        # only it and the process tool that serves it), and the four file tools are withheld when all
+        # four are off, but one file tool alone can only be asked (_hermes_toolsets_off).
         "tool_enforcement": "instruction",
     },
     "pi": {
@@ -18924,9 +20550,12 @@ _BASE_CATALOG: dict[str, dict] = {
                           "real git workspace, running shell commands and editing files to "
                           "complete the task end to end."),
         # The sdk profile's model-facing tools, read off the request header of a 0.1.2rc1 turn
-        # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). No per-tool
-        # switch exists on the wire, so disabling is an instruction to the model, the same
-        # standing as codex/hermes.
+        # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). The switch is
+        # the profile's rows: a tool whose row registers nothing else is withheld (bash,
+        # str_replace_editor, web_fetch, todo_write, skill, subagent, subagent_fork, workflow;
+        # dsh_driver._rows_off), glob and grep only together, and read, write and edit never, since
+        # their row also holds read_image. So the base stays "instruction": the request covers what
+        # the rows cannot.
         # web_search is not offered: dsh's stock provider calls DeepSeek's own API with the relay's placeholder
         # key (401 every time, and off the turn's connection), so the driver turns that row off.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
@@ -19263,13 +20892,16 @@ _BASE_CATALOG: dict[str, dict] = {
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
         # From the live init event's tool list under --yolo (0.22.1) — shell/write/edit exist
-        # ONLY in yolo mode, which the runner always passes. No per-tool kill switch on the CLI,
-        # so disabling is an instruction to the model — same tier as codex/hermes/dsh.
+        # ONLY in yolo mode, which the runner always passes. On 0.26.3 web_fetch, todo_write and
+        # agent are deferred (offered through tool_search rather than in the first request).
         "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
-        "tool_enforcement": "instruction",
+        # "hard": a disabled tool is a whole-tool rule in the settings file's permissions.deny, and
+        # Qwen Code never registers a tool such a rule names, deferred or not (_qwen_settings).
+        # Measured with every tool off: none of them is in the model's request (scripts/tools-off-check.py).
+        "tool_enforcement": "hard",
     },
     "gemini": {
         "label": "Gemini CLI", "backend": "gemini", "status": "ready",
@@ -19292,9 +20924,13 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("web_fetch", "Web Fetch"), ("google_web_search", "Web Search"),
                   ("write_todos", "Todo"), ("save_memory", "Memory"),
                   ("activate_skill", "Skill"), ("update_topic", "Topic")],
-        # No confirmed hard per-tool kill switch in headless mode (only --allowed-mcp-server-names
-        # gates MCP servers) — instruction tier until proven otherwise, same as qwen/cline/codex.
-        "tool_enforcement": "instruction",
+        # "hard": a disabled tool goes in the settings file's tools.exclude, and Gemini CLI leaves an
+        # excluded tool (or its legacy alias) out of the function declarations it sends, for
+        # subagents too (_gemini_settings). Until this it was a request: measured on 0.40.0 with all
+        # twelve off, nine were still in the request. search_file_content, write_todos and
+        # save_memory were not offered even with nothing off on 0.58.0 (the first is now
+        # grep_search, which the exclusion's alias expansion covers).
+        "tool_enforcement": "hard",
     },
     "cline": {
         "label": "Cline", "backend": "cline", "status": "ready",
@@ -19302,13 +20938,17 @@ _BASE_CATALOG: dict[str, dict] = {
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
         # From the tools array a live 3.0.60 run sent its provider (captured at a stub upstream).
-        # The CLI exposes no per-tool kill switch headless, so disabling is an instruction to the
-        # model — the codex/hermes/dsh/qwen tier, not claude's hard deny.
+        # "editor" is sent as apply_patch for a model whose route edits by patch; switching Editor
+        # off withholds both names.
         "tools": [("run_commands", "Shell"), ("read_files", "File Read"),
                   ("editor", "Editor"), ("search_codebase", "Search"),
                   ("fetch_web_content", "Web Fetch"), ("ask_question", "Question"),
                   ("spawn_agent", "Subagent")],
-        "tool_enforcement": "instruction",
+        # "hard": the runner writes the disabled list into cline's global-settings.json
+        # `disabledTools`, which 3.0.60 applies to every tool list it builds, a subagent's included,
+        # except a teammate's, so with any tool off the team tools go too (_cline_disabled_tools).
+        # Measured with every tool off: no tool at all is in the model's request (scripts/tools-off-check.py).
+        "tool_enforcement": "hard",
     },
     "mimo": {
         "label": "MiMo Code", "backend": "mimo", "status": "ready",
@@ -19358,17 +20998,46 @@ _BASE_CATALOG: dict[str, dict] = {
         # capability — the same honest limit every shell-bearing base carries.
         "tool_enforcement": "hard",
     },
+    "roder": {
+        "label": "Roder", "backend": "roder", "status": "ready",
+        "system_prompt": "You are Roder, an autonomous coding agent. Complete the task in the workspace.",
+        # What a 0.4.8 turn offers its model, read off the pinned release's app-server: 112 built-in
+        # tools, of which the runner withholds on every turn the 56 that cannot run in this sandbox
+        # or wait for a person (roder_backend.WITHHELD: the desktop browser and Jev tab families,
+        # Webwright, Zero, the media generators, which answer from a built-in fake provider, echo,
+        # request_user_input and exit_plan_mode). The rest are these switches, and each one is
+        # EVERY Roder tool that does its job (roder_backend.TOOLS, which test_roder_catalog.py pins
+        # to these ids): Shell is exec_command, shell, unified_exec and write_stdin; File Edit is
+        # apply_patch, edit, multi_edit and write_file, so with it off no file tool writes. Web
+        # Search is the provider's hosted search, switched off through Roder's own web_search mode.
+        "tools": [("exec_command", "Shell"), ("read_file", "File Read"), ("apply_patch", "File Edit"),
+                  ("grep", "Search"), ("glob", "Glob"), ("list_files", "List Files"),
+                  ("view_image", "View Image"), ("update_plan", "Plan"), ("spawn_agent", "Subagent"),
+                  ("memory_save", "Memory"), ("knowledge_save", "Knowledge"), ("create_goal", "Goal"),
+                  ("subscribe_event", "Events"), ("verification_review", "Verification"),
+                  ("read_artifact", "Output Artifacts"), ("discovery.search", "Tool Discovery"),
+                  ("design_read", "Design Canvas"), ("web_search", "Web Search")],
+        # "hard": the switches become Roder's runtime tools.allowlist, written before the process
+        # starts, which removes a tool from what the model is offered and refuses a call to it.
+        # MEASURED on 0.4.8 (runner/tests/test_roder_process.py): a switched-off tool is absent from
+        # the provider request on a resumed thread too, and a call the model makes anyway to a tool
+        # that is off (shell) or withheld (echo) is answered "... is not permitted by the tool
+        # allowlist" and nothing runs. The honest limit every base with a shell has: with File Edit
+        # off, the shell can still write a file.
+        "tool_enforcement": "hard",
+    },
     "opensquilla": {
         "label": "OpenSquilla", "backend": "opensquilla", "status": "ready",
         "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
-        # The tool names its own turns record (measured: write_file, read_file). Its agent CLI has
-        # NO per-tool deny list — `--permissions` chooses a posture (restricted / bypass / full) —
-        # so this list is deliberately short: it names what a turn was seen to call rather than
-        # advertising a switch for every tool in the runtime when none of them can be withheld.
-        "tools": [("exec", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
-                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep", "Search"),
+        # Tool names as 0.5.6 registers them (the runner's OPENSQUILLA_TOOLS): the shell is
+        # exec_command and content search is grep_search. Its agent CLI has NO per-tool deny list —
+        # `--permissions` chooses a posture (restricted / bypass / full) — so this list is
+        # deliberately short: the everyday tools, rather than a switch for every tool in the runtime
+        # when none of them can be withheld.
+        "tools": [("exec_command", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep_search", "Search"),
                   ("web_search", "Web Search"), ("web_fetch", "Web Fetch")],
         # "instruction", and for a stated reason rather than for lack of looking: there is no deny
         # list on `opensquilla agent`, so the disabled set reaches the model as a line in AGENTS.md
@@ -19653,6 +21322,13 @@ class HarnessBody(BaseModel):
     # at create and never changed by an update: a PUT that carries it (a harness read and sent back)
     # or leaves it out keeps the stored value (_harness_source_prop).
     source: str | None = Field(default=None, max_length=HARNESS_SOURCE_MAX)
+    # What the agent remembers: "auto" (what a new harness gets when this is left out: the gateway chooses from what
+    # the agent is for, memory_choice), "none", {"engine": "mem0" | "graphiti" | "hindsight" | "reme"}, or
+    # {"id": "<memory id>"} for a memory the caller may share. Read when the harness is made; a later save of the
+    # harness never changes its memory (PUT /v1/harnesses/{hid}/memory does).
+    memory: str | dict | None = None
+    # Who and what the agent should remember, in the words of the goal it was set up from (New setup's builder).
+    memory_hint: str | None = Field(default=None, max_length=1000, validation_alias=AliasChoices("memory_hint", "memoryHint"))
 
     @model_validator(mode="before")
     @classmethod
@@ -19681,7 +21357,8 @@ class HarnessBody(BaseModel):
 
 # What a harness comes back with (_harness_out) that is not written through these fields, plus the
 # protocol's `object` (Harnesses §2), so a harness read from any UHP server can be sent back.
-_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt"})
+_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt", "memories",
+                                "memory_reason"})
 
 
 def _harness_field_names() -> frozenset:
@@ -19696,7 +21373,39 @@ def _harness_field_names() -> frozenset:
     return frozenset(names)
 
 
-def _harness_out(v: dict) -> dict:
+# ── tool ids a harness saved before 0.41.3 may still hold ────────────────────────────────────────
+# 0.41.3 made the catalog name the tools each pinned CLI has (test_catalog_tool_names.py). A harness
+# saved earlier still stores the ids it offered then. Keyed by BACKEND, since the same id is a real
+# tool on other bases (nanobot's `exec`, omp's `grep`): an id with a current equivalent reads as that
+# id, wherever a stored list is read and when a harness is saved; a read never writes the record.
+#
+# Only ever as restricted or more: OpenSquilla has no per-tool switch, and its two ids become the
+# names of the tools they meant, so the agent doc now asks it off the tools it has. Nothing is ever
+# dropped. codex's read_file, write_file and git, which 0.154 has no tool for, are deliberately NOT
+# here: an old codex harness keeps asking the model off them, exactly as before, and the console
+# draws switches from the catalog only, so they show no switch (they never had one).
+_STORED_TOOL_IDS: dict[str, dict[str, str]] = {
+    "opensquilla": {"exec": "exec_command", "grep": "grep_search"},
+}
+
+
+def _stored_tools_current(backend: str, names) -> list:
+    """A stored disabled-tools list with the ids above made current, in order, each once. An entry
+    may be stored as "id (description)" and is matched by the id. A backend with nothing listed
+    gets its list back exactly as stored. Every entry stays, by its own name or its current one."""
+    renames = _STORED_TOOL_IDS.get(backend)
+    if not renames:
+        return list(names or [])
+    out: list = []
+    for t in names or []:
+        if isinstance(t, str) and t.split(" (")[0].strip() in renames:
+            t = renames[t.split(" (")[0].strip()]
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
     """VG vertex (snake_case, JSON-string lists) -> the frontend CustomHarness shape (camelCase)."""
     def _parse(s):
         try:
@@ -19715,9 +21424,10 @@ def _harness_out(v: dict) -> dict:
             "baseLabel": v.get("base_label") or v.get("base"),
             "defaultModel": v.get("default_model") or "",
             "systemPrompt": v.get("system_prompt") or "",
-            # Verbatim: what a client reads is what is stored, for every entry, which is the
-            # ordinary contract and the only one there now is.
-            "mcpServers": _mcp_list(v), "skills": _parse(v.get("skills")),
+            # Verbatim: what a client reads is what is stored, for every entry but the one that gives an
+            # agent its memories. That one is the server's (_is_memories_entry): nothing a client does
+            # with it could be right, and its address is nobody's business.
+            "mcpServers": [s for s in _mcp_list(v) if not _is_memories_entry(s)], "skills": _parse(v.get("skills")),
             # Derived by the server from each package on every write, never copied into the two
             # lists above: a client that PUTs back what it read cannot install a plugin twice.
             "plugins": _plugins_of(v),
@@ -19726,7 +21436,8 @@ def _harness_out(v: dict) -> dict:
             # API caller sees it where the console shows "not loaded". A create that silently
             # answered skills: [] cost a benchmark ten runs (2026-09-30).
             "notLoaded": [{"plugin": p["name"], **s} for p in _plugins_of(v) for s in (p.get("skipped") or [])],
-            "disabledTools": [t for t in _parse(v.get("disabled_tools")) if isinstance(t, str)],
+            "disabledTools": [t for t in _stored_tools_current(_backend_of_harness(v), _parse(v.get("disabled_tools")))
+                              if isinstance(t, str)],
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
             "env": _parse_env(v.get("env")),
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
@@ -19735,9 +21446,37 @@ def _harness_out(v: dict) -> dict:
             "calibrates": str(v.get("calibrates") or ""),
             "environment": str(v.get("environment") or ""),
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created,
+            # how many memories its agent holds, from its grants (memory_plane.grant_counts), where a read asked:
+            # its record doesn't say, and a list can't ask once per row
+            **({"memories": {"count": grants.get(_agent(str(v.get("id") or "")), 0)}} if grants is not None else {}),
             # where it came from (HarnessBody.source), when whatever made it said; a harness made
             # without one has no key, so "said nothing" and "said this" never read alike
-            **({"source": str(v["source"])} if v.get("source") else {})}
+            **({"source": str(v["source"])} if v.get("source") else {}),
+            # what its agent remembers with and why, for a harness made since memory came with it
+            **_harness_memory_view(v)}
+
+
+def _json_obj(s) -> dict:
+    try:
+        d = json.loads(s) if s else {}
+    except (TypeError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _harness_memory_view(v: dict) -> dict:
+    """`memory` ({id, name, engine, scope, reason, observe, provisioned}) or `memory: null` and `memory_reason`, as the
+    harness keeps them (_memory_provision). `provisioned`: the memory was made for this agent, kept with it for the 30
+    days a deleted agent is kept, and deleted with it then when no other agent uses it (_memories_gone_with). Nothing
+    for a harness made before; its memories are at /memories."""
+    info, reason = _json_obj(v.get("memory_info")), str(v.get("memory_reason") or "")
+    if info.get("id"):
+        return {"memory": {"id": info["id"], "name": str(info.get("name") or ""), "engine": str(info.get("engine") or ""),
+                           "scope": str(info.get("scope") or memory_choice.SHARED), "reason": reason,
+                           "observe": str(v.get("memory_observe") or "1") != "0", "provisioned": info.get("provisioned") is True}}
+    if reason:
+        return {"memory": None, "memory_reason": reason}
+    return {}
 
 
 async def _vg_list_by_org(label: str, org: str) -> list[dict]:
@@ -19771,7 +21510,8 @@ def _harness_props(body: HarnessBody) -> dict:
             "default_model": body.default_model or "", "system_prompt": body.system_prompt or "",
             "mcp_servers": json.dumps(body.mcp_servers or []), "skills": json.dumps(body.skills or []),
             "plugins": json.dumps(body.plugins or []),
-            "disabled_tools": json.dumps(body.disabled_tools or []),
+            "disabled_tools": json.dumps(_stored_tools_current(_backend_of_harness({"base": base}),
+                                                               body.disabled_tools or [])),
             "additional_headers": json.dumps([str(h).strip() for h in (body.additional_headers or [])
                                               if isinstance(h, str) and str(h).strip()]),
             "env": json.dumps(_env_clean(body.env)),
@@ -19844,8 +21584,22 @@ async def _mcp_seal_literals(org: str, servers: list[dict]) -> list[dict]:
     return out
 
 
-async def _mcp_servers_stored(org: str, incoming: list | None) -> list[dict]:
-    return await _mcp_seal_literals(org, _mcp_servers_prepare(incoming))
+async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None) -> list[dict]:
+    """What a write of a harness's servers stores. `cur` is the harness as it stands; a new one has none.
+
+    The rule that a server the caller didn't send is gone has one exception, and it isn't a kept-if-omitted
+    list: the entry that gives an agent its memories isn't the caller's. It follows from the agent's grants,
+    so it's taken from what's stored, whatever a client sends in its place, and nothing a client sends can
+    become it. A copy of a harness made by reading one and writing another brings nothing of it along."""
+    kept = [s for s in _mcp_list(cur) if _is_memories_entry(s)]
+    sent = [s for s in incoming or [] if not (isinstance(s, dict) and _is_memories_entry(s))]
+    names = {_mcp_name(str(s.get("name") or "mcp")) for s in kept}
+    for s in sent:
+        if isinstance(s, dict) and _mcp_name(str(s.get("name") or "mcp")) in names:
+            raise uhp_error(400, "invalid_mcp_server",
+                            f"'{s.get('name')}' is the name this agent's memories go by. Give this server another name.",
+                            "mcp_servers")
+    return await _mcp_seal_literals(org, _mcp_servers_prepare(sent + kept))
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -19904,6 +21658,1053 @@ async def _skill_bundle_files(sk: dict) -> list:
     if not files and sk.get("content"):
         files = [{"path": "SKILL.md", "content": sk["content"]}]
     return files or []
+
+
+# ── Memories (the Harness Memories sub-protocol) ──────────────────────────────────────────────
+# The tree, the grants and the provider seam are memory_plane's; the routes are memory_routes'.
+# Bound here because the routes need this process's principal resolver and error envelope.
+async def _memory_file_meta(org: str, file_id: str) -> dict | None:
+    """An uploaded file as a memory record may name it: this org's, with the name, media type and
+    size the file store holds (Files §5: another principal's file is not found)."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,80}", file_id or ""):
+        return None
+    raw = await _blob_get(f"uploads/{file_id}.meta", kb=RESP_BLOB_KB)
+    if raw is None:
+        return None
+    try:
+        meta = json.loads(raw)
+    except ValueError:
+        return None
+    if str(meta.get("org") or "") not in ("", org):
+        return None
+    data = await _blob_get(f"uploads/{file_id}", kb=RESP_BLOB_KB)
+    if data is None:
+        return None
+    return {"name": str(meta.get("filename") or ""), "media_type": str(meta.get("media_type") or "application/octet-stream"),
+            "bytes": len(data)}
+
+
+async def _memory_file_bytes(org: str, file_id: str) -> bytes | None:
+    return await _blob_get(f"uploads/{file_id}", kb=RESP_BLOB_KB) if await _memory_file_meta(org, file_id) else None
+
+
+async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
+    """{memory id: [{harness_id, name}]}: the agents holding a grant on each memory, as far as this caller may see
+    agents (a key held to a workspace sees that workspace's). A person's memory below an agent's (memory_plane's
+    end_user_node) is used by whoever uses the agent's memory: its own grant is that person's, never an agent's, and
+    it read "Not used yet" while its agent wrote to it. One read each of the grants, the harnesses and the memories."""
+    agents = {str(r["id"]): str(r.get("name") or "") for r in await _vg_list_by_org("Harness", org)
+              if r.get("id") and str(r.get("deleted")) not in ("1", "true", "True") and _scope_keeps(caller, r.get("workspace"))}
+    out: dict[str, list[dict]] = {}
+    for g in await BACKING.graph.find("MemoryGrant", {"org": org}):
+        principal = str(g.get("principal") or "")
+        if not principal.startswith("member:") or str(g.get("deleted") or "0") == "1" or principal[7:] not in agents:
+            continue
+        if not json.loads(g.get("privileges") or "[]"):
+            continue
+        hid, rows = principal[7:], out.setdefault(str(g.get("memory_id") or ""), [])
+        if all(x["harness_id"] != hid for x in rows):
+            rows.append({"harness_id": hid, "name": agents[hid]})
+    for rows in out.values():
+        rows.sort(key=lambda x: (x["name"].casefold(), x["harness_id"]))
+    if out:
+        for m in await BACKING.graph.find("Memory", {"org": org}):
+            above = str(m.get("end_user_of") or "")
+            if above in out and str(m.get("deleted") or "0") != "1" and m.get("id"):
+                out.setdefault(str(m["id"]), list(out[above]))
+    return out
+
+
+class _MemoryCovers:
+    """Memories' covers, kept in the instance's own file store beside its other files (blob storage hosted, the data
+    volume self-hosted). A read that fails raises, so a store that didn't answer is never a cover that isn't there."""
+
+    async def get(self, key: str) -> bytes | None:
+        return await _blob_get_or_raise(key, kb=BLOB_KB)
+
+    async def put(self, key: str, data: bytes) -> bool:
+        return await _blob_put(key, data, kb=BLOB_KB)
+
+    async def delete(self, key: str) -> bool:
+        return await _blob_delete(key, kb=BLOB_KB)
+
+
+memory_routes.install(app, _principal, uhp_error, BACKING.graph, _memory_file_meta, _memory_file_bytes,
+                      on_grant=lambda org, principal: _memories_on_grant(org, principal), workspace_of=_plug_workspace,
+                      used_by=_memory_used_by, engines_running=lambda org, ws: _memory_engines_running(org, ws),
+                      covers=_MemoryCovers())
+memory_plane.PROVIDERS.update({"mem0": memory_mem0.Mem0(), "graphiti": memory_graphiti.Graphiti(),
+                               "hindsight": memory_hindsight.Hindsight(), "reme": memory_reme.ReMe()})
+_MEMORY_CHECKS = {"mem0": memory_mem0.check, "graphiti": memory_graphiti.check,
+                  "hindsight": memory_hindsight.check, "reme": memory_reme.check}
+
+
+def _own_service_address(url: str) -> str:
+    """Why this address is this instance's own gateway or runner, which is not a memory service."""
+    try:
+        u = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "it is not a valid address"
+    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and (u.port or 0) in (3000, 8080, 8081):
+        return "it is this instance itself"
+    return ""
+
+
+_ENGINES_HOME = "default"     # where deploy/memories/up.sh and the start's discovery connect the engines
+
+
+async def _memory_engine_lookup(org: str, workspace: str, engine: str) -> tuple[str, dict | None]:
+    """(status, record) of a memory engine's connection as a workspace reaches it. On an instance with one operator,
+    a workspace that never connected that engine itself uses the one connected for the instance (the default
+    workspace, where deploy/memories/up.sh and the start's discovery connect them). Without it, every workspace but
+    the first got no memory at all, told "No memory engine is running here" beside four running engines. A workspace
+    that connected or turned off its own keeps its own. Only the connection is shared: each memory is still its own
+    store inside the engine, made in and read through its own workspace. Never on a shared pool."""
+    status, rec = await _plug_lookup(org, workspace, engine)
+    if status == "missing" and _memory_inherits(workspace, engine):
+        status, rec = await _plug_lookup(org, _ENGINES_HOME, engine)
+        return status, ({**rec, "inherited": True} if rec else rec)
+    return status, rec
+
+
+def _memory_inherits(workspace: str, engine: str) -> bool:
+    """Whether a workspace with no connection of its own for this engine uses the instance's: on an instance with
+    one operator, for the bundled engines, in any workspace but the one they are connected in."""
+    return bool(workspace) and workspace != _ENGINES_HOME and engine in _MEMORY_STACK and _pool_is_local()
+
+
+async def _memory_credentials(org: str, workspace: str, provider: str) -> dict | None:
+    """A memory provider's credential for one workspace, from the plug registry: the workspace's
+    own account (or, on an instance with one operator, the instance's: _memory_engine_lookup), resolved at the
+    moment of the call and never handed to an agent."""
+    status, rec = await _memory_engine_lookup(org, workspace, provider)
+    if status != "connected" or not rec:
+        return None
+    return {**(rec.get("config") or {}), **await _plug_fields(rec)}
+
+
+memory_plane.CREDENTIALS = _memory_credentials
+
+# What a memory never keeps: a credential. media_plane.scrub removes every key this process sends or sealed
+# (exactly) and the shapes of everyone's (sk-, Bearer, AKIA, AIza, a URL's userinfo and signature); a memory
+# also loses a JWT, a PEM block, this platform's own keys and credentials, and this instance's internal and
+# secret keys, whatever they were pasted into.
+_MEMORY_SECRET_SHAPES = (
+    re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}"),
+    re.compile(r"-----BEGIN [A-Z0-9 ]+-----[\s\S]*?(?:-----END [A-Z0-9 ]+-----|$)"),
+    re.compile(r"\b(?:sk-hr|hr|hrm|hrc|hrk|hrt)[-_][A-Za-z0-9][A-Za-z0-9\-_.]{11,}"),
+)
+
+
+def _memory_redact(text: str) -> str:
+    out = media_plane.scrub(str(text or ""))
+    for own in (INTERNAL_KEY, os.environ.get("HR_SECRET_KEY", "")):
+        if len(own) >= 12 and own in out:
+            out = out.replace(own, "[redacted]")
+    for pat in _MEMORY_SECRET_SHAPES:
+        out = pat.sub("[redacted]", out)
+    return out
+
+
+memory_plane.REDACT = _memory_redact
+
+# A harness reaches its memories through one more server this gateway hosts, like its plugs: the
+# entry's record names the memories and how the agent was attached to each; the agent acts as the
+# principal `member:<harness id>`: an agent is a member like a person, and its reach is its grants.
+_MEMORIES_SERVER = "memories"
+_MEMORIES_ENTRY = {"name": "memories", "id": "mcp.memories"}
+
+
+def _is_memories_entry(s: dict) -> bool:
+    """The server entry that gives an agent its memories: by its id, or by saying it's our memories server."""
+    return str(s.get("id") or "") == _MEMORIES_ENTRY["id"] or _hosted_server_name(s) == _MEMORIES_SERVER
+
+
+def _memories_go_with(hv: dict | None, org: str) -> bool:
+    """Whether a turn run in `org` on this harness is given the agent's memories. ONLY when the
+    harness is that organization's own.
+
+    Today no other turn exists: a harness runs only for its own organization (_turn_harness_owned).
+    This is the same statement made about MEMORY, where it has to keep holding if runs are ever
+    opened to others again (callers running a harness whose owner pays is where that came from).
+    A run may be shared; what the owner's organization knows may not: the agent reads and writes
+    it, and whoever drives the agent can have it recite that, or write into it. So this is read
+    wherever an agent's memories are resolved, the credential minted for the turn, the tool server
+    behind that credential, the settings the instructions and the recording read, the task's
+    memory, and is not left to the one gate in front of the turn."""
+    return bool(hv) and bool(org) and str(hv.get("org") or "") == org
+
+
+def _agent(hid: str) -> str:
+    """Who a harness's agent is to the access model: a member, like the people it works beside.
+    Here its member id is the harness's own id."""
+    return f"member:{hid}"
+
+
+async def _memories_settings(hid: str, org: str, hv: dict | None) -> dict | None:
+    """The harness's memory settings (where its agent writes by default, whether its turns are
+    recorded), or None when it has no memories server or the server is switched off."""
+    if not hid or not _memories_go_with(hv, org):
+        return None
+    try:
+        await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(hv), entry_id=_MEMORIES_ENTRY["id"], check_enabled=True)
+    except HTTPException:
+        return None
+    # The two settings are the harness's own properties. They are not in the server's entry, so a
+    # save of the harness that leaves that entry out cannot lose them.
+    return {"default_memory_id": str(hv.get("memory_default") or ""), "observe": str(hv.get("memory_observe") or "1") != "0"}
+
+
+async def _harness_memories(hid: str, org: str, hv: dict | None, sid: str = "") -> list[dict]:
+    """The memories a harness's agent holds, from ONE source: its grants. One entry per memory it
+    was granted, `access` read off the privileges it holds there. Nothing is attached and nothing
+    is narrowed here; the harness adds only where the agent writes by default. With a session, the
+    memory its task named in metadata.memory is that session's default when the agent may write it."""
+    rec = await _memories_settings(hid, org, hv)
+    if rec is None:
+        return []
+    who = _agent(hid)
+
+    async def held(mid: str) -> list[str]:
+        m = await memory_plane._load(org, mid) if mid else None
+        return await memory_plane.effective(org, m, [who]) if m else []
+
+    entries = [{"memory_id": str(m["id"]), "access": "write" if "write" in privs else "read", "default": False}
+               for m, privs in await memory_plane.granted(org, who)]
+    default = str(rec.get("default_memory_id") or "")
+    sv = ((await _vertex_get(sid)) or {}) if sid else {}
+    if sv.get("memory_off"):
+        return []                            # this task runs without memory (_memories_person_begin)
+    person = _json_obj(sv.get("memory_person"))
+    if person.get("node"):
+        # One person's task: their own memory is where it writes, and everything else the agent holds is read.
+        # The tools enforce the same (memory_local: a person's task writes as that person's principal alone).
+        rest = [{**e, "access": "read", "default": False} for e in entries if e["memory_id"] != person["node"]]
+        task = str(sv.get("memory") or "")
+        if task and task != person["node"] and task not in {e["memory_id"] for e in rest} and "read" in await held(task):
+            rest.append({"memory_id": task, "access": "read", "default": False})     # the task's own, read
+        return [{"memory_id": str(person["node"]), "access": "write", "default": True}, *rest]
+    task = str(sv.get("memory") or "")
+    if task and "write" in await held(task):
+        default = task                       # this session writes where its task said
+    for mid in (task, default):
+        privs = await held(mid)
+        if "read" in privs and mid not in [e["memory_id"] for e in entries]:
+            entries.append({"memory_id": mid, "access": "write" if "write" in privs else "read", "default": False})
+    for e in entries:
+        e["default"] = e["memory_id"] == default and e["access"] == "write"
+    return entries
+
+
+async def _task_memory_for_turn(org: str, hid: str, body) -> str:
+    """The memory a task names in `metadata.memory`, or ''. The agent must hold a privilege on it:
+    a memory it holds nothing on is refused exactly as one that does not exist, before the task starts."""
+    mid = str((getattr(body, "metadata", None) or {}).get("memory") or "").strip()
+    if not mid:
+        return ""
+    m = await memory_plane._load(org, mid) if hid and _memories_go_with(await _harness_vertex(hid), org) else None
+    if not m or "read" not in await memory_plane.effective(org, m, [_agent(hid)]):
+        raise uhp_error(404, "memory_not_found", "No memory with that id.", "metadata.memory")
+    return mid
+
+
+async def _memories_ensure(org: str, hid: str, v: dict, patch: dict | None = None) -> dict:
+    """Give the harness its memories server (the tools its agent reaches its memories through) and
+    keep its settings. Idempotent: called when the agent is granted a memory and when its settings
+    are written."""
+    origins = _own_origins()
+    if not origins:
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set HARNESS_PUBLIC_BASE_URL.", "memories")
+    cur = _mcp_list(v)
+    others = [x for x in cur if not _is_memories_entry(x)]
+    # this harness's own record, never the one an entry names: an entry copied from another harness names that
+    # harness's, and re-addressing it here would take the first agent's memories away from it
+    key = _hosted_secret_key(hid, _MEMORIES_ENTRY["id"])
+    await _hosted_put_record(org, key, {"server": _MEMORIES_SERVER, "harness": hid, "updated_at": int(time.time() * 1000)},
+                             secret=False, param="memories")
+    # two servers of one name are one server to the agent, and the last wins: a server a person already called
+    # memories keeps its name, and this one takes the next
+    taken = {_mcp_name(str(x.get("name") or "mcp")) for x in others}
+    taken |= {_mcp_name(str(x.get("name") or "mcp")) for p in _plugins_of(v or {}) for x in (p.get("mcpServers") or []) if isinstance(x, dict)}
+    name, n = _MEMORIES_ENTRY["name"], 1
+    while _mcp_name(name) in taken:
+        n += 1
+        name = f"{_MEMORIES_ENTRY['name']}_{n}"
+    # exactly this, whatever it was left as: nothing else should be able to change it, and it has no switch to find
+    want = {"id": _MEMORIES_ENTRY["id"], "name": name, "url": origins[0] + _HOSTED_MCP_PREFIX + _MEMORIES_SERVER,
+            "transport": "http", "auth": f"vault:{key}", "enabled": True}
+    if cur != [*others, want]:
+        await _mcp_write(hid, [*others, want])
+    props = {}
+    if "default_memory_id" in (patch or {}):
+        props["memory_default"] = str(patch["default_memory_id"] or "")
+    if "observe" in (patch or {}):
+        props["memory_observe"] = "1" if patch["observe"] else "0"
+    if props:
+        await _vg_upsert("Harness", hid, props)
+    return {}
+
+
+async def _memories_on_grant(org: str, principal: str) -> None:
+    """A grant was written. When it names an agent of this org, the agent gets its memory tools."""
+    if not principal.startswith("member:"):
+        return
+    hid = principal.split(":", 1)[1]
+    v = await _harness_vertex(hid)
+    if v and v.get("org") == org and str(v.get("deleted")) not in ("1", "true", "True"):
+        await _memories_ensure(org, hid, await _mcp_migrate(org, hid, v))
+
+
+async def _harness_memories_out(hid: str, org: str, v: dict) -> dict:
+    who = _agent(hid)
+    default = str(v.get("memory_default") or "")
+    if default:                      # a default the agent may no longer write is no default: said, not kept up
+        m = await memory_plane._load(org, default)
+        if not m or "write" not in await memory_plane.effective(org, m, [who]):
+            default = ""
+    rec = {"observe": str(v.get("memory_observe") or "1") != "0"}
+    data = [{**memory_plane._brief(await memory_plane.out(org, m, [who], privs)), "privileges": privs,
+             "default": str(m["id"]) == default} for m, privs in await memory_plane.granted(org, who)]
+    return {"object": "harness.memories", "principal": who, "default_memory_id": default or None,
+            "observe": rec.get("observe", True) is not False, "data": data}
+
+
+# ── an agent's own memory, given when the agent is made (memory_choice) ─────────────────────────────
+# A new harness remembers from its first task, with nobody choosing an engine: the gateway reads what the agent
+# is for, picks among the engines that are connected here and answering, makes a memory named after the agent,
+# grants the agent read and write on it through the grant path every grant takes (memory_plane.grant, then
+# _memories_on_grant for its tools), and makes it where the agent writes by default, with each finished task kept.
+# What was chosen and why is on the harness (`memory`, `memory_reason`) and changes in one place:
+# PUT /v1/harnesses/{hid}/memory. Moving an agent to another memory leaves the old one where it was, unattached.
+_MEMORY_OFF = "Memory is off for this agent."
+_ENGINE_UP: dict[tuple[str, str, str], tuple[float, bool]] = {}
+_ENGINE_UP_S = 60.0          # how long one engine's answer to "are you there" is taken as it was
+_ENGINE_CHECK_S = 8.0        # and how long it is waited for
+
+
+def _memory_ask(raw) -> tuple[str, str]:
+    """What a create or a change asked for: ("auto" | "none", "") or ("engine", engine) or ("id", memory id)."""
+    if raw is None or raw == "auto":
+        return "auto", ""
+    if raw == "none":
+        return "none", ""
+    if isinstance(raw, dict):
+        if str(raw.get("id") or "").strip():
+            return "id", str(raw["id"]).strip()
+        if str(raw.get("engine") or "") in memory_choice.ENGINES:
+            return "engine", str(raw["engine"])
+    raise uhp_error(422, "invalid_input", 'memory is "auto", "none", {"engine": "mem0" | "graphiti" | "hindsight" | "reme"} '
+                                          'or {"id": "<memory id>"}.', "memory")
+
+
+def _memory_ws_of(p: dict) -> str:
+    """The workspace an agent's memory is made in, read the way the plug and memory routes read it."""
+    return _key_scope(p) or str(p.get("workspace") or "") or "default"
+
+
+async def _memory_engines_running(org: str, ws: str) -> list[str]:
+    """The engines connected for this workspace that answer now AND can write: each one's health asked at most once a
+    minute and for a few seconds (one that is down never holds up making an agent), and none whose writes have been
+    failing (_memory_engines_failing). A health route alone answered while every write failed with HTTP 500 (a dead
+    model key), and auto-choice picked Graphiti and Hindsight there."""
+    return (await _memory_engines_state(org, ws))[0]
+
+
+async def _memory_engines_state(org: str, ws: str) -> tuple[list[str], dict[str, str]]:
+    """(the engines answering and writing here, {engine: why} for those that answer but whose writes are failing)."""
+    failing = await _memory_engines_failing(org, ws)
+
+    async def one(e: str) -> str:
+        if e not in memory_plane.PROVIDERS or e not in _MEMORY_CHECKS:
+            return ""
+        fields = await _memory_credentials(org, ws, e)
+        if fields is None:
+            return ""
+        hit = _ENGINE_UP.get((org, ws, e))
+        if hit and time.time() - hit[0] < _ENGINE_UP_S:
+            return e if hit[1] else ""
+        try:
+            why = await asyncio.wait_for(_MEMORY_CHECKS[e](str(fields.get("api_key") or ""), str(fields.get("base_url") or "")),
+                                         _ENGINE_CHECK_S)
+        except Exception as err:  # noqa: BLE001 - not answering is the answer
+            why = type(err).__name__
+        _ENGINE_UP[(org, ws, e)] = (time.time(), not why)
+        return "" if why else e
+    up = [e for e in await asyncio.gather(*(one(e) for e in memory_choice.ENGINES)) if e]
+    return [e for e in up if e not in failing], {e: why for e, why in failing.items() if e in up}
+
+
+_ENGINE_FAILING_S = 600.0     # how far back a write that failed makes an engine "not answering"
+
+
+async def _memory_engines_failing(org: str, ws: str) -> dict[str, str]:
+    """{engine: the last failure, in words} for each engine whose newest write failure on any memory it keeps for this
+    workspace is from the last ten minutes and newer than its newest success. Read off the memories (memory_plane.mark
+    keeps write_error_at and last_ok_at on each), so every replica reads the same. A key someone pasted and was refused
+    is not a write that failed: the connection that worked is kept, and still works."""
+    now_ms, ws = time.time() * 1000, ws or "default"
+    err: dict[str, tuple[int, str]] = {}
+    ok: dict[str, int] = {}
+    for m in await BACKING.graph.find("Memory", {"org": org}):
+        if str(m.get("deleted") or "0") == "1" or (str(m.get("workspace") or "") or "default") != ws:
+            continue
+        e = str(m.get("provider") or "")
+        at = memory_plane._ms_or_none(m.get("write_error_at")) or 0
+        if at > err.get(e, (0, ""))[0]:
+            err[e] = (at, str(m.get("last_error") or ""))
+        ok[e] = max(ok.get(e, 0), memory_plane._ms_or_none(m.get("last_ok_at")) or 0)
+    return {e: why or "Its last writes failed." for e, (at, why) in err.items()
+            if now_ms - at < _ENGINE_FAILING_S * 1000 and at > ok.get(e, 0)}
+
+
+def _memory_engine_failing_words(engine: str, why: str) -> str:
+    label = memory_choice.LABEL.get(engine, engine)
+    return f"{label} is running, but it couldn't keep anything in the last few minutes: {str(why or '').rstrip('.')}."
+
+
+async def _memory_agent_words(org: str, hid: str, v: dict, hint: str = "") -> dict:
+    """What the agent says about itself, for memory_choice: its name, its instructions, the goal's hint, and the
+    tools, plugins and skills it was given, by name."""
+    tools = [str(s.get("name") or "") for s in _mcp_list(v) if not _is_memories_entry(s)]
+    tools += [str(p.get("name") or "") for p in _plugins_of(v)]
+    try:
+        tools += await _harness_plug_types(hid, org, v)
+    except Exception:  # noqa: BLE001 - its plugins are one more hint, never a reason to fail
+        pass
+    skills = [str((s or {}).get("name") or "") for s in _json_list(v.get("skills")) if isinstance(s, dict)]
+    return {"name": str(v.get("name") or ""), "instructions": str(v.get("system_prompt") or ""), "hint": str(hint or "")[:1000],
+            "tools": [t for t in tools if t], "skills": [s for s in skills if s]}
+
+
+def _json_list(s) -> list:
+    try:
+        d = json.loads(s) if s else []
+    except (TypeError, ValueError):
+        return []
+    return d if isinstance(d, list) else []
+
+
+# A memory the gateway makes for an agent is made by a person, who then manages it (and grants the agent on it). A key
+# no person made can't be that person: before, the memory was made and the grant then failed ("No memory with that
+# id"), leaving a memory nobody calling the API could see or delete. So it is refused before anything is made.
+_MEMORY_NO_PERSON = ("This key has no person behind it, so it can't own a memory. Use a key made by a person, or create "
+                     "the agent from the console.")
+
+
+def _memory_no_person() -> HTTPException:
+    return uhp_error(422, "memory_no_owner", _MEMORY_NO_PERSON, "memory")
+
+
+async def _memory_ask_check(org: str, ws: str, ask: tuple[str, str], p: dict) -> None:
+    """An engine or a memory the caller named is checked before anything is made, and refused in words."""
+    kind, value = ask
+    if kind == "engine" and not str(p.get("member") or ""):
+        raise _memory_no_person()
+    if kind == "engine":
+        running, failing = await _memory_engines_state(org, ws)
+        if value in failing:
+            raise uhp_error(422, "memory_unavailable", _memory_engine_failing_words(value, failing[value]), "memory.engine")
+        if value not in running:
+            raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
+                            f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
+    if kind == "id":
+        who = memory_routes.principals_of(p)
+        m = await memory_plane._load(org, value)
+        privs = await memory_plane.effective(org, m, who) if m else []
+        if not privs:
+            raise uhp_error(404, "memory_not_found", "No memory with that id.", "memory.id")
+        if "write" not in privs:
+            raise uhp_error(403, "memory_forbidden", "You may read that memory but not write it, so it can't be this agent's.", "memory.id")
+        if "delete" not in privs:
+            raise uhp_error(403, "memory_forbidden", "You can write that memory but not share it: ask whoever manages it "
+                            "to share it with this agent.", "memory.id")
+
+
+async def _memory_detach(org: str, hid: str, info: dict) -> None:
+    """The agent moved off the memory it was given: its grant there is taken away and nothing else is. The memory
+    and everything in it are kept for whoever manages it."""
+    if info.get("id"):
+        try:
+            await memory_plane.ungrant(org, str(info["id"]), _agent(hid))
+        except Exception as e:  # noqa: BLE001
+            print(f"[memories] {hid}: its old memory kept its grant: {type(e).__name__}", flush=True)
+
+
+async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], hint: str = "", ws: str = "") -> None:
+    """Give the agent the memory asked for (_memory_ask), and keep on the harness what it got and why."""
+    v = await _vertex_get(hid) or {"id": hid}
+    kind, value = ask
+    ws = ws or _memory_ws_of(p)
+    who, member = memory_routes.principals_of(p), str(p.get("member") or "")
+    current = _json_obj(v.get("memory_info"))
+    made: dict | None = None            # a memory made here, for this agent
+    words = await _memory_agent_words(org, hid, v, hint or str(v.get("memory_hint") or ""))
+
+    async def none(reason: str) -> None:
+        await _memory_detach(org, hid, current)
+        await _vg_upsert("Harness", hid, {"memory_info": "", "memory_reason": reason, "memory_scope": "", "memory_default": "",
+                                          **({"memory_hint": str(hint)[:1000]} if hint else {})})
+
+    if kind == "none":
+        return await none(_MEMORY_OFF)
+    if kind == "id":
+        m = await memory_plane._load(org, value)
+        if not m:
+            raise uhp_error(404, "memory_not_found", "No memory with that id.", "memory.id")
+        choice = memory_choice.for_engine(str(m.get("provider") or ""), **words)
+        reason = f"It uses {m.get('name') or 'the memory'}, which was chosen for it."
+    else:
+        running, failing = await _memory_engines_state(org, ws)
+        if kind == "engine":
+            if value in failing:
+                raise uhp_error(422, "memory_unavailable", _memory_engine_failing_words(value, failing[value]), "memory.engine")
+            if value not in running:
+                raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here.", "memory.engine")
+            choice = memory_choice.for_engine(value, **words)
+        else:
+            choice = memory_choice.choose(running=running, failing=failing, **words)
+        reason = choice.reason
+        if choice.engine is None:
+            return await none(reason)
+        m = await memory_plane._load(org, str(current.get("id") or "")) if current.get("id") else None
+        if not m or str(m.get("provider") or "") != choice.engine:
+            if not member:
+                raise _memory_no_person()          # before anything is made (_MEMORY_NO_PERSON)
+            # named after the agent, made by the person who made it: they manage it like any memory of theirs. It
+            # says which agent it was made for, so it goes with that agent, when the retention sweep removes the agent
+            # for good and nothing else uses it (_memories_gone_with).
+            m = await memory_plane.create(org, member, ws, who, name=str(v.get("name") or "Agent")[:120],
+                                          description=f"What {str(v.get('name') or 'this agent')[:80]} remembers from its work.",
+                                          provider=choice.engine, extra={"provisioned_for": hid})
+            made = m
+    mid = str(m["id"])
+    try:
+        # read and write, through the grant path, adding to whatever the agent already held there
+        have = await memory_plane.held_on(org, mid, _agent(hid))
+        await memory_plane.grant(org, mid, who, _agent(hid), sorted({"read", "write", *have}, key=memory_plane.PRIVILEGES.index),
+                                 member or "server")
+        await _memories_on_grant(org, _agent(hid))
+        await _memories_ensure(org, hid, await _vertex_get(hid) or v, {"default_memory_id": mid, "observe": True})
+        info = {"id": mid, "name": str(m.get("name") or ""), "engine": str(m.get("provider") or ""), "scope": choice.scope,
+                "provisioned": str(m.get("provisioned_for") or "") == hid}
+        await _vg_upsert("Harness", hid, {"memory_info": json.dumps(info, separators=(",", ":")), "memory_reason": reason,
+                                          "memory_scope": choice.scope, **({"memory_hint": str(hint)[:1000]} if hint else {})})
+    except Exception:
+        if made is not None:
+            # nothing made here is left behind for nobody: the agent's grant, the memory, and its place as the default
+            await _memory_unmake(org, hid, made, str(v.get("memory_default") or ""))
+        raise
+    if current.get("id") and str(current["id"]) != mid:
+        await _memory_detach(org, hid, current)
+    print(f"[memories] {hid}: given {mid} on {info['engine']} ({choice.scope})", flush=True)
+
+
+async def _memory_unmake(org: str, hid: str, m: dict, default_before: str) -> None:
+    """A memory provisioning made, taken back after a later step failed. Each part is tried whatever the others did."""
+    mid = str(m["id"])
+    for what, step in (("its grant", memory_plane.ungrant(org, mid, _agent(hid))),
+                       ("the memory", memory_plane.unmake(org, m))):
+        try:
+            await step
+        except Exception as e:  # noqa: BLE001
+            print(f"[memories] {hid}: {what} on {mid} was not taken back: {type(e).__name__}", flush=True)
+    try:
+        if str(((await _vertex_get(hid)) or {}).get("memory_default") or "") == mid:
+            await _vg_upsert("Harness", hid, {"memory_default": default_before})
+    except Exception as e:  # noqa: BLE001
+        print(f"[memories] {hid}: its default memory was not put back: {type(e).__name__}", flush=True)
+
+
+async def _memory_provision_new(org: str, p: dict, hid: str, ask: tuple[str, str], hint: str, ws: str) -> None:
+    """A new harness's memory. The harness is made whatever happens here: what failed is said on it, in words."""
+    try:
+        await _memory_provision(org, p, hid, ask, hint, ws)
+    except Exception as e:  # noqa: BLE001
+        why = (e.detail.get("message") if isinstance(getattr(e, "detail", None), dict) else
+               getattr(e, "message", "") or str(getattr(e, "detail", "") or "")) or type(e).__name__
+        print(f"[memories] {hid}: no memory was given: {type(e).__name__}: {why}"[:300], flush=True)
+        said = why if why == _MEMORY_NO_PERSON else f"The memory couldn't be made just now: {memory_plane.clean_text(str(why))}"
+        await _vg_upsert("Harness", hid, {"memory_info": "", "memory_reason": " ".join(said.split())[:300]})
+
+
+async def _harness_memory_live(org: str, v: dict) -> dict:
+    """The harness's memory as it is now: the name it has now, and said plainly when it is gone."""
+    view = _harness_memory_view(v)
+    m = view.get("memory")
+    if m:
+        cur = await memory_plane._load(org, m["id"])
+        if not cur:
+            return {"memory": None, "memory_reason": "Its memory was deleted."}
+        view["memory"] = {**m, "name": str(cur.get("name") or m["name"]),
+                          "provisioned": bool(v.get("id")) and str(cur.get("provisioned_for") or "") == str(v["id"])}
+    return view
+
+
+@app.put("/v1/harnesses/{hid}/memory")
+async def set_harness_memory(hid: str, request: Request) -> dict:
+    """What the agent remembers with, changed in one place: {"memory": "auto" | "none" | {"engine": ...} | {"id": ...}},
+    and `observe` (whether each finished task is kept). Another engine is a new memory, and the agent moves to it;
+    the old memory is kept, unattached. Nothing is deleted."""
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    await _harness_for_route(hid, p)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or not ({"memory", "observe"} & set(body)) or set(body) - {"memory", "observe"}:
+        raise uhp_error(422, "invalid_input", 'Send {"memory": "auto" | "none" | {"engine": ...} | {"id": ...}}, '
+                                              'and `observe` (true or false) if it changes.', "memory")
+    if "observe" in body and not isinstance(body["observe"], bool):
+        raise uhp_error(422, "invalid_input", "`observe` is true or false.", "observe")
+    ws = _plug_workspace(request, p)
+    if "memory" in body:
+        ask = _memory_ask(body["memory"])
+        await _memory_ask_check(org, ws, ask, p)
+        try:
+            await _memory_provision(org, p, hid, ask, ws=ws)
+        except memory_plane.MemoryError as e:
+            raise uhp_error(e.status, e.code, e.message, e.param or "memory") from None
+    if "observe" in body:
+        await _vg_upsert("Harness", hid, {"memory_observe": "1" if body["observe"] else "0"})
+    v = await _vertex_get(hid) or {"id": hid}
+    return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
+
+
+@app.get("/v1/harnesses/{hid}/memories")
+async def harness_memories(hid: str, request: Request) -> dict:
+    """What this harness's agent may reach, read off its grants, and its two settings."""
+    caller = await _pub_principal(request)
+    org = str(caller.get("org") or "")
+    return await _harness_memories_out(hid, org, await _harness_for_route(hid, caller))
+
+
+@app.put("/v1/harnesses/{hid}/memories")
+async def set_harness_memories(hid: str, request: Request) -> dict:
+    """The harness's memory settings: where its agent writes by default, and whether each finished
+    turn is recorded there. Access is not set here. An agent is a member: it reaches what it is
+    granted, and it is granted where everyone is, on the memory."""
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    v = await _harness_for_route(hid, p)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    patch: dict = {}
+    if "default_memory_id" in body:
+        mid = str(body.get("default_memory_id") or "")
+        if mid:
+            m = await memory_plane._load(org, mid)
+            if not m or not await memory_plane.effective(org, m, memory_routes.principals_of(p)):
+                raise uhp_error(404, "memory_not_found", "No memory with that id.", "default_memory_id")
+            if "write" not in await memory_plane.effective(org, m, [_agent(hid)]):
+                raise uhp_error(422, "memory_invalid",
+                                f"This agent may not write that memory. Grant `{_agent(hid)}` write on it first.", "default_memory_id")
+        patch["default_memory_id"] = mid
+    if "observe" in body:
+        if not isinstance(body["observe"], bool):
+            raise uhp_error(422, "memory_invalid", "`observe` is true or false.", "observe")
+        patch["observe"] = body["observe"]
+    await _memories_ensure(org, hid, v, patch)
+    return await _harness_memories_out(hid, org, await _harness_for_route(hid, p))
+
+
+@app.post("/v1/mcp/memories")
+async def memories_mcp(request: Request):
+    """The MCP endpoint the agent's CLI talks to for its memories: stateless, the same shape as
+    the plugs server's. The token names the harness and the session; the record names the memories."""
+    claims = _verify_hosted_cred(_broker_token(request))
+    if not claims:
+        raise HTTPException(401, "invalid or expired turn credential")
+    hid, sid, key = claims
+    try:
+        req = json.loads(await request.body() or b"{}")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "malformed JSON-RPC request") from None
+    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+    if method == "initialize":
+        return _jsonrpc_result(rid, {"protocolVersion": str(params.get("protocolVersion") or "2024-11-05"),
+                                     "capabilities": {"tools": {}}, "serverInfo": {"name": "memories", "version": "1"}})
+    if rid is None:
+        return Response(status_code=202)
+    if method not in ("tools/list", "tools/call"):
+        return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {method}"}})
+    v = await _harness_vertex(hid)
+    if v and str(v.get("deleted")) in ("1", "true", "True"):
+        v = None
+    org = str((v or {}).get("org") or "")
+    try:
+        # the session this credential was minted for is the turn: it must be one of the harness's
+        # own organization (_memories_go_with), whatever minted the credential
+        if not _memories_go_with(v, str(((await _vertex_get(sid)) or {}).get("tenant") or "")):
+            raise HTTPException(404, "not this organization's agent")
+        await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(v), key=key, check_enabled=True)
+    except HTTPException:
+        if method == "tools/list":
+            return _jsonrpc_result(rid, {"tools": []})
+        return _jsonrpc_result(rid, _tool_text("This agent holds no memory yet. Someone who manages a memory can share "
+                                               "it with this agent; you cannot do that yourself.", True))
+    args = params.get("arguments") or {}
+    tool = str(params.get("name") or "")
+    # the harness's, the one this session's task named, and in a person's task that person's own. Each memory's record
+    # count is asked of its engine only for the one answer that shows it, memory_list's: a CLI lists the tools before
+    # its first model call, and two counts per memory there were on the way to the turn's first word.
+    seam = await _memories_seam(hid, org, v, sid, counts=method == "tools/call" and tool == "memory_list")
+    if seam is None:
+        if method == "tools/list":
+            return _jsonrpc_result(rid, {"tools": []})
+        return _jsonrpc_result(rid, _tool_text("Memory is off for this task: no person was named for it.", True))
+    if method == "tools/list":
+        entries, offers, settings = await asyncio.gather(seam.entries(), seam.offers(), _memories_settings(hid, org, v))
+        kept_after = (settings or {}).get("observe", True) is not False
+        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(entries, offers, kept_after)})
+    text, is_error = await memory_tools.call(seam, tool, args if isinstance(args, dict) else {})
+    if tool in ("memory_revise", "memory_forget") and not is_error:
+        _memory_corrected.add(sid)
+    if seam.kept:
+        # what the agent kept in this turn, for the turn's record (_memories_note)
+        kept = _kept_records(_json_list(((await _vertex_get(sid)) or {}).get("memory_kept"))) + _kept_records(seam.kept)
+        await _vertex_upsert(sid, {"memory_kept": json.dumps(kept[-200:], separators=(",", ":"))})
+    return _jsonrpc_result(rid, _tool_text(text, is_error))
+
+
+async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = "", *, counts: bool = True, around: bool = True):
+    """The agent's memories as one task reaches them, through the tools' seam on this gateway's own plane. None when
+    memory is off for the task; in a person's task, the seam reads and writes as that person (memory_local).
+    `counts` and `around` as memory_local.Local takes them: what only a tool's answer shows, asked of the engines."""
+    sv = ((await _vertex_get(sid)) or {}) if sid else {}
+    if sv.get("memory_off"):
+        return None
+    person = _json_obj(sv.get("memory_person"))
+    return memory_local.Local(org, hid, await _harness_memories(hid, org, hv, sid=sid),
+                              person=person if person.get("node") and person.get("principal") else None,
+                              counts=counts, around=around, session=sid)
+
+
+async def _memories_turn_start(hid: str, org: str, hv: dict | None, sid: str, text: str) -> tuple[str, dict, int]:
+    """(the Memory section, what was primed per memory in tokens, how many findings were recalled for the turn).
+
+    Started before the turn's workspace is restored and awaited only when its instructions are written
+    (_resp_execute), so what it waits on, an engine's search above all, runs while the sandbox is made ready. Inside
+    it, the recall and the rest of the section (each memory's standing records) are asked at once: the turn waits
+    on the longer of the two, never their sum. Nothing here asks an engine what only a tool's answer shows (record
+    counts, a memory's neighbours): measured on a person's task, those were five of the turn's engine calls, one
+    after the other, before its first word (r3, 11-09). Per-person memory had added 4.9 s to the first token."""
+    if not hid:
+        return "", {}, 0
+    seam = await _memories_seam(hid, org, hv, sid, counts=False, around=False)
+    if seam is None:
+        return "", {}, 0
+
+    async def ahead() -> None:
+        # what doc_section will ask, all at once: the seam keeps each answer (memory_local.Local._shared), and the
+        # section is then written from them. Its errors are the section's to meet, as they were.
+        try:
+            entries = await seam.entries()
+            share = memory_tools.prime_share(entries)
+            await asyncio.gather(seam.offers(), *(seam.prime(str(e["memory"]["id"]), share) for e in entries),
+                                 return_exceptions=True)
+        except Exception:  # noqa: BLE001
+            pass
+    (known, recalled), _, settings = await asyncio.gather(_memories_known_at_start(seam, text, sid), ahead(),
+                                                          _memories_settings(hid, org, hv))
+    section, primed = await memory_tools.doc_section(
+        seam, kept_after=(settings or {}).get("observe", True) is not False, person=bool(seam.person), known=known)
+    return section, primed, recalled if section else 0
+
+
+def _memories_turn_start_drop(task: "asyncio.Task | None") -> None:
+    """A turn that ends before its instructions are written: its memory work is let go, and its answer never read."""
+    if task is not None and not task.done():
+        task.cancel()
+
+
+# How long the turn waits for what its agent already knows (memory_tools.recall_at_start). Past it, or on any error,
+# the turn runs without it, and says so once in the log: a slow engine never holds a turn up.
+_RECALL_AT_START_S = float(os.environ.get("HR_MEMORY_RECALL_AT_START_S", "3"))
+
+
+async def _memories_known_at_start(seam, text: str, sid: str) -> tuple[str, int]:
+    """(the Memory section's block of what the agent already knows that may matter for this turn, how many findings),
+    recalled with the turn's own words through the task's seam, so per-person reach is exactly the recall tool's.
+    ("", 0) when memory is off for the task (no seam), there are no words, nothing was found, or it took too long."""
+    if seam is None or not str(text or "").strip():
+        return "", 0
+    try:
+        found = await asyncio.wait_for(memory_tools.recall_at_start(seam, str(text), session=sid), _RECALL_AT_START_S)
+    except asyncio.TimeoutError:
+        print(f"[memories] {sid}: the turn starts without what its agent already knows: recall took over "
+              f"{_RECALL_AT_START_S:g} s", flush=True)
+        return "", 0
+    except Exception as e:  # noqa: BLE001 - the turn runs without it
+        print(f"[memories] {sid}: the turn starts without what its agent already knows: {type(e).__name__}", flush=True)
+        return "", 0
+    # in a person's task, what was found in that person's own memory says it is theirs
+    return memory_tools.known_block(found, yours=str((getattr(seam, "person", None) or {}).get("node") or ""))
+
+
+_NO_END_USER = "no end user named"
+
+
+async def _task_person(org: str, hid: str, hv: dict | None, body, principal: dict) -> dict:
+    """Who this task is for, when its agent keeps each person's memory apart: {} for any other agent, else
+    {"user": ...} or {"skipped": why}. The Responses API's `user`, then `metadata.user`, then a person calling from
+    the console themselves. Never an API key's own identity: one key fronts many people, and taking it would put all
+    of them in one person's memory. A task that names nobody runs without memory, and says so."""
+    if not hid or not _memories_go_with(hv, org) or str((hv or {}).get("memory_scope") or "") != memory_choice.PER_USER:
+        return {}
+    meta = getattr(body, "metadata", None) or {}
+    user = str(getattr(body, "user", None) or "").strip()
+    if not user and isinstance(meta.get("user"), str):
+        user = meta["user"].strip()
+    if not user and principal.get("via") != "api_key" and not principal.get("calibration"):
+        user = str(principal.get("member") or "").strip()
+    if not user:
+        print(f"[memories] {hid}: a task named no end user, so it runs without memory (this agent keeps each person apart)", flush=True)
+        return {"skipped": _NO_END_USER}
+    return {"user": user[:256]}
+
+
+async def _turn_memory_note(rid: str, note: dict) -> None:
+    """What memory did in a turn, on the turn's record (GET /v1/sessions/{sid}/turns: `memory`)."""
+    if rid:
+        await _vg_upsert("HarnessResponse", rid, {"memory_note": json.dumps(note, separators=(",", ":"))})
+
+
+async def _turn_memory_recalled(rid: str, n: int) -> None:
+    """How many findings were recalled for the turn at its start, on the turn's record beside its note: read back as
+    `memory.recalled_at_start` (GET /v1/sessions/{sid}/turns). A property of its own, so the note written when the
+    task is kept (_memories_note) never takes it away."""
+    if rid and n:
+        await _vg_upsert("HarnessResponse", rid, {"memory_recalled": str(int(n))})
+
+
+async def _memories_person_begin(org: str, hid: str, hv: dict | None, sid: str, person: dict, translator, rec: dict) -> None:
+    """At a turn's start: whose task it is, kept on the session for the tools and the observation that follow. A
+    person's memory is made the first time their task needs it. Every turn says it afresh, so nothing of the last
+    turn's person carries over."""
+    if not hid or not sid:
+        return
+    settings = await _memories_settings(hid, org, hv)
+    if not (person or settings):
+        return
+    props = {"memory_person": "", "memory_off": "", "memory_kept": ""}
+    skipped = str(person.get("skipped") or "")
+    if person.get("user"):
+        default = str((settings or {}).get("default_memory_id") or "")
+        shared = await memory_plane._load(org, default) if default else None
+        if shared is None:
+            skipped = "this agent has no memory to keep it in"
+        else:
+            try:
+                node, principal = await memory_plane.end_user_node(org, shared, str(person["user"]))
+                props["memory_person"] = json.dumps({"node": str(node["id"]), "principal": principal, "shared": default},
+                                                    separators=(",", ":"))
+            except Exception as e:  # noqa: BLE001 - never this person's task in someone else's memory
+                skipped = "this person's memory couldn't be reached"
+                await memory_plane.mark(org, default, getattr(e, "message", "") or type(e).__name__)
+                print(f"[memories] {hid}: a person's memory was not reached: {type(e).__name__}", flush=True)
+    if skipped:
+        props["memory_off"] = skipped
+        note = {"skipped": skipped}
+        translator.memory_note, rec["memory"] = note, note
+        await _turn_memory_note(translator.resp_id, note)
+    await _vertex_upsert(sid, props)
+
+
+def _translator_answer(tr) -> str:
+    """What the agent answered this turn: every closed message item, and the one still open. The
+    turn's last message is closed by `complete()`, which runs after the turn function returns, so
+    reading the closed items alone gave an observed turn with a question and no answer (on an early
+    candidate of this feature, mem0's event log showed each turn's user message and nothing else)."""
+    parts = [str(c.get("text") or "") for o in tr.output if isinstance(o, dict) and o.get("type") == "message"
+             for c in (o.get("content") or []) if isinstance(c, dict)]
+    if tr.cur and tr.cur.get("kind") == "message":
+        parts.append(str(tr.cur.get("text") or ""))
+    return "\n".join(p for p in parts if p.strip())
+
+
+# Sessions whose agent corrected memory in the turn now running. That turn isn't observed: it is about what
+# must not be kept. A vendor that derives from what was said would learn the old title from "the title is no
+# longer X" and the forgotten thing from the answer that says it was forgotten. Measured on real turns. What
+# the agent wanted kept, it has just said through its tools.
+_memory_corrected: set[str] = set()
+
+
+async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str, resp_id: str = "") -> None:
+    """After a completed turn: what was asked and what was answered, sent as one episode to the
+    memory the harness writes by default (in a person's task, that person's own). No model runs here; what the
+    provider derives from it, and when, is the provider's. Best-effort: a memory that cannot take the episode never
+    fails the turn it describes, and a slow one never holds it: the turn doesn't wait for this. How it went is kept
+    on the memory (last_ok_at, last_error), and what it kept on the turn (_memories_note). An engine that draws from
+    the task after it answers (a job) has its records counted on the turn when the job settles (_memories_note_job)."""
+    made: list[dict] = []
+    job: dict | None = None
+    prov, mid = None, ""
+    # whether the task was sent to be kept (the note then always settles: what came, nothing, or why it failed)
+    sent, failed = False, ""
+    # what the agent kept with its tools in this turn, read now: the next turn starts afresh (_memories_person_begin)
+    kept = await _memories_kept(sid)
+    try:
+        if ((await _memories_settings(hid, org, hv)) or {}).get("observe", True) is False:
+            return
+        seam = await _memories_seam(hid, org, hv, sid)
+        if seam is None:
+            return
+        mid = next((e["memory_id"] for e in seam._entries if e.get("default")), "")
+        if not mid or not (str(rec.get("user_text") or "").strip() or answer.strip()):
+            return
+        sent = True
+        m, _ = await memory_plane.need(org, mid, seam.wpr, "write")
+        try:
+            prov = await memory_plane.provider_of(m)
+            # the turn says it is being kept the moment the task is sent, not when the engine answers: Graphiti and
+            # ReMe draw from it with a model before they answer (5.5 s and 7.2 s measured), and until then a reader of
+            # the turn saw no note at all, so nothing told it to wait. Settled below, whatever happens.
+            await _memories_note(org, sid, resp_id, kept, [], pending=True, at=mid)
+            out = await memory_plane.observe(prov, mid, [{
+                "content": [{"type": "text", "role": role, "text": text}
+                            for role, text in (("user", str(rec.get("user_text") or "")), ("assistant", answer)) if text.strip()],
+                "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
+                memory_plane.writer_of(hid, agent=True))
+        except memory_plane.MemoryError as e:
+            await memory_plane.mark(org, mid, e.message)
+            raise
+        await memory_plane.mark(org, mid)
+        await memory_plane.used(org, m)
+        made = _derived_records(out.get("records"), mid, episodes=bool(getattr(prov, "episode_is_kept", False)))
+        job = out.get("job") if isinstance(out.get("job"), dict) and out["job"].get("id") else None
+        print(f"[memories] {sid}: the turn was observed into {mid}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[memories] observe after a turn of {sid} was not taken: {type(e).__name__}: {e}"[:300], flush=True)
+        failed = _memory_save_failed(getattr(e, "message", "") or (str(e) if isinstance(e, memory_plane.MemoryError) else ""))
+    finally:
+        await _memories_note(org, sid, resp_id, kept, made, pending=bool(job), failed=failed if sent else "",
+                             settle=sent, at=mid)
+    if job and resp_id and prov is not None and len(_NOTE_JOBS) < _NOTE_JOBS_MAX:
+        t = asyncio.create_task(_memories_note_job(org, sid, resp_id, prov, mid, str(job["id"]), kept))
+        _NOTE_JOBS.add(t)
+        t.add_done_callback(_NOTE_JOBS.discard)
+
+
+def _kept_records(xs) -> list[dict]:
+    """Records a turn kept, each {"id", "memory_id"}, read leniently from what a session holds."""
+    out = []
+    for x in xs or []:
+        if isinstance(x, dict) and str(x.get("id") or ""):
+            out.append({"id": str(x["id"]), **({"memory_id": str(x["memory_id"])} if x.get("memory_id") else {})})
+        elif isinstance(x, str) and x:
+            out.append({"id": x})
+    return out
+
+
+def _derived_records(records, mid: str, episodes: bool = False) -> list[dict]:
+    """What an engine kept from a finished task, as a turn links it: every record it drew, and not the episode it was
+    given, unless the engine keeps that episode as a record a person reads (`episodes`: ReMe keeps it as a note, and
+    a ReMe turn read "memory: null" while its episode sat in the memory)."""
+    return [{"id": str(r["id"]), "memory_id": mid} for r in records or []
+            if isinstance(r, dict) and r.get("id") and (episodes or r.get("type") != "episode")]
+
+
+_MEMORY_SAVE_NO_REASON = "no reason was given"
+
+
+def _memory_save_failed(said: str) -> str:
+    """Why a finished task wasn't kept, for the turn's note: the bare reason, never a sentence around it. The console
+    says the rest itself ("Couldn't remember this one: <reason>"), and a reason that already said "This conversation
+    wasn't kept" read twice there. Redacted as the memory's last_error is; never empty, since a failed save always
+    has a note that says so."""
+    said = " ".join(memory_plane.clean_text(str(said or "")).split()).rstrip(". ")
+    return (said or _MEMORY_SAVE_NO_REASON)[:300]
+
+
+async def _memories_kept(sid: str) -> list[dict]:
+    """What the agent kept with its tools in this session's current turn (memories_mcp writes it)."""
+    try:
+        return _kept_records(_json_list(((await _vertex_get(sid)) or {}).get("memory_kept"))) if sid else []
+    except Exception as e:  # noqa: BLE001 - the turn's note says less, and never fails the turn
+        print(f"[memories] {sid}: what the turn kept was not read: {type(e).__name__}", flush=True)
+        return []
+
+
+async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], made: list[dict], pending: bool = False,
+                         failed: str = "", settle: bool = False, at: str = "") -> None:
+    """The turn's record says what memory kept in it: what the agent kept with its tools and what the finished task
+    left, {"remembered": n, "records": [{"id", "memory_id"}], "pending": bool}, `pending` while the engine is still
+    drawing from it. A task that was sent to be kept (`settle`) always gets its note, so it never stays pending: what
+    came, `remembered: 0` when nothing did, or `failed: true` and `reason` when the save failed. Each record names
+    the memory it is in, so a person reading the turn can open it there. Once written, the memories they are in (and
+    `at`, where the task was sent) say something changed (memory_live.tell: a person's memory also tells the agent's
+    memory above it, without saying what), so a page watching the agent's memory reads the turn again."""
+    try:
+        seen, records = set(), []
+        for r in [*kept, *made]:
+            k = (r.get("memory_id") or "", r["id"])
+            if k not in seen:
+                seen.add(k)
+                records.append(r)
+        if not resp_id or not (records or pending or failed or settle):
+            return
+        note = {"remembered": len(records), "records": records, "pending": bool(pending) and not failed}
+        if failed:
+            note.update(failed=True, reason=failed)
+        await _turn_memory_note(resp_id, note)
+        for mid in dict.fromkeys([*(str(r.get("memory_id") or "") for r in records), str(at or "")]):
+            m = await memory_plane._load(org, mid) if mid else None
+            if m:
+                memory_live.tell(mid, "records.changed", (str(m["end_user_of"]),) if m.get("end_user_of") else (), record_ids=[])
+    except Exception as e:  # noqa: BLE001 - the turn's note never fails the turn
+        print(f"[memories] {sid}: the turn's memory note was not written: {type(e).__name__}", flush=True)
+
+
+# An engine that draws from a finished task after it answers (Mem0's platform, Hindsight) answers a job; what it drew
+# is counted on the turn once the job settles. Asked with growing pauses for as long as a job may take, at most this
+# many turns at once on this replica (past that, the turn keeps "pending" and the memory still holds what was drawn).
+_NOTE_JOBS: set = set()
+_NOTE_JOBS_MAX = 128
+_NOTE_JOB_MAX_S = float(os.environ.get("HR_MEMORY_NOTE_JOB_MAX_S", "900"))
+
+
+async def _memories_note_job(org: str, sid: str, resp_id: str, prov, mid: str, job_id: str, kept: list[dict]) -> None:
+    """A turn whose engine answered a job: its note written again once the job settles, with what the engine drew, and
+    no longer pending: `remembered: 0` when it drew nothing, `failed` and why when the job failed, and settled also
+    when the engine forgets the job or it outlasts the wait. A replica that stops first leaves the note pending; what
+    the engine drew is in the memory all the same."""
+    end, wait = time.monotonic() + _NOTE_JOB_MAX_S, 1.0
+    made: list[dict] = []
+    failed = ""
+    while time.monotonic() < end:
+        await asyncio.sleep(min(wait, max(0.0, end - time.monotonic())))
+        wait = min(wait * 1.6, 15.0)
+        try:
+            job = await prov.job(mid, job_id)
+        except Exception as e:  # noqa: BLE001 - asked again after the next pause
+            print(f"[memories] {sid}: a job's state was not read: {type(e).__name__}", flush=True)
+            continue
+        if not job:
+            break                          # the engine no longer knows it: what was noted stands, no longer pending
+        status = str(job.get("status") or "")
+        if status == "completed":
+            made = _derived_records(job.get("records"), mid, episodes=bool(getattr(prov, "episode_is_kept", False)))
+            break
+        if status == "failed":
+            why = str(job.get("error") or "") or "The engine could not draw anything from a finished task."
+            await memory_plane.mark(org, mid, why)
+            failed = _memory_save_failed(why)
+            break
+    await _memories_note(org, sid, resp_id, kept, made, failed=failed, settle=True, at=mid)
+
+
+async def _memories_note_kept(org: str, sid: str, resp_id: str) -> None:
+    """A turn that kept nothing after it (it didn't complete, or nothing is observed): what the agent kept with its tools."""
+    await _memories_note(org, sid, resp_id, await _memories_kept(sid), [])
 
 
 # ── Environments (UHP 2026-09-28, Environments chapter) ───────────────────────────────────────
@@ -20977,6 +23778,9 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     # a key held to a workspace stamps its own, whatever header it sends; any other caller names it
     workspace = _key_scope(p) or request.headers.get("x-harness-workspace", "")
     await _require_offered_model(org, body.base, body.default_model)
+    memory_ws = _plug_workspace(request, p)
+    memory_ask = _memory_ask(body.memory)
+    await _memory_ask_check(org, memory_ws, memory_ask, {**p, "member": member})
     body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
@@ -20986,9 +23790,9 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     props = {"org": org, "member": member, "workspace": workspace, **_harness_props(body), **_harness_source_prop(body),
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
-    if await _plugs_ensure_required(org, hid):
-        return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
-    return _harness_out({"id": hid, **props})
+    await _plugs_ensure_required(org, hid)
+    await _memory_provision_new(org, {**p, "member": member}, hid, memory_ask, body.memory_hint or "", memory_ws)
+    return _harness_out(await _vertex_get(hid) or {"id": hid, **props}, await memory_plane.grant_counts(org))
 
 
 @app.get("/v1/orgs/{org}/harnesses")
@@ -21004,7 +23808,8 @@ async def list_harnesses(org: str, request: Request,
     if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
         workspace, workspace_default = _key_scope(p), 0
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
+    grants = await memory_plane.grant_counts(org)
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r), grants) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     if workspace:
         items = [i for i in items if _workspace_keep(i.get("workspace") or "", workspace, bool(workspace_default))]
@@ -21014,8 +23819,8 @@ async def list_harnesses(org: str, request: Request,
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}")
 async def get_harness(org: str, hid: str, request: Request) -> dict:
-    v = await _harness_in_reach(await _owned_org(request, org), hid)
-    return _harness_out(await _mcp_migrate(org, hid, v))
+    v = await _mcp_migrate(org, hid, await _harness_in_reach(await _owned_org(request, org), hid))
+    return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}/models")
@@ -21080,7 +23885,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
@@ -21090,7 +23895,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
     v = await _vertex_get(hid)
-    return _harness_out(v or {"id": hid})
+    return _harness_out(v or {"id": hid}, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/orgs/{org}/harnesses/{hid}")
@@ -21098,21 +23903,119 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     _caller = await _owned_org(request, org)
     # V1C02-005: only delete a harness that belongs to the caller's org.
     cur = await _harness_in_reach(_caller, hid, deleted_ok=True)
-    await _harness_delete(org, hid, cur)
-    return {"id": hid, "deleted": True}
+    who = {**_caller, "member": _caller.get("member") or request.headers.get("x-harness-member", "")}
+    return {"id": hid, "deleted": True, **await _harness_delete(org, hid, cur, who)}
 
 
-async def _harness_delete(org: str, hid: str, v: dict) -> None:
+async def _harness_delete(org: str, hid: str, v: dict, caller: dict | None = None) -> dict:
     """The one delete both routes call. The harness is kept 30 days, restorable, and then removed
     with its plugin packages by the retention sweep (Richard's rule, 2026-10-08); the sessions and
     responses that used it are not touched (Harnesses §5.3). What cannot wait goes now: a deleted
     agent must not still be holding a database password, and must not still be spending at a
-    provider. A second delete keeps the first one's time, so it cannot extend the 30 days."""
+    provider. A second delete keeps the first one's time, so it cannot extend the 30 days.
+
+    The memory made for it is kept with it for those 30 days, with every person's memory below it, so a restore
+    brings the agent back as it was: nothing of it is deleted here. The retention sweep deletes it when it removes
+    the agent for good (_memories_gone_with), as whoever deleted the agent (`deleted_by`, their principals), and only
+    when no agent still kept holds it. What the answer says of it is in `memory_kept` (_harness_memory_kept)."""
     v = await _mcp_migrate(org, hid, v)
+    props: dict = {}
     if str(v.get("deleted")) not in ("1", "true", "True") or not v.get("deleted_at"):
-        await _vg_upsert("Harness", hid, {"deleted": "1", "deleted_at": str(_now_ms())})
+        props.update({"deleted": "1", "deleted_at": str(_now_ms())})
+    if not v.get("deleted_by"):
+        props["deleted_by"] = json.dumps(memory_routes.principals_of(caller or {}), separators=(",", ":"))
+    if props:
+        await _vg_upsert("Harness", hid, props)
     await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
     await _media_harness_purge(hid)
+    return await _harness_memory_kept(org, hid, v, caller or {})
+
+
+_MEMORY_KEPT_30_DAYS = "kept with the agent for 30 days"
+_MEMORY_KEPT_NOT_YOURS = "only whoever manages it can delete it"
+
+
+async def _harness_memory_kept(org: str, hid: str, v: dict, caller: dict) -> dict:
+    """What a delete says of the memory made for the agent (`provisioned_for`): {"memory_kept": why}, or {} for a
+    memory someone chose for it, which is theirs and stays. Only words: nothing is deleted here, and a read that
+    fails changes no more than the words."""
+    info = _json_obj(v.get("memory_info"))
+    mid = str(info.get("id") or "")
+    if not mid:
+        return {}
+    try:
+        m = await memory_plane._load(org, mid)
+        if not m or str(m.get("provisioned_for") or "") != hid:
+            return {}
+        if "delete" not in await memory_plane.effective(org, m, memory_routes.principals_of(caller)):
+            return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
+    except Exception as e:  # noqa: BLE001 - the agent is deleted, and its memory is kept, whatever this read did
+        print(f"[memories] {hid}: its memory could not be read at its delete: {type(e).__name__}", flush=True)
+        return {"memory_kept": _MEMORY_KEPT_30_DAYS} if info.get("provisioned") is True else {}
+    return {"memory_kept": _MEMORY_KEPT_30_DAYS}
+
+
+def _memories_agents_hold(grants: list[dict], live: set[str]) -> set[str]:
+    """The memories one of these agents holds a grant on (a privilege, not taken away)."""
+    return {str(g.get("memory_id") or "") for g in grants
+            if str(g.get("principal") or "").startswith("member:") and str(g["principal"])[7:] in live
+            and str(g.get("deleted") or "0") != "1" and json.loads(g.get("privileges") or "[]")}
+
+
+# The most memories one retention sweep deletes (each with the people's memories below it). Past it the sweep stops
+# deleting memories and says so in its log, and the agent whose turn it was is left for the next sweep, which goes on.
+_MEMORY_SWEEP_CAP = 25
+_MEMORY_UNCHECKED = "its memory couldn't be checked just now"
+_MEMORY_CAPPED = "more memories were due than one sweep deletes"
+
+
+async def _memories_gone_with(org: str, hid: str, principals: list[str], budget: dict) -> str | None:
+    """At the retention sweep, before agent `hid` is removed for good: every memory made for an agent that is no
+    longer kept (`provisioned_for` names no Harness record left but `hid`), this agent's own first, that no agent
+    still kept holds a grant on, on it or below it, deleted with its people's memories through the memory delete
+    every caller goes through, as whoever deleted `hid` (`principals`). A deleted agent still inside its 30 days is
+    kept, restorable, and holds its memory as it did. One the deleter may not delete stays, as it would have at
+    their own delete. None when the agent may go; else why it is left for the next sweep, having deleted nothing
+    on a read that couldn't answer, or what it could under the cap (`budget["n"]`, shared by the whole sweep).
+
+    Every read the decision rests on is strict: the agents, the grants, the memories and each one's subtree. The
+    plain reads answer a failed read with [] (backing.GraphStore.find), and here [] reads as "no agent holds it":
+    one failed read during one agent's removal would have deleted every provisioned memory in the organization."""
+    try:
+        agents = await BACKING.graph.find_strict("Harness", {"org": org})
+        grants = await BACKING.graph.find_strict("MemoryGrant", {"org": org})
+        made = await BACKING.graph.find_strict("Memory", {"org": org})
+        kept = {str(a["id"]) for a in agents if a.get("id")} - {hid}
+        due = [m for m in made if m.get("id") and str(m.get("deleted") or "0") != "1"
+               and str(m.get("provisioned_for") or "") and str(m["provisioned_for"]) not in kept]
+        due.sort(key=lambda m: str(m["provisioned_for"]) != hid)
+        held = _memories_agents_hold(grants, kept)
+        go = []
+        for m in due:
+            mid = str(m["id"])
+            if not ({mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid, strict=True))} & held):
+                go.append(mid)
+    except Exception as e:  # noqa: BLE001 - nothing is deleted on a read that couldn't answer
+        print(f"[memories] {hid}: no memory was deleted with it, a read couldn't answer: {type(e).__name__}", flush=True)
+        return _MEMORY_UNCHECKED
+    gone = 0
+    for i, mid in enumerate(go):
+        if budget.get("n", 0) >= _MEMORY_SWEEP_CAP:
+            print(f"[memories] the sweep stopped at {_MEMORY_SWEEP_CAP} memories: {len(go) - i} more of {org}'s "
+                  f"wait for the next sweep, and {hid} with them", flush=True)
+            return _MEMORY_CAPPED
+        if await memory_plane._load(org, mid) is None:
+            continue                                  # went with one deleted before it in this sweep
+        try:
+            below = await memory_plane.delete(org, mid, principals)
+        except memory_plane.MemoryError:
+            continue                                  # theirs to delete, not this deleter's; or a read below it failed
+        budget["n"] = budget.get("n", 0) + 1
+        gone += 1
+        print(f"[memories] {hid}: {mid} went with it ({len(below)} with the people's memories below)", flush=True)
+    if gone:
+        print(f"[memories] {hid}: {gone} memories made for agents no longer kept went with it", flush=True)
+    return None
 
 
 # ── workspaces: the DIRECTORY, server-side (fix for the localStorage split-brain) ──────
@@ -21296,12 +24199,13 @@ async def _harness_idem_claim(org: str, sha: str, hid: str, req: str) -> dict | 
 
 @app.post("/v1/harnesses")
 async def create_harness_public(body: HarnessBody, request: Request) -> dict:
-    return await _harness_create_as(await _principal(request), body,
-                                    idem_key=request.headers.get("idempotency-key", "").strip())
+    p = await _principal(request)
+    return await _harness_create_as(p, body, idem_key=request.headers.get("idempotency-key", "").strip(),
+                                    ws=_plug_workspace(request, p) if p.get("org") else "")
 
 
 async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
-                             idem_key: str = "") -> dict:
+                             idem_key: str = "", ws: str = "") -> dict:
     """The public create, for the caller `p`: every check it makes, then the record. `hid` is the id
     New setup's builder derives from its build's key (setup_builder.setup_id), else a new one.
 
@@ -21312,6 +24216,10 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     await _require_offered_model(org, body.base, body.default_model)
+    # what the agent remembers: "auto" when the request says nothing, an engine or a memory checked before anything is made
+    memory_ws = ws or _memory_ws_of(p)
+    memory_ask = _memory_ask(body.memory)
+    await _memory_ask_check(org, memory_ws, memory_ask, p)
     hid = hid or _rid("chrn")
     idem_sha = ""
     if idem_key:
@@ -21337,9 +24245,9 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
         if idem_sha:
             await control_store.idem_release(org, idem_sha, hid)
         raise
-    if await _plugs_ensure_required(org, hid):
-        return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
-    return _harness_out({"id": hid, **props})
+    await _plugs_ensure_required(org, hid)
+    await _memory_provision_new(org, p, hid, memory_ask, body.memory_hint or "", memory_ws)
+    return _harness_out(await _vertex_get(hid) or {"id": hid, **props}, await memory_plane.grant_counts(org))
 
 
 # ── New setup: the builder (setup_builder holds the harness, its checks and the build's record) ────
@@ -21378,7 +24286,7 @@ async def _setup_bases(org: str) -> dict:
     bases: dict = {}
     views: dict[str, list[str]] = {}
     for bid, b in _BASE_CATALOG.items():
-        if b.get("status") != "ready":
+        if b.get("status") != "ready" or not _backend_installed(b["backend"]):
             continue
         backend = b["backend"]
         if backend not in views:
@@ -21425,9 +24333,14 @@ def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> 
     base = _provider_base_url(vendor, str(cfg.get("base_url") or "") or _PROVIDER_BASE.get(vendor, ""))
     if not base:
         return None
-    full = vendor == "custom" and str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+    url = _conn_request_url({**cfg, "provider": vendor}, base, "chat/completions")
+    if not url:
+        return None
     header = {"api-key": key} if vendor in ("azure", "azure-foundry") else {"authorization": f"Bearer {key}"}
-    return {"url": base if full else f"{base}/chat/completions", "headers": header,
+    # The builder calls the provider from here rather than through the broker, so it adds the
+    # connection's headers itself, after the key's, which none of them may name.
+    _with_conn_headers(header, cfg)
+    return {"url": url, "headers": header,
             "model": model_id or canonical, "canonical": canonical, "route": vendor}
 
 
@@ -21444,11 +24357,22 @@ async def _setup_build_model_wire(org: str, canonical: str) -> dict | None:
         if w:
             return w
     for name in await _resolve_chain(org, setup_builder.BASE, None):
-        conn, _tenant = await _get_connection(org, name)
+        conn, src = await _get_connection(org, name)
         if not conn or not _conn_serves(conn, canonical) or _chain_refusal(conn, setup_builder.BASE):
             continue
         vendor = str(conn.get("provider") or "")
         w = _setup_build_wire(vendor, conn, _provider_model_id(vendor.lower(), canonical) or canonical, canonical)
+        if w and bool(src) and src != GLOBAL_TENANT and not _pool_is_local():
+            # An address an organization typed for its own connection, where organizations share this
+            # instance: held to the rule the model relay holds it to (llm_broker). Its text is checked
+            # here, and where it points when the socket opens: the builder sends it on the checked
+            # client, which refuses this deployment's own networks and follows no redirect. Before, the
+            # builder posted to it on the plain client, wherever it resolved.
+            why = _org_endpoint_problem(w["url"])
+            if why:
+                print(f"[setup-build] skipped an organization's connection: its address can't be used ({why})", flush=True)
+                continue
+            w["client"] = _relay_checked_client()
         if w:
             return w
     return None
@@ -21689,7 +24613,8 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
                 print(f"[setup-build] {hid}: a server not copied: {type(err).__name__}", flush=True)
         await _harness_create_as(p, HarnessBody(name=name, base=cfg["base"], default_model=cfg["model"],
                                                 system_prompt=cfg["instructions"], environment=env,
-                                                skills=skills or None, mcp_servers=servers or None), hid=hid)
+                                                skills=skills or None, mcp_servers=servers or None,
+                                                memory="auto", memory_hint=cfg.get("memoryHint") or None), hid=hid)
     if any(x["id"] == setup_compose.MEDIA_ID for x in cfg["plugins"]):
         try:
             await _hosted_media_attach(org, hid, await _harness_in_reach(p, hid), dict(_SETUP_MEDIA_DECL))
@@ -21712,6 +24637,20 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
     # a built-in skill is mounted on every task of a base that takes skills: nothing to attach
     attached.update({x["id"]: "on" for x in cfg["skills"] if x["id"] not in (ctx.get("skills") or {})})
     return {"name": name, "attached": attached}
+
+
+async def _setup_build_memory(p: dict, cfg: dict) -> dict:
+    """The memory the agent a build saves will get, and why: {engine, scope, reason}, chosen the way the save chooses
+    it (memory_choice over the engines connected in the person's workspace and answering, from the same words: its
+    name, instructions, the goal's hint, its servers and skills), so the card says it while the setup is saved. Nothing
+    is made here; the save provisions it (_harness_create_as, memory "auto")."""
+    words = {"name": str(cfg.get("name") or ""), "instructions": str(cfg.get("instructions") or ""),
+             "hint": str(cfg.get("memoryHint") or "")[:1000],
+             "tools": [str(x.get("name") or "") for x in cfg.get("mcpServers") or [] if isinstance(x, dict)],
+             "skills": [str(x.get("name") or "") for x in cfg.get("skills") or [] if isinstance(x, dict)]}
+    running, failing = await _memory_engines_state(str(p["org"]), _memory_ws_of(p))
+    c = memory_choice.choose(running=running, failing=failing, **words)
+    return {"engine": c.engine, "scope": c.scope, "reason": c.reason}
 
 
 def _setup_build_member(p: dict) -> str:
@@ -21749,7 +24688,8 @@ async def setup_build_start(body: SetupBuildBody, request: Request) -> dict:
              "find": lambda q: asyncio.sleep(0, result=[]),
              "conn": lambda: _setup_build_wires(org), "client": _client(),
              "save": lambda cfg, hid: _setup_build_save(p, cfg, hid, ctx),
-             "exists": lambda hid: _setup_build_exists(org, hid)}
+             "exists": lambda hid: _setup_build_exists(org, hid),
+             "propose": lambda cfg: _setup_build_memory(p, cfg)}
     try:
         return await setup_builder.start(org, who, body.key, body.job, body.base, body.model, bases=bases, run_parts=parts)
     except setup_builder.BadKey:
@@ -22144,7 +25084,8 @@ async def list_harnesses_public(request: Request) -> dict:
     # org — narrowed to its workspace when the key is workspace-scoped — exactly like the
     # console, so both surfaces always agree.
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
+    grants = await memory_plane.grant_counts(org)
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r), grants) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     ws = str(p.get("workspace") or "")
     if ws:
@@ -22260,6 +25201,14 @@ async def _cloud_base_refused(base: str) -> str | None:
     return await _internal_target(u.hostname, u.port or 443)
 
 
+class _CloudKeyRefused(HTTPException):
+    """Cloud answered 401 to a destination's key. Said to the console as 400: a 401 from this server
+    means the person's own session ended, and the console signs them out on it, so a pasted key Cloud
+    refused used to sign its operator out of their own console."""
+    def __init__(self, detail: str = "HarnessRouter Cloud refused this key. Check it, or sign in again to get a new one."):
+        super().__init__(400, detail)
+
+
 async def _cloud_me(base_url: str, api_key: str) -> dict:
     """Resolve a key to where an upload lands, as HarnessRouter Cloud's /v1/me names it. Raises
     HTTPException with the hosted side's words. A key Cloud's sign-in minted for the organization's
@@ -22274,7 +25223,7 @@ async def _cloud_me(base_url: str, api_key: str) -> dict:
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"could not reach {base_url}: {str(e)[:120]}")
     if r.status_code == 401:
-        raise HTTPException(401, "the cloud workspace rejected this key")
+        raise _CloudKeyRefused()
     if r.status_code != 200:
         raise HTTPException(502, f"cloud answered {r.status_code}")
     me = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
@@ -22412,8 +25361,26 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
         per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
                      "remote_id": remote_id, "target": _cloud_label(target), "plugins_ok": plugins_ok}
         return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": remote_id}
-    detail = str((j.get("error") or {}).get("message") or j.get("detail") or "") if j else r.text[:160]
-    return {"id": hid, "ok": False, "action": action, "error": f"cloud answered {r.status_code}: {detail}"[:300]}
+    if r.status_code == 401:
+        # the destination's key, refused: said as that, and the destination is marked so the next deploy
+        # asks to sign in again with the reason, instead of failing the same way or pairing in silence
+        return {"id": hid, "ok": False, "action": action, "refused": True,
+                "error": "HarnessRouter Cloud refused the key this instance keeps for that workspace. Sign in again to reconnect it."}
+    return {"id": hid, "ok": False, "action": action, "error": _cloud_refusal(r.status_code, j, r.text)}
+
+
+def _cloud_refusal(status: int, j: dict, text: str) -> str:
+    """Cloud's refusal of a deploy in its own words, naming what it refused. Its errors carry the
+    field they are about (`param`: base, default_model, plugins, or the field a body failed on) and a
+    sentence; a 422 on base or default_model means Cloud does not offer that harness or that model to
+    the workspace, which no retry changes."""
+    err = (j.get("error") or {}) if isinstance(j.get("error"), dict) else {}
+    msg = str(err.get("message") or (j.get("detail") if isinstance(j.get("detail"), str) else "") or "").strip() \
+        if j else str(text or "")[:160]
+    param = str(err.get("param") or "").strip()
+    what = {"base": "the agent harness", "default_model": "the model"}.get(param, param)
+    lead = f"HarnessRouter Cloud did not take {what}" if (status == 422 and what) else f"cloud answered {status}"
+    return f"{lead}: {msg}"[:300] if msg else lead[:300]
 
 
 def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict:
@@ -22443,7 +25410,7 @@ async def cloud_targets_get(request: Request) -> dict:
         except HTTPException as e:
             # A revoked key is a state the operator must see, not an empty label. Anything else
             # (network, hosted hiccup) stays silent and retries on the next listing.
-            if e.status_code == 401 and not t.get("revoked"):
+            if isinstance(e, _CloudKeyRefused) and not t.get("revoked"):
                 t["revoked"] = True
                 changed = True
             continue
@@ -22588,6 +25555,16 @@ async def _cloud_pick_target(tid: str | None) -> dict:
     raise HTTPException(400, "several workspaces are stored; name one")
 
 
+async def _cloud_mark_refused(target: dict) -> None:
+    """A destination whose key Cloud refused on a deploy reads as refused (`revoked`) in the list, so the
+    console says so and asks for a sign-in; a sign-in to the same workspace replaces it whole."""
+    doc = await _cloud_targets()
+    t = doc["targets"].get(_cloud_tkey(target))
+    if t is not None and not t.get("revoked"):
+        t["revoked"] = True
+        await _cloud_targets_save(doc)
+
+
 async def _cloud_remember_last(target: dict) -> None:
     doc = await _cloud_targets()
     if doc.get("last") != _cloud_tkey(target) and _cloud_tkey(target) in doc["targets"]:
@@ -22603,6 +25580,8 @@ async def cloud_upload_batch(body: CloudUploadBody, request: Request) -> dict:
     results = [await _cloud_upload_one(p.get("org", ""), str(h), target, records) for h in body.ids[:200]]
     await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
     await _cloud_remember_last(target)
+    if any(x.get("refused") for x in results):
+        await _cloud_mark_refused(target)
     return {"results": results, "target": _cloud_target_public(target)}
 
 
@@ -22619,6 +25598,9 @@ async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody 
     res = await _cloud_upload_one(p.get("org", ""), hid, target, records)
     await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
     await _cloud_remember_last(target)
+    if res.get("refused"):
+        await _cloud_mark_refused(target)
+        raise _CloudKeyRefused(res.get("error") or "")
     if not res.get("ok"):
         raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
     return {**res, "open_url": _cloud_open_url(target, str(res.get("remote_id") or "")),
@@ -22668,8 +25650,8 @@ async def cloud_upload_status_all(request: Request) -> dict:
 async def get_harness_public(hid: str, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org = _caller["org"]
-    v = await _harness_in_reach(_caller, hid)
-    return _harness_out(await _mcp_migrate(org, hid, v))
+    v = await _mcp_migrate(org, hid, await _harness_in_reach(_caller, hid))
+    return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
 
 
 # ── the API, described ────────────────────────────────────────────────────────────────────────
@@ -22740,9 +25722,14 @@ async def list_bases(request: Request) -> dict:
         cat = _MODEL_CATALOG.get(backend, {})
         # the same view every picker reads (see list_models): catalog, custom endpoints, additions
         view = await _harness_models_view({}, backend, await _servable_models(org, backend))
+        installed = _backend_installed(backend)
         out.append({
             "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
-            "status": b["status"], "systemPrompt": b["system_prompt"],
+            # "not_installed" for a base this instance does not hold, with the reason in words: the
+            # console does not offer it, rather than listing it ready to fail on its first turn
+            "status": b["status"] if installed else "not_installed",
+            **({} if installed else {"statusReason": _not_installed_reason(b["label"], backend)}),
+            "systemPrompt": b["system_prompt"],
             "defaultModel": cat.get("default", ""),
             # `reasoning`: the thinking levels the model has, lowest first; empty where none was
             # measured, and the console offers no level there (runner/reasoning.py has the table).
@@ -22895,7 +25882,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))
@@ -22903,7 +25890,11 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     # AFTER the write: see update_harness.
     await _hosted_scrub_removed(org, hid, _mcp_list(v), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
-    return _harness_out(await _vertex_get(hid) or {"id": hid})
+    # An agent that holds memories keeps the tools to reach them, whatever list of servers a
+    # client saved: its access is its grants, and a harness save is not a revocation.
+    if await memory_plane.granted(org, _agent(hid)):
+        await _memories_ensure(org, hid, await _vertex_get(hid) or v)
+    return _harness_out(await _vertex_get(hid) or {"id": hid}, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/harnesses/{hid}")
@@ -22911,5 +25902,6 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid, deleted_ok=True)
-    await _harness_delete(org, hid, v)
-    return {"id": hid, "deleted": True}
+    return {"id": hid, "deleted": True, **await _harness_delete(org, hid, v, _caller)}
+COLLAB_URL = os.environ.get("COLLAB_URL", "").rstrip("/")
+COLLAB_TOKEN = os.environ.get("COLLAB_TOKEN", "")

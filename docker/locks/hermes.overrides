@@ -1,0 +1,5 @@
+# hermes-agent 0.19.0 pins Pillow==12.2.0 and certifi==2026.5.20. Pillow 13.0.0 fixes memory-corruption
+# and denial-of-service bugs in its image decoders, and hermes decodes workspace images. certifi
+# 2026.10.19 drops the emSign root certificates whose intermediate keys were compromised.
+pillow==13.0.0
+certifi==2026.10.19

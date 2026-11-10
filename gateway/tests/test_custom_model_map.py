@@ -72,6 +72,13 @@ def test_custom_format_metadata_matches_routing_compatibility():
     }
 
 
+def test_custom_responses_connection_can_drive_omp_and_pi():
+    integ = {"provider": "custom", "config": {"api_format": "responses"}}
+    assert gw._integration_serves_backend(integ, "omp")
+    assert gw._integration_serves_backend(integ, "pi")
+    assert not gw._integration_serves_backend(integ, "hermes")
+
+
 def test_uncatalogued_custom_model_is_available_only_on_compatible_bases(monkeypatch):
     integ = {'name': 'proxy', 'provider': 'custom',
              'config': {'api_format': 'openai', 'base_url': 'https://proxy.example/v1'},

@@ -23,7 +23,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | 'roder' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -43,6 +43,8 @@ export interface CustomHarness {
   defaultModel: string;
   systemPrompt: string;
   mcpServers: McpServer[];
+  /** How many memories its agent holds, from its grants. On a read, not on what a save sends. */
+  memories?: { count: number };
   // A skill carries its bundle inline as `files`; bundles over the gateway's inline cap are
   // offloaded server-side and round-trip as {name, enabled, blob}, `blob` is an opaque pointer,
   // resolved back to files via getSkillFiles() when editing. Either shape is a REAL own skill.
@@ -233,6 +235,10 @@ export const OOB: OobHarness[] = [
     models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'step-3.7-flash', 'nemotron-3.5-lightning'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are MiMo Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
+  { id: 'roder', name: 'Roder', version: 'v0.4.8', backend: 'roder', status: 'ready',
+    models: ['gpt-6.1-sol'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
+    systemPrompt: 'You are Roder, an autonomous coding agent. Complete the task in the workspace.',
+    tools: [], skills: [] },
   { id: 'jcode', name: 'jcode', version: 'v0.90.0', backend: 'jcode', status: 'ready',
     // Placeholder only. jcode speaks one OpenAI shape, chat/completions, through the relay, so the
     // list is the other chat-completions bases' and the two Responses-only ids are not on it.
@@ -277,15 +283,17 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
 ];
 
-/** The built-in harnesses a person can pick: the ones the server's bases document lists. None until
+/** The built-in harnesses a person can pick: the ones the server's bases document lists, less any it
+ *  says this instance has not installed (an opt-in base, or one whose install failed). None until
  *  it has been read (useBasesRead says whether it could be). */
 export function offeredOob(bases: Record<string, BaseInfo> | null): OobHarness[] {
-  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id]);
+  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id] && bases[o.id].status !== 'not_installed');
 }
 
 /** A base by its id, or by the backend it runs: the gateway takes either for a setup's base, so a setup made through the
  *  API can carry `claude` where the console names the base `claude-code` (its setups read "claude", with no mark). */
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || OOB.find((o) => o.backend === id) || null;
+
 
 // ── model catalog: the GATEWAY owns it, this file does not ────────────────────────────
 // The `models` / `defaultModel` fields above are the pre-fetch placeholder only (so first paint
@@ -374,7 +382,8 @@ export function modelAvailable(backend: string | null | undefined, id: string): 
 export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
 export interface BuiltinSkill { name: string; title: string; description: string; defaultEnabled: boolean; origin: string }
 export interface BaseInfo {
-  id: string; label: string; backend: string; status: string; systemPrompt: string;
+  /** `not_installed` for a base this instance does not hold, with `statusReason` saying so in words. */
+  id: string; label: string; backend: string; status: string; statusReason?: string; systemPrompt: string;
   defaultModel: string;
   /** `reasoning`: the thinking levels the model has, lowest first; empty or absent where it has
    *  none to offer. The control is drawn from this list and never from one kept here. */
@@ -587,9 +596,14 @@ export async function deleteSession(sid: string): Promise<void> {
   await gw<{ deleted: boolean }>('DELETE', `/v1/sessions/${encodeURIComponent(sid)}`);
 }
 
+/** What deleting a setup did. From 0.40 it says what became of the memory made for its agent: `memory_kept`, why
+ *  ("kept with the agent for 30 days", deleted with it when it is removed for good; or that only whoever manages it
+ *  can delete it). `memory_deleted` (gone with it) is what an earlier candidate said. A service before says neither. */
+export interface SetupDeleted { deleted?: boolean; memory_deleted?: unknown; memory_kept?: unknown }
 /** Delete a setup: it stops at once and is removed for good after 30 days; its tasks stay. */
-export async function deleteCustom(id: string): Promise<void> {
-  await gw<{ deleted: boolean }>('DELETE', `/v1/harnesses/${encodeURIComponent(id)}`);
+export async function deleteCustom(id: string): Promise<SetupDeleted> {
+  const d = await gw<SetupDeleted | null>('DELETE', `/v1/harnesses/${encodeURIComponent(id)}`);
+  return d && typeof d === 'object' ? d : {};
 }
 
 let _pluginSchemas: Promise<string[]> | null = null;
@@ -691,6 +705,7 @@ const AGENTS_MD_BASES = [
   // dcode reads the project's AGENTS.md through find_project_agent_md — but only when the
   // workspace is a git PROJECT, which every session here is.
   'dcode',
+  'roder',
 ];
 export function instructionFileLabel(baseId: string | null | undefined): string {
   const id = baseId || '';
@@ -710,6 +725,8 @@ export interface Plug {
   attention?: string;
 }
 export const PLUGS_ENTRY_ID = 'mcp.plugs';
+/** The server entry that gives an agent its memories: the service's, not one of the setup's own servers. */
+export const MEMORIES_ENTRY_ID = 'mcp.memories';
 
 /** Connect a plugin for the workspace, change its settings, or turn it off. */
 export function setPlug(type: string, body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<Plug> {

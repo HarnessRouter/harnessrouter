@@ -2,9 +2,9 @@ import { brickLayer, cfgOf, LAYER_KEYS, layerOf, SET_KEYS, SET_LAYERS, showRef, 
 import type { CustomHarness } from '@/lib/harness';
 
 describe('the Settings layers', () => {
-  it('lists them in Richard’s order: Instructions, Agent harness, Capabilities, Environment & limits', () => {
-    expect(SET_LAYERS.map(([k]) => k)).toEqual(['instructions', 'harness', 'caps', 'runtime']);
-    expect(SET_LAYERS.map(([, label]) => label)).toEqual(['Instructions', 'Agent harness', 'Capabilities', 'Environment & limits']);
+  it('lists them in Richard’s order, with Memory after Capabilities as the design places it', () => {
+    expect(SET_LAYERS.map(([k]) => k)).toEqual(['instructions', 'harness', 'caps', 'memory', 'runtime']);
+    expect(SET_LAYERS.map(([, label]) => label)).toEqual(['Instructions', 'Agent harness', 'Capabilities', 'Memory', 'Environment & limits']);
   });
 
   it('keeps the model in the Agent harness layer, so its dot and Save cover both', () => {

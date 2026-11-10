@@ -101,7 +101,8 @@ def test_test_resolves_the_key_to_a_label_without_saving_and_shows_no_ids(api, c
 
 
 def test_a_bad_key_and_a_key_without_a_workspace_are_refused(api, cloud):
-    assert api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-wrong", "base_url": CLOUD}).status_code == 401
+    # Cloud refusing a key is 400 here: a 401 from this server signs the person out of the console
+    assert api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-wrong", "base_url": CLOUD}).status_code == 400
     r = api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-nows", "base_url": CLOUD})
     assert r.status_code == 400 and "workspace" in r.text
 

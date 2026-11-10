@@ -28,6 +28,9 @@ def test_every_provider_we_route_to_names_its_own_id():
 def test_it_leads_the_gpt_6_family_wherever_that_family_is_offered():
     for base, cat in gw._MODEL_CATALOG.items():
         models = cat["models"]
+        if base in gw._STILL_QUALIFYING:
+            # offers only what it has run so far (roder: gpt-6.1-sol alone), not the family yet
+            continue
         if base in REFUSED_EVERYWHERE or M in gw._NOT_OFFERED.get(base, frozenset()):
             # a measured exception (opensquilla, 2026-10-12: its deck never reaches the person)
             assert M not in models, base
@@ -47,3 +50,12 @@ def test_it_is_not_responses_only():
 
 def test_it_sees_images():
     assert M in gw._VISION_CAPABLE
+
+
+def test_the_qualifying_exception_names_real_bases_that_offer_it_alone():
+    """gw._STILL_QUALIFYING is the one exception to the family rules here and in
+    test_default_models.py. Every base in it is in the catalog, and none offers the family it is
+    excused from: once one does, it is measured and leaves the set."""
+    assert gw._STILL_QUALIFYING <= set(gw._MODEL_CATALOG)
+    for base in gw._STILL_QUALIFYING:
+        assert "gpt-6-sol" not in gw._MODEL_CATALOG[base]["models"], base

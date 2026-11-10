@@ -1,6 +1,6 @@
-/* HarnessRouter app chrome — built on AgentStudio tokens (deep iris --brand #1a5cf5). */
+/* HarnessRouter app chrome, built on the console tokens (src/studio/styles/tokens.css, --brand #1a5cf5). */
 
-/* UI Core token mapping — the shared conversational surface (frontend-ui-core/styles/chat.css,
+/* UI Core token mapping — the shared conversational surface (reifyui/styles/chat.css,
    the wbx-* chat rules extracted from this file) reads --uic-*; map them onto HR's palette so
    the extracted surface stays pixel-identical. Unmapped tokens (mono stack, code-block, badge
    palettes, sizes) keep the package fallbacks — those fallbacks ARE the HR values. */
@@ -229,7 +229,7 @@ a { color: inherit; text-decoration: none; }
 .wbx-conv-title { flex: 1; text-align: center; font-size: 14px; font-weight: 700; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wbx-conv-msgs { flex: 1; min-height: 0; overflow: auto; padding: 24px 0; display: flex; flex-direction: column; gap: 22px; }
-/* .wbx-turn / .wbx-bubble-user / .wbx-md live in UI Core (frontend-ui-core/styles/chat.css). */
+/* .wbx-turn / .wbx-bubble-user / .wbx-md live in UI Core (reifyui/styles/chat.css). */
 .wbx-av-asst { flex-shrink: 0; width: 30px; height: 30px; border-radius: 9px; background: var(--brand);
   color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
 .wbx-asst { min-width: 0; flex: 1; max-width: calc(100% - 90px); display: flex; flex-direction: column; gap: 8px; }

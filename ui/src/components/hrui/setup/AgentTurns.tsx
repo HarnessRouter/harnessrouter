@@ -7,11 +7,12 @@
 // record shows no durations rather than invented ones. A surface can open some calls in a place of
 // its own (TurnSteps: the task page opens a browser step in the browser card beside the conversation,
 // the way a file card opens its file); every other call unfolds to its input and output.
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, useMemo, type ReactNode } from 'react';
 import { AgentTurnView, turnFromMessage, motionFor, type OpenStep, type Turn, type TurnUser } from 'reifyui/agent-chat';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import type { AsstMsg, Msg, UserMsg } from '@/lib/conversation';
 import { limitStopWhy, SETUP_LIMITS } from '@/lib/limit-copy';
+import { readableTurn } from './memorySteps';
 // reifyui/styles/agent-chat.css, scoped under #hrui so the redesign's reset does not undo it
 import './agent-chat.scoped.css';
 import './agent-turns.css';
@@ -41,7 +42,8 @@ export function viewTurn(asst: AsstMsg | null, user: TurnUser | null): Turn {
   // A turn that ended on a question did what it should: nothing stopped it. Its form says what's next.
   const asked = asst?.status === 'incomplete' && asst.incompleteReason === 'input_required';
   const shown = asked && asst ? { ...asst, status: 'done' as const } : asst;
-  const t = shown ? turnFromMessage(shown, shown.clock || null, user) : turnFromMessage({ status: 'done', blocks: [] }, null, user);
+  // a memory search reads as what it looked for and what it found, not as the JSON the agent was given (memorySteps.ts)
+  const t = readableTurn(shown ? turnFromMessage(shown, shown.clock || null, user) : turnFromMessage({ status: 'done', blocks: [] }, null, user));
   if (t.status === 'running' || !t.items.some((x) => x.kind === 'thinking' && x.open)) return t;
   return { ...t, items: t.items.map((x) => (x.kind === 'thinking' && x.open ? { ...x, open: false } : x)) };
 }
@@ -71,7 +73,7 @@ export function pairTurns(msgs: Msg[]): Pair[] {
   return out;
 }
 
-export function AgentTurns({ msgs, base, md, files, meta, actions, userLabel }: {
+export function AgentTurns({ msgs, base, md, files, meta, actions, userLabel, after }: {
   msgs: Msg[];
   /** the setup's base harness id (its mark and motion) */
   base: string | null | undefined;
@@ -85,6 +87,8 @@ export function AgentTurns({ msgs, base, md, files, meta, actions, userLabel }: 
   actions?: (turn: number, m: AsstMsg) => ReactNode;
   /** a caption inside the person's bubble: the same for every turn, or each turn's own */
   userLabel?: ReactNode | ((turn: number) => ReactNode);
+  /** a line of the surface's own after a turn (where a branched task's history ends) */
+  after?: (turn: number) => ReactNode;
 }) {
   const { mark, motion } = useMemo(() => harnessMark(base), [base]);
   const stepsOf = useContext(TurnSteps);
@@ -96,13 +100,16 @@ export function AgentTurns({ msgs, base, md, files, meta, actions, userLabel }: 
         const t = viewTurn(asst, u);
         const steps = asst && stepsOf ? stepsOf(turn) : null;
         return (
-          <AgentTurnView key={turn} turn={t} renderMarkdown={md} mark={mark} motion={motion}
-            openStep={steps?.openStep} activeStep={steps?.activeStep ?? null}
-            userExtra={typeof userLabel === 'function' ? userLabel(turn) : userLabel}
-            meta={asst && meta ? meta(turn, asst) : undefined}
-            renderFiles={asst && files ? () => files(asst) : undefined}
-            actions={asst && actions ? actions(turn, asst) : undefined}
-            describeIncomplete={(i) => incompleteWhy(i.reason, i.detail)} />
+          <Fragment key={turn}>
+            <AgentTurnView turn={t} renderMarkdown={md} mark={mark} motion={motion}
+              openStep={steps?.openStep} activeStep={steps?.activeStep ?? null}
+              userExtra={typeof userLabel === 'function' ? userLabel(turn) : userLabel}
+              meta={asst && meta ? meta(turn, asst) : undefined}
+              renderFiles={asst && files ? () => files(asst) : undefined}
+              actions={asst && actions ? actions(turn, asst) : undefined}
+              describeIncomplete={(i) => incompleteWhy(i.reason, i.detail)} />
+            {after?.(turn)}
+          </Fragment>
         );
       })}
     </>

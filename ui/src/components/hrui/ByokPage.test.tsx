@@ -7,6 +7,7 @@
 // included; a removed key leaves no route behind in either map. Media lists are reordered whole. A
 // HarnessRouter API key comes from the hand-off and is saved once it lands.
 import { act } from 'react';
+import { HANDOFF_POLL_MS } from './ByokPage';
 import { createRoot, type Root } from 'react-dom/client';
 
 jest.mock('next/link', () => ({ __esModule: true, default: ({ children, href, className }: { children: React.ReactNode; href: string; className?: string }) => <a className={className} href={href}>{children}</a> }));
@@ -156,6 +157,17 @@ it('editing a key leaves a blank secret as it was (the sentinel goes back)', asy
   expect(put.integrations[0].config.api_key).toBe(SECRET);
 });
 
+it('editing a key keeps the request headers it was saved with (each value goes back as the sentinel)', async () => {
+  const config = { api_key: SECRET, headers: { 'X-Project': SECRET } } as unknown as Record<string, string>;
+  doc.integrations = [{ name: 'main', provider: 'anthropic', config, models: CATALOG[1].models }];
+  doc.model_map = { 'claude-sonnet': 'main' };
+  await open();
+  await click('Edit', rowOf('anthropic'));
+  await click('Save', rowOf('anthropic'));
+  const put = lastPut() as { integrations: { config: Record<string, unknown> }[] };
+  expect(put.integrations[0].config).toEqual({ api_key: SECRET, headers: { 'X-Project': SECRET } });
+});
+
 it('which key serves a model, chat and image apart, Off included', async () => {
   doc.integrations = [
     { name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: CATALOG[1].models },
@@ -206,4 +218,38 @@ it('omits the removed hosted provider and its key hand-off', async () => {
   expect(document.querySelector('[data-provider="harnessrouter"]')).toBeNull();
   expect(document.getElementById('pvHosted')).toBeNull();
   expect(text()).not.toContain('获取密钥');
+});
+
+it('a key HarnessRouter Cloud refused says so on its own line, and Reconnect puts the new key in that connection', async () => {
+  // Cloud refused the stored key (the server read it and was answered 401). It used to read "serves no
+  // model now" with Get a key beside it, and the new key went in as a second connection behind the
+  // refused one, which stayed the one asked: the person paired again and again (hosted, 2026-11-08).
+  jest.useFakeTimers();
+  const opened = jest.fn();
+  Object.defineProperty(window, 'open', { value: opened, configurable: true });
+  doc.integrations = [{ name: 'HarnessRouter API', provider: 'harnessrouter', models: [], key_state: 'refused',
+    config: { api_key: SECRET, base_url: 'https://hosted.example/v1', models_url: 'https://hosted.example/v1/models' } }];
+  let ready = false;
+  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+    if (url.startsWith('/api/harness/v1/harnesses')) return ok({ harnesses: [] });
+    if (url === '/api/harness/v1/admin/connect') return ok({ code: 'c2', url: 'https://hosted.example/connect/c2' });
+    if (url === '/api/harness/v1/admin/connect/c2') return ready ? ok({ status: 'ready', api_key: 'hr-key-2', endpoint: 'https://hosted.example/v1', name: 'HarnessRouter API' }) : ok({}, 202);
+    if (url === '/api/harness/v1/admin/integrations' && init?.method === 'PUT') { puts.push(JSON.parse(init.body || '{}')); return ok({}); }
+    return ok(doc);
+  });
+  await open();
+  const line = rowOf('harnessrouter').querySelector('[data-key-state="refused"]') as HTMLElement;
+  expect(line).not.toBeNull();
+  expect(line.textContent).toContain('HarnessRouter Cloud refused this key. Reconnect to get a new one.');
+  expect(line.textContent).not.toContain('Connected');
+  await click('Reconnect', line);
+  expect(opened).toHaveBeenCalledWith('https://hosted.example/connect/c2', '_blank', 'noopener');
+  ready = true;
+  await act(async () => { await jest.advanceTimersByTimeAsync(HANDOFF_POLL_MS); });
+  const put = lastPut() as { integrations: { name: string; provider: string; config: Record<string, string> }[] };
+  // one connection, the same name, the new key: never a second connection beside the refused one
+  expect(put.integrations).toHaveLength(1);
+  expect(put.integrations[0]).toMatchObject({ name: 'HarnessRouter API', provider: 'harnessrouter',
+    config: { api_key: 'hr-key-2', base_url: 'https://hosted.example/v1', models_url: 'https://hosted.example/v1/models' } });
+  expect(toast).toHaveBeenCalledWith('HarnessRouter API is reconnected to HarnessRouter.');
 });

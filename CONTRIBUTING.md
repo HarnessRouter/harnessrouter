@@ -94,7 +94,18 @@ python -m pytest gateway/tests
 ```
 
 For container-level changes, build the image and walk the documented self-hosted flow before
-requesting review.
+requesting review. A change to what the image installs at first start also runs the pin check:
+
+```bash
+python3 scripts/test-check-install-pins.py && python3 scripts/check-install-pins.py
+```
+
+A change to `deploy/memories` runs its check, then `deploy/memories/up.sh` against a running
+container, as the Memories section of the self-hosting guide does:
+
+```bash
+python3 scripts/test-memories-deploy.py
+```
 
 For the optional open-source audit environment and enrollment process, see
 [the scanner preparation guide](.oss-scanner/README.md). These smoke tests do not

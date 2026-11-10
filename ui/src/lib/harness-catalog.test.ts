@@ -63,6 +63,15 @@ test('no harness is offered until the server lists it, and only the ones it list
   expect(one.map((o) => o.id)).toEqual(['hermes']);
 });
 
+test('a base the server says this instance has not installed is not offered', () => {
+  const h = fresh();
+  const base = (id: string, status?: string) => ({ id, label: id, backend: id, models: [], ...(status ? { status } : {}) }) as unknown as import('./harness').BaseInfo;
+  const offered = h.offeredOob({ hermes: base('hermes', 'ready'), roder: base('roder', 'not_installed') });
+  expect(offered.map((o) => o.id)).toEqual(['hermes']);
+  // the same base, installed, is offered
+  expect(h.offeredOob({ roder: base('roder', 'ready') }).map((o) => o.id)).toEqual(['roder']);
+});
+
 test('a setup saved with no model of its own keeps none, whatever the catalog says', async () => {
   const h = fresh();
   hf.mockResolvedValueOnce(json(MODELS));

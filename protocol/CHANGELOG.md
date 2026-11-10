@@ -2,6 +2,32 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.19.post6 (2026-11-04)
+
+B-01…B-06 check the addition below on a server that reports `session_branching`: the first
+response's file bytes after three turns, absence of later files, original-session isolation,
+inspection provenance, the `branch_unavailable` refusal for a running response, the `400` for a
+branch with no previous response (and no task run in the session it named), and a continuation in a
+branch that names no origin. Missing model-created fixtures remain explicit skips; refusing a valid
+fresh fixture's branch fails a server that reports the capability. A server without the capability
+skips all six, so no verdict it had changes.
+
+## 2026-10-19, addition: explicit session branching (capability `session_branching`, #477)
+
+`branch: true` beside `previous_response_id` creates a new session from that response's
+committed user files and transcript, leaving the original untouched. Responses identify the
+origin with `metadata.branched_from`; session inspection identifies the source session too.
+Only the response that branched carries `branched_from`; the session's detail keeps the origin,
+with the `turn` it started from. Missing or unreachable checkpoints return `409 branch_unavailable`.
+The request is opt-in; a non-boolean `branch`, `true` without a previous response, and `branch`
+with an `input_response` are `400 invalid_input`, never run some other way. Under
+[VERSIONING](VERSIONING.md) a new capability and an optional request field fit within a version:
+branching is optional at every class, a server without the capability may ignore `branch` as every
+server did before, and a client reads the capability before sending it. Earlier versions served
+from the same implementation share the additive behavior. The unprefixed code is part of this
+accepted UEP's canonical specification, following the existing `input_not_pending` precedent,
+rather than an independently invented vendor error.
+
 ## Conformance suite 2026.10.19.post5 (2026-11-03)
 
 T-13 and T-14 check the addition below on a server that reports `input_requests`. T-13 asks the

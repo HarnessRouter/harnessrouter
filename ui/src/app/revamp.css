@@ -1354,6 +1354,9 @@ main .hr-wrap { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
 .share-asst pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: #f5f5f4; font-size: 12px; }
 .share-asst code { background: #f2f2f5; border-radius: 4px; padding: 1px 4px; font-size: 12px; }
 .share-asst pre code { background: transparent; padding: 0; }
+/* a reply's links read as links, as they do in the console's own replies (a file of the task opens from one) */
+.share-asst a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.share-asst a:hover { color: var(--accent-hover); }
 .share-page { padding-bottom: 80px; }
 
 /* Share page meta badges — same look as the trace pane's labels (.tr-tag) */

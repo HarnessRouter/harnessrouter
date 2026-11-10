@@ -74,6 +74,9 @@ const nextConfig: NextConfig = {
     ];
   },
   webpack: (config) => {
+    // One copy of the document library, whichever way a package imports it: two copies make its own `instanceof`
+    // checks fail (it warns when it happens), which breaks writing a change into a live document.
+    config.resolve.alias = { ...config.resolve.alias, yjs: path.resolve(__dirname, "node_modules/yjs/dist/yjs.mjs") };
     // NOTE: do NOT alias react/react-dom here — Next.js installs its own layer-aware react
     // aliases (RSC vs client) that must also apply to the out-of-root UI Core source; overriding
     // them breaks server prerender (`null.useContext`).

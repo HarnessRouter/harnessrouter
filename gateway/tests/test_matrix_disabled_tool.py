@@ -106,7 +106,7 @@ def test_the_tools_this_batchs_bases_run_the_fixture_WITH_are_never_withheld():
     needs = {
         "mimo": ("bash", "edit"),                     # opencode's names, kept in the fork
         "jcode": ("bash", "write"),
-        "opensquilla": ("exec", "write_file"),
+        "opensquilla": ("exec_command", "write_file"),
         "nanobot": ("exec", "write_file"),
         # vibe: measured off a real turn's own request, where these are the names it declares. Its
         # two DISPATCHERS matter here too — `run_typescript` runs a script with the tool registry

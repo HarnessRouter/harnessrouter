@@ -82,6 +82,9 @@ def test_every_internal_route_and_the_three_writers_go_through_the_one_guard():
 
 def test_the_console_proxy_does_not_forward_internal_routes_outside_a_self_hosted_box():
     route = (Path(__file__).resolve().parents[2] / "ui" / "src" / "app" / "api" / "harness" / "[...path]" / "route.ts").read_text()
-    guard = route.index("if (!SELF_HOSTED && (path || [])[0] === 'internal')")
+    # the first segment as the gateway will route it, after a segment it could read as another path
+    # ('..%2finternal%2fx', '%2e%2e') has been refused in both editions (lib/relay-path)
+    guard = route.index("if (!segs.length || segs.some(oddSegment) || (!SELF_HOSTED && gatewayFirstSegment(segs) === 'internal'))")
     assert guard < route.index("headers['x-harness-internal'] = INTERNAL_KEY")
+    assert route.index("const target = ") > guard                     # nothing is built, let alone fetched, before it
     assert "if (lk === 'x-harness-internal') return;" in route          # and a browser's own copy of the header is dropped

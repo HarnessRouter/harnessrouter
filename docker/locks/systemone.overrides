@@ -1,0 +1,5 @@
+# browser-use 0.13.14 (the [browser] extra) pins mcp==2.1.1 and anyio==4.12.1. mcp 2.2.0 fixes the SDK's
+# redirect, session and token-audience bugs, and is the version aider's bridge already runs. anyio
+# 4.14.2 fixes TLS host-name encoding and a process-pool hang.
+mcp==2.2.0
+anyio==4.14.2

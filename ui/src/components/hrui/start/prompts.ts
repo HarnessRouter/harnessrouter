@@ -98,7 +98,11 @@ export function setupPrompt(): string {
 }
 
 /** What a prompt needs to know about the setup it is for. */
-export interface SetupRef { id: string; name: string; harness: string; model: string; instr: string }
+export interface SetupRef {
+  id: string; name: string; harness: string; model: string; instr: string;
+  /** it remembers each of the app's users apart (its memory is kept per person), so every task names its user */
+  perUser?: boolean;
+}
 
 /** The setup, as every block names it. A setup with no model of its own says nothing about one
  *  rather than guess. */
@@ -208,12 +212,20 @@ export function promptText(a: SetupRef): string {
     '1. ' + GUIDE_STEP + '\n' +
     '2. Find my app. ' + NEW_OR_EXISTING + ' If my backend already has a HarnessRouter client, reuse it for this feature.\n' +
     '3. ' + KEY_STEP + '\n' +
-    '4. Call this setup from my backend as How it connects says below.\n' +
+    '4. Call this setup from my backend as How it connects says below' + (a.perUser ? ', with my user’s id on every request as How it remembers says' : '') + '.\n' +
     '5. Add an input, a submit button, progress, error handling and a result view with its files.\n' +
     '6. ' + VERIFY + '\n\n' +
     howItConnects(a.id) + '\n\n' +
+    (a.perUser ? HOW_IT_REMEMBERS + '\n\n' : '') +
     INSTR_RULE;
 }
+
+/** For a setup that remembers each person apart (its memory's scope is per person): the end user of a task is the
+ *  Responses API's `user`, and a task that names nobody runs with its memory off (gateway _task_person: an API key's
+ *  own identity is never taken, since one key fronts many people). */
+export const HOW_IT_REMEMBERS = 'How it remembers:\n' +
+  'This setup remembers each of my users separately. On every request, my backend sets user to my signed-in user’s own id from my app’s own authentication: the same id every time for the same person, never a value the browser sends.\n' +
+  'A task sent without user runs with its memory off: it neither recalls nor keeps anything about anyone.';
 
 /** The coding agents a prompt is pasted into, named with their marks beside every Copy prompt. No
  *  sheet opens one with the prompt (Richard, 10-18): every sheet copies, the same way. */

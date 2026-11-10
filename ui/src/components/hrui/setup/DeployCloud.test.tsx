@@ -144,4 +144,50 @@ describe('Deploy to Cloud', () => {
     expect(label()).toBe('Deploy to Cloud');
     open.mockRestore();
   });
+
+  test('the kept workspaces could not be read: the click opens no sign-in, says why, and reads them again', async () => {
+    // a failed read used to read as "none kept", and the click started a new pairing in silence
+    lib.statusOne.mockResolvedValue({ uploaded: false });
+    lib.listTargets.mockRejectedValueOnce(new Error('503')).mockResolvedValue({ targets: [TARGET], last: 't1' });
+    const open = jest.spyOn(window, 'open').mockReturnValue(null);
+    await show();
+    await act(async () => { btn().click(); });
+    await flush();
+    expect(open).not.toHaveBeenCalled();
+    expect(lib.startDeploySignIn).not.toHaveBeenCalled();
+    expect(lib.uploadOne).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith('Your HarnessRouter Cloud workspaces could not be read just now, so nothing was deployed. Try again.');
+    expect(lib.listTargets).toHaveBeenCalledTimes(2);
+    open.mockRestore();
+  });
+
+  test('every kept key was refused by Cloud: the button says Reconnect to Cloud and why, and only then signs in', async () => {
+    lib.statusOne.mockResolvedValue({ uploaded: true, changed: false });
+    lib.listTargets.mockResolvedValue({ targets: [{ ...TARGET, revoked: true }], last: 't1' });
+    lib.startDeploySignIn.mockResolvedValue({ code: 'c1', url: 'https://app.harnessrouter.ai/get-key?code=c1' });
+    const tab = { location: { href: '' }, opener: {} as unknown, close: jest.fn() };
+    const open = jest.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+    await show();
+    expect(label()).toBe('Reconnect to Cloud');
+    expect(btn().title).toBe('HarnessRouter Cloud refused the key this instance keeps. Sign in again to reconnect, then Weekly feedback summary deploys.');
+    expect(btn().getAttribute('aria-haspopup')).toBeNull();     // no In Cloud menu on a key that cannot deploy
+    await act(async () => { btn().click(); });
+    await flush();
+    expect(lib.startDeploySignIn).toHaveBeenCalled();
+    expect(tab.location.href).toBe('https://app.harnessrouter.ai/get-key?code=c1');
+    open.mockRestore();
+  });
+
+  test('a deploy Cloud refuses the key on reads the workspaces again, so the button turns to Reconnect to Cloud', async () => {
+    lib.statusOne.mockResolvedValue({ uploaded: false });
+    lib.listTargets.mockResolvedValueOnce({ targets: [TARGET], last: 't1' })
+      .mockResolvedValue({ targets: [{ ...TARGET, revoked: true }], last: 't1' });
+    lib.uploadOne.mockRejectedValue(new Error('HarnessRouter Cloud refused the key this instance keeps for that workspace. Sign in again to reconnect it.'));
+    await show();
+    expect(label()).toBe('Deploy to Cloud');
+    await act(async () => { btn().click(); });
+    await flush();
+    expect(toast).toHaveBeenCalledWith('HarnessRouter Cloud refused the key this instance keeps for that workspace. Sign in again to reconnect it.');
+    expect(label()).toBe('Reconnect to Cloud');
+  });
 });

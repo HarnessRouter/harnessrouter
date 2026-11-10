@@ -13,8 +13,8 @@ Two implementations of each:
                            VG_GATEWAY_URL unset). Point POOL_MGMT_ENDPOINT at a single runner
                            process (the pool is only an identifier-routing proxy in front of
                            runner replicas — the routes are identical).
-  vg (backing_vg.py)     — the production AgentStudio infra: vg-gateway (Cosmos graph + Azure
-                           blob) and the vault service. Verbatim the code that always ran here.
+  vg (backing_vg.py)     — a deployment's remote graph, blob and secret services. Its client
+                           module is not part of this repository.
 
 Selection is one env var: HR_BACKING=vg|local; unset = vg when VG_GATEWAY_URL is set, local
 otherwise. The interface is deliberately SEMANTIC (get/upsert/find/add_edge), not query-shaped:

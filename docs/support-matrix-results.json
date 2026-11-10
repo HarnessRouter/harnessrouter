@@ -6920,9 +6920,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 171.22,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,
@@ -7012,9 +7012,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 175.73,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,
@@ -7105,9 +7105,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 174.64,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,
@@ -7199,9 +7199,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 174.74,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,
@@ -7292,9 +7292,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 177.79,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,
@@ -7385,9 +7385,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 174.31,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,
@@ -7478,9 +7478,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 174.67,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,
@@ -7571,9 +7571,9 @@
     "status": "failed",
     "pill": "failed",
     "s": 177.92,
-    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
+    "tail": "Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses) Error: [{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}] \u2715 Failed. See the output above for the reason",
     "turn_files": [],
-    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://agentstudio-oai-e2.openai.azure.com/responses)\"}]"
+    "why": "[{\"connection\": \"integration:Azure OpenAI E2\", \"status\": \"failed\", \"error\": \"Reconnecting... 1/5 (unexpected status 404 Not Found: Resource not found, url: https://<resource>.openai.azure.com/responses)\"}]"
    },
    "followup": {
     "ok": null,

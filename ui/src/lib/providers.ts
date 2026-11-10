@@ -32,6 +32,7 @@ export const providerById = (id: string): Provider | undefined => PROVIDERS.find
 
 /** One of this instance's keys: the name it was saved under and the provider it is at. */
 export interface Connection { name: string; provider: string }
+interface ConnectionRow extends Connection { key_state?: string }
 
 export interface ModelProviders {
   /** The key that serves this model, or null: none of this instance's keys serves it, or (while
@@ -39,6 +40,9 @@ export interface ModelProviders {
   connectionFor: (model: string) => Connection | null;
   /** At least one key has been added. */
   hasConnections: boolean;
+  /** The keys whose provider refused them the last time this instance asked (a HarnessRouter API key
+   *  Cloud answered 401): a surface that would ask for a key says this instead. Absent until read. */
+  refused?: Connection[];
   /** 'loading' until the keys are read, 'failed' when they could not be (after a few tries). Until
    *  'ready' nothing may be said about what a model runs on: no badge, and no line that tells someone
    *  who has a key to add one. */
@@ -56,12 +60,13 @@ const RETRY_MS = 800;
 async function readConnections(): Promise<ModelProviders> {
   const r = await harnessFetch('/api/harness/v1/admin/integrations', { headers: authHeaders() });
   if (!r.ok) throw new Error(String(r.status));
-  const doc = await r.json() as { integrations?: Connection[]; model_map?: Record<string, string> } | null;
+  const doc = await r.json() as { integrations?: ConnectionRow[]; model_map?: Record<string, string> } | null;
   if (!doc || !Array.isArray(doc.integrations)) throw new Error('unreadable document');
   // model_map is the effective routing: canonical model -> the name of the key serving it
   const byName = new Map(doc.integrations.map((i) => [i.name, { name: i.name, provider: i.provider }]));
   const map = doc.model_map || {};
-  return { connectionFor: (model) => byName.get(map[model] ?? '') ?? null, hasConnections: byName.size > 0, state: 'ready' };
+  const refused = doc.integrations.filter((i) => i.key_state === 'refused').map((i) => ({ name: i.name, provider: i.provider }));
+  return { connectionFor: (model) => byName.get(map[model] ?? '') ?? null, hasConnections: byName.size > 0, refused, state: 'ready' };
 }
 
 /** Which of this instance's keys serves each model, for a menu that lists models. The document is

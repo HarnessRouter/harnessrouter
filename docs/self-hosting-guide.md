@@ -10,6 +10,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [What an agent can read](#what-an-agent-can-read)
 - [Starter kits](#starter-kits)
 - [Plugins](#plugins)
+- [Memories](#memories)
 - [Environments](#environments)
 - [What it is](#what-it-is)
 - [Why self-host](#why-self-host)
@@ -98,6 +99,15 @@ What that buys you, inside one container serving many sessions:
 - A file an agent saves to the wrong place fails at the write, while the model is still there to
   correct itself, instead of silently disappearing outside the collected workspace.
 - An agent process carries none of the product's secrets in its environment.
+
+The agent CLIs are installed the same way. On the first start, root downloads each one and checks
+it against a version and a digest written into the image. Anything that runs a downloaded package's
+own code runs as a separate user for that agent alone: npm or pip filling its folder, an install
+script, the checks that it works. When the install finishes, nothing of that user is left running,
+and the folder belongs to root again. One step still runs as root: the system libraries for the
+System One agent's browser, which Playwright installs with apt. An install can reach the network,
+as it must to download, so on a cloud VM block the metadata address as
+[Running on a cloud VM](#running-on-a-cloud-vm) shows; that covers the agents too.
 
 No extra privilege is granted to get there: no `--privileged`, no `--cap-add`, no custom seccomp
 profile. Docker's default capability set already includes what a root process needs to switch to
@@ -273,7 +283,7 @@ integration there is nothing to set.
 <summary>Your own endpoint: a proxy or a gateway that names its models its own way</summary>
 
 Pick the **Custom** provider. It asks for the API format the endpoint speaks (OpenAI Chat
-Completions, OpenAI Responses for Codex, or Anthropic Messages), the endpoint URL, the key, and
+Completions, OpenAI Responses, or Anthropic Messages), the endpoint URL, the key, and
 the **models** it serves. In **Model**, type any id, including one absent from the suggested
 catalog. Each row pairs that id, which a harness picks, with the name this endpoint wants on the wire. That
 name is an arbitrary string per row and is sent verbatim: a bare vendor id, a deployment alias, a
@@ -282,13 +292,28 @@ name a proxy expects is a fact about that proxy and nothing else. If only **Name
 is filled in, the console also uses it as the model id when saving; completely empty rows are skipped.
 
 The form lists the compatible harness bases below the model rows for the selected API format.
-Choose one of those bases to use the model. If another connection serves the same id, select
-this connection under **Model routing**. Model ids are entered manually; the form does not fetch
-the endpoint's model list.
+Choose one of those bases to use the model. Pi and Oh My Pi take all three formats and call the API
+the connection declares, whatever the model id: on a Responses connection they post to
+`<endpoint>/responses`. That is the format to pick for a model the endpoint refuses on Chat
+Completions when a request carries both tools and a reasoning effort. If another connection serves
+the same id, select this connection under **Model routing**. Model ids are entered manually; the
+form does not fetch the endpoint's model list.
 
 The mapping is a property of the connection, not of a harness: a harness picks a model by its id,
 the connection decides how that id is written for its endpoint. Two harnesses that need different
 vocabularies on one endpoint are two connections to it.
+
+**Use Full URL.** When the endpoint URL is the complete request URL (a gateway route such as
+`https://llm.internal/teams/a/invoke`), set **Use Full URL** to **Use as it is** (`"full_url": "1"`
+in the integrations document). Every model call for the connection's API format then goes to that
+URL exactly, with nothing appended, whichever harness makes it. Any other call a harness makes on
+the side (a model list, a token count, a conversation compaction) has no address on such a
+connection and is answered `404` without being sent. Like a connection with request headers, it goes
+through the gateway even under `HR_SANDBOX_TRUST=owner`, so its key is never handed to the agent.
+
+**An Anthropic Messages endpoint.** A custom connection in the Anthropic Messages format is sent its
+key in the `x-api-key` header, the one Anthropic's API reads, and in no other header. It goes through
+the gateway even under `HR_SANDBOX_TRUST=owner`, so its key is never handed to the agent either.
 
 **Disabled built-in tools.** Some endpoints refuse an agent's built-in tools per model (a proxy
 that answers `400 The following tool is not allowed for model 'gpt-5.5': web_search` to Codex).
@@ -337,6 +362,35 @@ keys redacted. Rows are matched by `name`, so a `PUT` with an existing name repl
 the product's own table for that vendor, and a `models` row there only changes the wire id of a
 model that table already lists. `model_map` routes a model id to the integration that serves it;
 a model with no route goes to the first integration that can serve it.
+
+**Request headers.** A gateway in front of the provider often wants a header beside the key:
+Cloudflare AI Gateway's `cf-aig-authorization`, Helicone's `Helicone-Auth`, Portkey's `x-portkey-*`,
+OpenRouter's `HTTP-Referer` and `X-Title`, or an internal gateway's project header. Put them in the
+row's `config.headers` (or `headers` on a connection set from the environment or with
+`PUT /v1/orgs/{org}/connections/{name}`):
+
+```json
+{"name": "cf-gateway", "provider": "custom",
+ "config": {"api_format": "openai", "base_url": "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/openai",
+            "api_key": "…", "headers": {"cf-aig-authorization": "Bearer …", "X-Project": "evals"}},
+ "models": [{"canonical": "gpt-5.5", "provider_id": "gpt-5.5"}]}
+```
+
+The gateway adds them to every model call it forwards on that connection, after the key, and the
+setup builder sends them too. They are never handed to the agent: a connection with headers goes
+through the gateway even under `HR_SANDBOX_TRUST=owner`, and a backend that only speaks its
+provider's native API (and so is not brokered) is refused on such a connection rather than run
+without them. A value is treated like the key: `GET` shows each name with its value redacted, a
+save that sends the redacted value back keeps the stored one, and a save that changes the endpoint
+or the provider asks for the values again. A header the gateway sets itself (`authorization`,
+`x-api-key`, `api-key`, `x-goog-api-key`, `host`, `content-type`, `content-length`, `connection`,
+`traceparent`, the relay's own names and the like), or that would speak for a client or a hop (`cookie`,
+`via`, `forwarded`, `proxy-*`, `x-forwarded-*`, `cf-connecting-ip` and Cloudflare's other `cf-*` markers),
+or AWS request signing (`x-amz-*`), cannot be set on a connection; names are compared in any case.
+Cloudflare AI Gateway's `cf-aig-*` and an Access service token's `cf-access-client-id` and
+`cf-access-client-secret` are yours to set. A value may not
+contain a line break, and a connection takes at most 20 headers, 8 KB together. Bedrock and Vertex
+sign their own requests, so their connections refuse headers when you save.
 
 </details>
 
@@ -490,7 +544,7 @@ the instance, and are then removed.
 | A file or folder in a task's workspace (`DELETE /v1/sessions/{session_id}/files/{path}`) | Removed at once from the workspace and from its checkpoint, so no later turn sees it, together with the copy an app saved there. A copy that a turn handed back as one of its outputs stays readable from that turn's response until the task is deleted. |
 | An API key | Removed at once. It stops working immediately and leaves the list of keys. |
 | A credential | Removed at once: a plugin's stored secrets when the plugin is removed, a database connection when it is removed from a harness or its harness is deleted, a stored tool token deleted with `DELETE /v1/mcp-secrets/{ref}`. |
-| A harness | Kept 30 days, then removed with its skill bundles and plugin packages. A restored harness comes back without its credentials, since those went at once. The tasks and responses that used it are kept. |
+| A harness | Kept 30 days, then removed with its skill bundles and plugin packages, and with the memory made for it and each person's memory, unless another agent uses that memory ([Memories](#what-agents-remember)). A restored harness comes back with its memory, and without its credentials, since those went at once. The tasks and responses that used it are kept. |
 | A response deleted on its own | Unreadable at once, kept 30 days, then removed. A response of a deleted task goes with the task. |
 | An environment | Its `/env/<name>` path goes at once, so no task sees it and the name is free; its files and builds are kept 30 days, then removed. |
 | An upload (`DELETE /v1/files/{id}`) | Refused to new tasks at once, kept 30 days, then removed. |
@@ -865,6 +919,71 @@ no markup, read from the same table the hosted service bills from. Every call an
 written down on the task's trace (event type `plug`, plug `browser`, with the minutes and the
 vendor's figure on the session row).
 
+## Memories
+
+One command, then every new agent remembers: what each person told it, what it learned doing its work, what it was asked to keep. You can always see what an agent remembers and why, and change or delete it, under **Memories** in the console.
+
+### Start the memory engines
+
+```bash
+docker cp harnessrouter:/app/deploy/memories .
+./memories/up.sh
+```
+
+The first line copies the engines' folder out of the image, so there is nothing to clone (in a clone it's `deploy/memories`). The second starts four open source memory engines beside your instance, puts HarnessRouter on their network, waits until each one answers and connects each one. It finds your HarnessRouter container by itself; if you run more than one, name it with `HR_CONTAINER=<name> ./memories/up.sh`. The first start builds two engines and downloads the others, so it takes several minutes and a few GB of disk.
+
+- `./memories/up.sh mem0 hindsight` starts only the engines you name.
+- Run it again at any time: it keeps what works and repairs what doesn't.
+- `./memories/up.sh --down` stops them, and keeps what they remember.
+
+**No second key.** The engines read and search with your instance's own model keys. `up.sh` asks HarnessRouter for one credential per engine. A credential reaches only HarnessRouter's model relay, only for its engine's two models, and HarnessRouter can withdraw it. It is kept in `memories/.env` on your machine, with the engines' other generated secrets, at mode 600. The engines use `gpt-4o-mini` and `text-embedding-3-small` unless you choose others in that file, so connect a model provider that serves both first (step 5 above: OpenAI, Azure OpenAI, Vercel AI Gateway and OpenRouter do). If none does yet, `up.sh` says so and starts nothing. On an instance shared by several organizations, every organization's memory work (extraction and embeddings) runs on the operator's own model keys, through the memory relay; organizations' own connections are never used for it.
+
+### Keep HarnessRouter on their network
+
+`up.sh` adds the running container to the `harnessrouter-memories` network. A container you make again (to upgrade, or to change a setting) keeps it only if its `docker run` says so:
+
+```bash
+docker run -d --name harnessrouter \
+  -p 127.0.0.1:3000:3000 \
+  -v harnessrouter:/data \
+  --network harnessrouter-memories \
+  harnessrouter/harnessrouter
+```
+
+The network stays when the engines stop, so this line works whether they run or not. Then run `./memories/up.sh` once more: it checks that each engine still answers and that its credential still works.
+
+<details>
+<summary>The same with Docker Compose</summary>
+
+Add the network to the HarnessRouter service in the repository's `docker-compose.yml`:
+
+```yaml
+services:
+  harnessrouter:
+    networks: [default, memories]
+
+networks:
+  memories:
+    name: harnessrouter-memories
+    external: true
+```
+
+</details>
+
+### What agents remember
+
+Each agent you create from then on gets its own memory, named after it, on the engine that suits what it does: separate facts for each person for an agent that serves people, a graph for one that tracks things that change, lessons for one that should get better at its work, notes for one whose memory people read, and none for one that only transforms what it's given. The console shows the choice and the reason, and **Change** picks another engine or none. After a task, what mattered in it is kept, and the agent recalls it before answering the next time.
+
+**Separately for each person.** For an agent that serves people, memory is kept separately for each person, identified by the task's `user`. Send your own authenticated user id there, never text the person types, because the `user` decides whose memory a task reads. A task sent with an API key and no `user` runs without memory.
+
+**Personal data.** The user ids you send are stored with each person's memory, as data you hold about them. When someone asks you to delete what an agent remembers about them, delete their memory: in the console, open the agent's memory, where each person's memory is listed under it, and delete theirs; or with the API, `DELETE /v1/memories/{id}`, where `GET /v1/memories?ancestor=<the agent's memory id>` lists each person's memory and its id. Deleting a memory deletes what its engine holds for it too, so do it while the engines run.
+
+**When an agent is deleted.** Its memory, and each person's memory, are kept with it for the 30 days a deleted agent can be restored, so a restored agent comes back with everything it remembered. When the agent is removed for good, they are deleted with it, unless another agent still uses that memory: then it stays until the last agent using it is removed too. A deleted agent inside its 30 days still counts as using the memory it used. They are deleted as whoever deleted the agent, so a memory that person may not delete stays, for whoever manages it. One daily sweep deletes at most 25 memories, and the next one goes on where it stopped. Keep the engines running: deleting a memory deletes what its engine holds for it.
+
+**More than one replica.** Which memories an agent or a person may reach is read once and kept for 3 seconds on each replica. If you run more than one HarnessRouter replica, set `HR_MEMORY_GRANTS_TTL_S=0` on every replica, so that access taken away on one replica is refused on the others at once, not up to 3 seconds later.
+
+What each engine is, its licence, its addresses and files, and how to run them by hand: [Memory engines](memories-engines.md).
+
 ## Environments
 
 A task's workspace starts empty and is checkpointed after every turn with its dependency
@@ -992,9 +1111,8 @@ docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
 Aider, OpenHands and Agent Zero are the largest of the set: each environment is 600-700 MB and takes
-a minute or two to install on a fresh volume. All three are in the default list anyway, because the
-console offers every base the catalogue lists and a base that did not install fails on its first
-task; leave any of them out of `HR_BACKENDS` if you will not use it.
+a minute or two to install on a fresh volume. All three are in the default list; leave any of them
+out of `HR_BACKENDS` if you will not use it, and the console stops offering it.
 
 Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
 archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv
@@ -1002,9 +1120,10 @@ and 69 MB of source, 83 seconds on a fresh volume (measured on Linux arm64). It 
 dependency pins, minus the packages that serve only what this base switches off (local embeddings and
 speech, which would bring torch; document parsing; the browser; its messaging integrations).
 
-A backend that fails to install is not fatal: the others still work. The console offers every
-base the gateway's catalogue lists, so a task on a backend that did not install fails on its
-first turn; the container's log names the install that failed.
+A backend that fails to install is not fatal: the others still work. A base this instance has not
+installed (one left out of `HR_BACKENDS`, or one whose install failed) reads "not installed": the
+console does not offer it, and a task on a harness built on it is refused with that reason. The
+container's log names the install that failed.
 
 Chromium is genuinely an image layer, so it stays a build flag:
 
@@ -1026,6 +1145,12 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HR_SANDBOX_TRUST` | `owner` | You own the box, the agent and the key, so the key is handed over directly rather than brokered. |
 | `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume, so a restart doesn't discard work in flight. |
 | `HR_WS_MARKER_DIR` | `/data/ws-markers` | Which checkpoint each workspace holds, on the volume too. After a restart the next turn finds the workspace where the interrupted turn left it, instead of restoring the previous checkpoint over it. |
+| `HR_STEP_CHECKPOINT` | off | Off here: the workspace already sits on the volume and outlives a restart (`HARNESS_WORKSPACE`, `HR_WS_MARKER_DIR`). `1` also saves the workspace after each finished tool step while a task runs, so a sandbox that dies mid-task keeps the steps before it. Turn it on when the workspace lives somewhere a restart loses, such as `/tmp`. |
+| `HR_STEP_CHECKPOINT_EVERY_S` | `30` | With `HR_STEP_CHECKPOINT=1`, at most one save per this many seconds per session. A step that finishes inside the interval is saved when it ends, not dropped. |
+| `HR_STEP_CHECKPOINT_MAX_BYTES` | `268435456` | With `HR_STEP_CHECKPOINT=1`, a session whose last save was larger than this (256 MiB) is saved only when its task ends, since each save copies the whole workspace. |
+| `HR_BRANCH_PREPARE_TIMEOUT_S` | `300` | How long a branch (`branch: true`) may take to prepare its new session: restoring the chosen response's files, saving them, and copying its turns and their files. Past it the request is answered `503` and no session is created. |
+| `HR_BRANCH_COPY_MAX_FILES` | `100` | A branch copies the files its earlier turns attached, so they stay readable if the original task is deleted. At most this many; past it, an attachment names the file's path in the branch's files instead. |
+| `HR_BRANCH_COPY_MAX_BYTES` | `268435456` | The same, at most this many bytes in all (256 MiB). |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HR_RELAY_UPSTREAM_TIMEOUT_S` | `600` | How long one model call may go without sending anything before the task is told the provider did not answer. Several model APIs send nothing while a model thinks (OpenAI's Chat Completions sends nothing at all), so a shorter wait cuts long thinking off. Lower it only if you would rather end a stuck call sooner than wait out a long think. It was `180` in 0.31.0 only. |
 | `HR_ENTRA_AUTHORITY` | `https://login.microsoftonline.com` | Where an Azure connection that signs in with Microsoft Entra asks for its token. A sovereign cloud names its own. |
@@ -1253,7 +1378,7 @@ you do not need `HR_AUTH_DISABLED=1` to integrate your backend.
 
 ## Running on a cloud VM
 
-An agent runs real shell commands, and every process on a cloud VM can reach the provider's metadata address, `169.254.169.254`, by default. If the VM has an instance role or a managed identity, an agent or anything that reaches it, such as a prompt injection, can ask that address for the role's credentials. Nothing inside the container can stop this, so block it on the host:
+An agent runs real shell commands, and every process on a cloud VM can reach the provider's metadata address, `169.254.169.254`, by default. If the VM has an instance role or a managed identity, an agent or anything that reaches it, such as a prompt injection or a package an agent's install downloads, can ask that address for the role's credentials. Nothing inside the container can stop this, so block it on the host:
 
 ```bash
 sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
@@ -1424,3 +1549,11 @@ Apache-2.0, see [LICENSE](../LICENSE). Third-party notices are in [NOTICE](../NO
 
 The agent CLIs are **not** redistributed here; they are installed on first run under their own
 licenses. Review them before enabling a backend.
+
+
+### Roder
+
+Set `HR_BACKENDS=roder` for a Roder-only installation. Roder uses its native app-server
+and a Responses connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, or a custom
+endpoint with `api_format=responses`). See [Roder setup and verification](roder.md) for
+installation, session state, tool policy, MCP, and qualification limits.

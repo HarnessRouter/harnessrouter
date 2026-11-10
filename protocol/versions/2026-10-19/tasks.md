@@ -31,6 +31,7 @@ Content-Type: application/json
 | `metadata` | object | no | Client metadata. `harness_id` selects the configured harness (§1.2). `memory` names one more memory this task works with, on a server with the `memories` capability ([Memories §9](memories.md#9-an-agent-and-its-memories)). |
 | `stream` | boolean | no | `true` streams Server-Sent Events; default `false` returns one JSON object. |
 | `previous_response_id` | string | no | Continue the session that produced that response. See [Sessions](sessions.md). |
+| `branch` | boolean | no | With `true`, start a **new** session from the end of the response named in `previous_response_id`, leaving its session as it was ([Sessions §1.1](sessions.md#11-branching-from-an-earlier-response)). Requires the `session_branching` capability. Default `false`. |
 | `instructions` | string | no | Additional system guidance for this task only. |
 | `store` | boolean | no | Whether the server retains the response for later reads. Default `true`. |
 | `max_output_tokens` | integer | no | Upper bound on generated tokens. |

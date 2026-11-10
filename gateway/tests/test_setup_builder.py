@@ -135,7 +135,7 @@ def env(monkeypatch):
         return {"pdf": {"name": "PDF", "about": "Read and write PDF files."}}
 
     async def lookup(org, ws, t):
-        rec["lookups"].append((org, ws))
+        rec["lookups"].append((org, ws, t))
         status = PLUGS.get((org, ws), {}).get(t, "missing")
         return status, ({"config": {}} if status == "connected" else None)
 
@@ -268,7 +268,10 @@ def test_the_builder_runs_on_the_instances_own_model_reading_this_workspace_only
     flat = json.dumps(call0["json"])
     for theirs in ("other-secret", "other.example", "henv_b", "crm-token-not-real", "mcp.plugs"):
         assert theirs not in flat
-    assert set(env["lookups"]) == {(ORG_A, WS_A)}
+    # only this workspace's plugins are read; the one read outside it is the instance's memory engines, which a
+    # workspace that never connected its own uses on an instance with one operator (_memory_engine_lookup)
+    assert {(o, w) for o, w, t in env["lookups"] if t not in gw._MEMORY_STACK} == {(ORG_A, WS_A)}
+    assert {(o, w) for o, w, t in env["lookups"] if t in gw._MEMORY_STACK} <= {(ORG_A, WS_A), (ORG_A, "default")}
     props = call0["json"]["tools"][1]["function"]["parameters"]["properties"]
     assert props["base"]["enum"] == ["hermes", "dsh"]                            # never one Auto may not pick
     assert props["connections_needed"]["items"]["enum"] == ["browser", "insforge", "vercel"]
@@ -311,6 +314,37 @@ def test_a_job_is_saved_into_the_workspace_with_its_own_copies_of_the_skill_and_
     assert env["vault"][(gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001")] == "crm-token-not-real"
     assert out["attached"] == {"skill:reply-tone": "on", CRM: "on"}
     assert env["plugs_attach"] == [] and env["media"] == []
+
+
+def test_the_record_says_the_memory_the_save_will_give_while_it_saves(env, monkeypatch):
+    """The card draws "Memory: <Engine>, <why>" from the record before the setup exists (the memories spec, C1). It is
+    chosen, not made: the save provisions it. With no engine running in this workspace, it says so and how to start one."""
+    seen = []
+    real = gw._setup_build_save
+
+    async def save(p, cfg, hid, ctx):
+        rec = sb.RECORDS.get(sb.record_key(ORG_A, ADA["member"], "b1test0001"))
+        seen.append((rec["step"], rec["config"].get("memory"), cfg.get("memory")))
+        return await real(p, cfg, hid, ctx)
+    monkeypatch.setattr(gw, "_setup_build_save", save)
+    start(env)
+    out = settled(env)
+    assert out["status"] == "saved", out
+    [(step, on_record, given)] = seen
+    assert step == sb.SAVING and on_record == given
+    assert on_record == {"engine": None, "scope": "per_user", "reason": gw.memory_choice.NO_ENGINE}
+    assert out["config"]["memory"] == on_record
+    [h] = built(env)
+    assert h["memory_reason"] == gw.memory_choice.NO_ENGINE, "what the save gave is what the card said"
+
+
+def test_a_build_whose_memory_cant_be_said_still_saves(env, monkeypatch):
+    async def down(p, cfg):
+        raise RuntimeError("engines unreachable")
+    monkeypatch.setattr(gw, "_setup_build_memory", down)
+    start(env)
+    out = settled(env)
+    assert out["status"] == "saved" and "memory" not in out["config"]
 
 
 def test_a_plugin_the_workspace_has_not_connected_is_asked_for_and_bound(env):
@@ -736,3 +770,110 @@ def test_the_wires_follow_the_order_and_skip_a_model_with_no_connection(monkeypa
     assert gw._MODEL_CATALOG["hermes"]["default"] == "gpt-6.1-sol"
     assert [w["canonical"] for w in wires] == ["gpt-6.1-sol", "gpt-5.4"]       # deepseek-v4-pro runs, but has no connection here
     assert all(w["url"] == "https://api.openai.com/v1/chat/completions" for w in wires)
+
+
+# ── an organization's own connection, where organizations share the instance ─────────────────────
+# Held to the rule the model relay holds it to (test_broker_org_address): the address text is checked
+# before any socket, and the builder sends on the checked client, which classifies where the name points
+# when the socket opens and refuses this deployment's own networks. The operator's integrations, the
+# platform's connections and a single-operator install are unchanged.
+PUBLIC = "93.184.216.34"
+
+
+@pytest.fixture
+def org_wire(monkeypatch):
+    import socket
+
+    import httpcore
+    sockets: list = []
+    conns: dict = {}
+
+    async def doc():
+        return []
+
+    async def model_map():
+        return {}
+
+    async def chain(org, backend, explicit):
+        return ["mine"]
+
+    async def get_conn(org, name):
+        return conns["mine"]
+
+    async def resolve(host, port):
+        ip = {"llm.example.com": PUBLIC, "rebind.example.com": "10.1.2.3"}.get(host, host)
+        return [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+    async def no_network(self, host, port, timeout=None, local_address=None, socket_options=None):
+        sockets.append((host, port))
+        raise httpcore.ConnectError("test: no network")
+    monkeypatch.setattr(gw, "_integrations_doc", doc)
+    monkeypatch.setattr(gw, "_effective_model_map", model_map)
+    monkeypatch.setattr(gw, "_resolve_chain", chain)
+    monkeypatch.setattr(gw, "_get_connection", get_conn)
+    monkeypatch.setattr(gw, "_conn_serves", lambda conn, canonical: True)
+    monkeypatch.setattr(gw, "_chain_refusal", lambda conn, base: "")
+    monkeypatch.setattr(gw, "_resolve", resolve)
+    monkeypatch.setattr(httpcore.AnyIOBackend, "connect_tcp", no_network)
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: False)
+    gw._checked_clients.pop("relay", None)
+
+    def wire(base_url, tenant="org-a-tenant"):
+        conns["mine"] = ({"provider": "custom", "api_format": "openai", "base_url": base_url, "api_key": "sk-org"}, tenant)
+        return asyncio.run(gw._setup_build_model_wire(ORG_A, "gpt-5.4"))
+    yield wire, sockets, monkeypatch
+    gw._checked_clients.pop("relay", None)
+
+
+@pytest.mark.parametrize("base", ["http://127.0.0.1:8081/v1", "http://169.254.169.254/latest", "http://10.0.0.5/v1",
+                                  "http://192.168.1.10/v1", "http://[::1]:8080/v1", "https://rebind.example.com/v1"])
+def test_an_organizations_address_inside_this_deployment_is_refused_at_the_socket_on_the_builder_path(org_wire, base):
+    wire, sockets, _ = org_wire
+    w = wire(base)
+    assert w is not None and w["client"] is gw._relay_checked_client()
+
+    async def send():
+        return await w["client"].post(w["url"], headers=w["headers"], json={})
+    with pytest.raises(httpx.ConnectError) as e:
+        asyncio.run(send())
+    assert str(e.value).startswith("that address cannot be used: ") and sockets == []
+
+
+@pytest.mark.parametrize("base", ["https://user:pw@llm.example.com/v1", "https://llm.example.com/v1?x=",
+                                  "https://llm.example.com/v1#f", "ftp://llm.example.com/v1"])
+def test_an_organizations_address_that_cannot_be_used_as_written_is_skipped(org_wire, base, capsys):
+    wire, sockets, _ = org_wire
+    assert wire(base) is None and sockets == []
+    out = capsys.readouterr().out
+    assert "skipped an organization's connection" in out and "sk-org" not in out and "pw@" not in out
+
+
+def test_a_public_organization_address_opens_its_socket_to_the_address_classified(org_wire):
+    wire, sockets, _ = org_wire
+    w = wire("https://llm.example.com/v1")
+
+    async def send():
+        return await w["client"].post(w["url"], headers=w["headers"], json={})
+    with pytest.raises(httpx.ConnectError) as e:
+        asyncio.run(send())
+    assert "test: no network" in str(e.value) and sockets == [(PUBLIC, 443)]
+
+
+@pytest.mark.parametrize("case", ["platform", "pool_local"])
+def test_a_platform_connection_and_a_single_operator_install_are_unchanged(org_wire, case):
+    wire, _sockets, monkeypatch = org_wire
+    if case == "pool_local":
+        monkeypatch.setattr(gw, "_pool_is_local", lambda: True)
+    w = wire("http://10.0.0.5/v1", tenant=gw.GLOBAL_TENANT if case == "platform" else "org-a-tenant")
+    assert w is not None and "client" not in w and w["url"] == "http://10.0.0.5/v1/chat/completions"
+
+
+def test_the_builder_sends_on_the_client_its_wire_carries(env, monkeypatch):
+    own = FakeChat()
+
+    async def wires(org):
+        return [{**WIRE, "client": own}]
+    monkeypatch.setattr(gw, "_setup_build_wires", wires)
+    assert start(env).status_code == 200
+    assert settled(env)["status"] == "saved"
+    assert own.calls and not env["chat"].calls

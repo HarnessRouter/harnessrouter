@@ -2,8 +2,8 @@
 
 Hot control state (idempotency reservations, per-session execution leases with
 fencing tokens, and monotonic response/cancellation state) lives here in a
-dedicated Cosmos NoSQL container — NOT on the shared Gremlin partition, and NOT
-in per-process dicts that don't survive a replica or coordinate across replicas.
+dedicated Cosmos NoSQL container (self-hosted: one SQLite file, control_sqlite.py), NOT on
+the graph, and NOT in per-process dicts that don't survive a replica or coordinate across replicas.
 
 Why Cosmos NoSQL: point reads, atomic create (409 on duplicate id → race-safe
 reservation), ETag optimistic concurrency (if_match CAS), per-item TTL, and a
@@ -513,12 +513,12 @@ async def try_lock(name: str, ttl_s: int) -> bool:
 
 
 # ── API-key hot-read cache (HR-INF-010) ────────────────────────────────────────────────
-# The public Bearer auth read (_apikey_resolve) hit the shared Gremlin partition on EVERY public
+# The public Bearer auth read (_apikey_resolve) hit the graph on EVERY public
 # request. These make the control store the hot-path read: a SELF-KEYED doc (pk == id == the token
 # hash — the org is unknown pre-auth, so an org partition can't serve it) that is a write-through
 # cache of the graph key record. The graph stays the source of truth (list/durable); dual-writes on
 # mint/revoke keep this in sync (instant revocation, no TTL lag), and a lazy backfill on first
-# resolve migrates pre-existing keys so Gremlin is never hit on the hot path afterward.
+# resolve migrates pre-existing keys so the graph is never read on the hot path afterward.
 def _apikey_id(sha: str) -> str:
     return f"apikey::{sha}"
 
@@ -526,7 +526,7 @@ def _apikey_id(sha: str) -> str:
 # Per-item TTL on key docs: NOT the revocation mechanism (dual-write on revoke is, giving instant
 # revocation) — it's a STALENESS BOUND. If a revoke's dual-write ever fails, the stale-valid cache
 # doc expires within this window and the next resolve falls back to the authoritative graph
-# (revoked). An active key is re-backfilled at most once per TTL (one Gremlin read/hour), negligible.
+# (revoked). An active key is re-backfilled at most once per TTL (one graph read/hour), negligible.
 _APIKEY_TTL_S = int(os.environ.get("HR_APIKEY_TTL_S", "3600"))
 
 

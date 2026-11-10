@@ -7845,3 +7845,7 @@ Measured 2026-09-27 on hr-test (self-hosted, 0.25.7-rc.17). One task in plain wo
 
 15 of 15 bases drive the browser.
 
+
+
+Roder's new native app-server adapter has deterministic process qualification only;
+its live provider matrix is pending. See [Roder](roder.md) for scope and commands.
