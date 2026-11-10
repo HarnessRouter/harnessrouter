@@ -1286,7 +1286,10 @@ def _git_shed_cli_home_history(ws: str) -> None:
         # with no scope of their own, so the removal is judged as the session wherever the name now leads.
         try:
             with _fs_as(_session_uid(ws)):
-                os.unlink(scratch)
+                # where the name leads now, and only inside this workspace: a .git made to lead elsewhere is left alone
+                real = os.path.realpath(scratch)
+                if real.startswith(os.path.realpath(ws) + os.sep):
+                    os.unlink(real)
         except OSError:
             pass
     _git(ws, "reflog", "expire", "--expire=now", "--all")

@@ -1180,14 +1180,15 @@ def test_the_persons_own_goal_decides_the_memory_when_it_is_clear_whatever_the_b
     p = {"org": ORG, "member": "ada@example.com", "workspace": ""}
     # without the goal, the builder's words decide: kept per person
     assert run(gw._setup_build_memory(p, cfg))["scope"] == "per_user"
-    # with it, as the build passes it: the goal decides, for the card and for the save alike
+    # with it, as the build passes it: the goal decides, for the card and for the save alike. What it decides is the
+    # nature (Graphiti's) and so the scope; the engine is the best of those running here (CI runs Mem0 alone)
     said = run(gw._setup_build_memory(p, {**cfg, "goal": goal}))
-    assert (said["engine"], said["scope"]) == ("graphiti", "shared")
+    assert said["scope"] == "shared" and "Graphiti" in said["reason"]
     hid = gw._rid("chrn")
     run(gw._setup_build_save(p, {**cfg, "model": "", "goal": goal}, hid, {}))
     v = run(gw._harness_vertex(hid))
     info = json.loads(v["memory_info"])
-    assert (info["engine"], info["scope"]) == ("graphiti", "shared") and v["memory_hint"] == goal
+    assert (info["engine"], info["scope"]) == (said["engine"], "shared") and v["memory_hint"] == goal
     # a goal that names nothing clearly leaves it to the builder's words, as before
     assert gw._setup_build_hint({**cfg, "goal": "Help me out."}) == "the user's personal preferences"
 
