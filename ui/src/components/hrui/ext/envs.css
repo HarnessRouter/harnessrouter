@@ -85,7 +85,7 @@
 #hrui .eo-ib{flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:7px;color:var(--faint)}
 #hrui .eo-ib:hover{background:var(--surface-2);color:var(--fg)}
 #hrui .eo-ib svg{width:14px;height:14px}
-@media (max-width:560px){#hrui .eo-two{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:560px){#hrui .eo-two{grid-template-columns:minmax(0,1fr);row-gap:12px}}
 
 /* ── New environment ────────────────────────────────────────────────────────────────────────────── */
 /* The product's form sheet (small-sheet mcp-sheet: Add MCP server, Connect a plugin) as it is; only the description's
