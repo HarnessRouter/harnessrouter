@@ -334,7 +334,8 @@ function TypeDetail({
           </button>
           <div className="stat-lbl" style={{ marginTop: 6 }}>
             {isVertex
-              ? `Removes ${typeLabel(label)} from the schema, and every link that uses it. Records already kept stay as they are.`
+              // where the schema has no relations (schema.mode "labels"), nothing else goes with a type
+              ? `Removes ${typeLabel(label)} from the schema${caps.conns ? ', and every link that uses it' : ''}. Records already kept stay as they are.`
               : `Removes ${relText(label)} from the schema. Links already made stay on their records.`}
           </div>
         </>)}
@@ -873,7 +874,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
       ) : null}
       {confirm?.kind === 'vertex' ? (
         <ConfirmSheet id="mmDt" title={`Delete ${typeLabel(confirm.label)}?`} confirmLabel={`Delete ${typeLabel(confirm.label)}`}
-          body={`Removes ${typeLabel(confirm.label)} from the schema of ${memory.name}, and every relation that uses it. Records already kept stay as they are.`}
+          body={`Removes ${typeLabel(confirm.label)} from the schema of ${memory.name}${caps.conns ? ', and every relation that uses it' : ''}. Records already kept stay as they are.`}
           onClose={() => setConfirm(null)}
           onConfirm={() => {
             const label = confirm.label;
