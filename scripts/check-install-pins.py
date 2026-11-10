@@ -26,6 +26,7 @@ that no longer matches anything fails too, so the lists can only shrink.
 import os
 import re
 import sys
+from typing import Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FILES = ["docker/entrypoint.sh", "docker/install-skills.sh", "docker/install-kits.sh", "Dockerfile"]
@@ -45,8 +46,24 @@ ALLOWED: list[tuple[str, str, str]] = [
 # uid now. Moving one of these under `iu` removes its entry. Empty is the goal.
 ROOT_RUNS: list[tuple[str, str, str]] = [
     ("docker/entrypoint.sh", '"$TOOLS/systemone-venv/bin/playwright" install-deps chromium',
-     "System One's browser libraries: Playwright's driver runs apt as root. Its replacement, a fixed apt "
-     "package list committed in the script (#623 step 3, item 5), waits on the design answer"),
+     "System One's browser libraries: Playwright's driver runs apt as root. A fixed apt package list "
+     "committed in the script (#623, item 5) replaces it by 2026-11-24, and this entry and its pin go"),
+]
+
+# The code a ROOT_RUNS entry runs, pinned here as well: the lock's entry for it, its version and every
+# hash. A lock update that changes what root runs fails this check until the pin below changes with it,
+# so the change shows in review next to the exception, never only as a regenerated lock.
+ROOT_RUN_PINS: list[tuple[str, str, frozenset[str]]] = [
+    ("docker/locks/systemone.lock.txt", "playwright==1.64.1", frozenset({
+        "29453ff76e25c17d0b45658cacd6b92e9eec46e8db21e134fb3b7143df50f013",
+        "577b8d88778c245cfbd145ae17cf53044f084b1b46c55c69081d4069d56057e2",
+        "59f7b041284ce8d1b72098ae50ca48a2d83692eec25154ab5ba79d4b6b4fe8a9",
+        "5e240a79464434c9260957b9ef59a5808e02e96e3fcabdc717fd7485260b9730",
+        "6a6f99adad1ae40e6ee62efe89785db861ce7ddd57651521cb31894183cc4ae3",
+        "983ccd085453ea5a7588193657fc349a6ffbf7bf7ba663fd58dc81e4aa3af9d9",
+        "a29fda44725e11b0b625c4bff6458a1f6dbee97b88c9788d12e18a8344458c2d",
+        "d3c48b31da426c2f3562d0919cb9ea4e5415f6dbd29d7211fa4d66cca24fbd2f",
+    })),
 ]
 
 # npm itself, or npm_g (an `npm install -g --prefix $TOOLS`, gone since #623 step 3) called rather than defined.
@@ -216,6 +233,34 @@ def root_runs_text(path: str, text: str) -> list[tuple[str, int, str, str]]:
     return found
 
 
+def lock_entry(text: str, name: str) -> "Optional[tuple[str, frozenset[str]]]":
+    """(name==version, its hashes) for one package of a hashed pip lock, or None if it isn't there."""
+    m = re.search(rf"^({re.escape(name)}==\S+)((?:\s*\\\n\s*--hash=sha256:[0-9a-f]{{64}})+)", text, re.M | re.I)
+    if not m:
+        return None
+    return m.group(1), frozenset(re.findall(r"--hash=sha256:([0-9a-f]{64})", m.group(2)))
+
+
+def root_run_pins() -> list[str]:
+    """What differs between ROOT_RUN_PINS and the locks: each line is a reason to fail."""
+    out = []
+    if ROOT_RUN_PINS and not ROOT_RUNS:
+        out.append("ROOT_RUN_PINS pins code no ROOT_RUNS entry runs any more: remove the pins too")
+    for rel, want, hashes in ROOT_RUN_PINS:
+        p = os.path.join(ROOT, rel)
+        if not os.path.exists(p):
+            out.append(f"{rel}: the lock ROOT_RUN_PINS names is gone")
+            continue
+        with open(p, encoding="utf-8") as f:
+            got = lock_entry(f.read(), want.split("==")[0])
+        if got is None:
+            out.append(f"{rel}: no hashed entry for {want.split('==')[0]}")
+        elif got != (want, hashes):
+            out.append(f"{rel}: {got[0]} with {len(got[1])} hashes is not the {want} with {len(hashes)} hashes that "
+                       "ROOT_RUN_PINS allows root to run: change the pin in the same review, or move the step under `iu`")
+    return out
+
+
 def run(files: list[str]) -> int:
     found, root_found = [], []
     for rel in files:
@@ -240,7 +285,10 @@ def run(files: list[str]) -> int:
         print(f"{path}:{n}: {why}\n    {line.strip()[:200]}")
     for label, a in stale:
         print(f"{label} entry matches nothing any more, remove it: {a[0]}: {a[1]!r}")
-    if bad or stale:
+    pins = root_run_pins()
+    for line in pins:
+        print(line)
+    if bad or stale or pins:
         return 1
     print(f"install pins hold ({len(files)} files, {len(ALLOWED)} allowed exceptions); root runs nothing an "
           f"install brought, except {len(ROOT_RUNS)} step{'s' if len(ROOT_RUNS) != 1 else ''} named in ROOT_RUNS")

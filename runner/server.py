@@ -852,10 +852,18 @@ def _spool_dir(path: str) -> str | None:
     hosted service an image build imported this module as root, which left the default path
     root-owned at 755, and the runner, running as another user, then failed every checkpoint and
     every hydrate with EACCES at mkstemp (2026-10-14). This image runs the runner as root and imports
-    nothing at build time, but a container started with `--user` meets the same directory."""
+    nothing at build time, but a container started with `--user` meets the same directory.
+
+    The default sits in a directory everyone may write (/var/tmp), so a directory already at the
+    path counts only if it is this process's own, a real directory (not a link), that no group or
+    other user can write. Whoever owns it could otherwise swap the files written there between
+    their writing and their reading (#623)."""
     try:
-        os.makedirs(path, exist_ok=True)
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        st = os.lstat(path)
     except OSError:
+        return None
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o022:
         return None
     return path if os.access(path, os.W_OK | os.X_OK) else None
 

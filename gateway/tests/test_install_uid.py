@@ -72,7 +72,67 @@ def test_every_install_goes_through_its_uid_and_drops_everything():
     # what the uid held is given back, its processes are killed, its HOME goes, whatever the install did
     assert ia.index('"$@"; ia_rc=$?') < ia.index("iu_give") < ia.index("iu_kill || ia_rc=1") < ia.rindex('rm -rf -- "$IU_HOME"')
     give = _func("iu_give")
-    assert give.index("iu_kill") < give.index("-links +1") < give.index("chown -hR root:root") < give.index("ug-s,go-w,a+rX")
+    assert give.index("iu_kill") < give.index("-links +1") < give.index("iu_links_out") \
+        < give.index("chown -hR root:root") < give.index("ug-s,go-w,a+rX")
+
+
+def test_nothing_of_an_install_uid_is_left_anywhere_before_the_seal():
+    # after the last install and before the tools are sealed and anything else starts
+    tail = EP[EP.rindex("\ninstall_backends\n"):]
+    assert tail.index("\niu_sweep ||") < tail.index("\nseal_tools") < tail.index("server:app")
+    sw = _func("iu_sweep")
+    # every install uid: the range comes from INSTALL_UID_ORDER, so a base added at the end is in it
+    assert 'read -ra sw_w <<<"$INSTALL_UID_ORDER"' in sw and "sw_hi=$((INSTALL_UID_BASE + ${#sw_w[@]}))" in sw
+    # its processes first, then what it owns, files and directories, by owner or by group
+    assert sw.index("/proc/[0-9]*/status") < sw.index("iu_kill") < sw.index("find ")
+    assert "-uid +$((sw_lo - 1)) -uid -$((sw_hi + 1)) -o -gid +$((sw_lo - 1)) -gid -$((sw_hi + 1))" in sw
+    # every mounted file system (tmpfs /dev/shm, the message queues) but proc and sys; the volume only as the tools
+    assert "done < /proc/mounts" in sw and 'sw_roots+=("$TOOLS")' in sw and '-path "$DATA_DIR" -prune' in sw
+    assert 'rm -rf -- "$sw_p" || return 1' in sw
+
+
+def _gnu_realpath() -> bool:
+    return subprocess.run(["realpath", "-e", "--", "/"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _gnu_realpath(), reason="needs GNU realpath -e (the image's coreutils)")
+def test_a_link_that_leads_out_of_a_base_is_removed_and_nothing_reads_through_it(tmp_path):
+    secret = tmp_path / "secret"; secret.write_text("k")
+    beside = tmp_path / "tools" / "x-python"; (beside / "bin").mkdir(parents=True)
+    (beside / "bin" / "python3").write_text("")              # what the same install unpacked beside it
+    theirs = tmp_path / "tools" / "y-venv"; theirs.mkdir()
+    (theirs / "python").write_text("")                        # another base's
+    tree = tmp_path / "tools" / "npm" / "x"
+    (tree / "node_modules" / "pkg").mkdir(parents=True)
+    (tree / "node_modules" / ".bin").mkdir()
+    (tree / "node_modules" / "pkg" / "cli.js").write_text("")
+    keep = {
+        "node_modules/.bin/cli": "../pkg/cli.js",        # npm's own links
+        "lib64": "node_modules",                          # a venv's lib64 -> lib
+        "python": "/usr/bin/env",                         # the image's interpreter
+        "self": ".",
+        "python3": str(beside / "bin" / "python3"),      # dcode's venv on its own Python build
+    }
+    out = {
+        "to-secret": str(secret),                         # an instance secret
+        "up": "../../../secret",                          # the same, relative
+        "data": "/data/secrets/key",                      # a path that may exist later
+        "proc": "/proc/1/environ",
+        "via-usr": "/usr/../" + str(secret).lstrip("/"),  # /usr only after it is resolved
+        "hop1": "hop2", "hop2": str(tmp_path),            # out through another link
+        "loop1": "loop2", "loop2": "loop1",               # resolves nowhere
+        "gone-inside": "node_modules/pkg/not-there",      # resolves nowhere yet
+        "node_modules/pkg/deep": "../../../../secret",
+        "other-base": str(theirs / "python"),             # a directory this install did not fill
+    }
+    for rel, target in {**keep, **out}.items():
+        os.symlink(target, tree / rel)
+    r = _bash(f'declare -A IU_MINE=(["{tree}"]=1 ["{beside}"]=1)\n{_func("iu_links_out")}iu_links_out "{tree}"')
+    assert r.returncode == 0, r.stderr
+    left = {str(p.relative_to(tree)) for p in tree.rglob("*") if p.is_symlink()}
+    assert left == set(keep), (left, r.stdout)
+    assert "removed a link that leads out of" in r.stdout and f"({len(out)} such links in all)" in r.stdout
+    assert secret.read_text() == "k"
 
 
 @pytest.mark.skipif(not _bash_has_maps(), reason="this bash has no associative arrays (the image's does)")
@@ -82,7 +142,7 @@ def test_the_uid_never_holds_what_every_base_shares(tmp_path):
         (tools / d).mkdir(parents=True)
     stub = tmp_path / "stub"; stub.mkdir()
     (stub / "chown").write_text("#!/bin/sh\nexit 0\n"); (stub / "chown").chmod(0o755)
-    script = f'TOOLS="{tools}"; STAMPS="$TOOLS/.versions"; IU_UID=19008; declare -A IU_HELD=()\n{_func("iu_take")}' + \
+    script = f'TOOLS="{tools}"; STAMPS="$TOOLS/.versions"; IU_UID=19008; declare -A IU_HELD=() IU_MINE=()\n{_func("iu_take")}' + \
         "for d in \"$@\"; do iu_take \"$d\" >/dev/null && echo \"took $d\" || echo \"refused $d\"; done\n"
     dirs = [f"{tools}", f"{tools}/bin", f"{tools}/lib", f"{tools}/npm", f"{tools}/.versions", f"{tools}/npm/../bin",
             f"{tmp_path}", f"{tools}/npm/qwen", f"{tools}/venv"]

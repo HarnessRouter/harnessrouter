@@ -438,6 +438,9 @@ INSTALL_UID_BASE=19000
 INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder "
 IU_UID=""; IU_HOME=""
 declare -A IU_HELD=()
+# Every directory the current install has filled, held or given back (a base can fill more than one:
+# dcode's venv runs on the Python build it unpacked beside it). A link may end in any of them.
+declare -A IU_MINE=()
 # install_uid <base>: the base's install uid.
 install_uid() {
   iu_before="${INSTALL_UID_ORDER%% "$1" *}"
@@ -485,22 +488,90 @@ iu_take() {
     *) echo "iu_take: $1 is not below $TOOLS"; return 1 ;;
   esac
   [ -d "$1" ] && [ ! -L "$1" ] || { echo "iu_take: $1 is not a directory"; return 1; }
-  IU_HELD[$1]=1
+  IU_HELD[$1]=1; IU_MINE[$1]=1
   chown -hR "$IU_UID:$IU_UID" "$1"
 }
 # iu_give <dir>: the directory is root's again and sealed, and no process of the uid is left to change
 # it or to hold a file in it open. A second name for a file the uid does not own (a hard link to one
 # of root's, on a kernel that allows it) is removed first, since the seal would change that file's
 # owner and modes; a file the uid made setuid or setgid loses the bit; chown -h follows no link.
+# A link that leads out of the directory is removed too (iu_links_out): whatever follows it later,
+# root included, would reach wherever the package pointed it.
 iu_give() {
   iu_kill || return 1
   if [ -d "$1" ] && [ ! -L "$1" ]; then
     find "$1" -xdev ! -type d -links +1 ! -user "$IU_UID" -exec rm -f -- {} + || return 1
+    iu_links_out "$1" || return 1
     chown -hR root:root "$1" || return 1
     find "$1" -xdev ! -type l \( -perm /6022 -o ! -perm -444 -o \( -type d ! -perm -111 \) \) \
       -exec chmod ug-s,go-w,a+rX {} + || return 1
   fi
   unset 'IU_HELD[$1]'
+}
+# iu_links_out <dir>: every symbolic link under <dir> that leads outside it is removed. A link is
+# judged where it ends, resolved now through every link on the way (realpath -e), so one that leaves
+# through another link goes too. Two kinds stay: a link that ends at something inside <dir>, or inside
+# another directory this same install filled (node_modules/.bin, a venv's lib64, dcode's venv python
+# in the Python build beside it), and one into the image's own /usr (a venv's python is usually the
+# image's interpreter). Nothing else is a place a package may point: not the instance's secrets, /app,
+# /data, /proc or another base's tree. A link that resolves to nothing (its target missing, or a loop)
+# goes as well: it can't be followed now, and must not be once something appears where it points.
+# That rule needs no order: a link through a removed one never resolved to a kept place either.
+iu_links_out() {
+  lo_roots=("$(realpath -e -- "$1")") || return 1
+  for lo_d in "${!IU_MINE[@]}"; do
+    [ -d "$lo_d" ] && lo_roots+=("$(realpath -e -- "$lo_d")")
+  done
+  lo_n=0
+  while IFS= read -r -d '' lo_l; do
+    lo_t="$(realpath -e -- "$lo_l" 2>/dev/null)" || lo_t=""
+    lo_in=""
+    if [ -n "$lo_t" ]; then
+      case "$lo_t" in /usr/*) lo_in=1 ;; esac
+      for lo_r in "${lo_roots[@]}"; do
+        case "$lo_t" in "$lo_r"|"$lo_r"/*) lo_in=1; break ;; esac
+      done
+    fi
+    [ -z "$lo_in" ] || continue
+    [ "$lo_n" -lt 3 ] && echo "[harnessrouter]   removed a link that leads out of $1: ${lo_l#"$1"/}"
+    lo_n=$((lo_n + 1))
+    rm -f -- "$lo_l" || return 1
+  done < <(find "$1" -xdev -type l -print0)
+  [ "$lo_n" -le 3 ] || echo "[harnessrouter]   ($lo_n such links in all)"
+  return 0
+}
+# iu_sweep: after the last install, nothing of any install uid is left anywhere. A uid can write more
+# than the directories it is handed: anywhere anyone may (/tmp, /var/tmp, /dev/shm, /run/lock, a POSIX
+# message queue), and a file it plants at a path a later step uses would be waiting there. So no
+# process of an install uid may be alive, and every file or directory one owns is removed, on every
+# mounted file system but the data volume (where the tools' directories are all a uid is ever handed,
+# and those are swept as well). It runs at every start, so an install a restart cut short is cleared
+# too, and an install uid can't own the path a session or a later start reaches.
+iu_sweep() {
+  read -ra sw_w <<<"$INSTALL_UID_ORDER"
+  sw_lo=$((INSTALL_UID_BASE + 1)); sw_hi=$((INSTALL_UID_BASE + ${#sw_w[@]}))
+  sw_alive="$(awk -v lo="$sw_lo" -v hi="$sw_hi" '/^Uid:/ { for (i = 2; i <= 5; i++) if ($i >= lo && $i <= hi) print $i }' \
+    /proc/[0-9]*/status 2>/dev/null | sort -u)" || true
+  for IU_UID in $sw_alive; do iu_kill || { IU_UID=""; return 1; }; done
+  IU_UID=""
+  sw_roots=(/)
+  while read -r _ sw_m sw_fs _; do
+    case "$sw_fs" in
+      proc|sysfs|cgroup|cgroup2|devpts|securityfs|debugfs|tracefs|bpf|pstore|configfs|fusectl|binfmt_misc|autofs|hugetlbfs|nsfs) continue ;;
+    esac
+    case "$sw_m" in /|/proc|/proc/*|/sys|/sys/*|"$DATA_DIR"|"$DATA_DIR"/*) continue ;; esac
+    sw_roots+=("$sw_m")
+  done < /proc/mounts
+  [ -d "$TOOLS" ] && sw_roots+=("$TOOLS")
+  sw_n=0
+  while IFS= read -r -d '' sw_p; do
+    [ "$sw_n" -lt 3 ] && echo "[harnessrouter] removing what an install left behind: $sw_p"
+    sw_n=$((sw_n + 1))
+    rm -rf -- "$sw_p" || return 1
+  done < <(find "${sw_roots[@]}" -xdev -path "$DATA_DIR" -prune -o \
+             \( -uid +$((sw_lo - 1)) -uid -$((sw_hi + 1)) -o -gid +$((sw_lo - 1)) -gid -$((sw_hi + 1)) \) -prune -print0 2>/dev/null)
+  [ "$sw_n" -le 3 ] || echo "[harnessrouter] ($sw_n such paths in all)"
+  return 0
 }
 # iu_drop <dir>: a failed fill, removed, with no process of the uid left in it.
 iu_drop() { iu_kill; unset 'IU_HELD[$1]'; rm -rf -- "$1"; }
@@ -516,7 +587,7 @@ iu_untar() {
     echo "iu_untar: $ut_dir is not a new directory in one of root's"; return 1
   fi
   chown "$IU_UID:$IU_UID" "$ut_dir" || return 1
-  IU_HELD[$ut_dir]=1
+  IU_HELD[$ut_dir]=1; IU_MINE[$ut_dir]=1
   iu tar -xzf - --no-same-owner -C "$ut_dir" "$@" < "$ut_archive"; ut_rc=$?
   iu_give "$ut_dir" || return 1
   return "$ut_rc"
@@ -536,6 +607,7 @@ install_as_uid() {
     IU_UID=""; return 1
   fi
   shift
+  IU_MINE=()
   IU_HOME="$(mktemp -d /tmp/hr-install.XXXXXX)" || return 1
   chown "$IU_UID:$IU_UID" "$IU_HOME" && chmod 700 "$IU_HOME" && iu_kill || { rm -rf -- "$IU_HOME"; return 1; }
   "$@"; ia_rc=$?
@@ -2085,6 +2157,7 @@ install_backends() {
 }
 
 install_backends
+iu_sweep || { echo "[harnessrouter] FATAL: what an install left behind could not be removed"; exit 1; }
 seal_tools    # nothing else is running yet: the runner and the gateway start below
 # The installed CLIs go on PATH now, for the runner, which starts each one by name for a session, and
 # for the processes after it; the order is the one they always had (hermes's venv, then $TOOLS/bin).

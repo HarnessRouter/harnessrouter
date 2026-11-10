@@ -119,5 +119,34 @@ with contextlib.redirect_stdout(io.StringIO()) as out:
     assert cip.run(["docker/entrypoint.sh"]) == 1
 assert "ROOT_RUNS entry matches nothing" in out.getvalue()
 
+# What a ROOT_RUNS entry runs is pinned too: a lock whose entry for it changes fails until the pin does.
+import tempfile
+real_pins = list(cip.ROOT_RUN_PINS)
+rel, want, hashes = real_pins[0]
+with open(os.path.join(cip.ROOT, rel), encoding="utf-8") as f:
+    lock = f.read()
+name = want.split("==")[0]
+assert cip.lock_entry(lock, name) == (want, hashes), "the committed lock is not what ROOT_RUN_PINS pins"
+one = sorted(hashes)[0]
+TAMPERED = {
+    "a hash replaced": lock.replace(one, "0" * 64),
+    "a hash dropped": lock.replace(f" \\\n    --hash=sha256:{one}", ""),
+    "a version bump": lock.replace(want + " \\", name + "==9.9.9 \\"),
+    "the entry gone": lock.replace(want, name + "x==1.0"),
+}
+cip.ROOT_RUNS = [("docker/entrypoint.sh", "x", "y")]
+with tempfile.TemporaryDirectory() as td:
+    for label, text in TAMPERED.items():
+        assert text != lock, f"the tamper did nothing: {label}"
+        path = os.path.join(td, "lock.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        cip.ROOT_RUN_PINS = [(path, want, hashes)]
+        assert cip.root_run_pins(), f"a changed lock passed: {label}"
+cip.ROOT_RUN_PINS = real_pins
+assert not cip.root_run_pins(), cip.root_run_pins()
+cip.ROOT_RUNS = []
+assert any("no ROOT_RUNS entry" in r for r in cip.root_run_pins()), "pins outlived their exception"
+
 print(f"install-pin check: {len(BAD)} unpinned forms caught, {len(GOOD)} pinned forms passed; "
-      f"{len(ROOT_BAD)} root runs caught, {len(ROOT_GOOD)} uses passed")
+      f"{len(ROOT_BAD)} root runs caught, {len(ROOT_GOOD)} uses passed; {len(TAMPERED)} changed locks caught")
