@@ -4349,7 +4349,9 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
     if not takes_skills:
         skills_out = []        # nothing on this base can read a skill; see _BASE_CATALOG["systemone"]
 
-    disabled_tools = [t for t in _arr("disabled_tools") if isinstance(t, str)]
+    # As the pinned CLI names them: a harness saved before 0.41.3 may hold ids it does not (_stored_tools_current).
+    disabled_tools = [t for t in _stored_tools_current(_backend_of_harness(v), _arr("disabled_tools"))
+                      if isinstance(t, str)]
     return mcp_out, skills_out, suppressed, disabled_tools, plugins_out
 
 
@@ -21302,6 +21304,38 @@ def _harness_field_names() -> frozenset:
     return frozenset(names)
 
 
+# ── tool ids a harness saved before 0.41.3 may still hold ────────────────────────────────────────
+# 0.41.3 made the catalog name the tools each pinned CLI has (test_catalog_tool_names.py). A harness
+# saved earlier still stores the ids it offered then. Keyed by BACKEND, since the same id is a real
+# tool on other bases (nanobot's `exec`, omp's `grep`): an id with a current equivalent reads as that
+# id, wherever a stored list is read and when a harness is saved; a read never writes the record.
+#
+# Only ever as restricted or more: OpenSquilla has no per-tool switch, and its two ids become the
+# names of the tools they meant, so the agent doc now asks it off the tools it has. Nothing is ever
+# dropped. codex's read_file, write_file and git, which 0.154 has no tool for, are deliberately NOT
+# here: an old codex harness keeps asking the model off them, exactly as before, and the console
+# draws switches from the catalog only, so they show no switch (they never had one).
+_STORED_TOOL_IDS: dict[str, dict[str, str]] = {
+    "opensquilla": {"exec": "exec_command", "grep": "grep_search"},
+}
+
+
+def _stored_tools_current(backend: str, names) -> list:
+    """A stored disabled-tools list with the ids above made current, in order, each once. An entry
+    may be stored as "id (description)" and is matched by the id. A backend with nothing listed
+    gets its list back exactly as stored. Every entry stays, by its own name or its current one."""
+    renames = _STORED_TOOL_IDS.get(backend)
+    if not renames:
+        return list(names or [])
+    out: list = []
+    for t in names or []:
+        if isinstance(t, str) and t.split(" (")[0].strip() in renames:
+            t = renames[t.split(" (")[0].strip()]
+        if t not in out:
+            out.append(t)
+    return out
+
+
 def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
     """VG vertex (snake_case, JSON-string lists) -> the frontend CustomHarness shape (camelCase)."""
     def _parse(s):
@@ -21333,7 +21367,8 @@ def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
             # API caller sees it where the console shows "not loaded". A create that silently
             # answered skills: [] cost a benchmark ten runs (2026-09-30).
             "notLoaded": [{"plugin": p["name"], **s} for p in _plugins_of(v) for s in (p.get("skipped") or [])],
-            "disabledTools": [t for t in _parse(v.get("disabled_tools")) if isinstance(t, str)],
+            "disabledTools": [t for t in _stored_tools_current(_backend_of_harness(v), _parse(v.get("disabled_tools")))
+                              if isinstance(t, str)],
             "additionalHeaders": [h for h in _parse(v.get("additional_headers")) if isinstance(h, str) and h.strip()],
             "env": _parse_env(v.get("env")),
             "maxStep": int(v.get("max_step")) if str(v.get("max_step") or "").isdigit() else None,
@@ -21406,7 +21441,8 @@ def _harness_props(body: HarnessBody) -> dict:
             "default_model": body.default_model or "", "system_prompt": body.system_prompt or "",
             "mcp_servers": json.dumps(body.mcp_servers or []), "skills": json.dumps(body.skills or []),
             "plugins": json.dumps(body.plugins or []),
-            "disabled_tools": json.dumps(body.disabled_tools or []),
+            "disabled_tools": json.dumps(_stored_tools_current(_backend_of_harness({"base": base}),
+                                                               body.disabled_tools or [])),
             "additional_headers": json.dumps([str(h).strip() for h in (body.additional_headers or [])
                                               if isinstance(h, str) and str(h).strip()]),
             "env": json.dumps(_env_clean(body.env)),
