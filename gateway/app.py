@@ -1389,8 +1389,13 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # appends its own resource (/chat/completions, /responses, /v1/messages) to the base it is given,
     # so the address can be used as it is only where every base's model calls pass, the broker
     # (_conn_request_url). Handed over, the key went to the stored URL with a resource appended.
+    #
+    # And a custom connection in the Anthropic Messages format, whose key goes in x-api-key alone
+    # (_with_credential). Handed over, it reached the endpoint from the runner's relay in x-api-key AND
+    # as a Bearer, the shape the relay keeps for an aggregator's Messages surface, which reads a Bearer;
+    # the relay cannot tell the two apart, and the broker can.
     if (SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn)
-            and not _conn_full_url(conn)):
+            and not _conn_full_url(conn) and not _conn_custom_messages(conn)):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -4438,15 +4443,19 @@ _RELAY_OURS = frozenset({"x-internal-key", "cookie", "proxy-authorization", "for
 _CREDENTIAL_HEADERS = ("authorization", "api-key", "x-api-key", "x-goog-api-key")
 
 
+def _conn_custom_messages(conn: dict) -> bool:
+    """Whether a connection is a custom one declared in the Anthropic Messages format. Read under the vendor's
+    own name, which a turn's connection carries as `_vendor` beside the runner's name for it."""
+    vendor = str(conn.get("_vendor") or conn.get("provider") or "").strip().lower()
+    return vendor == "custom" and str(conn.get("api_format") or "").strip().lower() == "anthropic"
+
+
 def _conn_reads_x_api_key(conn: dict) -> bool:
     """Whether a connection's API reads its key from x-api-key, as Anthropic's Messages API does: Anthropic's
-    own connection, and a custom one declared in the Anthropic format. Read under the vendor's own name,
-    which a turn's connection carries as `_vendor` beside the runner's name for it."""
+    own connection, and a custom one declared in the Anthropic format."""
     provider = str(conn.get("provider") or "").strip().lower()
     vendor = str(conn.get("_vendor") or provider).strip().lower()
-    if "anthropic" in (provider, vendor):
-        return True
-    return vendor == "custom" and str(conn.get("api_format") or "").strip().lower() == "anthropic"
+    return "anthropic" in (provider, vendor) or _conn_custom_messages(conn)
 
 
 async def _with_credential(headers: dict, conn: dict) -> dict:

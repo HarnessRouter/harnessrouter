@@ -302,6 +302,10 @@ the side (a model list, a token count, a conversation compaction) has no address
 connection and is answered `404` without being sent. Like a connection with request headers, it goes
 through the gateway even under `HR_SANDBOX_TRUST=owner`, so its key is never handed to the agent.
 
+**An Anthropic Messages endpoint.** A custom connection in the Anthropic Messages format is sent its
+key in the `x-api-key` header, the one Anthropic's API reads, and in no other header. It goes through
+the gateway even under `HR_SANDBOX_TRUST=owner`, so its key is never handed to the agent either.
+
 **Disabled built-in tools.** Some endpoints refuse an agent's built-in tools per model (a proxy
 that answers `400 The following tool is not allowed for model 'gpt-5.5': web_search` to Codex).
 Name those tools on the connection, comma-separated, and every turn through it runs without them;

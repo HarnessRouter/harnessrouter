@@ -150,3 +150,76 @@ def test_connection_headers_still_come_after_the_key(monkeypatch, upstream, fmt,
     assert "attacker" not in json.dumps(got["raw"])
     assert got["headers"]["x-project"] == "p1" and got["headers"]["cf-aig-authorization"] == "Bearer cf-tok"
     assert names.index("x-project") > names.index(header)
+
+
+# ── owner trust brokers a custom Anthropic connection, so the rule above is the only one it meets ──
+
+def _owner(monkeypatch):
+    monkeypatch.setattr(gw, "SANDBOX_TRUST", "owner")
+    monkeypatch.setattr(gw, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(gw, "INTERNAL_KEY", "k-test-internal-key")
+    monkeypatch.setenv("HARNESS_GATEWAY_URL", "http://127.0.0.1:8080")
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: True)
+
+
+def _turn_conn(backend, fmt, provider="tokenrouter", vendor="custom", base="https://llm.example/anthropic/v1"):
+    """The connection as a turn's integration reaches _auth_from_conn (_mapped_integration_conn)."""
+    return {"name": "integration:Proxy", "backend": backend, "provider": provider, "_vendor": vendor,
+            "api_key": KEY, "base_url": base, "api_format": fmt, "full_url": ""}
+
+
+@pytest.mark.parametrize("backend", ["claude", "pi", "omp", "opencode", "goose", "hermes", "openhands"])
+def test_in_owner_trust_a_custom_anthropic_connection_with_only_a_base_url_is_brokered(monkeypatch, backend):
+    _owner(monkeypatch)
+    auth = gw._auth_from_conn(_turn_conn(backend, "anthropic"), "hsess1")
+    assert auth["base_url"] == "http://127.0.0.1:8080/v1/llm"
+    assert gw._verify_turn_cred(auth["api_key"]) == ("hsess1", "integration:Proxy")
+    assert KEY not in json.dumps(auth)
+
+
+def test_in_owner_trust_it_reaches_the_upstream_with_x_api_key_alone(monkeypatch, upstream):
+    """End to end in the gateway: the auth owner trust now hands the runner is the broker's, and the call
+    the runner's relay makes with it (Bearer and x-api-key both, as it does on /messages) reaches the
+    connection's base with the stored key in x-api-key alone."""
+    _owner(monkeypatch)
+    conn = {"name": "integration:Proxy", "provider": "custom", "api_key": KEY,
+            "base_url": upstream + "/gw/anthropic/v1", "api_format": "anthropic", "full_url": ""}
+    auth = gw._auth_from_conn({**conn, "backend": "claude", "provider": "tokenrouter", "_vendor": "custom"}, "hsess1")
+    assert auth["base_url"].endswith("/v1/llm"), auth.get("base_url")
+
+    async def resolve(name, org):
+        return gw._with_provider_base(dict(conn))
+
+    async def vertex_get(sid):
+        return {}
+    monkeypatch.setattr(gw, "_broker_resolve", resolve)
+    monkeypatch.setattr(gw, "_vertex_get", vertex_get)
+    monkeypatch.setattr(gw, "_relay_client", lambda: httpx.AsyncClient(timeout=10.0))
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gw.app), base_url="http://gw.test") as c:
+            return await c.post("/v1/llm/v1/messages?beta=true",
+                                headers={"authorization": f"Bearer {auth['api_key']}", "x-api-key": auth["api_key"],
+                                         "anthropic-version": "2023-06-01"},
+                                json={"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+    r = asyncio.run(run())
+    assert r.status_code == 200, r.text
+    got = _Upstream.seen[-1]
+    assert got["path"] == "/gw/anthropic/v1/messages?beta=true"
+    assert _one(got, "x-api-key") == [KEY] and "authorization" not in got["headers"]
+    assert auth["api_key"] not in json.dumps(got["raw"])
+
+
+@pytest.mark.parametrize("conn", [
+    _turn_conn("pi", "openai", base="https://llm.example/v1"),           # a custom OpenAI connection
+    _turn_conn("codex", "responses", base="https://llm.example/v1"),     # a custom Responses connection
+    # Anthropic's own connection: the runner's relay sends its key in x-api-key alone (api.anthropic.com)
+    {"name": "integration:Anthropic", "backend": "claude", "provider": "anthropic", "api_key": KEY,
+     "base_url": "https://api.anthropic.com/v1"},
+    # an aggregator's Messages surface, outside this change
+    _turn_conn("claude", "", provider="tokenrouter", vendor="openrouter", base="https://openrouter.ai/api/v1"),
+])
+def test_in_owner_trust_every_other_connection_is_handed_over_as_before(monkeypatch, conn):
+    _owner(monkeypatch)
+    auth = gw._auth_from_conn(conn, "hsess1")
+    assert auth["api_key"] == KEY and auth["base_url"] == conn["base_url"]
