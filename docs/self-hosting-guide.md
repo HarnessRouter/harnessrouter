@@ -1398,6 +1398,8 @@ echo 'fs.protected_hardlinks = 1' | sudo tee /etc/sysctl.d/90-protected-hardlink
 
 The first line changes it now; the file in `/etc/sysctl.d` keeps it after a reboot. Most distributions that use systemd already set it to 1. The container checks at start and prints a warning when it is 0.
 
+A checkpoint reads a session's folder as that session, so a file the session can't read is left out of it, and the runner's log names it. If the log names a file you know is the user's own, check that it has a single name (`stat -c %h` prints 1) and is inside that session's workspace, then give it to the session's user with `chown`; the next checkpoint takes it.
+
 ## Putting it on a public URL
 
 The console can create harnesses, read every task transcript, and run an agent with your
