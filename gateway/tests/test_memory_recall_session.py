@@ -197,9 +197,9 @@ def test_what_an_agent_kept_in_this_task_is_left_out_and_what_names_neither_is_k
 
 def test_the_seam_names_the_task_on_what_the_agent_keeps():
     import memory_local
-    seam = memory_local.Local("org", "h1", [], session=THIS)
+    seam = memory_local.Local("org", "h1", [], workspace="", session=THIS)
     assert seam.writer == {**mp.writer_of("h1", agent=True), "session_id": THIS}
-    assert memory_local.Local("org", "h1", []).writer == mp.writer_of("h1", agent=True)
+    assert memory_local.Local("org", "h1", [], workspace="").writer == mp.writer_of("h1", agent=True)
 
 
 def test_mem0_keeps_the_writers_task_on_a_stated_record():

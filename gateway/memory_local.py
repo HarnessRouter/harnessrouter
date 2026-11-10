@@ -23,11 +23,12 @@ class Local:
     shows it. `around`: a recall names the memory's parent and children, as the recall tool shows them. A turn's
     start asks for neither (app.py's _memories_turn_start), and a tool list doesn't ask for counts."""
 
-    def __init__(self, org: str, hid: str, entries: list[dict], person: dict | None = None, *,
+    def __init__(self, org: str, hid: str, entries: list[dict], person: dict | None = None, *, workspace: str,
                  counts: bool = True, around: bool = True, session: str = ""):
+        """`workspace`: the agent's own, the only one whose memories it reaches (memory_plane.acting_in)."""
         self.org, self.hid, self._entries, self.person = org, hid, entries, person or None
-        self.pr = [f"member:{hid}"] + ([self.person["principal"]] if self.person else [])
-        self.wpr = [self.person["principal"]] if self.person else self.pr
+        self.pr = mp.placed([f"member:{hid}"] + ([self.person["principal"]] if self.person else []), workspace)
+        self.wpr = mp.placed([self.person["principal"]], workspace) if self.person else self.pr
         # what the agent keeps names the task it was kept in (`session`), as what a finished turn sends does: a later
         # turn of the same task leaves it out of what it recalls at its start (memory_tools.same_session)
         self.writer = {**mp.writer_of(hid, agent=True), **({"session_id": session} if session else {})}

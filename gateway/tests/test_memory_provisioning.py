@@ -303,7 +303,7 @@ def test_a_task_from_an_api_key_that_names_nobody_runs_without_memory_and_says_s
     asked = len(stub.calls)
     run(gw._memories_observe(ORG, hid, sid, hv, {"user_text": "Remember me.", "model": "m"}, "Sure."))
     assert len(stub.calls) == asked
-    section, _ = run(gw.memory_tools.doc_section(gw.memory_local.Local(ORG, hid, run(gw._harness_memories(hid, ORG, hv, sid=sid)))))
+    section, _ = run(gw.memory_tools.doc_section(gw.memory_local.Local(ORG, hid, run(gw._harness_memories(hid, ORG, hv, sid=sid)), workspace=hv.get("workspace"))))
     assert section == ""
     # and the turn's record says the same
     run(gw._resp_put("resp_skip1", {"id": "resp_skip1", "status": "completed", "output": [], "_input": [{"content": "hi"}]},
@@ -773,7 +773,7 @@ def test_a_memory_made_for_an_agent_is_taken_back_when_a_later_step_fails(client
     assert h["memory"] is None and h["memory_reason"].startswith("The memory couldn't be made just now")
     assert _live_memories() == before, "the memory made for it is gone again"
     v = run(gw._harness_vertex(h["id"]))
-    assert not v.get("memory_default") and not run(gw.memory_plane.granted(ORG, f"member:{h['id']}"))
+    assert not v.get("memory_default") and not run(gw.memory_plane.granted(ORG, f"member:{h['id']}", v.get("workspace")))
 
 
 # ── an agent's own memory: kept with it for its 30 days, then gone with it ──────────────────

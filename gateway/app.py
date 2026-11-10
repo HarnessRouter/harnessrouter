@@ -11628,7 +11628,7 @@ async def retention_restore(body: RetentionRestoreBody) -> dict:
             # (_hosted_scrub_removed): a memory kept for it and out of its reach would not be its memory back
             org = str(v.get("org") or "")
             try:
-                if await memory_plane.granted(org, _agent(iid)):
+                if await memory_plane.granted(org, _agent(iid), v.get("workspace")):
                     await _memories_on_grant(org, _agent(iid))
             except Exception as e:  # noqa: BLE001 - the agent is back; its tools are given again at its next grant
                 print(f"[memories] {iid}: restored without its memory tools: {type(e).__name__}", flush=True)
@@ -21336,7 +21336,7 @@ def _stored_tools_current(backend: str, names) -> list:
     return out
 
 
-def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
+def _harness_out(v: dict, grants: dict[tuple[str, str], int] | None = None) -> dict:
     """VG vertex (snake_case, JSON-string lists) -> the frontend CustomHarness shape (camelCase)."""
     def _parse(s):
         try:
@@ -21379,7 +21379,8 @@ def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created,
             # how many memories its agent holds, from its grants (memory_plane.grant_counts), where a read asked:
             # its record doesn't say, and a list can't ask once per row
-            **({"memories": {"count": grants.get(_agent(str(v.get("id") or "")), 0)}} if grants is not None else {}),
+            **({"memories": {"count": grants.get((_agent(str(v.get("id") or "")), memory_plane.place(v.get("workspace"))), 0)}}
+               if grants is not None else {}),
             # where it came from (HarnessBody.source), when whatever made it said; a harness made
             # without one has no key, so "said nothing" and "said this" never read alike
             **({"source": str(v["source"])} if v.get("source") else {}),
@@ -21624,25 +21625,33 @@ async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
     agents (a key held to a workspace sees that workspace's). A person's memory below an agent's (memory_plane's
     end_user_node) is used by whoever uses the agent's memory: its own grant is that person's, never an agent's, and
     it read "Not used yet" while its agent wrote to it. One read each of the grants, the harnesses and the memories."""
-    agents = {str(r["id"]): str(r.get("name") or "") for r in await _vg_list_by_org("Harness", org)
+    agents = {str(r["id"]): (str(r.get("name") or ""), memory_plane.place(r.get("workspace")))
+              for r in await _vg_list_by_org("Harness", org)
               if r.get("id") and str(r.get("deleted")) not in ("1", "true", "True") and _scope_keeps(caller, r.get("workspace"))}
+    grants = await BACKING.graph.find("MemoryGrant", {"org": org})
+    if not grants:
+        return {}
+    memories = [m for m in await BACKING.graph.find("Memory", {"org": org})
+                if m.get("id") and str(m.get("deleted") or "0") != "1"]
+    places = {str(m["id"]): memory_plane.place_of(m) for m in memories}
     out: dict[str, list[dict]] = {}
-    for g in await BACKING.graph.find("MemoryGrant", {"org": org}):
-        principal = str(g.get("principal") or "")
+    for g in grants:
+        principal, mid = str(g.get("principal") or ""), str(g.get("memory_id") or "")
         if not principal.startswith("member:") or str(g.get("deleted") or "0") == "1" or principal[7:] not in agents:
             continue
-        if not json.loads(g.get("privileges") or "[]"):
+        hid = principal[7:]
+        # an agent uses only its own workspace's memories: a grant on another's gives it nothing (memory_plane.acting_in)
+        if not json.loads(g.get("privileges") or "[]") or places.get(mid) != agents[hid][1]:
             continue
-        hid, rows = principal[7:], out.setdefault(str(g.get("memory_id") or ""), [])
+        rows = out.setdefault(mid, [])
         if all(x["harness_id"] != hid for x in rows):
-            rows.append({"harness_id": hid, "name": agents[hid]})
+            rows.append({"harness_id": hid, "name": agents[hid][0]})
     for rows in out.values():
         rows.sort(key=lambda x: (x["name"].casefold(), x["harness_id"]))
-    if out:
-        for m in await BACKING.graph.find("Memory", {"org": org}):
-            above = str(m.get("end_user_of") or "")
-            if above in out and str(m.get("deleted") or "0") != "1" and m.get("id"):
-                out.setdefault(str(m["id"]), list(out[above]))
+    for m in memories if out else []:
+        above = str(m.get("end_user_of") or "")
+        if above in out:
+            out.setdefault(str(m["id"]), list(out[above]))
     return out
 
 
@@ -21716,6 +21725,20 @@ async def _memory_credentials(org: str, workspace: str, provider: str) -> dict |
 
 memory_plane.CREDENTIALS = _memory_credentials
 
+
+async def _memory_place_of(org: str, principal: str) -> str | None:
+    """The workspace a member acts in, when it acts in one only: an agent, in its harness's. None for a person, who acts
+    in whichever workspace they open (memory_plane.PLACE_OF)."""
+    if not principal.startswith("member:"):
+        return None
+    hv = await _harness_vertex(principal.split(":", 1)[1])
+    if not hv or str(hv.get("org") or "") != org:
+        return None
+    return memory_plane.place(hv.get("workspace"))
+
+
+memory_plane.PLACE_OF = _memory_place_of
+
 # What a memory never keeps: a credential. media_plane.scrub removes every key this process sends or sealed
 # (exactly) and the shapes of everyone's (sk-, Bearer, AKIA, AIza, a URL's userinfo and signature); a memory
 # also loses a JWT, a PEM block, this platform's own keys and credentials, and this instance's internal and
@@ -21772,6 +21795,12 @@ def _agent(hid: str) -> str:
     return f"member:{hid}"
 
 
+def _agent_pr(hid: str, hv: dict | None) -> list[str]:
+    """The agent as an access check asks: itself, acting in its harness's workspace, the only one whose memories it
+    reaches (memory_plane.acting_in)."""
+    return [_agent(hid), memory_plane.acting_in((hv or {}).get("workspace"))]
+
+
 async def _memories_settings(hid: str, org: str, hv: dict | None) -> dict | None:
     """The harness's memory settings (where its agent writes by default, whether its turns are
     recorded), or None when it has no memories server or the server is switched off."""
@@ -21794,14 +21823,14 @@ async def _harness_memories(hid: str, org: str, hv: dict | None, sid: str = "") 
     rec = await _memories_settings(hid, org, hv)
     if rec is None:
         return []
-    who = _agent(hid)
+    who = _agent_pr(hid, hv)
 
     async def held(mid: str) -> list[str]:
         m = await memory_plane._load(org, mid) if mid else None
-        return await memory_plane.effective(org, m, [who]) if m else []
+        return await memory_plane.effective(org, m, who) if m else []
 
     entries = [{"memory_id": str(m["id"]), "access": "write" if "write" in privs else "read", "default": False}
-               for m, privs in await memory_plane.granted(org, who)]
+               for m, privs in await memory_plane.granted(org, _agent(hid), (hv or {}).get("workspace"))]
     default = str(rec.get("default_memory_id") or "")
     sv = ((await _vertex_get(sid)) or {}) if sid else {}
     if sv.get("memory_off"):
@@ -21833,8 +21862,9 @@ async def _task_memory_for_turn(org: str, hid: str, body) -> str:
     mid = str((getattr(body, "metadata", None) or {}).get("memory") or "").strip()
     if not mid:
         return ""
-    m = await memory_plane._load(org, mid) if hid and _memories_go_with(await _harness_vertex(hid), org) else None
-    if not m or "read" not in await memory_plane.effective(org, m, [_agent(hid)]):
+    hv = await _harness_vertex(hid) if hid else None
+    m = await memory_plane._load(org, mid) if hid and _memories_go_with(hv, org) else None
+    if not m or "read" not in await memory_plane.effective(org, m, _agent_pr(hid, hv)):
         raise uhp_error(404, "memory_not_found", "No memory with that id.", "metadata.memory")
     return mid
 
@@ -21888,15 +21918,15 @@ async def _memories_on_grant(org: str, principal: str) -> None:
 
 
 async def _harness_memories_out(hid: str, org: str, v: dict) -> dict:
-    who = _agent(hid)
+    who, pr = _agent(hid), _agent_pr(hid, v)
     default = str(v.get("memory_default") or "")
     if default:                      # a default the agent may no longer write is no default: said, not kept up
         m = await memory_plane._load(org, default)
-        if not m or "write" not in await memory_plane.effective(org, m, [who]):
+        if not m or "write" not in await memory_plane.effective(org, m, pr):
             default = ""
     rec = {"observe": str(v.get("memory_observe") or "1") != "0"}
-    data = [{**memory_plane._brief(await memory_plane.out(org, m, [who], privs)), "privileges": privs,
-             "default": str(m["id"]) == default} for m, privs in await memory_plane.granted(org, who)]
+    data = [{**memory_plane._brief(await memory_plane.out(org, m, pr, privs)), "privileges": privs,
+             "default": str(m["id"]) == default} for m, privs in await memory_plane.granted(org, who, v.get("workspace"))]
     return {"object": "harness.memories", "principal": who, "default_memory_id": default or None,
             "observe": rec.get("observe", True) is not False, "data": data}
 
@@ -22040,7 +22070,7 @@ async def _memory_ask_check(org: str, ws: str, ask: tuple[str, str], p: dict) ->
             raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
                             f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
     if kind == "id":
-        who = memory_routes.principals_of(p)
+        who = memory_plane.placed(memory_routes.principals_of(p), ws)      # a memory of the agent's own workspace
         m = await memory_plane._load(org, value)
         privs = await memory_plane.effective(org, m, who) if m else []
         if not privs:
@@ -22066,8 +22096,9 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
     """Give the agent the memory asked for (_memory_ask), and keep on the harness what it got and why."""
     v = await _vertex_get(hid) or {"id": hid}
     kind, value = ask
-    ws = ws or _memory_ws_of(p)
-    who, member = memory_routes.principals_of(p), str(p.get("member") or "")
+    # the agent's memory is in the agent's own workspace, whichever the caller has open: it reaches no other's
+    ws = memory_plane.place(v.get("workspace")) if v.get("org") else (ws or _memory_ws_of(p))
+    who, member = memory_plane.placed(memory_routes.principals_of(p), ws), str(p.get("member") or "")
     current = _json_obj(v.get("memory_info"))
     made: dict | None = None            # a memory made here, for this agent
     words = await _memory_agent_words(org, hid, v, hint or str(v.get("memory_hint") or ""))
@@ -22181,7 +22212,7 @@ async def set_harness_memory(hid: str, request: Request) -> dict:
     org = p.get("org", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
-    await _harness_for_route(hid, p)
+    hv = await _harness_for_route(hid, p)
     try:
         body = await request.json()
     except ValueError:
@@ -22191,7 +22222,7 @@ async def set_harness_memory(hid: str, request: Request) -> dict:
                                               'and `observe` (true or false) if it changes.', "memory")
     if "observe" in body and not isinstance(body["observe"], bool):
         raise uhp_error(422, "invalid_input", "`observe` is true or false.", "observe")
-    ws = _plug_workspace(request, p)
+    ws = memory_plane.place((hv or {}).get("workspace"))      # the agent's own workspace, whichever is open
     if "memory" in body:
         ask = _memory_ask(body["memory"])
         await _memory_ask_check(org, ws, ask, p)
@@ -22233,9 +22264,10 @@ async def set_harness_memories(hid: str, request: Request) -> dict:
         mid = str(body.get("default_memory_id") or "")
         if mid:
             m = await memory_plane._load(org, mid)
-            if not m or not await memory_plane.effective(org, m, memory_routes.principals_of(p)):
+            if not m or not await memory_plane.effective(org, m, memory_plane.placed(memory_routes.principals_of(p),
+                                                                                     v.get("workspace"))):
                 raise uhp_error(404, "memory_not_found", "No memory with that id.", "default_memory_id")
-            if "write" not in await memory_plane.effective(org, m, [_agent(hid)]):
+            if "write" not in await memory_plane.effective(org, m, _agent_pr(hid, v)):
                 raise uhp_error(422, "memory_invalid",
                                 f"This agent may not write that memory. Grant `{_agent(hid)}` write on it first.", "default_memory_id")
         patch["default_memory_id"] = mid
@@ -22314,9 +22346,12 @@ async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = "", *, 
     if sv.get("memory_off"):
         return None
     person = _json_obj(sv.get("memory_person"))
+    hv = hv if hv is not None else await _harness_vertex(hid)
+    if not hv:
+        return None                          # no agent, no workspace: nothing it could reach
     return memory_local.Local(org, hid, await _harness_memories(hid, org, hv, sid=sid),
                               person=person if person.get("node") and person.get("principal") else None,
-                              counts=counts, around=around, session=sid)
+                              workspace=str(hv.get("workspace") or ""), counts=counts, around=around, session=sid)
 
 
 async def _memories_turn_start(hid: str, org: str, hv: dict | None, sid: str, text: str) -> tuple[str, dict, int]:
@@ -23878,7 +23913,8 @@ async def _harness_memory_kept(org: str, hid: str, v: dict, caller: dict) -> dic
         m = await memory_plane._load(org, mid)
         if not m or str(m.get("provisioned_for") or "") != hid:
             return {}
-        if "delete" not in await memory_plane.effective(org, m, memory_routes.principals_of(caller)):
+        if "delete" not in await memory_plane.effective(org, m, memory_plane.placed(memory_routes.principals_of(caller),
+                                                                                   v.get("workspace"))):
             return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
     except Exception as e:  # noqa: BLE001 - the agent is deleted, and its memory is kept, whatever this read did
         print(f"[memories] {hid}: its memory could not be read at its delete: {type(e).__name__}", flush=True)
@@ -23935,10 +23971,12 @@ async def _memories_gone_with(org: str, hid: str, principals: list[str], budget:
             print(f"[memories] the sweep stopped at {_MEMORY_SWEEP_CAP} memories: {len(go) - i} more of {org}'s "
                   f"wait for the next sweep, and {hid} with them", flush=True)
             return _MEMORY_CAPPED
-        if await memory_plane._load(org, mid) is None:
+        gm = await memory_plane._load(org, mid)
+        if gm is None:
             continue                                  # went with one deleted before it in this sweep
         try:
-            below = await memory_plane.delete(org, mid, principals)
+            # as the deleter, where the memory is: the agent's own workspace, which they deleted it from
+            below = await memory_plane.delete(org, mid, memory_plane.placed(principals, memory_plane.place_of(gm)))
         except memory_plane.MemoryError:
             continue                                  # theirs to delete, not this deleter's; or a read below it failed
         budget["n"] = budget.get("n", 0) + 1
@@ -25833,7 +25871,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     await _plugs_ensure_required(org, hid)
     # An agent that holds memories keeps the tools to reach them, whatever list of servers a
     # client saved: its access is its grants, and a harness save is not a revocation.
-    if await memory_plane.granted(org, _agent(hid)):
+    if await memory_plane.granted(org, _agent(hid), v.get("workspace")):
         await _memories_ensure(org, hid, await _vertex_get(hid) or v)
     return _harness_out(await _vertex_get(hid) or {"id": hid}, await memory_plane.grant_counts(org))
 
