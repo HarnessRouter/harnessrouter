@@ -171,7 +171,7 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
       return `It could not be saved to ${sayNames(r.failed)}${r.done.length ? `. ${sayNames(r.done)} ${r.done.length === 1 ? 'has' : 'have'} it now` : ''}. Try again.`;
     }
     const more = v.to.filter((id) => !users.includes(id)).length, dropped = users.filter((id) => !v.to.includes(id)).length;
-    toast(more || dropped ? `${v.name} saved. ${v.to.length === 1 ? '1 setup uses' : `${v.to.length} setups use`} it.` : `${v.name} saved.`);
+    toast(more || dropped ? `${v.name} saved. ${v.to.length === 1 ? '1 harness uses' : `${v.to.length} harnesses use`} it.` : `${v.name} saved.`);
     setOpen(null);
     return '';
   }

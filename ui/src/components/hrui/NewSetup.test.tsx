@@ -44,7 +44,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 let el: HTMLElement;
 const line = () => (el.querySelector('#nwCost')?.textContent || '').replace(/\s+/g, ' ').trim();
-const save = () => el.querySelector('button[aria-label="Save setup"]') as HTMLButtonElement;
+const save = () => el.querySelector('button[aria-label="Save harness"]') as HTMLButtonElement;
 async function flush() { for (let i = 0; i < 4; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); }
 async function open(pre: { job?: string; demo?: number }) {
   el = document.createElement('div'); document.body.appendChild(el);
@@ -59,7 +59,7 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('Save starts a build with the sentence and Auto as it is, then opens the page of the setup being made', async () => {
+test('Save starts a build with the sentence and Auto as it is, then opens the page of the harness being made', async () => {
   await open({ job: 'Answer support emails: look up the order, then draft a reply.' });
   expect(el.querySelector('#nwPicks')?.textContent).toContain('Auto');
   expect(save().disabled).toBe(false);

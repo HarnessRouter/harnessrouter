@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 describe('the Next card', () => {
-  test('your app at the left, the setup by its own name at the right, task over and result back between', () => {
+  test('your app at the left, the harness by its own name at the right, task over and result back between', () => {
     const card = show('Product images');
     expect(card.classList.contains('nx2')).toBe(true);
     expect(card.querySelector('.bs-nk')?.textContent).toBe('Next');
@@ -64,7 +64,7 @@ describe('the Next card', () => {
     expect(btn.closest('[role="img"], [aria-hidden="true"]')).toBeNull();
   });
 
-  test('a long name is the setup’s own, whole in the sentence and the tooltip', () => {
+  test('a long name is the harness’s own, whole in the sentence and the tooltip', () => {
     const long = 'Quarterly supplier invoice reconciliation for every regional office';
     const card = show(long);
     const b = card.querySelector('.nx-setup b') as HTMLElement;
@@ -73,7 +73,7 @@ describe('the Next card', () => {
     expect(card.querySelector('.nx-flow')?.getAttribute('aria-label')).toContain(`sends each task to ${long}.`);
   });
 
-  test('Connect your app asks the setup’s page for its Connect your app sheet', () => {
+  test('Connect your app asks the harness’s page for its Connect your app sheet', () => {
     const heard = jest.fn();
     const on = (e: Event) => heard((e as CustomEvent).detail);
     window.addEventListener(SET_UP_APP_EVENT, on);

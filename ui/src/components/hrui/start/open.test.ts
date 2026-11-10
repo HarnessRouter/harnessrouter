@@ -59,20 +59,20 @@ const LANDS: Record<string, string> = {
   'components/hrui/start/build.ts': 'components/hrui/start/BuildPage.tsx',
 };
 
-describe('after any create, the only destination is that setup’s Tasks', () => {
+describe('after any create, the only destination is that harness’s Tasks', () => {
   test('each file that makes a setup opens it through openNewSetup, itself or through the page that lands it', () => {
     const opens = (f: string) => ALL.some((l) => l.file === f && /\bopenNewSetup\(\s*router\s*,/.test(l.text));
     const makers = [...new Set(ALL.filter((l) => CREATE.test(l.text) && !/\b(function|async function)\s+(createCustom|launchKit)\b/.test(l.text)).map((l) => l.file))];
     expect(makers.length).toBeGreaterThan(0);
-    const missing = makers.filter((f) => !opens(LANDS[f] || f)).map((f) => `${f} makes a setup and ${LANDS[f] || 'it'} never calls openNewSetup`);
+    const missing = makers.filter((f) => !opens(LANDS[f] || f)).map((f) => `${f} makes a harness and ${LANDS[f] || 'it'} never calls openNewSetup`);
     expect(missing).toEqual([]);
   });
-  test('New setup’s Save opens the page of the setup being made, and that page the setup’s own', () => {
+  test('New harness’s Save opens the page of the harness being made, and that page the harness’s own', () => {
     const sheet = ALL.filter((l) => l.file === 'components/hrui/NewSetup.tsx');
     expect(sheet.some((l) => /const b = startBuild\(/.test(l.text))).toBe(true);
     expect(sheet.filter((l) => /\bopenNewSetup\(/.test(l.text)).map((l) => l.text.trim())).toEqual(['openNewSetup(router, { build: b.key });']);
   });
-  test('the page of a setup being made opens the setup and nothing else, whatever happened before it loaded', () => {
+  test('the page of a harness being made opens the harness and nothing else, whatever happened before it loaded', () => {
     const page = ALL.filter((l) => l.file === 'components/hrui/start/BuildPage.tsx');
     const auto = page.filter((l) => /useEffect\(/.test(l.text) && /router\.|location\.|openNewSetup/.test(l.text));
     expect(auto.map((l) => l.text.trim())).toEqual(['useEffect(() => { if (b?.id) openNewSetup(router, { id: b.id }); }, [b?.id, router]);']);
@@ -86,26 +86,26 @@ const MINE = linesOf(['app/(app)/studio', 'components/hrui/setup', 'components/h
   'components/hrui/start/BuildPage.tsx', 'components/hrui/NewSetup.tsx']);
 const STUDIO = /['"`]\/studio(?=['"`?/]|\$\{)/;
 const STUDIO_ALLOWED: Entry[] = [
-  ['components/hrui/start/open.ts', '`/studio/${encodeURIComponent(to.id)}`', 'the one way into a setup just made'],
-  ['components/hrui/start/open.ts', "here === '/studio/new'", 'the one way: replaces the page of a setup being made'],
+  ['components/hrui/start/open.ts', '`/studio/${encodeURIComponent(to.id)}`', 'the one way into a harness just made'],
+  ['components/hrui/start/open.ts', "here === '/studio/new'", 'the one way: replaces the page of a harness being made'],
   ['components/hrui/NewSetup.tsx', "router.prefetch('/studio/new')", 'fetches the page Save opens ahead of time, goes nowhere'],
   ['components/hrui/start/BuildPage.tsx', 'className="ag-back" href="/studio"', 'Back, pressed'],
   ['components/hrui/start/BuildPage.tsx', "onBack={() => router.push('/studio')}", 'Back, pressed (a phone’s task head)'],
-  ['components/hrui/setup/SetupSettings.tsx', "toast(said || `${rec.name} deleted`); router.push('/studio')", 'the setup was deleted: it has no page any more'],
-  ['components/hrui/setup/parts.tsx', 'className="ag-back" href="/studio"', 'a setup page’s Back, pressed'],
-  ['app/(app)/studio/page.tsx', 'const setupHref = ', 'a setup’s card on Harness Studio, pressed'],
-  ['app/(app)/studio/page.tsx', "router.replace('/studio', { scroll: false })", 'Studio takes ?new=1 out of its own address as it opens New setup'],
-  ['app/(app)/studio/[id]/page.tsx', "rawTab === 'playground') router.replace(`/studio/${enc(id)}", 'the setup’s own address (an old tab name)'],
-  ['app/(app)/studio/[id]/page.tsx', 'const pgHref = ', 'the setup’s own address (the open task)'],
-  ['app/(app)/studio/[id]/page.tsx', ": `/studio/${enc(id)}?tab=${t}`", 'the setup’s own address (its tab)'],
-  ['app/(app)/studio/[id]/page.tsx', 'router.replace(`/studio/${enc(id)}?tab=settings&layer=', 'the setup’s own address (Settings’ layer)'],
-  ['app/(app)/studio/[id]/page.tsx', 'This setup is not in this workspace. <a className="link-q inl" href="/studio">', 'a setup that is not here: Back, pressed'],
+  ['components/hrui/setup/SetupSettings.tsx', "toast(said || `${rec.name} deleted`); router.push('/studio')", 'the harness was deleted: it has no page any more'],
+  ['components/hrui/setup/parts.tsx', 'className="ag-back" href="/studio"', 'a harness page’s Back, pressed'],
+  ['app/(app)/studio/page.tsx', 'const setupHref = ', 'a harness’s card on Harness Studio, pressed'],
+  ['app/(app)/studio/page.tsx', "router.replace('/studio', { scroll: false })", 'Studio takes ?new=1 out of its own address as it opens New harness'],
+  ['app/(app)/studio/[id]/page.tsx', "rawTab === 'playground') router.replace(`/studio/${enc(id)}", 'the harness’s own address (an old tab name)'],
+  ['app/(app)/studio/[id]/page.tsx', 'const pgHref = ', 'the harness’s own address (the open task)'],
+  ['app/(app)/studio/[id]/page.tsx', ": `/studio/${enc(id)}?tab=${t}`", 'the harness’s own address (its tab)'],
+  ['app/(app)/studio/[id]/page.tsx', 'router.replace(`/studio/${enc(id)}?tab=settings&layer=', 'the harness’s own address (Settings’ layer)'],
+  ['app/(app)/studio/[id]/page.tsx', 'This harness is not in this workspace. <a className="link-q inl" href="/studio">', 'a harness that is not here: Back, pressed'],
 ];
 /** A navigation whose address is worked out at run time (it could be anywhere). */
 const RUNTIME = /(router\.(push|replace)|location\.(assign|replace))\(\s*(?![`'"]\/)|location\.href\s*=\s*(?![`'"]\/)/;
 const RUNTIME_ALLOWED: Entry[] = [
-  ['app/(app)/studio/[id]/page.tsx', 'router.replace(pgHref(', 'the setup’s own address (the open task)'],
-  ['app/(app)/studio/[id]/page.tsx', "router.replace(t === 'tasks' ? pgHref(testSid)", 'the setup’s own address (its tab)'],
+  ['app/(app)/studio/[id]/page.tsx', 'router.replace(pgHref(', 'the harness’s own address (the open task)'],
+  ['app/(app)/studio/[id]/page.tsx', "router.replace(t === 'tasks' ? pgHref(testSid)", 'the harness’s own address (its tab)'],
   ['components/hrui/setup/DeployCloud.tsx', 'if (tab) tab.location.href = s.url;', 'Deploy to Cloud’s sign-in, in the new tab it opened: this page stays where it is'],
 ];
 
@@ -121,7 +121,7 @@ describe('Harness Studio is never where a create lands', () => {
 // ── 3. the one way ─────────────────────────────────────────────────────────────────────────────
 describe('openNewSetup', () => {
   const nav = () => ({ push: jest.fn(), replace: jest.fn() });
-  test('opens the setup’s own Tasks by its id, and its page waits for it rather than call it missing', () => {
+  test('opens the harness’s own Tasks by its id, and its page waits for it rather than call it missing', () => {
     expect(newSetupHref({ id: 'chrn_a b' })).toBe('/studio/chrn_a%20b');
     const n = nav();
     openNewSetup(n, { id: 'chrn_a' }, '/start');
@@ -129,10 +129,10 @@ describe('openNewSetup', () => {
     expect(n.replace).not.toHaveBeenCalled();
     expect(markMade).toHaveBeenCalledWith('chrn_a');
   });
-  test('while the setup is being made, its page before it exists', () => {
+  test('while the harness is being made, its page before it exists', () => {
     expect(newSetupHref({ build: 'bk1' })).toBe('/studio/new?b=bk1');
   });
-  test('from the page of a setup being made, the setup’s page takes its place (Back goes where the person was)', () => {
+  test('from the page of a harness being made, the harness’s page takes its place (Back goes where the person was)', () => {
     const n = nav();
     openNewSetup(n, { id: 'chrn_a' }, '/studio/new');
     expect(n.replace).toHaveBeenCalledWith('/studio/chrn_a');

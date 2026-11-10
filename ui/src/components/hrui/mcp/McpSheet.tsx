@@ -121,7 +121,7 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
   // a reference to a header the setup does not take reaches the server empty: say which ones
   // (with a step after this one, its setups are not chosen yet: that step says it of each)
   const lacking = typedHdr && hdrName && !next
-    ? (targets ? targets.filter((t) => to.includes(t.id) && !t.headers.includes(hdrName)).map((t) => t.name) : (headers || []).includes(hdrName) ? [] : ['This setup'])
+    ? (targets ? targets.filter((t) => to.includes(t.id) && !t.headers.includes(hdrName)).map((t) => t.name) : (headers || []).includes(hdrName) ? [] : ['This harness'])
     : [];
 
   const fail = (f: 'name' | 'url' | 'to', msg: string) => { setBad(f); setSay(msg); if (f === 'name') nameRef.current?.focus(); else if (f === 'url') urlRef.current?.focus(); };
@@ -144,7 +144,7 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
     setSay('');
     if (!n) { fail('name', 'Give it a name.'); return; }
     if (!okEndpoint(u)) { fail('url', 'Use the server’s https:// endpoint.'); return; }
-    if (wide && !to.length) { fail('to', server ? 'Choose at least one setup, or remove it.' : 'Choose the setup that gets it.'); return; }
+    if (wide && !to.length) { fail('to', server ? 'Choose at least one harness, or remove it.' : 'Choose the harness that gets it.'); return; }
     const taken = nameTaken(n, to);
     if (taken) { fail('name', taken); return; }
     setBusy(true);
@@ -161,7 +161,7 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
   const enter = (e: React.KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); void save(); } };
   const users = targets ? targets.filter((t) => t.has) : [];
   const dropping = server && targets ? users.filter((t) => !to.includes(t.id)).map((t) => t.name) : [];
-  const removeWhere = targets ? (users.length === 1 ? users[0].name : `${users.length} setups`) : 'this setup';
+  const removeWhere = targets ? (users.length === 1 ? users[0].name : `${users.length} harnesses`) : 'this harness';
 
   return (
     <Sheet onClose={onClose} labelledBy="mch" className="small-sheet mcp-sheet mcp-x" busy={busy} initialFocus={nameRef}>
@@ -234,7 +234,7 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
                 );
               })}
             </div>
-          ) : <p className="set-help">No setups yet. Make one in Harness Studio first.</p>}
+          ) : <p className="set-help">No harnesses yet. Make one in Harness Studio first.</p>}
           {dropping.length ? <p className="set-help mcp-warn">Saving removes it from {dropping.join(', ')}.</p> : null}
         </div>
       ) : null}

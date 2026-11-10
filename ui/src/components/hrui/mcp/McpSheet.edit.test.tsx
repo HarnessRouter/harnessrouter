@@ -11,7 +11,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root; let el: HTMLElement;
 afterEach(() => { act(() => root.unmount()); el.remove(); document.body.innerHTML = ''; });
 
-test('editing: no Used by list, and Save keeps the setups it had', async () => {
+test('editing: no Used by list, and Save keeps the harnesses it had', async () => {
   const onSave = jest.fn(async () => '');
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
   await act(async () => { root.render(<McpSheet server={{ name: 'docs', url: 'https://example.com/mcp', enabled: true } as never}

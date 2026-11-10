@@ -140,7 +140,7 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); jest.clearAllMocks(); });
 
-describe('tabs: Data, Schema and Settings, as a setup has Tasks and Settings (Richard 11-09)', () => {
+describe('tabs: Data, Schema and Settings, as a harness has Tasks and Settings (Richard 11-09)', () => {
   test('three tabs on the header, each its own address; no Use in and no More', async () => {
     open({ provider: CAPS.graphiti, records: [record()] });
     await draw();
@@ -155,7 +155,7 @@ describe('tabs: Data, Schema and Settings, as a setup has Tasks and Settings (Ri
     await click(tabOf('Settings'));
     expect(onTab).toHaveBeenLastCalledWith('settings');
   });
-  test('the arrow keys move between the tabs, as on a setup', async () => {
+  test('the arrow keys move between the tabs, as on a harness', async () => {
     open({ provider: CAPS.graphiti, records: [record()] });
     await draw();
     await act(async () => { tabOf('Data')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
@@ -710,7 +710,7 @@ describe('the Settings tab', () => {
     await click(button('Delete memory'));
     const sheet = page().querySelector('[role=alertdialog], [role=dialog]') as HTMLElement;
     expect(sheet.querySelector('#mmDlh')?.textContent).toBe('Delete Brand kits?');
-    expect(sheet.textContent).toContain('setups lose it at once. This cannot be undone.');
+    expect(sheet.textContent).toContain('harnesses lose it at once. This cannot be undone.');
     expect(s.sent('DELETE', '/v1/memories/hmem_1')).toHaveLength(0);
     await click(Array.from(sheet.querySelectorAll('button')).find((b) => b.textContent === 'Delete memory'));
     expect(s.sent('DELETE', '/v1/memories/hmem_1')).toHaveLength(1);

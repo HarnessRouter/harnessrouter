@@ -237,7 +237,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       try { manifest = JSON.parse(mf.content) as typeof manifest; } catch { throw new Error('Its plugin.json is not valid JSON.'); }
       const name = String(manifest?.name || '');
       if (!name) throw new Error('Its plugin.json names no plugin.');
-      if ((rec.plugins || []).some((p) => p.name === name)) throw new Error(`A plugin named ${name} is already installed on this setup.`);
+      if ((rec.plugins || []).some((p) => p.name === name)) throw new Error(`A plugin named ${name} is already installed on this harness.`);
       const schemas = await pluginSchemas();
       if (schemas.length && !schemas.includes(String(manifest.$schema || ''))) {
         throw new Error(manifest.$schema ? `This package targets ${manifest.$schema}, which is not installed here (it installs ${schemas.join(', ')}).` : 'Its plugin.json names no $schema, which every package must.');
@@ -295,7 +295,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   // ── Save and Discard ───────────────────────────────────────────────────────────────────────
   async function save() {
     if (busy) return;
-    if (!c.name.trim()) { onLayer('harness'); point('setName'); toast('Give the setup a name.'); return; }
+    if (!c.name.trim()) { onLayer('harness'); point('setName'); toast('Give the harness a name.'); return; }
     const badL = (fid: string, msg: string) => { onLayer('runtime'); point(fid); toast(msg); };
     const turns = c.turns.trim(), mins = c.mins.trim();
     if (turns && !(/^\d+$/.test(turns) && +turns >= 1)) { badL('setTurns', 'Max steps must be a whole number, 1 or more.'); return; }
@@ -525,7 +525,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
                   );
                 })}
               </div>
-            ) : capEmpty('skill', 'No skills on this setup yet.')
+            ) : capEmpty('skill', 'No skills on this harness yet.')
         ) : (
           <div className="cap-list">
             {toolList.map((x) => {
@@ -566,9 +566,9 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           <span className="grow">
             <b>{envX ? envX.name : rec.environment ? (envs === null ? (envsFailed ? 'Environment' : '') : 'Not found') : 'None'}</b>
             {srv?.takesEnvironments === false
-              ? <small className="warn">{r.baseName} can’t use an environment. Remove it, or every task on this setup is refused.</small>
+              ? <small className="warn">{r.baseName} can’t use an environment. Remove it, or every task on this harness is refused.</small>
               : envX ? (envX.status === 'ready' ? (envX.description ? <small>{envX.description}</small> : null)
-                : <small className="warn">It has no built version yet, so tasks on this setup are refused until it is built.</small>)
+                : <small className="warn">It has no built version yet, so tasks on this harness are refused until it is built.</small>)
                 : rec.environment ? (envs === null ? (envsFailed ? <small className="warn">Your environments could not be read just now.</small> : null)
                   : <small className="warn">This environment is no longer there. Choose another or none.</small>)
                   : null}
@@ -706,7 +706,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           is stored securely first, only its reference goes into the draft) */}
       {pop?.k === 'mcp' ? (
         <McpSheet server={mcpEdit} keptAuth={mcpEdit?.auth} headers={c.headers} onClose={() => setPop(null)}
-          nameTaken={(n) => (c.mcp.some((x, k) => k !== pop.i && (x.name || '').toLowerCase() === n.toLowerCase()) ? `This setup already has an MCP server named ${n}.` : '')}
+          nameTaken={(n) => (c.mcp.some((x, k) => k !== pop.i && (x.name || '').toLowerCase() === n.toLowerCase()) ? `This harness already has an MCP server named ${n}.` : '')}
           onSave={async (v) => {
             const id = mcpEdit?.id || newMcpId();
             let auth: string | undefined;
@@ -721,7 +721,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       ) : null}
       {pop?.k === 'delmcp' && c.mcp[pop.i] ? (
         <ConfirmSheet id="dmc" title="Remove MCP server?" confirmLabel="Remove" focusConfirm
-          body={<><b>{c.mcp[pop.i].name || 'This MCP server'}</b> comes off this setup when you save.</>}
+          body={<><b>{c.mcp[pop.i].name || 'This MCP server'}</b> comes off this harness when you save.</>}
           onClose={() => setPop(null)} onConfirm={() => { const i = pop.i; set('mcp', c.mcp.filter((_, k) => k !== i)); setPop(null); }} />
       ) : null}
       {pop?.k === 'plugin' && included !== undefined ? (

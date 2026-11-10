@@ -199,7 +199,7 @@ export function MemorySettings({ memory, onSaved, onDeleted }: { memory: Memory;
       </div>
       {asking ? (
         <ConfirmSheet id="mmDl" title={`Delete ${memory.name}?`} confirmLabel="Delete memory" busy={deleting} refused={refused || undefined}
-          body={`${memory.name}, its records and anything below it are destroyed, and setups lose it at once. This cannot be undone.`}
+          body={`${memory.name}, its records and anything below it are destroyed, and harnesses lose it at once. This cannot be undone.`}
           onClose={() => setAsking(false)} onConfirm={() => void remove()} />
       ) : null}
     </div>

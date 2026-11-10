@@ -335,7 +335,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
             </div>
             <div className="nw-ask-bar">
               <span aria-hidden="true" />
-              <button type="button" className="send" id={demoNow != null ? 'nwBuild' : 'nwSend'} aria-label="Save setup"
+              <button type="button" className="send" id={demoNow != null ? 'nwBuild' : 'nwSend'} aria-label="Save harness"
                 aria-busy={busy || undefined} disabled={!job.trim() || busy || !ready} onClick={() => void send()}>{UP}</button>
             </div>
           </div>

@@ -147,8 +147,8 @@ export function Handoff({ kind, onClose }: { kind: HandKind; onClose: () => void
   );
   const s3 = since == null ? null : <span className="hx-live"><i className="dot run" />Started {since < 1 ? 'just now' : `${since} min ago`}</span>;
   const checks: [boolean, string, string][] = mv
-    ? [[made.length > 0, 'Saves a setup per feature', made.length ? `${made.length} created` : ''], [ok, 'Checks each with a real task', made.length ? `${conn} of ${made.length} connected` : '']]
-    : [[!!a, 'Saves the setup', a ? a.id : ''], [ok, 'Checks it with a real task', ok ? 'Connected' : '']];
+    ? [[made.length > 0, 'Saves a harness per feature', made.length ? `${made.length} created` : ''], [ok, 'Checks each with a real task', made.length ? `${conn} of ${made.length} connected` : '']]
+    : [[!!a, 'Saves the harness', a ? a.id : ''], [ok, 'Checks it with a real task', ok ? 'Connected' : '']];
   let cur = -1;
   if (h.copied) for (let i = 0; i < checks.length; i++) if (!checks[i][0]) { cur = i; break; }
   const s5 = (

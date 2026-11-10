@@ -44,12 +44,12 @@ const STARTER_KITS = /^(dashboard|video|mario|harness-bot|slides|sheets)$/;
 export const starterFolder = (kit: string | undefined | null): string => (kit && STARTER_KITS.test(kit) ? `kits/${kit}` : '');
 
 const HR_FILE = 'harnessrouter.json';
-export const INSTR_RULE = 'Instructions are stored in the HarnessRouter setup, not in my app’s code or sent with every task. Keep a copy of the setup in my repo as ' + HR_FILE + ' (harness_id, name, base, model, instructions). To change it later, fetch the live setup first (it may have been edited in HarnessRouter), update ' + HR_FILE + ', then apply it with the HarnessRouter API.';
+export const INSTR_RULE = 'Instructions are stored in the HarnessRouter harness, not in my app’s code or sent with every task. Keep a copy of the harness in my repo as ' + HR_FILE + ' (harness_id, name, base, model, instructions). To change it later, fetch the live harness first (it may have been edited in HarnessRouter), update ' + HR_FILE + ', then apply it with the HarnessRouter API.';
 const GUIDE_STEP = 'Read the setup guide first: ' + GUIDE + ' (if you cannot open links, ask me to paste it).';
 const NEW_OR_EXISTING = 'If this folder already has an app, add the feature there and keep its design and architecture. If it is empty, create a small web app for it first, and ask me which stack if it is unclear.';
 /** How every block asks for the key, as one of its steps: the person makes a new one in the sheet's
  *  key step and pastes it into the coding agent's secure prompt. */
-export const KEY_STEP = 'Open a secure secret prompt and ask me for my HarnessRouter API key. Store it as HR_API_KEY in my backend environment, replacing the existing value if there is one (any key of this workspace works for every setup in it). Never ask me to paste it into this chat. Never print, log or commit it, and never send it to the browser.';
+export const KEY_STEP = 'Open a secure secret prompt and ask me for my HarnessRouter API key. Store it as HR_API_KEY in my backend environment, replacing the existing value if there is one (any key of this workspace works for every harness in it). Never ask me to paste it into this chat. Never print, log or commit it, and never send it to the browser.';
 /** Every block that adds the integration checks it the same way. */
 const VERIFY = 'Verify: send one real request through my app’s own code path and confirm a result comes back.';
 
@@ -64,7 +64,7 @@ function howItConnects(hid: string): string {
   return 'How it connects:\n' +
     'My frontend talks only to my backend. It never calls HarnessRouter and never sees the key.\n' +
     'My backend calls POST ' + API_BASE + '/v1/responses, sending HR_API_KEY from its own environment as Authorization: Bearer <key>.\n' +
-    'One user request is one task: input is what my user typed, and metadata.harness_id is ' + (hid ? '"' + hid + '"' : 'the Harness ID of the feature’s own setup') + ' on every request the feature sends, never another setup’s. My backend sets the Harness ID; never take it from the browser.\n' +
+    'One user request is one task: input is what my user typed, and metadata.harness_id is ' + (hid ? '"' + hid + '"' : 'the Harness ID of the feature’s own harness') + ' on every request the feature sends, never another harness’s. My backend sets the Harness ID; never take it from the browser.\n' +
     'Send previous_response_id, the id of the response it continues, only when my user follows up on the same result. Otherwise start a new task: a follow-up carries the earlier context and costs more.\n' +
     'A task can take minutes. Send stream: true and pass its events to my frontend as progress, or send background: true and poll GET /v1/responses/{id} until its status is completed, failed, incomplete or cancelled.\n' +
     'The finished response’s output holds the answer text, with each file the agent made as an annotation carrying its filename and download_url. GET /v1/sessions/{session_id}/files lists all of the task’s files (session_id is in the response’s metadata). My backend downloads them with the key and serves them to my frontend.\n' +
@@ -90,11 +90,11 @@ export function setupPrompt(): string {
   return 'Help me move my existing agents to HarnessRouter, whether they run on a managed agent service or in my own code (an agent loop, framework or SDK). Keep my app’s behavior, UI and architecture.\n\n' +
     '1. ' + GUIDE_STEP + ' Then wait for me to say: ' + MOVE_LINE + '\n' +
     '2. ' + KEY_STEP + '\n' +
-    '3. Find each agent my app runs, on a service or in my own code, and every place my backend calls it. Each one becomes one HarnessRouter setup (one `harness` resource) with the same instructions and tools.\n' +
+    '3. Find each agent my app runs, on a service or in my own code, and every place my backend calls it. Each one becomes one HarnessRouter harness (one `harness` resource) with the same instructions and tools.\n' +
     '4. For each feature, create one `harness` resource through the HarnessRouter API. Set its `base` to the agent harness that fits (see the guide), then configure its model and instructions: a clear name, the model that fits, and the feature’s standing instructions. If one with that name already exists in my workspace, reuse it and do not change its settings.\n' +
     '5. Replace the old call as How it connects says below, each feature with its own Harness ID.\n' +
     '6. Verify: send one real request per feature through my app’s own code path and confirm a result comes back.\n' +
-    '7. Tell me which setups you created and their Harness IDs.\n\n' + howItConnects('') + '\n\n' + INSTR_RULE;
+    '7. Tell me which harnesses you created and their Harness IDs.\n\n' + howItConnects('') + '\n\n' + INSTR_RULE;
 }
 
 /** What a prompt needs to know about the setup it is for. */
@@ -119,8 +119,8 @@ const KIT_TESTS = /^(dashboard|video|harness-bot|sheets)$/;
  *  a Sheets agent column runs the setup the column names (the app refuses the sheet's own), and a
  *  Harness Bot teammate is a setup the app creates and calls by the teammate's own id. */
 const KIT_OTHERS: Record<string, string> = {
-  sheets: 'One exception: an agent column runs the other setup its column names, never this one (the app refuses that).',
-  'harness-bot': 'One exception: each teammate is a setup of its own that the app creates, and the app calls a teammate with that teammate’s own Harness ID.',
+  sheets: 'One exception: an agent column runs the other harness its column names, never this one (the app refuses that).',
+  'harness-bot': 'One exception: each teammate is a harness of its own that the app creates, and the app calls a teammate with that teammate’s own Harness ID.',
 };
 
 /** Where each kit's app sets the address its calls go to, read from the starter-kit repository
@@ -143,7 +143,7 @@ function pointAtBackend(kit: string, app: string): string {
   if (kit === 'slides') {
     return 'Point the app at my backend. This app makes its own calls: const API = "/api/harness/v1" in ' + app + '/src/lib/sl.js and in ' + app + '/src/lib/copilot.js sets where they go, slidesHarness() in sl.js looks the setup up with GET {API}/harnesses, and copilot.js sends POST {API}/responses with that setup’s id as metadata.harness_id. Set API in both files to a path on my backend, such as /api/hr, so the browser talks only to my backend.';
   }
-  return 'Point the app at my backend. Every call the app makes goes through reifyui/harness: configureKit({ kitId, base }) sets where calls go (base is /api/harness/v1 on the same origin until it is set), kitHarness() looks the setup up with GET {base}/harnesses, and streamTurn() sends POST {base}/responses with that setup’s id as metadata.harness_id. In ' + app + ', ' + (KIT_WIRING[kit] || 'find where configureKit is called.') + ' Set base to a path on my backend, such as /api/hr, so the browser talks only to my backend.';
+  return 'Point the app at my backend. Every call the app makes goes through reifyui/harness: configureKit({ kitId, base }) sets where calls go (base is /api/harness/v1 on the same origin until it is set), kitHarness() looks the harness up with GET {base}/harnesses, and streamTurn() sends POST {base}/responses with that harness’s id as metadata.harness_id. In ' + app + ', ' + (KIT_WIRING[kit] || 'find where configureKit is called.') + ' Set base to a path on my backend, such as /api/hr, so the browser talks only to my backend.';
 }
 
 /** "Make <kit> yours": the coding agent takes the kit's app from the starter-kit repository, written
@@ -178,8 +178,8 @@ export function starterPrompt(a: SetupRef, folder: string, title: string = a.nam
   const app = folder + '/app';
   const others = !!KIT_OTHERS[kit];
   const pin = others
-    ? 'The backend keeps this setup as the app’s own. This app also calls other setups (the exception above), so the backend answers GET /harnesses with the list from GET ' + API_BASE + '/v1/harnesses, leaving out any other setup whose kit is "' + kit + '", so the app’s lookup by kit id lands on this one. On POST /responses it keeps a Harness ID the browser names from that list, and sets metadata.harness_id to "' + a.id + '" when the browser names none.'
-    : 'The backend carries the fixed Harness ID: it answers GET /harnesses with {"harnesses": [this setup]}, read from GET ' + API_BASE + '/v1/harnesses/' + a.id + ', so the app’s lookup by kit id lands on it, and on every POST /responses it sets metadata.harness_id to "' + a.id + '", whatever the browser sent.';
+    ? 'The backend keeps this harness as the app’s own. This app also calls other harnesses (the exception above), so the backend answers GET /harnesses with the list from GET ' + API_BASE + '/v1/harnesses, leaving out any other harness whose kit is "' + kit + '", so the app’s lookup by kit id lands on this one. On POST /responses it keeps a Harness ID the browser names from that list, and sets metadata.harness_id to "' + a.id + '" when the browser names none.'
+    : 'The backend carries the fixed Harness ID: it answers GET /harnesses with {"harnesses": [this harness]}, read from GET ' + API_BASE + '/v1/harnesses/' + a.id + ', so the app’s lookup by kit id lands on it, and on every POST /responses it sets metadata.harness_id to "' + a.id + '", whatever the browser sent.';
   const cloud = [
     'Add a small backend that serves the app.',
     KEY_STEP,
@@ -191,28 +191,28 @@ export function starterPrompt(a: SetupRef, folder: string, title: string = a.nam
     'The build expects to be served under /kits/' + kit + '/ (the base in vite.config.js). Serve it there, or change that base.',
     'Verify: run one task in the app on my host and confirm a result comes back.',
   ].map((t, i) => String.fromCharCode(97 + i) + '. ' + t).join('\n');
-  return 'Make the ' + title + ' starter kit app my own. It runs on this setup in my HarnessRouter workspace, launched from the kit:\n' +
+  return 'Make the ' + title + ' starter kit app my own. It runs on this harness in my HarnessRouter workspace, launched from the kit:\n' +
     setupLines(a) + '\n\n' +
     '1. ' + GUIDE_STEP + ' Where it describes a backend with an API key, that is the backend path below; as HarnessRouter serves the app, it needs neither.\n' +
     '2. Clone ' + STARTER_REPO + ' and open ' + folder + '. Read its README.md first: kit.json names the agent the kit needs and where its app is served, and the app itself is in ' + app + '.\n' +
-    '3. Work on the app: cd ' + app + ', then npm install' + (KIT_TESTS.test(kit) ? ', npm test' : '') + ' and npm run build. Every change must keep calling this setup: keep the kit id "' + kit + '" and its lookup (How it connects, below), and never write another setup’s Harness ID into the app.' + (others ? ' ' + KIT_OTHERS[kit] : '') + '\n' +
+    '3. Work on the app: cd ' + app + ', then npm install' + (KIT_TESTS.test(kit) ? ', npm test' : '') + ' and npm run build. Every change must keep calling this harness: keep the kit id "' + kit + '" and its lookup (How it connects, below), and never write another harness’s Harness ID into the app.' + (others ? ' ' + KIT_OTHERS[kit] : '') + '\n' +
     '4. Serve my changed version. HarnessRouter serves only the kit’s own app at /kits/' + kit + ', not a copy I change, so the changed app runs on a host of mine or in an image I build. Ask me which way, and suggest the backend path.\n\n' +
     'Backend path (recommended): my changed app keeps calling Harness ID ' + a.id + ' on this HarnessRouter.\n' + cloud + '\n\n' +
-    'Image path: build the HarnessRouter image (' + OSS_REPO + ') from my fork of the starter kits: docker build --build-arg HR_KITS_REPO=<my fork’s git URL> --build-arg HR_KITS_REF=<my branch> . The image runs npm ci && npm run build in each kit’s app folder and serves it at /kits/<kit>. Run as a new HarnessRouter, launching the kit there makes a setup there with a Harness ID of its own, and the app finds that one the same way. Harness ID ' + a.id + ' is the setup on this HarnessRouter.\n\n' +
+    'Image path: build the HarnessRouter image (' + OSS_REPO + ') from my fork of the starter kits: docker build --build-arg HR_KITS_REPO=<my fork’s git URL> --build-arg HR_KITS_REF=<my branch> . The image runs npm ci && npm run build in each kit’s app folder and serves it at /kits/<kit>. Run as a new HarnessRouter, launching the kit there makes a harness there with a Harness ID of its own, and the app finds that one the same way. Harness ID ' + a.id + ' is the harness on this HarnessRouter.\n\n' +
     'How it connects as HarnessRouter serves it (the default): the app is a browser app with no backend of its own. HarnessRouter serves it at /kits/' + kit + ' on the same origin as the console, and my signed-in console session goes with every request it makes, so it needs no API key and no login of its own. Never put a key in the app’s browser code.\n' +
-    'The app is already connected to Harness ID ' + a.id + '. The id is not written in the app’s code or in any config file: when the app starts, it looks up the setup launched from its kit id "' + kit + '" in my workspace, which is this one, and sends that setup’s id as metadata.harness_id on every request to POST /api/harness/v1/responses.';
+    'The app is already connected to Harness ID ' + a.id + '. The id is not written in the app’s code or in any config file: when the app starts, it looks up the harness launched from its kit id "' + kit + '" in my workspace, which is this one, and sends that harness’s id as metadata.harness_id on every request to POST /api/harness/v1/responses.';
 }
 
 /** "Connect your app": the coding agent adds one API call to the person's own app. Every setup gets
  *  this one prompt, an app that already calls another setup included (Richard, 10-18): its existing
  *  client is reused, and the feature keeps its own Harness ID. */
 export function promptText(a: SetupRef): string {
-  return 'Add an agent-powered feature to my app that sends tasks to this setup in my HarnessRouter workspace:\n' +
-    setupLines(a) + (a.instr ? '\nWhat it does (already set in the setup, for context only): ' + a.instr : '') + '\n\n' +
+  return 'Add an agent-powered feature to my app that sends tasks to this harness in my HarnessRouter workspace:\n' +
+    setupLines(a) + (a.instr ? '\nWhat it does (already set in the harness, for context only): ' + a.instr : '') + '\n\n' +
     '1. ' + GUIDE_STEP + '\n' +
     '2. Find my app. ' + NEW_OR_EXISTING + ' If my backend already has a HarnessRouter client, reuse it for this feature.\n' +
     '3. ' + KEY_STEP + '\n' +
-    '4. Call this setup from my backend as How it connects says below' + (a.perUser ? ', with my user’s id on every request as How it remembers says' : '') + '.\n' +
+    '4. Call this harness from my backend as How it connects says below' + (a.perUser ? ', with my user’s id on every request as How it remembers says' : '') + '.\n' +
     '5. Add an input, a submit button, progress, error handling and a result view with its files.\n' +
     '6. ' + VERIFY + '\n\n' +
     howItConnects(a.id) + '\n\n' +
@@ -224,7 +224,7 @@ export function promptText(a: SetupRef): string {
  *  Responses API's `user`, and a task that names nobody runs with its memory off (gateway _task_person: an API key's
  *  own identity is never taken, since one key fronts many people). */
 export const HOW_IT_REMEMBERS = 'How it remembers:\n' +
-  'This setup remembers each of my users separately. On every request, my backend sets user to my signed-in user’s own id from my app’s own authentication: the same id every time for the same person, never a value the browser sends.\n' +
+  'This harness remembers each of my users separately. On every request, my backend sets user to my signed-in user’s own id from my app’s own authentication: the same id every time for the same person, never a value the browser sends.\n' +
   'A task sent without user runs with its memory off: it neither recalls nor keeps anything about anyone.';
 
 /** The coding agents a prompt is pasted into, named with their marks beside every Copy prompt. No

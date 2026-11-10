@@ -30,7 +30,7 @@ import '../setup/agent-chat.scoped.css';
 const STEP_LINE: Record<BuildStep, string> = {
   reading: 'Reading what it should do',
   writing: 'Writing its instructions',
-  saving: 'Saving your setup',
+  saving: 'Saving your harness',
 };
 
 const PLUS = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
@@ -42,7 +42,7 @@ function draftRow(b: Build) {
   const cfg = b.asm?.cfg;
   const empty = { id: '', name: '', base: '', baseLabel: '', defaultModel: '', systemPrompt: '', mcpServers: [], skills: [], createdAt: b.at } as unknown as CustomHarness;
   const row = rowOf(empty, '', [], false);
-  return { ...row, baseName: cfg?.baseName || b.pick.baseName, h: { ...row.h, name: cfg?.name || 'New setup', defaultModel: cfg?.model || b.pick.model } };
+  return { ...row, baseName: cfg?.baseName || b.pick.baseName, h: { ...row.h, name: cfg?.name || 'New harness', defaultModel: cfg?.model || b.pick.model } };
 }
 
 export function BuildPage() {
@@ -77,7 +77,7 @@ export function BuildPage() {
   const hn = cfg?.baseName || b.pick.baseName, md = cfg?.model || b.pick.model;
   const logo = cfg ? harnessLogoSrc(cfg.base) : '';
   const { mark, motion } = harnessMark(cfg?.base || '');
-  const now = b.phase === 'composing' ? <><b>Setting up</b> · your harness</> : b.phase === 'saving' ? <><b>Saving</b> · your setup</> : null;
+  const now = b.phase === 'composing' ? <><b>Setting up</b> · your harness</> : b.phase === 'saving' ? <><b>Saving</b> · your harness</> : null;
   return (
     <div className="tk-page">
       {/* the setup page's own bar (setup/parts AgentHead): Tasks · Settings at its right end with their icons, the same
@@ -86,7 +86,7 @@ export function BuildPage() {
         <div className="ag-lft">
           <Link className="ag-back" href="/studio" aria-label="Back to Harness Studio" title="Harness Studio">{BACK_IC}</Link>
           <div className="ag-ident">
-            <div className="ag-l1"><h1 className="ag-name" title={cfg?.name || 'New setup'}>{cfg?.name || 'New setup'}</h1></div>
+            <div className="ag-l1"><h1 className="ag-name" title={cfg?.name || 'New harness'}>{cfg?.name || 'New harness'}</h1></div>
             <div className="ag-l2">
               {logo ? <img className="h-logo" src={logo} alt="" /> : null}<span className="ag-h">{hn || 'Auto'}</span>
               <span className="sep" aria-hidden="true">·</span><span className={md ? 'mono ag-m' : 'ag-m'}>{md || 'Auto'}</span>

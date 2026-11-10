@@ -97,7 +97,7 @@ export default function StudioPage() {
   const tot = list.reduce((s, r) => s + r.day.n, 0);
   const capped = list.some((r) => r.dayCapped);
   const meta = [
-    rows === null || error ? '' : own ? `${own} setup${own === 1 ? '' : 's'}` : 'No setups yet',
+    rows === null || error ? '' : own ? `${own} ${own === 1 ? 'harness' : 'harnesses'}` : 'No harnesses yet',
     whole && runningN ? `${runningN} running` : '',
     whole && tot ? `${tot}${capped ? '+' : ''} task${tot === 1 ? '' : 's'} in 24 h` : '',
   ].filter(Boolean);
@@ -129,11 +129,11 @@ export default function StudioPage() {
                 <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>List
               </button>
             </div>
-            <button type="button" className={`btn primary${own || rows === null || error ? '' : ' pulse'}`} onClick={newSetup}>{PLUS}New setup</button>
+            <button type="button" className={`btn primary${own || rows === null || error ? '' : ' pulse'}`} onClick={newSetup}>{PLUS}New harness</button>
           </div>
         </div>
 
-        {error ? <p className="sub" role="alert">Your setups could not be read just now. {error}</p> : null}
+        {error ? <p className="sub" role="alert">Your harnesses could not be read just now. {error}</p> : null}
         {paused && !error && rows !== null ? (
           <p className="sub live-off" role="status">
             Live updates paused. This list may be out of date.{' '}
@@ -143,11 +143,11 @@ export default function StudioPage() {
 
         {vm === 'cards' ? (
           <div className="cards">
-            {rows === null ? <Skel label="Loading your setups" className="hrui-skel-contents"><SkCards n={3} /></Skel> : null}
+            {rows === null ? <Skel label="Loading your harnesses" className="hrui-skel-contents"><SkCards n={3} /></Skel> : null}
             {list.map((r) => <Card key={r.h.id} r={r} />)}
             <button type="button" className={`card new-card${own || rows === null || error ? '' : ' hi'}`} onClick={newSetup}>
               <div className="card-tower" aria-hidden="true"><Iso svg={isoSvg(ghostTower(), 13, false)} /></div>
-              <div className="nc-b">{PLUS}<span>New setup</span></div>
+              <div className="nc-b">{PLUS}<span>New harness</span></div>
             </button>
           </div>
         ) : (
@@ -167,8 +167,8 @@ export default function StudioPage() {
                   <span className="r">{r.tasksKnown && r.lastAny ? ago(r.lastAny) : '—'}</span>
                 </Link>
               ))}
-              {rows === null ? <Skel label="Loading your setups"><SkRows n={4} cols={4} /></Skel> : null}
-              {rows !== null && !list.length && !error ? <div className="empty-list">No setups yet.</div> : null}
+              {rows === null ? <Skel label="Loading your harnesses"><SkRows n={4} cols={4} /></Skel> : null}
+              {rows !== null && !list.length && !error ? <div className="empty-list">No harnesses yet.</div> : null}
             </div>
           </>
         )}

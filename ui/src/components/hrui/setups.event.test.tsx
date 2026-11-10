@@ -43,7 +43,7 @@ beforeEach(async () => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('told of a setup it does not show, the list reads its setups again and shows it', async () => {
+test('told of a harness it does not show, the list reads its harnesses again and shows it', async () => {
   expect(names()).toEqual(['Alpha']);
   list.mockResolvedValue([B, A]);
   await tell({ id: 'chrn_b' });
@@ -52,7 +52,7 @@ test('told of a setup it does not show, the list reads its setups again and show
   expect(names()).toEqual(['Alpha', 'Greetings']);
 });
 
-test('told of a setup it already shows, it reads nothing more; told of a change with no setup named, it reads again', async () => {
+test('told of a harness it already shows, it reads nothing more; told of a change with no harness named, it reads again', async () => {
   await tell({ id: 'chrn_a' });
   await settle();
   expect(list).toHaveBeenCalledTimes(1);

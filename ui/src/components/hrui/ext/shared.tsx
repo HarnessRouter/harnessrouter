@@ -9,9 +9,11 @@ export const setupHref = (id: string) => `/studio/${encodeURIComponent(id)}?tab=
 
 /** The design's libUsed: who uses it, three names at most. */
 export function usedText(names: string[]): string {
-  return names.length ? `Used by ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` and ${names.length - 3} more` : ''}` : 'Not used by any setup';
+  return names.length ? `Used by ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` and ${names.length - 3} more` : ''}` : 'Not used by any harness';
 }
 export const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+/** "1 harness", "2 harnesses". */
+export const harnesses = (n: number) => `${n} ${n === 1 ? 'harness' : 'harnesses'}`;
 
 /** A list that could not be read (lib/settle.ts readSettled gave up after its quiet second try): one
  *  plain line where the list goes, and Try again, never a skeleton that waits forever. */

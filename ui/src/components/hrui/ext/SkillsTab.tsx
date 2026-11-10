@@ -10,7 +10,7 @@ import { getCustom, saveCustom, getSkillFiles, useBases, type CustomHarness } fr
 import { partIcon } from '../bricks';
 import { toast } from '../toast';
 import { ConfirmSheet } from '../Sheet';
-import { PLUS, plural, usedText, ReadFailed } from './shared';
+import { PLUS, harnesses, usedText, ReadFailed } from './shared';
 import { Skel, SkRows } from '../Skel';
 import { SkillEditor } from '../skills/SkillEditor';
 import { AddToSheet, type AddResult, type AddTarget } from './AddToSheet';
@@ -112,7 +112,7 @@ export function SkillsTab({ setups, reload, failed = false, retry }: {
   function added(ids: string[]) {
     const names = ids.map((id) => setups?.find((h) => h.id === id)?.name || id);
     setStep2(false); setEd(null);
-    if (names.length) toast(`Skill created and added to ${names.length === 1 ? names[0] : plural(names.length, 'setup')}.`);
+    if (names.length) toast(`Skill created and added to ${names.length === 1 ? names[0] : harnesses(names.length)}.`);
   }
 
   async function remove(r: Row) {
@@ -123,7 +123,7 @@ export function SkillsTab({ setups, reload, failed = false, retry }: {
       const id = r.s.id || r.s.name;
       await saveCustom({ ...h, skills: (h.skills || []).filter((x) => (x.id || x.name) !== id) });
       setDel(null);
-      toast('Skill deleted. 1 setup updated.');
+      toast('Skill deleted. 1 harness updated.');
       await reload();
     } catch { toast('The skill could not be deleted. Try again.'); }
     finally { setBusy(false); }

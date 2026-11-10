@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 afterEach(() => { window.removeEventListener(SETUPS_EVENT, hear); });
 
-test('a build this page follows tells the setups list, by its id, as the server saves it', async () => {
+test('a build this page follows tells the harnesses list, by its id, as the server saves it', async () => {
   start.mockResolvedValue(building('writing'));
   read.mockResolvedValueOnce(building('saving')).mockResolvedValueOnce(saved);
   const b = startBuild(IN);
@@ -61,7 +61,7 @@ test('a build this page follows tells the setups list, by its id, as the server 
   expect(told).toEqual(['chrn_left']);
 });
 
-test('a build left by a page load is asked for by its key as Studio opens, followed, and its setup lands in the list', async () => {
+test('a build left by a page load is asked for by its key as Studio opens, followed, and its harness lands in the list', async () => {
   leftBy('bleft0001');
   read.mockResolvedValueOnce(building('writing')).mockResolvedValueOnce(saved);
   pickUpBuilds();
@@ -97,7 +97,7 @@ test('one the server has no record of, or that failed, is left as it is: nothing
 test('a demo preset from its recording, a build already saved and one that failed here are not asked for', async () => {
   leftBy('bdemo0001', { preset: true, composed: true, cfg: CFG });
   leftBy('bdone0001', { id: 'chrn_done', done: true });
-  leftBy('berr00001', { error: 'Your setup couldn’t be saved just now.' });
+  leftBy('berr00001', { error: 'Your harness couldn’t be saved just now.' });
   pickUpBuilds();
   await settle();
   expect(read).not.toHaveBeenCalled();

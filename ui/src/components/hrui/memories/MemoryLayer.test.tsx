@@ -104,7 +104,7 @@ test('it says what it is with its own brick, not a tool’s', async () => {
   expect(rowOf('Brand kits').querySelector('.cap-ic .f-memory')).toBeTruthy();
   expect(rowOf('Brand kits').querySelector('.cap-ic .f-mcp')).toBeNull();
 });
-test('On is full use: a read and write grant to the setup’s principal, the same call as before, and says nothing when it works', async () => {
+test('On is full use: a read and write grant to the harness’s principal, the same call as before, and says nothing when it works', async () => {
   const s = backend({ data: [held('m1', 'Brand kits', true, true)], def: 'm1' });
   await draw();
   await press(sw('Support'));

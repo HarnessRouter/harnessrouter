@@ -92,7 +92,10 @@ jobs:
       # and the driver's tests run it as a subprocess against a stub Managed API.
       # boto3 (botocore inside): the relay signs Bedrock calls itself, and its tests check every signature
       # against botocore's own for the same request; without it they skip.
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
+      # boto3 at the version the image ships for Hermes (docker/locks/hermes.in): an unpinned install took botocore
+      # 1.44.0 the day it came out (2026-11-10), which refuses a bearer token on a plain-http endpoint, and the relay
+      # test then failed on a library the image doesn't carry
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "boto3==1.43.126" "botocore==1.43.126" "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
       # The tests that hold the runner's work in a session's tree to the session's own identity need root on
       # Linux and skip anywhere else, so the step above skips them. This step runs that file as root, with the

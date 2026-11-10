@@ -151,7 +151,7 @@ describe('the editor', () => {
     expect(document.querySelector('.ske-bin p')?.textContent).toBe('This file is not text, so it is kept as it is.');
   });
 
-  it('names no setup in the foot, even when editing one in a setup', async () => {
+  it('names no harness in the foot, even when editing one in a harness', async () => {
     await act(async () => { root.render(<Host start={{ ...START, id: 'sk_1' }} setup="Docs helper" />); });
     await settle();
     expect(document.querySelector('.sk-state')).toBeNull();
