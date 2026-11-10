@@ -261,7 +261,7 @@ def secure_store() -> int:
                 os.chown(vers, 0, gid)
                 os.chmod(vers, 0o750)
                 for v in vers.iterdir():
-                    _read_only(v, gid)
+                    _read_only(v, gid, builder=0)     # built as root, before an environment had an identity
             n += 1
         except Exception:  # noqa: BLE001 — one odd directory must not stop the rest
             continue
@@ -899,27 +899,48 @@ def _apt_packages(dst: pathlib.Path) -> list[dict]:
     return out
 
 
-def _read_only(dst: pathlib.Path, gid: int | None = None) -> None:
+def _read_only(dst: pathlib.Path, gid: int | None = None, builder: int | None = None) -> None:
     """Root's, the environment's group's to read, writable by nobody: directories 750, files 640
-    keeping their execute bit (750). Nobody outside the group sees a byte of it."""
+    keeping their execute bit (750). Nobody outside the group sees a byte of it.
+
+    The tree is what the build's own code left, so it is walked by directory descriptor and changed relative to
+    it, a link as itself and never followed (os.fwalk, as _own_tree in server.py), and each directory is made
+    root's before its entries are read. Every name the build makes is its own identity's (`builder`: the
+    environment's identity, or root for a version built before environments had one). A file with another name
+    besides this one that the builder does not own is not the build's: its name is taken out of the layer, and
+    the file itself keeps its owner, its mode and its bytes. Skipping it instead would leave a name in the layer
+    whose content its owner can still change."""
     own = gid is not None and _root()
+    builder = gid if builder is None else builder
+    ours: set[tuple[int, int]] = set()          # the builder's files with several names, re-owned at the first
 
-    def one(p: str, is_dir: bool) -> None:
-        try:
-            st = os.lstat(p)
-            if own:
-                os.lchown(p, 0, gid)
-            if not stat.S_ISLNK(st.st_mode):
-                os.chmod(p, 0o750 if is_dir or st.st_mode & 0o111 else 0o640)
-        except OSError:
-            pass
+    def mode(st: os.stat_result) -> int:
+        return 0o750 if stat.S_ISDIR(st.st_mode) or st.st_mode & 0o111 else 0o640
 
-    one(str(dst), True)
-    for dirpath, dirnames, filenames in os.walk(dst):
-        for d in dirnames:
-            one(os.path.join(dirpath, d), True)
-        for f in filenames:
-            one(os.path.join(dirpath, f), False)
+    try:
+        st = os.lstat(dst)                       # the version itself: its parent is root's
+        if own:
+            os.chown(dst, 0, gid, follow_symlinks=False)
+        if not stat.S_ISLNK(st.st_mode):
+            os.chmod(dst, mode(st))
+    except OSError:
+        pass
+    for _dirpath, dirnames, filenames, dirfd in os.fwalk(dst, follow_symlinks=False):
+        for name in dirnames + filenames:
+            try:
+                st = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+                if own and not stat.S_ISDIR(st.st_mode) and st.st_nlink > 1:
+                    if (st.st_dev, st.st_ino) not in ours:
+                        if st.st_uid != builder:
+                            os.unlink(name, dir_fd=dirfd)
+                            continue
+                        ours.add((st.st_dev, st.st_ino))
+                if own:
+                    os.chown(name, 0, gid, dir_fd=dirfd, follow_symlinks=False)
+                if not stat.S_ISLNK(st.st_mode):
+                    os.chmod(name, mode(st), dir_fd=dirfd)
+            except OSError:
+                pass
 
 
 def _end_build_processes(gid: int | None) -> None:

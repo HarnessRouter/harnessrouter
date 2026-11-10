@@ -391,18 +391,31 @@ def test_each_environment_gets_its_own_group_and_its_builds_run_as_it(store, mon
     E.write_file("henv_g1", "a.txt", b"a")
     assert E.env_gid("henv_g1") is None and E._build_as("henv_g1") == {} and E.secure_store() == 0   # not root: modes only
     owned, made = {}, []
+
+    def at(p, dir_fd=None) -> str:     # the path a call names, whether whole or relative to a directory descriptor
+        if dir_fd is None:
+            return str(p)
+        if sys.platform == "darwin":
+            import fcntl
+            base = fcntl.fcntl(dir_fd, fcntl.F_GETPATH, b"\0" * 1024).split(b"\0", 1)[0].decode()
+        else:
+            base = os.readlink(f"/proc/self/fd/{dir_fd}")
+        return os.path.join(base, p)
+
+    def chown(p, u, g, *, dir_fd=None, follow_symlinks=True):
+        owned[at(p, dir_fd)] = (u, g)
     monkeypatch.setattr(E.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(E.os, "chown", lambda p, u, g: owned.__setitem__(str(p), (u, g)))
+    monkeypatch.setattr(E.os, "chown", chown)
     monkeypatch.setattr(E.os, "lchown", lambda p, u, g: owned.__setitem__(str(p), (u, g)))
     monkeypatch.setattr(E, "_account", lambda n: made.append(n))
     real_stat = os.stat
 
     def fake_stat(p, *a, **k):        # the directory's group is the record: replay what chown set
         st = real_stat(p, *a, **k)
-        if str(p) in owned:
-            class St:
-                st_uid, st_gid, st_mode = owned[str(p)][0], owned[str(p)][1], st.st_mode
-            return St()
+        if isinstance(p, (str, os.PathLike)) and at(p, k.get("dir_fd")) in owned:
+            fields = list(tuple(st))
+            fields[4], fields[5] = owned[at(p, k.get("dir_fd"))]
+            return os.stat_result(fields)
         return st
     monkeypatch.setattr(E.os, "stat", fake_stat)
     E._claim("henv_g1"); E._claim("henv_g2")

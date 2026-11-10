@@ -133,9 +133,11 @@ export function MemoryLayer({ hid, onRead }: { hid: string; onRead?: (d: Harness
   const ownId = own.read?.memory?.id || '';
   const turnOn = (mid: string) => run(async () => {
     await grant(mid, principal, ['read', 'write']);
-    // its own memory back on: the default again, keeping finished tasks, as the service set it when it gave it
+    // its own memory back on: the default again, keeping finished tasks, as the service set it when it gave it.
+    // Any other memory switched on while the agent has nowhere to write becomes where it writes, keeping finished
+    // tasks too: the outcome can't depend on which switch was pressed first (own Off then this On kept nothing).
     if (mid === ownId) await setHarnessMemories(hid, { default_memory_id: mid, observe: true });
-    else if (!d?.default_memory_id) await setHarnessMemories(hid, { default_memory_id: mid, observe: false });
+    else if (!d?.default_memory_id) await setHarnessMemories(hid, { default_memory_id: mid, observe: true });
   }, 'That memory was not given. Try again.');
   const turnOff = (mid: string) => run(async () => {
     const g = (await listGrants(mid)).find((x) => x.principal === principal && x.memory_id === mid);

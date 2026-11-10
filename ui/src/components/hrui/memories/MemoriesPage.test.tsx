@@ -326,6 +326,41 @@ describe('New memory: a name, a description if you like, and every engine, the o
   });
 });
 
+describe('coming back to the page', () => {
+  // A memory an agent was given in another tab or window shows here when the person comes back, without a reload.
+  test('the list is read again when the window is focused or shown again, at most once in five seconds, and a failed read keeps what is shown', async () => {
+    let made = false, fail = false;
+    const s = backend({
+      'GET /v1/memories/providers': { data: [CAPS.graphiti] },
+      'GET /v1/memories': () => {
+        if (fail) throw Object.assign(new Error('down'), { status: 503 });
+        return { data: made ? [memory(), memory({ id: 'hmem_2', name: 'Trip plans', description: '' })] : [memory()] };
+      },
+      'GET /v1/memories/hmem_1/schema': { types: [], relations: [] },
+      'GET /v1/memories/hmem_2/schema': { types: [], relations: [] },
+    });
+    const now = jest.spyOn(Date, 'now');
+    let t = 1_000_000; now.mockImplementation(() => t);
+    await open();
+    expect(page().querySelectorAll('.mm-card')).toHaveLength(1);
+    made = true;
+    t += 6000; await act(async () => { window.dispatchEvent(new Event('focus')); }); await flush();
+    expect(page().querySelectorAll('.mm-card')).toHaveLength(2);
+    expect(page().textContent).toContain('Trip plans');
+    // focus again at once: not read again
+    const reads = () => s.sent('GET', '/v1/memories').length;
+    const before = reads();
+    t += 1000; await act(async () => { window.dispatchEvent(new Event('focus')); }); await flush();
+    expect(reads()).toBe(before);
+    // shown again later, the service down: what is shown stays, with no error in its place
+    fail = true;
+    t += 6000; await act(async () => { document.dispatchEvent(new Event('visibilitychange')); }); await flush();
+    expect(reads()).toBe(before + 1);
+    expect(page().querySelectorAll('.mm-card')).toHaveLength(2);
+    now.mockRestore();
+  });
+});
+
 describe('the cards', () => {
   test('no counts: the list is read without them, in the order it was last used, and a card names its engine', async () => {
     // Richard 11-06: the counts (memories, records, setups; a card's types, records and setups) made the list slow

@@ -1167,6 +1167,32 @@ def test_the_builder_is_told_memory_is_the_platforms_and_its_save_provisions(cli
     assert (info["engine"], info["scope"], v["memory_reason"]) == (said["engine"], said["scope"], said["reason"])
 
 
+
+def test_the_persons_own_goal_decides_the_memory_when_it_is_clear_whatever_the_builder_wrote(client):
+    # 2026-11-10: the same typed request got Graphiti (shared) once and Mem0 (per person) once, because the builder
+    # names the agent and words the hint afresh each time. The goal as typed is read first.
+    inv = {"bases": {"claude-code": {"name": "Claude Code", "default": "m", "models": ["m"], "skills": True, "auto": True}}}
+    goal = ("Keep a timeline of the people in my life and how we're all related: what's happening with each of my "
+            "friends and family over time, and the plans we make together.")
+    cfg = setup_builder.settle({"name": "Personal relationship updates", "instructions": "You are a personal assistant. " * 8,
+                                "example_task": "What's new with Melanie?", "memory_hint": "the user's personal preferences"},
+                               inv, "claude-code", "m", {}, goal)
+    p = {"org": ORG, "member": "ada@example.com", "workspace": ""}
+    # without the goal, the builder's words decide: kept per person
+    assert run(gw._setup_build_memory(p, cfg))["scope"] == "per_user"
+    # with it, as the build passes it: the goal decides, for the card and for the save alike. What it decides is the
+    # nature (Graphiti's) and so the scope; the engine is the best of those running here (CI runs Mem0 alone)
+    said = run(gw._setup_build_memory(p, {**cfg, "goal": goal}))
+    assert said["scope"] == "shared" and "Graphiti" in said["reason"]
+    hid = gw._rid("chrn")
+    run(gw._setup_build_save(p, {**cfg, "model": "", "goal": goal}, hid, {}))
+    v = run(gw._harness_vertex(hid))
+    info = json.loads(v["memory_info"])
+    assert (info["engine"], info["scope"]) == (said["engine"], "shared") and v["memory_hint"] == goal
+    # a goal that names nothing clearly leaves it to the builder's words, as before
+    assert gw._setup_build_hint({**cfg, "goal": "Help me out."}) == "the user's personal preferences"
+
+
 # ── the instructions ─────────────────────────────────────────────────────────────────────────
 def test_the_memory_section_says_the_rules_first(client, per_person):
     hid, _ = per_person

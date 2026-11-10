@@ -1282,8 +1282,14 @@ def _git_shed_cli_home_history(ws: str) -> None:
         if h_new:
             _git(ws, "update-ref", "HEAD", h_new)      # HEAD is symbolic: this moves the branch
     finally:
+        # As the session: .git is the agent's to rearrange, and /hydrate, /checkpoint and /produced reach this
+        # with no scope of their own, so the removal is judged as the session wherever the name now leads.
         try:
-            os.unlink(scratch)
+            with _fs_as(_session_uid(ws)):
+                # where the name leads now, and only inside this workspace: a .git made to lead elsewhere is left alone
+                real = os.path.realpath(scratch)
+                if real.startswith(os.path.realpath(ws) + os.sep):
+                    os.unlink(real)
         except OSError:
             pass
     _git(ws, "reflog", "expire", "--expire=now", "--all")
@@ -13754,7 +13760,10 @@ def _jcode_anthropic_listed() -> list[str]:
     global _JCODE_ANTHROPIC_LISTED
     if _JCODE_ANTHROPIC_LISTED is None:
         try:
-            with tempfile.TemporaryDirectory(prefix="hr-jcode-models-") as home:
+            # The CLI runs as root with this folder as its home, so the folder is root's (0700) whatever identity
+            # the calling thread holds: the builders ask from inside a session's scope (_fs_as), where a folder
+            # made would be the session's.
+            with _fs_as(0), tempfile.TemporaryDirectory(prefix="hr-jcode-models-") as home:
                 r = subprocess.run(["jcode", "model", "list", "--provider", "anthropic-api"], capture_output=True,
                                    text=True, timeout=30, env={**_child_env(), "HOME": home, "JCODE_NO_TELEMETRY": "1",
                                                                "ANTHROPIC_AUTH_TOKEN": "placeholder",
@@ -15485,8 +15494,10 @@ def _fast_agent_known(model: str) -> dict | None | bool:
     if model in _FA_KNOWN:
         return _FA_KNOWN[model]
     try:
+        # From /, never a shared scratch folder: the probe runs as root, and fast-agent looks for its
+        # configuration in the folder it starts in.
         out = subprocess.run([FAST_AGENT_PYTHON, "-I", "-c", _FA_PROBE, model], capture_output=True,
-                             text=True, timeout=60, cwd=tempfile.gettempdir())
+                             text=True, timeout=60, cwd="/")
         view = json.loads(out.stdout.strip().splitlines()[-1]) if out.returncode == 0 else False
     except (OSError, subprocess.SubprocessError, ValueError, IndexError):
         view = False
@@ -15880,6 +15891,31 @@ _turns_lock = threading.Lock()
 _TURN_MARK = "HR_TURN_ID"
 
 
+# The tmux socket directory openhands' driver makes for a turn (tempfile.mkdtemp(prefix="oh", dir="/tmp"),
+# runner/openhands_driver.py): /tmp/oh and mkdtemp's letters, digits and underscores, and nothing else.
+_TURN_TMUX_DIR = re.compile(r"/tmp/oh[a-z0-9_]+")
+
+
+def _remove_turn_tmux_dir(d: str, uid: int) -> bool:
+    """Remove a tmux socket directory a turn's process named in its TMUX_TMPDIR. The value comes from the
+    session's own process, so it is treated as the session's input: the RAW value must be exactly the
+    shape the driver makes (judged before any normalising), it must be a real directory (not a link)
+    owned by the uid of the process that named it, and the removal runs as that uid (_fs_as), so it can
+    take nothing the process could not have removed itself. rmtree walks by descriptor and refuses a
+    directory swapped for a link under it."""
+    if not _TURN_TMUX_DIR.fullmatch(d):
+        return False
+    try:
+        st = os.lstat(d)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+        return False
+    with _fs_as(uid):
+        shutil.rmtree(d, ignore_errors=True)
+    return True
+
+
 def _sweep_turn_processes(turn_id: str) -> int:
     """Kill every process still carrying this turn's marker, and remove the tmux socket
     directory such a process names. The group kill misses a process that put itself in a new
@@ -15892,28 +15928,28 @@ def _sweep_turn_processes(turn_id: str) -> int:
         return 0
     want = f"{_TURN_MARK}={turn_id}".encode()
     killed = 0
-    dirs: set[str] = set()
+    dirs: set[tuple[str, int]] = set()          # (the directory a process named, that process's uid)
     me = os.getpid()
     for entry in os.listdir("/proc") if os.path.isdir("/proc") else []:
         if not entry.isdigit() or int(entry) == me:
             continue
         try:
             environ = pathlib.Path("/proc", entry, "environ").read_bytes()
+            uid = os.stat(f"/proc/{entry}").st_uid
         except OSError:
             continue
         if want not in environ.split(b"\0"):
             continue
         for kv in environ.split(b"\0"):
             if kv.startswith(b"TMUX_TMPDIR="):
-                dirs.add(kv.split(b"=", 1)[1].decode(errors="replace"))
+                dirs.add((kv.split(b"=", 1)[1].decode(errors="replace"), uid))
         try:
             os.kill(int(entry), signal.SIGKILL)
             killed += 1
         except OSError:
             pass
-    for d in dirs:
-        if d.startswith("/tmp/oh"):
-            shutil.rmtree(d, ignore_errors=True)
+    for d, uid in dirs:
+        _remove_turn_tmux_dir(d, uid)
     return killed
 
 
@@ -17244,8 +17280,22 @@ def backends() -> dict:
 # that holds several sessions puts them beside its workspace root, as environments.py does with its
 # own root, so a runner started some other way keeps them as long as its workspaces too; a
 # per-session sandbox, or a runner that cannot write there, keeps /tmp.
+#
+# Behind the write-wall the runner writes and removes markers as root, and a shared scratch folder is one
+# every session can make names in, so the wall takes its marker folder from the entrypoint or not at all:
+# HR_WS_MARKER_DIR must name a real directory of root's, mode 0700, or the runner refuses to start.
 def _ws_marker_dir() -> str:
     named = os.environ.get("HR_WS_MARKER_DIR")
+    if _SESSION_UIDS:
+        try:
+            st = os.lstat(named) if named else None
+        except OSError:
+            st = None
+        if st is None or not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or stat.S_IMODE(st.st_mode) != 0o700:
+            raise RuntimeError("HR_SESSION_UIDS=1 requires HR_WS_MARKER_DIR to name a directory owned by root with "
+                               f"mode 0700 (the image's entrypoint makes one on the data volume); got {named!r}. "
+                               "Refusing to start rather than keep workspace markers somewhere sessions can write")
+        return named
     if named:
         return named
     if _SANDBOX_PER_SESSION:
@@ -17502,6 +17552,18 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
     return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws}
 
 
+# GNU tar's own line for a path --ignore-failed-read let it pass over: `tar: <name>: Warning: Cannot open: <why>`
+# (also Cannot read, stat, readlink, savedir). Only the name is kept, for the log; nothing of the file is read.
+_TAR_SKIPPED = re.compile(r"^tar: (.+?): Warning: Cannot [a-z]+: ")
+_TAR_SKIPPED_SHOWN = 20
+
+
+def _tar_skipped(stderr: bytes | str | None) -> list[str]:
+    """The paths tar's stderr says it left out because they could not be read."""
+    text = stderr.decode(errors="replace") if isinstance(stderr, bytes) else (stderr or "")
+    return [m.group(1)[:300] for m in (_TAR_SKIPPED.match(ln) for ln in text.splitlines()) if m]
+
+
 @app.get("/checkpoint")
 def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: str = "1") -> Response:
     """Commit /workspace and return it as a gzip tarball (secrets/scratch excluded). The gateway
@@ -17537,12 +17599,22 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
     excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
     fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     try:
+        # The archive is read as the session, as /hydrate's untar writes as it: the checkpoint holds what the
+        # session can read in its own tree and nothing else, and the tar process starts from _child_env, never
+        # the runner's environment. A file the session cannot read is left out (--ignore-failed-read) and named
+        # in the log, rather than failing the checkpoint; any other failure still fails it.
         with os.fdopen(fd, "wb") as out:
-            proc = subprocess.run(["tar", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
-                                  stdout=out, stderr=subprocess.PIPE)
+            proc = subprocess.run(["tar", "--ignore-failed-read", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
+                                  stdout=out, stderr=subprocess.PIPE, env=_child_env(), **_as_session(ws))
         if proc.returncode != 0:
             os.unlink(tar_path)
             raise HTTPException(500, f"tar failed: {proc.stderr.decode(errors='replace')[:300]}")
+        skipped = _tar_skipped(proc.stderr)
+        if skipped:
+            shown = ", ".join(skipped[:_TAR_SKIPPED_SHOWN]) + (f" and {len(skipped) - _TAR_SKIPPED_SHOWN} more"
+                                                             if len(skipped) > _TAR_SKIPPED_SHOWN else "")
+            print(f"[checkpoint] WARNING: {identifier}: {len(skipped)} path(s) the session cannot read were left "
+                  f"out of the checkpoint: {shown}", flush=True)
         h = hashlib.sha256()
         nbytes = 0
         with open(tar_path, "rb") as f:
@@ -18683,8 +18755,14 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
     if not state.is_file():
         return None
     if not (auth and auth.api_key):
+        # The record is a file in the session's tree: the log names it and its size, never what it holds.
+        try:
+            with _fs_as(_session_uid(ws)):
+                size = state.stat().st_size
+        except OSError:
+            size = -1
         print(f"[workspace] {ws}: remote Qoder objects recorded but no credential came with the delete; "
-              f"left in place: {state.read_text()[:600]}", flush=True)
+              f"left in place, as recorded in {QODER_STATE_REL} ({size} bytes)", flush=True)
         return {"backend": "qoder", "purged": False, "reason": "no credential", "state": QODER_STATE_REL}
     base = (auth.base_url or QODER_DEFAULT_BASE).rstrip("/")
     relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)

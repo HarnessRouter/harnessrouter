@@ -18,6 +18,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [Configuration](#configuration)
 - [Using the API](#using-the-api)
 - [Running on a cloud VM](#running-on-a-cloud-vm)
+- [Hard links on the host](#hard-links-on-the-host)
 - [Putting it on a public URL](#putting-it-on-a-public-url)
 - [Moving to the hosted service](#moving-to-the-hosted-service)
 - [Architecture](#architecture)
@@ -1385,6 +1386,19 @@ sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
 ```
 
 Make the rule permanent the way your distribution does (for example `netfilter-persistent save`), and don't give the VM a role it doesn't need. Bedrock or Vertex through an instance role also goes over this path: with the block in place, give the connection its own credential instead, which the relay holds for the turn.
+
+## Hard links on the host
+
+Each session runs under its own user, and that is what keeps one session out of another's files. The host's kernel decides whether a user may make a hard link to a file it doesn't own. When it allows that, the separation is weaker than it should be. Set `fs.protected_hardlinks` to 1 on the host:
+
+```bash
+sudo sysctl -w fs.protected_hardlinks=1
+echo 'fs.protected_hardlinks = 1' | sudo tee /etc/sysctl.d/90-protected-hardlinks.conf
+```
+
+The first line changes it now; the file in `/etc/sysctl.d` keeps it after a reboot. Most distributions that use systemd already set it to 1. The container checks at start and prints a warning when it is 0.
+
+A checkpoint reads a session's folder as that session, so a file the session can't read is left out of it, and the runner's log names it. If the log names a file you know is the user's own, check that it has a single name (`stat -c %h` prints 1) and is inside that session's workspace, then give it to the session's user with `chown`; the next checkpoint takes it.
 
 ## Putting it on a public URL
 

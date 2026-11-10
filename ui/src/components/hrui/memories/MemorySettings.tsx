@@ -84,9 +84,11 @@ export function MemorySettings({ memory, onSaved, onDeleted }: { memory: Memory;
   const turnOn = (h: CustomHarness) => run(async () => {
     const d = await getHarnessMemories(h.id);
     await grant(memory.id, d.principal, ['read', 'write']);
-    // its own memory back on: the default again, keeping finished tasks, as the service set it when it gave it
+    // its own memory back on: the default again, keeping finished tasks, as the service set it when it gave it.
+    // Any other memory switched on for an agent with nowhere to write becomes where it writes, keeping finished
+    // tasks too, the same whichever switch was pressed first.
     if (agentMemoryOf(h)?.memory?.id === memory.id) await setHarnessMemories(h.id, { default_memory_id: memory.id, observe: true });
-    else if (!d.default_memory_id) await setHarnessMemories(h.id, { default_memory_id: memory.id, observe: false });
+    else if (!d.default_memory_id) await setHarnessMemories(h.id, { default_memory_id: memory.id, observe: true });
   }, 'That memory was not given. Try again.');
   const turnOff = (h: CustomHarness) => run(async () => {
     const d = await getHarnessMemories(h.id);

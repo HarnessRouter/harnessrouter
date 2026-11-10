@@ -608,16 +608,16 @@ describe('the Settings tab', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(`/studio/${H}?tab=settings&layer=memory`);
     expect(page().querySelector('.mm-settings input[type=search]')).toBeNull();
   });
-  test('On sends what the switch for this memory in that agent’s own Settings, Memory sends: read and write, and the default where there is none', async () => {
+  test('On sends what the switch for this memory in that agent’s own Settings, Memory sends: read and write, and the default where there is none, keeping finished tasks', async () => {
     const s = open({ provider: CAPS.mem0, memory: contract(), records: [record()], extra: {
       [`GET /v1/harnesses/${H}/memories`]: theirs({ observe: true }),
       'POST /v1/memories/hmem_1/grants': { id: 'g' },
-      [`PUT /v1/harnesses/${H}/memories`]: theirs({ def: 'hmem_1', observe: false }),
+      [`PUT /v1/harnesses/${H}/memories`]: theirs({ def: 'hmem_1', observe: true }),
     } });
     await draw('settings');
     await click(sw('Photo cut'));
     expect(s.sent('POST', '/v1/memories/hmem_1/grants').map((c) => c.body)).toEqual([{ principal: `member:${H}`, privileges: ['read', 'write'] }]);
-    expect(s.sent('PUT', `/v1/harnesses/${H}/memories`).map((c) => c.body)).toEqual([{ default_memory_id: 'hmem_1', observe: false }]);
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memories`).map((c) => c.body)).toEqual([{ default_memory_id: 'hmem_1', observe: true }]);
   });
   test('On where the agent has a default already leaves it there', async () => {
     const s = open({ provider: CAPS.mem0, memory: contract(), records: [record()], extra: {
