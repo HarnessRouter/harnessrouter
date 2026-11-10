@@ -21,7 +21,7 @@ test('a memory’s name and description are one column: the name on its row, the
 });
 
 test('a memory’s picture is contained and centred in its box, and the list’s small one never takes Studio’s own .mini', () => {
-  const rule = (sel: string) => (css.match(new RegExp(`${sel.replace(/[.]/g, '\\.')}\\{[^}]*\\}`)) || [''])[0];
+  const rule = (sel: string) => (css.match(new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\{[^}]*\\}`)) || [''])[0];
   expect(rule('#hrui .mm-cover')).toMatch(/object-fit:contain/);
   expect(rule('#hrui .mm-cover')).toMatch(/object-position:center/);
   expect(rule('#hrui .mm-mini-box .mm-cover')).toMatch(/width:100%;height:100%/);

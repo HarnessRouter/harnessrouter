@@ -618,6 +618,12 @@ def _stand_ins(monkeypatch) -> pathlib.Path:
     if node:
         (d / "kimi").write_text(_NODE_STAND_IN.format(node=node))
         os.chmod(d / "kimi", 0o755)
+        # the preload, where a session's uid can read it, as the image's /app/runner is (a CI checkout under a home
+        # folder isn't readable by other users, so node there couldn't load the runner's own copy)
+        pre = d / "prompt_preload.cjs"
+        pre.write_text(pathlib.Path(server.PROMPT_PRELOAD_CJS).read_text())
+        os.chmod(pre, 0o444)
+        monkeypatch.setattr(server, "PROMPT_PRELOAD_CJS", str(pre), raising=False)
     if cc:
         # jcode's pair: a launcher, and the binary beside it that the runner starts directly (_jcode_exe); and the
         # library that hands the binary its prompt, built from the runner's own source as the image builds it
