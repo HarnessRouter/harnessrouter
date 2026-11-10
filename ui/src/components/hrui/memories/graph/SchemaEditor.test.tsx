@@ -461,6 +461,29 @@ describe('a schema with no saved places', () => {
   });
 });
 
+describe('deleting a type says only what goes with it', () => {
+  const sheet = () => document.querySelector('[role=alertdialog], [role=dialog]') as HTMLElement;
+  it('labels (no relations): the type alone, never "every link that uses it"', async () => {
+    stored = { types: [{ name: 'Billing', description: 'Money owed or paid.' }] };
+    await open(CAPS.hindsight);
+    await act(async () => { canvasProps.onTapNode('Billing'); });
+    await flush();
+    expect(panel().textContent).toContain('Removes Billing from the schema. Records already kept stay as they are.');
+    expect(panel().textContent).not.toContain('every link');
+    await click(button('Delete this type'));
+    expect(sheet().textContent).toContain('Removes Billing from the schema of Customers. Records already kept stay as they are.');
+    expect(sheet().textContent).not.toContain('every relation');
+  });
+  it('guides (relations): the type and the relations that use it, as before', async () => {
+    await open(CAPS.graphiti);
+    await act(async () => { canvasProps.onTapNode('Person'); });
+    await flush();
+    expect(panel().textContent).toContain('Removes Person from the schema, and every link that uses it.');
+    await click(button('Delete this type'));
+    expect(sheet().textContent).toContain('Removes Person from the schema of Customers, and every relation that uses it.');
+  });
+});
+
 describe('where the engine reads no schema (schema.mode "none"), the pencil and + Type are there and off, saying why', () => {
   const editIcon = 'M16 4l4 4-11 11H5v-4z';
   const mem0 = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'A short fact.' }], relations: [] } } } as Provider;
