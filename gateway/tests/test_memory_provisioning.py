@@ -277,7 +277,8 @@ def test_the_operator_sees_each_persons_memory_by_who_they_are(client, per_perso
     kids = client.get("/v1/memories", params={"parent": shared}, headers=ADA).json()["data"]
     people = {k["end_user"]: k for k in kids}
     assert "dana@guests.example" in people and people["dana@guests.example"]["restricted"] is True
-    assert people["dana@guests.example"]["name"] == memory_plane.end_user_hash("dana@guests.example")
+    # named after the person (Richard 11-10), not a hash that read as an empty stranger
+    assert people["dana@guests.example"]["name"] == "dana@guests.example"
     # someone else holds nothing on a person's memory: it is not there for them
     assert client.get(f"/v1/memories/{people['dana@guests.example']['id']}", headers=BEN).status_code == 404
 
@@ -1603,3 +1604,26 @@ def test_another_organizations_engines_are_never_lent(client):
     other = {**ADA, "x-harness-org": "provorg-elsewhere", "x-harness-workspace": "ws.later"}
     h = client.post("/v1/harnesses", headers=other, json={"name": "Support replies", "base": "claude-code"}).json()
     assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+
+
+def test_a_persons_memory_named_by_a_hash_before_is_named_after_them_when_next_used(client, per_person):
+    hid, shared = per_person
+    m = run(memory_plane._load(ORG, shared))
+    who = "gil@guests.example"
+    node, _ = run(memory_plane.end_user_node(ORG, m, who))
+    # as 0.41.10 and earlier named it
+    run(gw.BACKING.graph.upsert("Memory", node["id"], {"name": memory_plane.end_user_hash(who)}))
+    memory_plane._PEOPLE.clear()
+    again, _ = run(memory_plane.end_user_node(ORG, m, who))
+    assert again["id"] == node["id"] and again["name"] == who
+    assert run(memory_plane._load(ORG, node["id"]))["name"] == who
+
+
+def test_a_persons_own_memory_says_it_is_theirs_and_no_one_elses(client, per_person):
+    hid, shared = per_person
+    m = run(memory_plane._load(ORG, shared))
+    node, _ = run(memory_plane.end_user_node(ORG, m, "ada@example.com"))     # Ada's own: she talks to it in the console
+    other, _ = run(memory_plane.end_user_node(ORG, m, "hal@guests.example"))
+    kids = {k["id"]: k for k in client.get("/v1/memories", params={"parent": shared}, headers=ADA).json()["data"]}
+    assert kids[node["id"]].get("yours") is True and "yours" not in kids[other["id"]]
+    assert "yours" not in client.get(f"/v1/memories/{shared}", headers=ADA).json()

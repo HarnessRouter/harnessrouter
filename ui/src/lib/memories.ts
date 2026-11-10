@@ -26,6 +26,8 @@ export interface Memory {
   /** A memory kept for one person of an agent that keeps each person's memory apart: who that person is, as the
    *  agent's caller named them (the task's `user`). Said only to whoever manages the memory, never to the agent. */
   end_user?: string;
+  /** a person's memory below an agent's that is the signed-in person's own: listed first, and open */
+  yours?: boolean;
   /** Its card's picture: when it was made (epoch ms; null or absent: none yet) and the console's short name for the
    *  drawing it shows (cover.ts coverSig), so another is made only when the drawing changes. */
   cover_at?: number | null; cover_sig?: string | null;
