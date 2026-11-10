@@ -12,9 +12,14 @@ these lines would let what a volume runs move with an upstream, without a change
                             transfer, not the build: a replaced release ships with a matching one
   curl | sh                 a vendor's install script, run as root
 
-The check reads the source, so it runs in the tests job with nothing installed. ALLOWED names the
-lines that are known and accepted for now; each PR that pins one removes it, and an entry that no
-longer matches anything fails too, so the list can only shrink.
+It also holds who runs an install (#623, step 3). In docker/entrypoint.sh, root never runs a package
+manager on a base's tree, unpacks a downloaded archive, or runs a file out of an installed tree: npm
+ci, npm rebuild, npm install, pip install, tar -x, node loading a package, and any command that is a
+path into the tools tree or a venv run as the base's own install uid, written `iu <command>`.
+
+The check reads the source, so it runs in the tests job with nothing installed. ALLOWED and ROOT_RUNS
+name the lines that are known and accepted for now; each PR that fixes one removes it, and an entry
+that no longer matches anything fails too, so the lists can only shrink.
 
   python3 scripts/check-install-pins.py [file ...]
 """
@@ -35,7 +40,16 @@ ALLOWED: list[tuple[str, str, str]] = [
      "build time: the gateway's and runner's requirements, version-pinned but not hashed"),
 ]
 
-# npm itself, or npm_g (entrypoint.sh's `npm install -g --prefix $TOOLS`) called rather than defined.
+# (file, a substring of the line, why root still runs it). Every entry is a step after a base's own
+# install that runs its installed code as root: the package managers themselves all run as the install
+# uid now. Moving one of these under `iu` removes its entry. Empty is the goal.
+ROOT_RUNS: list[tuple[str, str, str]] = [
+    ("docker/entrypoint.sh", '"$TOOLS/systemone-venv/bin/playwright" install-deps chromium',
+     "System One's browser libraries: Playwright's driver runs apt as root. Its replacement, a fixed apt "
+     "package list committed in the script (#623 step 3, item 5), waits on the design answer"),
+]
+
+# npm itself, or npm_g (an `npm install -g --prefix $TOOLS`, gone since #623 step 3) called rather than defined.
 NPM_INSTALL = re.compile(r"\bnpm\s+(?:install|i|add)\b|\bnpm_g\s+(?!\()")
 # pip, however it is named: pip3, a venv's bin/pip in quotes, python -m pip.
 PIP_INSTALL = re.compile(r"\bpip3?[\"']?\s+install\b|-m\s+pip\s+install\b")
@@ -72,7 +86,7 @@ def npm_unpinned(cmd: str) -> list[str]:
     if not m:
         return bad
     rest = cmd[m.end():]
-    rest = re.split(r"\|\||&&|;|\|", rest)[0]
+    rest = re.split(r"\|\||&&|;|\||\s\)", rest)[0]
     for tok in rest.split():
         tok = tok.strip("'\"")
         if not tok or tok.startswith("-") or tok.startswith("$TOOLS") or tok in ('"$@"', "$@"):
@@ -153,29 +167,83 @@ def check_text(path: str, text: str) -> list[tuple[str, int, str, str]]:
     return found
 
 
-def run(files: list[str]) -> int:
+# ── who runs it ──────────────────────────────────────────────────────────────────────────────────
+# A word that runs a package manager, unpacks an archive (as root, a crafted entry or a tar bug reaches
+# anything), or runs a file out of an installed tree: a path under $TOOLS or a venv's bin, held in
+# quotes or not. `-m pip` is judged by the interpreter before it.
+_PATHWORD = r"\"?\$\{?(?:TOOLS\}?/[^\s\"]*|\w*venv\}?/bin/[^\s\"]*)\"?"
+_RUNNER = re.compile(rf"(?P<w>{_PATHWORD}|\bnpm\s+(?:ci|rebuild|install|i|add|exec|run|x)\b|\bnpx\b|\bpip3?\s+install\b"
+                     r"|\btar\s+(?:-[A-Za-z]*x[A-Za-z]*|x[A-Za-z]*|--extract)\b)")
+# What may come before a word for the word to be the command: the start of the line or of a command,
+# then any VAR=value assignments.
+_CMD_START = re.compile(r"(?:^|[;&|(!{`]|\$\(|\b(?:then|do|else|if|while|until|exec)\b)\s*$")
+_ASSIGN = re.compile(r"\b[A-Za-z_]\w*=(?:\"[^\"]*\"|'[^']*'|(?:(?!\$\()\S)*)\s*$")
+# node loading a package by name (not one of node's own modules) out of an installed tree
+_NODE_PKG = re.compile(r"\bnode\s+-[ep]\b.*\brequire\(\s*[\"'](?!(?:node:)?(?:fs|path|os|child_process|util)[\"'])[^\"']+[\"']")
+
+
+def _as_root(prefix: str, after: str) -> bool:
+    """True when the word between <prefix> and <after> is a command that runs as root (not after `iu`).
+    A value being assigned (X="$TOOLS/...") and a case pattern ("$TOOLS/bin"|...) are not commands."""
+    if prefix.endswith("=") or re.match(r"[*?]*[|)]", after):
+        return False
+    prefix = re.sub(r"\"\$\($", "$(", prefix.rstrip())
+    while True:   # VAR=value assignments, and a launcher that runs the word as the same user
+        m = _ASSIGN.search(prefix) or re.search(r"\b(?:env|nohup|setsid|nice|timeout\s+\S+)$", prefix)
+        if not m:
+            break
+        prefix = prefix[:m.start()].rstrip()
+    if re.search(r"(?:^|\s|[;&|(!{`])iu$", prefix):
+        return False
+    return bool(_CMD_START.search(prefix))
+
+
+def root_runs_text(path: str, text: str) -> list[tuple[str, int, str, str]]:
+    """The lines of the entrypoint where root runs what an install brought, rather than `iu`."""
+    if not path.endswith("entrypoint.sh"):
+        return []
     found = []
+    for n, line in logical_lines(text):
+        if re.match(r"\s*(echo|printf)\b", line):
+            continue
+        line = FUNC_HEADER.sub("", line)
+        for m in _RUNNER.finditer(line):
+            word = m.group("w")
+            if _as_root(line[:m.start()], line[m.end():]):
+                found.append((path, n, f"root runs {word.strip(chr(34))} (not `iu`)", line))
+        if _NODE_PKG.search(line) and not re.search(r"\biu\s+node\b", line):
+            found.append((path, n, "root runs node on an installed package (not `iu`)", line))
+    return found
+
+
+def run(files: list[str]) -> int:
+    found, root_found = [], []
     for rel in files:
         p = os.path.join(ROOT, rel)
         if not os.path.exists(p):
             continue
         with open(p, encoding="utf-8") as f:
-            found += check_text(rel, f.read())
-    used, bad = set(), []
-    for item in found:
-        hit = next((a for a in ALLOWED if a[0] == item[0] and a[1] in item[3]), None)
-        if hit:
-            used.add(hit)
-        else:
-            bad.append(item)
+            text = f.read()
+        found += check_text(rel, text)
+        root_found += root_runs_text(rel, text)
+    bad, stale = [], []
+    for items, allowed, label in ((found, ALLOWED, "ALLOWED"), (root_found, ROOT_RUNS, "ROOT_RUNS")):
+        used = set()
+        for item in items:
+            hit = next((a for a in allowed if a[0] == item[0] and a[1] in item[3]), None)
+            if hit:
+                used.add(hit)
+            else:
+                bad.append(item)
+        stale += [(label, a) for a in allowed if a not in used]
     for path, n, why, line in bad:
         print(f"{path}:{n}: {why}\n    {line.strip()[:200]}")
-    stale = [a for a in ALLOWED if a not in used]
-    for a in stale:
-        print(f"ALLOWED entry matches nothing any more, remove it: {a[0]}: {a[1]!r}")
+    for label, a in stale:
+        print(f"{label} entry matches nothing any more, remove it: {a[0]}: {a[1]!r}")
     if bad or stale:
         return 1
-    print(f"install pins hold ({len(files)} files, {len(ALLOWED)} allowed exceptions)")
+    print(f"install pins hold ({len(files)} files, {len(ALLOWED)} allowed exceptions); root runs nothing an "
+          f"install brought, except {len(ROOT_RUNS)} step{'s' if len(ROOT_RUNS) != 1 else ''} named in ROOT_RUNS")
     return 0
 
 

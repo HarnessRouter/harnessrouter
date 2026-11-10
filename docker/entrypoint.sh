@@ -19,6 +19,9 @@ set -euo pipefail
 #           the model is still there to choose the right one, instead of vanishing. Shared scratch
 #           (/tmp, /var/tmp, /dev/shm) stays writable, because tools hardcode it — see the mode
 #           below. See _isolate_session in runner/server.py.
+#   19001+  one uid per base, for that base's install alone: its package manager fills its own
+#           directories, and nothing else, as it (install_as_uid, below), and it leaves nothing
+#           running and nothing it owns when the install is over.
 if [ "$(id -u)" -ne 0 ]; then
   echo "[harnessrouter] ERROR: the container must start as root. It drops privileges itself: the product runs as 'agent', every agent process as its own session uid. Remove --user from docker run."
   exit 1
@@ -280,8 +283,8 @@ export HOSTNAME=0.0.0.0
 # to install one backend is not fatal: the others still work, and the gateway's catalog is what
 # the UI offers, so an unavailable backend simply isn't listed.
 TOOLS="$DATA_DIR/agent-tools"
-# Root installs these and runs their version checks at every start, and every session runs them, so
-# they are root's and written by nobody else. A volume from before this was the product's in places,
+# Every session runs these, so they are root's and written by nobody else (a base's install uid owns
+# its own directories only while it fills them; see install_as_uid). A volume from before this was the product's in places,
 # and an installer leaves what its archive says: tar as root keeps the packer's uid and modes. So this
 # runs at every start, before anything here runs a tool, and again when the installers are done.
 # It changes only what is wrong, so on a settled volume it is one walk of the tree. There is no mark to
@@ -292,8 +295,9 @@ seal_tools() {
   find "$TOOLS" -xdev ! -type l \( -perm /022 -o ! -perm -444 -o \( -type d ! -perm -111 \) \) -exec chmod go-w,a+rX {} +
 }
 seal_tools
-export PATH="$TOOLS/bin:$PATH"
-export NODE_PATH="$TOOLS/lib/node_modules"
+# $TOOLS/bin is NOT on this script's PATH until the installs are done (below, before the runner
+# starts): every name root runs here (node, npm, tar, sha256sum, python3, …) is the image's, never a
+# command a base linked into $TOOLS/bin or a script one of hermes's dependencies put in its venv.
 # The four added in this batch are in the DEFAULT set rather than opt-in, for the reason
 # agentzero's PR settled: the console lists every base in the catalog, so a base the operator
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
@@ -404,13 +408,141 @@ install_base() {
   case "$ib_want" in
     *unverified*) echo "[harnessrouter] WARN: $ib_label is an override ($ib_want) with no digest or lock here — NOT verified" ;;
   esac
-  if try_install "$ib_label" "$@" && [ -x "$(backend_bin "$ib_base")" ]; then
+  if try_install "$ib_label" install_as_uid "$ib_base" "$@" && [ -x "$(backend_bin "$ib_base")" ]; then
     printf '%s\n' "$ib_want" > "$STAMPS/$ib_base"
     return 0
   fi
   [ -x "$(backend_bin "$ib_base")" ] && echo "[harnessrouter]   removing the previous $ib_label: it is not the one pinned"
   rm -f -- "$(backend_bin "$ib_base")"
   return 1
+}
+
+# ── who runs an install ──────────────────────────────────────────────────────────────────────────
+# Root never runs what a download brought, and never lets a package manager or an unpacker write a
+# base's tree (#623, step 3). Root fetches, checks digests, makes directories, copies, links and
+# chowns. Everything else runs as the base's own install uid: a package manager filling a tree (npm ci
+# and every tarball it extracts, npm rebuild and the one install script it runs, an override's npm
+# install with its scripts, pip and any sdist it builds), tar unpacking a release archive (iu_untar),
+# and every check that runs an installed file. One step still runs as root, System One's `playwright
+# install-deps` (it calls apt); scripts/check-install-pins.py names it, and that list only shrinks.
+#
+# One uid per base (INSTALL_UID_BASE + its place in INSTALL_UID_ORDER, below the session uids), so a
+# package in one base cannot reach another base's tree, and the uid owns a directory only while it
+# fills it: iu_take hands it a directory root has just made, and iu_give kills every process of the
+# uid and makes the tree root's and sealed again before root reads or links anything in it. Its HOME
+# is a directory of its own under /tmp, removed with the install, so npm's cache and whatever a check
+# writes stay out of /root. Its environment is try_install's, without the instance's secrets, and it
+# can gain no privilege (--no-new-privs: no setuid program in the image changes its uid back).
+INSTALL_UID_BASE=19000
+# A new base goes at the END, so no base's uid moves.
+INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder "
+IU_UID=""; IU_HOME=""
+declare -A IU_HELD=()
+# install_uid <base>: the base's install uid.
+install_uid() {
+  iu_before="${INSTALL_UID_ORDER%% "$1" *}"
+  [ "$iu_before" != "$INSTALL_UID_ORDER" ] || return 1
+  read -ra iu_words <<<"$iu_before"
+  echo $((INSTALL_UID_BASE + ${#iu_words[@]} + 1))
+}
+# iu <command…>: the command as the install uid, in its HOME. Only ever inside install_as_uid.
+iu() {
+  [ -n "$IU_UID" ] || { echo "iu: no install uid here; installs run through install_base"; return 1; }
+  setpriv --reuid="$IU_UID" --regid="$IU_UID" --clear-groups --no-new-privs env HOME="$IU_HOME" "$@"
+}
+# iu_left: how many processes of the install uid are alive, read from /proc. (A zombie runs nothing
+# and holds nothing open; PID 1 reaps it.) kill -0 -1 cannot say this: it answers yes whenever any
+# other process exists, since one it may not signal still counts.
+iu_left() {
+  il_n=0
+  for il_f in /proc/[0-9]*/status; do
+    il_state=""; il_uids=""
+    while read -r il_k il_v il_rest; do
+      case "$il_k" in State:) il_state="$il_v" ;; Uid:) il_uids=" $il_v $il_rest "; break ;; esac
+    done 2>/dev/null < "$il_f" || continue
+    [ "$il_state" != Z ] && [[ "$il_uids" == *" $IU_UID "* ]] && il_n=$((il_n + 1))
+  done
+  echo "$il_n"
+}
+# iu_kill: no process of the install uid is left. kill -1 sent as that uid reaches every process the
+# uid owns and no other, so nothing a package started outlives its install.
+iu_kill() {
+  for iu_round in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ "$(iu_left)" = 0 ] && return 0
+    setpriv --reuid="$IU_UID" --regid="$IU_UID" --clear-groups --no-new-privs bash -c 'kill -KILL -1' 2>/dev/null
+    sleep 0.1
+  done
+  echo "$(iu_left) processes of install uid $IU_UID survived twenty rounds of SIGKILL"; return 1
+}
+# iu_take <dir>: hand a directory root has just made to the install uid, to fill. Never $TOOLS itself
+# and never what every base shares (bin, lib, npm, the stamps), whose parent the uid could then rename.
+iu_take() {
+  case "$1" in
+    *"/.."*|*"/./"*|*"//"*) echo "iu_take: $1 is not a plain path"; return 1 ;;
+    "$TOOLS/bin"|"$TOOLS/bin/"*|"$TOOLS/lib"|"$TOOLS/lib/"*|"$TOOLS/npm"|"$STAMPS"|"$STAMPS/"*)
+      echo "iu_take: $1 is shared by every base"; return 1 ;;
+    "$TOOLS/"?*) ;;
+    *) echo "iu_take: $1 is not below $TOOLS"; return 1 ;;
+  esac
+  [ -d "$1" ] && [ ! -L "$1" ] || { echo "iu_take: $1 is not a directory"; return 1; }
+  IU_HELD[$1]=1
+  chown -hR "$IU_UID:$IU_UID" "$1"
+}
+# iu_give <dir>: the directory is root's again and sealed, and no process of the uid is left to change
+# it or to hold a file in it open. A second name for a file the uid does not own (a hard link to one
+# of root's, on a kernel that allows it) is removed first, since the seal would change that file's
+# owner and modes; a file the uid made setuid or setgid loses the bit; chown -h follows no link.
+iu_give() {
+  iu_kill || return 1
+  if [ -d "$1" ] && [ ! -L "$1" ]; then
+    find "$1" -xdev ! -type d -links +1 ! -user "$IU_UID" -exec rm -f -- {} + || return 1
+    chown -hR root:root "$1" || return 1
+    find "$1" -xdev ! -type l \( -perm /6022 -o ! -perm -444 -o \( -type d ! -perm -111 \) \) \
+      -exec chmod ug-s,go-w,a+rX {} + || return 1
+  fi
+  unset 'IU_HELD[$1]'
+}
+# iu_drop <dir>: a failed fill, removed, with no process of the uid left in it.
+iu_drop() { iu_kill; unset 'IU_HELD[$1]'; rm -rf -- "$1"; }
+# iu_untar <archive> <dir> [<tar argument>…]: unpack an archive whose digest was checked into <dir>, as
+# the install uid: a crafted entry (a link, an absolute or ../ name) or a bug in tar reaches only what
+# that uid can write, where root's tar would have reached anything. <dir> is a new, empty directory
+# root made in a directory of root's, and it is root's and sealed when this returns. The uid reads the
+# archive from stdin, opened by root, and is handed nothing else.
+iu_untar() {
+  ut_archive="$1"; ut_dir="$2"; shift 2
+  if [ ! -d "$ut_dir" ] || [ -L "$ut_dir" ] || [ -n "$(ls -A "$ut_dir" 2>/dev/null)" ] \
+     || [ "$(stat -c %u "$(dirname "$ut_dir")")" != 0 ]; then
+    echo "iu_untar: $ut_dir is not a new directory in one of root's"; return 1
+  fi
+  chown "$IU_UID:$IU_UID" "$ut_dir" || return 1
+  IU_HELD[$ut_dir]=1
+  iu tar -xzf - --no-same-owner -C "$ut_dir" "$@" < "$ut_archive"; ut_rc=$?
+  iu_give "$ut_dir" || return 1
+  return "$ut_rc"
+}
+# unpacked <dir> <path>: <dir>/<path> is a regular file and no part of the way to it is a link, so what
+# root copies out of an unpacked archive is a file the archive held, never what a link points to.
+unpacked() { [ -f "$1/$2" ] && [ "$(realpath -e -- "$1/$2" 2>/dev/null)" = "$(realpath -e -- "$1")/$2" ]; }
+# unpack_dir <tmp>: a new directory <tmp>/x for iu_untar, with <tmp> (root's, from mktemp) passable.
+unpack_dir() { chmod 711 "$1" && mkdir "$1/x" && echo "$1/x"; }
+# install_as_uid <base> <command…>: <command>, whose iu steps run as <base>'s install uid, and nothing
+# of that uid left behind afterwards: no process, no directory it holds, no HOME.
+install_as_uid() {
+  IU_UID="$(install_uid "$1")" || { echo "$1 has no install uid (INSTALL_UID_ORDER)"; IU_UID=""; return 1; }
+  ia_sessions="${HR_SESSION_UID_BASE:-20000}"
+  if [ "$IU_UID" -ge "$ia_sessions" ] && [ "$IU_UID" -lt $((ia_sessions + 40000)) ]; then
+    echo "install uid $IU_UID is a session uid (HR_SESSION_UID_BASE=$ia_sessions); sessions must start above $((INSTALL_UID_BASE + 100))"
+    IU_UID=""; return 1
+  fi
+  shift
+  IU_HOME="$(mktemp -d /tmp/hr-install.XXXXXX)" || return 1
+  chown "$IU_UID:$IU_UID" "$IU_HOME" && chmod 700 "$IU_HOME" && iu_kill || { rm -rf -- "$IU_HOME"; return 1; }
+  "$@"; ia_rc=$?
+  for ia_dir in "${!IU_HELD[@]}"; do iu_give "$ia_dir" || ia_rc=1; done
+  iu_kill || ia_rc=1
+  rm -rf -- "$IU_HOME"
+  return "$ia_rc"
 }
 
 # opencode ships prebuilt binaries on GitHub releases rather than npm, so fetch the asset directly.
@@ -437,9 +569,9 @@ install_opencode() {
   oc_tmp="$(mktemp -d)"
   curl -fsSL "$oc_url" -o "$oc_tmp/opencode.tar.gz" || { rm -rf "$oc_tmp"; return 1; }
   check_sha "opencode $OPENCODE_PIN" "$oc_tmp/opencode.tar.gz" "$OPENCODE_SHA" || { rm -rf "$oc_tmp"; return 1; }
-  tar -xzf "$oc_tmp/opencode.tar.gz" --no-same-owner -C "$oc_tmp" || { rm -rf "$oc_tmp"; return 1; }
-  [ -f "$oc_tmp/opencode" ] || { echo "release archive contained no opencode binary"; rm -rf "$oc_tmp"; return 1; }
-  mkdir -p "$TOOLS/bin" && mv "$oc_tmp/opencode" "$TOOLS/bin/opencode" && chmod 755 "$TOOLS/bin/opencode" \
+  oc_x="$(unpack_dir "$oc_tmp")" && iu_untar "$oc_tmp/opencode.tar.gz" "$oc_x" || { rm -rf "$oc_tmp"; return 1; }
+  unpacked "$oc_x" opencode || { echo "release archive contained no opencode binary"; rm -rf "$oc_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$oc_x/opencode" "$TOOLS/bin/opencode" \
     || { rm -rf "$oc_tmp"; return 1; }
   rm -rf "$oc_tmp"
 }
@@ -484,12 +616,14 @@ install_aider() {
   else
     # An override, unlocked, in the order the overrides above describe: aider, then the SDK over it.
     install_unlocked_venv aider "$am_py" "$TOOLS/aider-venv" "aider-chat==$AIDER_PIN" || return 1
-    "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
+    iu_take "$TOOLS/aider-venv" || return 1
+    iu "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
       "mcp==$AIDER_MCP_PIN" || return 1
+    iu_give "$TOOLS/aider-venv" || return 1
   fi
   # The driver imports aider in process; prove the pinned version is importable before declaring the
   # install good, so a resolver that quietly picked another one fails HERE and not on a live turn.
-  "$TOOLS/aider-venv/bin/python" -c '
+  iu "$TOOLS/aider-venv/bin/python" -c '
 import sys, aider
 want = sys.argv[1]
 if aider.__version__ != want:
@@ -499,7 +633,7 @@ if aider.__version__ != want:
   # and is not usable here — it is a Go program that publishes NO binaries on any release (checked
   # through v0.7.1, every one has zero assets), so it would mean a Go toolchain in a python-slim
   # image for one command.
-  "$TOOLS/aider-venv/bin/python" -c 'from mcp import StdioServerParameters; from mcp.client.client import Client' || return 1
+  iu "$TOOLS/aider-venv/bin/python" -c 'from mcp import StdioServerParameters; from mcp.client.client import Client' || return 1
 }
 
 # Qoder Cloud Agents' Python SDK, MIT (QoderAI/qoder-cloud-agents-sdk-python, PyPI `qca-sdk`), pinned
@@ -513,7 +647,7 @@ QODER_PIN="${HR_QODER_SDK_VERSION:-0.6.0}"
 QODER_REQS=("qca-sdk==$QODER_PIN")
 install_qoder() {
   install_pinned_venv qoder "${HR_QODER_BASE_PYTHON:-python3}" "$TOOLS/qoder-venv" "" "${QODER_REQS[@]}" || return 1
-  "$TOOLS/qoder-venv/bin/python" -c '
+  iu "$TOOLS/qoder-venv/bin/python" -c '
 import sys, importlib.metadata as md
 want = sys.argv[1]
 have = md.version("qca-sdk")
@@ -557,7 +691,7 @@ CHEETAHCLAWS_PIN="${HR_CHEETAHCLAWS_VERSION:-3.5.88}"
 CHEETAHCLAWS_REQS=("cheetahclaws==$CHEETAHCLAWS_PIN")
 install_cheetahclaws() {
   install_pinned_venv cheetahclaws "${HR_CHEETAHCLAWS_BASE_PYTHON:-python3}" "$TOOLS/cheetahclaws-venv" "" "${CHEETAHCLAWS_REQS[@]}" || return 1
-  "$TOOLS/cheetahclaws-venv/bin/python" -c '
+  iu "$TOOLS/cheetahclaws-venv/bin/python" -c '
 import sys, importlib.metadata as md
 want = sys.argv[1]
 have = md.version("cheetahclaws")
@@ -750,14 +884,15 @@ install_systemone() {
     || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   if ! ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
     echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
-    "$TOOLS/systemone-venv/bin/playwright" install chromium \
-      || { rm -rf "$TOOLS/systemone-venv"; return 1; }
-    chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true
+    # Playwright's driver downloads it, as the install uid, into a directory that uid holds meanwhile.
+    rm -rf "$PLAYWRIGHT_BROWSERS_PATH"; mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && iu_take "$PLAYWRIGHT_BROWSERS_PATH" \
+      && iu "$TOOLS/systemone-venv/bin/playwright" install chromium && iu_give "$PLAYWRIGHT_BROWSERS_PATH" \
+      || { iu_drop "$PLAYWRIGHT_BROWSERS_PATH"; rm -rf "$TOOLS/systemone-venv"; return 1; }
   fi
   chromium_libs || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   # Prove the loop imports and the version is the pin, the way every other installer here proves
   # its executable: an install that cannot import is a base that dies on its first turn.
-  "$TOOLS/systemone-venv/bin/python" -c '
+  iu "$TOOLS/systemone-venv/bin/python" -c '
 import sys
 import systemone_harness, systemone_harness.envs.mcp, systemone_harness.envs.browser  # noqa: F401 - the loop, the MCP adapter, the browser
 import browser_use  # noqa: F401 - the browser extra
@@ -799,9 +934,9 @@ install_agentzero() {
   curl -fsSL "https://github.com/agent0ai/agent-zero/archive/refs/tags/v${AGENTZERO_PIN}.tar.gz" \
       -o "$az_tmp/a0.tar.gz" || { rm -rf "$az_tmp"; return 1; }
   check_sha "Agent Zero $AGENTZERO_PIN" "$az_tmp/a0.tar.gz" "$AGENTZERO_SHA" || { rm -rf "$az_tmp"; return 1; }
-  mkdir "$az_tmp/x" && tar -xzf "$az_tmp/a0.tar.gz" --no-same-owner -C "$az_tmp/x" --strip-components=1 \
+  unpack_dir "$az_tmp" >/dev/null && iu_untar "$az_tmp/a0.tar.gz" "$az_tmp/x" --strip-components=1 \
     || { rm -rf "$az_tmp"; return 1; }
-  [ -f "$az_tmp/x/agent.py" ] && [ -f "$az_tmp/x/requirements.txt" ] \
+  unpacked "$az_tmp/x" agent.py && unpacked "$az_tmp/x" requirements.txt \
     || { echo "the Agent Zero archive holds no agent.py/requirements.txt"; rm -rf "$az_tmp"; return 1; }
   grep -vE '^[[:space:]]*(#|$)' "$az_tmp/x/requirements.txt" | sed 's/[[:space:]]*#.*$//' \
     | grep -viE "$AGENTZERO_EXCLUDE" > "$az_tmp/requirements.harness.txt"
@@ -817,13 +952,15 @@ install_agentzero() {
   install_pinned_venv agentzero "${HR_AGENTZERO_BASE_PYTHON:-python3}" "$TOOLS/agentzero-venv" crontab,flask-basicauth "${az_reqs[@]}" \
     || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
   mv "$az_tmp/x" "$TOOLS/agentzero-src" && rm -rf "$az_tmp"
+  # The compile and the import check below run Agent Zero's code and write into its tree, so the
+  # install uid holds the tree for them.
+  iu_take "$TOOLS/agentzero-src" || { rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"; return 1; }
   # Turns run as the session's uid, which cannot write here: compile now, or every turn pays for it.
-  "$TOOLS/agentzero-venv/bin/python" -m compileall -q "$TOOLS/agentzero-src" >/dev/null 2>&1 || true
-  chmod -R a+rX "$TOOLS/agentzero-src" "$TOOLS/agentzero-venv"
+  iu "$TOOLS/agentzero-venv/bin/python" -m compileall -q "$TOOLS/agentzero-src" >/dev/null 2>&1 || true
   # Prove the framework imports from the tree the way the driver imports it — the core, the
   # terminal tool the base's work goes through, the MCP client — before declaring the install good.
   # An excluded package that a kept module still needed fails HERE, not on a live turn.
-  ( cd "$TOOLS/agentzero-src" && "$TOOLS/agentzero-venv/bin/python" -c '
+  ( cd "$TOOLS/agentzero-src" && iu "$TOOLS/agentzero-venv/bin/python" -c '
 import sys, types
 st = types.ModuleType("sentence_transformers"); st.SentenceTransformer = object
 sys.modules["sentence_transformers"] = st
@@ -834,7 +971,8 @@ import helpers.mcp_handler, helpers.persist_chat, helpers.tool_policy  # noqa: F
 import plugins._code_execution.tools.code_execution_tool  # noqa: F401 - paramiko, the pty
 import plugins._text_editor.tools.text_editor  # noqa: F401
 import IPython  # noqa: F401 - the python runtime
-' ) || { rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"; return 1; }
+' ) || { iu_drop "$TOOLS/agentzero-src"; rm -rf "$TOOLS/agentzero-venv"; return 1; }
+  iu_give "$TOOLS/agentzero-src" || { rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"; return 1; }
   # A check that left state behind in the shared tree (a usr/ from an import) would become every
   # workspace's; the driver gives each workspace its own usr/.
   rm -rf "$TOOLS/agentzero-src/usr" "$TOOLS/agentzero-src/tmp"
@@ -855,7 +993,7 @@ install_openhands() {
   # Prove the server can actually START, and that the litellm pin still buys what it is for, before
   # declaring the install good. Importing its api module is what catches the undeclared dependencies
   # above: the failure they cause is an import error at the first live turn, not a pip error here.
-  "$TOOLS/openhands-venv/bin/python" -c '
+  iu "$TOOLS/openhands-venv/bin/python" -c '
 import sys
 import libtmux  # noqa: F401 — undeclared by the server, brought by openhands-tools
 import openhands.agent_server.api  # noqa: F401 — the module the server boots from
@@ -888,9 +1026,10 @@ install_kimi() {
   km_tmp="$(mktemp -d)"
   curl -fsSL "$km_url" -o "$km_tmp/kimi.tar.gz" || { rm -rf "$km_tmp"; return 1; }
   check_sha "kimi $KIMI_PIN" "$km_tmp/kimi.tar.gz" "$KIMI_SHA" || { rm -rf "$km_tmp"; return 1; }
-  mkdir "$km_tmp/x" && tar -xzf "$km_tmp/kimi.tar.gz" -C "$km_tmp/x" || { rm -rf "$km_tmp"; return 1; }
-  km_bin="$(find "$km_tmp/x" -type f -name kimi -perm -u+x | head -n 1)"
-  [ -n "$km_bin" ] || { echo "release archive contained no kimi binary"; rm -rf "$km_tmp"; return 1; }
+  km_x="$(unpack_dir "$km_tmp")" && iu_untar "$km_tmp/kimi.tar.gz" "$km_x" || { rm -rf "$km_tmp"; return 1; }
+  km_bin="$(find "$km_x" -type f -name kimi -perm -u+x | head -n 1)"
+  [ -n "$km_bin" ] && unpacked "$km_x" "${km_bin#"$km_x"/}" \
+    || { echo "release archive contained no kimi binary"; rm -rf "$km_tmp"; return 1; }
   mkdir -p "$TOOLS/bin" && install -m 755 "$km_bin" "$TOOLS/bin/kimi" \
     || { rm -rf "$km_tmp"; return 1; }
   rm -rf "$km_tmp"
@@ -919,11 +1058,16 @@ install_minimax() {
     "https://github.com/WiseLibs/better-sqlite3/releases/download/v${MINIMAX_SQLITE_PIN}/better-sqlite3-v${MINIMAX_SQLITE_PIN}-node-v${mm_abi}-linux-${mm_arch}.tar.gz" \
     -o "$mm_tmp/binding.tar.gz" || mm_fail "could not fetch better-sqlite3's binding" || return 1
   check_sha "better-sqlite3 $MINIMAX_SQLITE_PIN" "$mm_tmp/binding.tar.gz" "$MINIMAX_SQLITE_SHA" || mm_fail "" || return 1
-  tar -xzf "$mm_tmp/binding.tar.gz" --no-same-owner -C "$mm_bs" build/Release/better_sqlite3.node \
+  mm_x="$(unpack_dir "$mm_tmp")" && iu_untar "$mm_tmp/binding.tar.gz" "$mm_x" build/Release/better_sqlite3.node \
+    && unpacked "$mm_x" build/Release/better_sqlite3.node \
     || mm_fail "better-sqlite3's archive holds no build/Release/better_sqlite3.node" || return 1
+  [ "$(realpath -e -- "$mm_bs")" = "$mm_bs" ] && mkdir -p "$mm_bs/build/Release" \
+    && [ "$(realpath -e -- "$mm_bs/build/Release")" = "$mm_bs/build/Release" ] \
+    && install -m 644 "$mm_x/build/Release/better_sqlite3.node" "$mm_bs/build/Release/better_sqlite3.node" \
+    || mm_fail "better-sqlite3's binding could not be put in place" || return 1
   rm -rf "$mm_tmp"
   # The proof: the binding loads and answers a query.
-  ( cd "$TOOLS/npm/minimax" && node -e 'new (require("better-sqlite3"))(":memory:").prepare("select 1").get()' ) \
+  ( cd "$TOOLS/npm/minimax" && iu node -e 'new (require("better-sqlite3"))(":memory:").prepare("select 1").get()' ) \
     || mm_fail "better-sqlite3's binding does not load" || return 1
 }
 
@@ -942,9 +1086,9 @@ install_kilo() {
   # install already gone. Root's tar keeps the archive's owners and modes; a session uid must be
   # able to read the helpers, so neither is trusted.
   kl_stage="$(mktemp -d -p "$TOOLS" .kilo-stage.XXXXXX)" || { rm -rf "$kl_tmp"; return 1; }
-  tar -xzf "$kl_tmp/kilo.tar.gz" --no-same-owner -C "$kl_stage" || { rm -rf "$kl_tmp" "$kl_stage"; return 1; }
+  iu_untar "$kl_tmp/kilo.tar.gz" "$kl_stage" || { rm -rf "$kl_tmp" "$kl_stage"; return 1; }
   rm -rf "$kl_tmp"; kl_tmp="$kl_stage"
-  [ -f "$kl_stage/kilo" ] || { echo "release archive contained no kilo binary"; rm -rf "$kl_stage"; return 1; }
+  unpacked "$kl_stage" kilo || { echo "release archive contained no kilo binary"; rm -rf "$kl_stage"; return 1; }
   chmod -R a+rX "$kl_stage" && chmod 755 "$kl_stage" "$kl_stage/kilo" || { rm -rf "$kl_stage"; return 1; }
   # The whole directory, replaced as a unit: the binary finds its helpers beside itself.
   rm -rf "$TOOLS/kilo" && mv "$kl_stage" "$TOOLS/kilo" || { rm -rf "$kl_stage"; return 1; }
@@ -986,9 +1130,9 @@ install_goose() {
   gs_tmp="$(mktemp -d)"
   curl -fsSL "$gs_url" -o "$gs_tmp/goose.tar.gz" || { rm -rf "$gs_tmp"; return 1; }
   check_sha "goose $GOOSE_PIN" "$gs_tmp/goose.tar.gz" "$GOOSE_SHA" || { rm -rf "$gs_tmp"; return 1; }
-  tar -xzf "$gs_tmp/goose.tar.gz" --no-same-owner -C "$gs_tmp" || { rm -rf "$gs_tmp"; return 1; }
-  [ -f "$gs_tmp/goose" ] || { echo "release archive contained no goose binary"; rm -rf "$gs_tmp"; return 1; }
-  mkdir -p "$TOOLS/bin" && install -m 755 "$gs_tmp/goose" "$TOOLS/bin/goose" \
+  gs_x="$(unpack_dir "$gs_tmp")" && iu_untar "$gs_tmp/goose.tar.gz" "$gs_x" || { rm -rf "$gs_tmp"; return 1; }
+  unpacked "$gs_x" goose || { echo "release archive contained no goose binary"; rm -rf "$gs_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$gs_x/goose" "$TOOLS/bin/goose" \
     || { rm -rf "$gs_tmp"; return 1; }
   rm -rf "$gs_tmp"
 }
@@ -1013,9 +1157,9 @@ install_zeroclaw() {
   zc_tmp="$(mktemp -d)"
   curl -fsSL "$zc_url" -o "$zc_tmp/zeroclaw.tar.gz" || { rm -rf "$zc_tmp"; return 1; }
   check_sha "zeroclaw $ZEROCLAW_PIN" "$zc_tmp/zeroclaw.tar.gz" "$ZEROCLAW_SHA" || { rm -rf "$zc_tmp"; return 1; }
-  tar -xzf "$zc_tmp/zeroclaw.tar.gz" --no-same-owner -C "$zc_tmp" zeroclaw || { rm -rf "$zc_tmp"; return 1; }
-  [ -f "$zc_tmp/zeroclaw" ] || { echo "release archive contained no zeroclaw binary"; rm -rf "$zc_tmp"; return 1; }
-  mkdir -p "$TOOLS/bin" && install -m 755 "$zc_tmp/zeroclaw" "$TOOLS/bin/zeroclaw" \
+  zc_x="$(unpack_dir "$zc_tmp")" && iu_untar "$zc_tmp/zeroclaw.tar.gz" "$zc_x" zeroclaw || { rm -rf "$zc_tmp"; return 1; }
+  unpacked "$zc_x" zeroclaw || { echo "release archive contained no zeroclaw binary"; rm -rf "$zc_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$zc_x/zeroclaw" "$TOOLS/bin/zeroclaw" \
     || { rm -rf "$zc_tmp"; return 1; }
   rm -rf "$zc_tmp"
 }
@@ -1066,10 +1210,12 @@ install_mimo() {
   # MiMo performs a ONE-TIME SQLite migration and fetches an npm tree of ai-sdk packages on its
   # first run. Measured: the first turn on a fresh home took over nine minutes and printed nothing
   # before it was killed; the second, warm, answered in about twenty seconds. A turn is not where
-  # that cost belongs, so a throwaway home is warmed here, at install, and then removed.
-  mimo_warm="$(mktemp -d)"
-  mimo_got="$(HOME="$mimo_warm" "$TOOLS/bin/mimo" --version 2>/dev/null | head -n 1)"
-  rm -rf "$mimo_warm"
+  # that cost belongs, so a throwaway home is warmed here, at install, and then removed: the install
+  # uid's own HOME, removed with the install. The uid holds mimo's tree meanwhile, which root's
+  # warm-up could write to.
+  iu_take "$TOOLS/npm/mimo" || return 1
+  mimo_got="$(iu "$TOOLS/bin/mimo" --version 2>/dev/null | head -n 1)"
+  iu_give "$TOOLS/npm/mimo" || return 1
   # The warm-up doubles as the proof: an npm install can land a tree with no working entry point.
   if [ "$mimo_got" != "$MIMO_PIN" ]; then
     echo "mimo installed but reports '${mimo_got:-nothing}', wanted $MIMO_PIN"; return 1
@@ -1097,15 +1243,16 @@ install_roder() {
   curl -fsSL "https://github.com/RoderAI/roder/releases/download/roder/v${RODER_PIN}/$rd_asset.tar.gz" \
     -o "$rd_tmp/roder.tar.gz" || { rm -rf "$rd_tmp"; return 1; }
   check_sha "Roder $RODER_PIN" "$rd_tmp/roder.tar.gz" "$RODER_SHA" || { rm -rf "$rd_tmp"; return 1; }
-  tar -xzf "$rd_tmp/roder.tar.gz" --no-same-owner -C "$rd_tmp" "$rd_asset/roder" || { rm -rf "$rd_tmp"; return 1; }
+  rd_x="$(unpack_dir "$rd_tmp")" && iu_untar "$rd_tmp/roder.tar.gz" "$rd_x" "$rd_asset/roder" \
+    && unpacked "$rd_x" "$rd_asset/roder" || { rm -rf "$rd_tmp"; return 1; }
   # A Roder-only install on a fresh volume (HR_BACKENDS=roder) is the first to write here.
-  mkdir -p "$TOOLS/bin" && install -m 755 "$rd_tmp/$rd_asset/roder" "$TOOLS/bin/roder" \
+  mkdir -p "$TOOLS/bin" && install -m 755 "$rd_x/$rd_asset/roder" "$TOOLS/bin/roder" \
     || { rm -rf "$rd_tmp"; return 1; }
   rm -rf "$rd_tmp"
   # PROVE IT RUNS, and that it is the version that was pinned, as jcode's install does. Measured on
   # 0.4.8: `roder --version` prints "roder 0.4.8", reads no stdin and writes nothing to HOME or the
   # working directory.
-  rd_got="$("$TOOLS/bin/roder" --version </dev/null 2>/dev/null | awk '{print $2}')"
+  rd_got="$(iu "$TOOLS/bin/roder" --version </dev/null 2>/dev/null | awk '{print $2}')"
   if [ "$rd_got" != "$RODER_PIN" ]; then
     echo "Roder installed but reports '${rd_got:-nothing}', wanted $RODER_PIN"; rm -f "$TOOLS/bin/roder"; return 1
   fi
@@ -1131,7 +1278,7 @@ install_jcode() {
   curl -fsSL "https://github.com/1jehuang/jcode/releases/download/v${jc_ver}/jcode-linux-$jc_arch.tar.gz" \
     -o "$jc_tmp/jcode.tar.gz" || { rm -rf "$jc_tmp"; return 1; }
   check_sha "jcode $jc_ver" "$jc_tmp/jcode.tar.gz" "$JCODE_SHA" || { rm -rf "$jc_tmp"; return 1; }
-  tar -xzf "$jc_tmp/jcode.tar.gz" --no-same-owner -C "$jc_tmp" || { rm -rf "$jc_tmp"; return 1; }
+  jc_x="$(unpack_dir "$jc_tmp")" && iu_untar "$jc_tmp/jcode.tar.gz" "$jc_x" || { rm -rf "$jc_tmp"; return 1; }
   # THE LINUX ARCHIVE IS A PAIR, NOT A BINARY: `jcode-linux-<arch>` is a 505-byte sh launcher that
   # puts its own directory on LD_LIBRARY_PATH and execs `jcode-linux-<arch>.bin` beside it. The
   # macOS archive is a single binary with no launcher, so a probe on a developer's Mac shows one
@@ -1141,12 +1288,12 @@ install_jcode() {
   # symlink (the launcher resolves `readlink -f` itself, which is what makes that safe).
   jc_dir="$TOOLS/jcode"
   rm -rf "$jc_dir"; mkdir -p "$jc_dir" "$TOOLS/bin"
-  if [ -f "$jc_tmp/jcode-linux-$jc_arch.bin" ]; then
-    install -m 755 "$jc_tmp/jcode-linux-$jc_arch" "$jc_tmp/jcode-linux-$jc_arch.bin" "$jc_dir/" \
+  if unpacked "$jc_x" "jcode-linux-$jc_arch.bin" && unpacked "$jc_x" "jcode-linux-$jc_arch"; then
+    install -m 755 "$jc_x/jcode-linux-$jc_arch" "$jc_x/jcode-linux-$jc_arch.bin" "$jc_dir/" \
       || { rm -rf "$jc_tmp" "$jc_dir"; return 1; }
     ln -sf "$jc_dir/jcode-linux-$jc_arch" "$TOOLS/bin/jcode"
-  elif [ -f "$jc_tmp/jcode-linux-$jc_arch" ]; then
-    install -m 755 "$jc_tmp/jcode-linux-$jc_arch" "$TOOLS/bin/jcode" \
+  elif unpacked "$jc_x" "jcode-linux-$jc_arch"; then
+    install -m 755 "$jc_x/jcode-linux-$jc_arch" "$TOOLS/bin/jcode" \
       || { rm -rf "$jc_tmp" "$jc_dir"; return 1; }
   else
     echo "release archive held neither jcode-linux-$jc_arch nor its .bin"; rm -rf "$jc_tmp" "$jc_dir"; return 1
@@ -1155,7 +1302,7 @@ install_jcode() {
   # PROVE IT RUNS, and that it is the version that was pinned. An installer that exits 0 without a
   # working executable is how a base reaches the console and fails on its first task with nothing to
   # read — which is exactly what the launcher-without-its-.bin produced.
-  jc_got="$("$TOOLS/bin/jcode" --version 2>/dev/null | awk '{print $2}')"
+  jc_got="$(iu "$TOOLS/bin/jcode" --version 2>/dev/null | awk '{print $2}')"
   if [ "$jc_got" != "v$jc_ver" ]; then
     echo "jcode installed but reports '${jc_got:-nothing}', wanted v$jc_ver"; rm -rf "$jc_dir" "$TOOLS/bin/jcode"; return 1
   fi
@@ -1179,7 +1326,7 @@ install_opensquilla() {
   # A failed install leaves NO venv behind, and the version is PROVEN rather than assumed: the
   # wheel's name could be anything, and a base that reports installed and dies on its first turn is
   # the failure mode every installer here is written to avoid.
-  "$TOOLS/opensquilla-venv/bin/python" -c '
+  iu "$TOOLS/opensquilla-venv/bin/python" -c '
 import sys, importlib.metadata as md
 have = md.version("opensquilla")
 if have != sys.argv[1]:
@@ -1200,7 +1347,7 @@ install_nanobot() {
   # Nanobot.from_config and on seven STREAM_EVENT_* constants, and a release that renamed one of
   # them would otherwise fail at the first live turn with an ImportError the user would see as a
   # dead base. The version is asserted beside them.
-  "$TOOLS/nanobot-venv/bin/python" -c '
+  iu "$TOOLS/nanobot-venv/bin/python" -c '
 import sys, importlib.metadata as md
 have = md.version("nanobot-ai")
 if have != sys.argv[1]:
@@ -1220,40 +1367,46 @@ for name in ("Nanobot", "STREAM_EVENT_TEXT_DELTA", "STREAM_EVENT_REASONING_DELTA
 # --no-deps --only-binary=:all:`. A file whose bytes differ, or a dependency the lock does not name,
 # fails the install, and a base that failed to install is not offered. Wheels only, so no package's
 # build code runs here, except for the few distributions a base names that publish no wheel (an sdist,
-# or systemone's source archive); those are built with --no-build-isolation against setuptools from
-# build.lock.txt, because pip's isolated build would fetch its backend fresh and unhashed. The pins
-# are part of the reviewed, digest-pinned image; nothing about them is fetched at boot except the
-# files themselves (#623, step 2).
+# or systemone's source archive); those are built by the base's install uid, never by root, with
+# --no-build-isolation against setuptools from build.lock.txt, because pip's isolated build would
+# fetch its backend fresh and unhashed. The pins are part of the reviewed, digest-pinned image;
+# nothing about them is fetched at boot except the files themselves (#623, step 2).
 HR_LOCKS_DIR="${HR_LOCKS_DIR:-/app/locks}"
 
 # install_locked_venv <label> <python> <venv> <lock> [<sdists>]: a venv from <python>, filled from
-# <lock> only. <sdists> (comma-separated) are the distributions of <lock> that are built here.
+# <lock> only. <sdists> (comma-separated) are the distributions of <lock> that are built here. Root
+# makes the empty directory; the venv, pip and the build of any sdist are the base's install uid's
+# (<python> is not always the image's: dcode's is a downloaded CPython), and the venv is root's again
+# when this returns.
 install_locked_venv() {
   lv_label="$1"; lv_py="$2"; lv_venv="$3"; lv_lock="$HR_LOCKS_DIR/$4"; lv_sdists="${5:-}"
   [ -f "$lv_lock" ] || { echo "$lv_label: no lock file at $lv_lock"; return 1; }
-  rm -rf "$lv_venv"
-  "$lv_py" -I -m venv "$lv_venv" || { rm -rf "$lv_venv"; return 1; }
+  rm -rf "$lv_venv"; mkdir -p "$lv_venv"
+  iu_take "$lv_venv" && iu "$lv_py" -I -m venv "$lv_venv" || { iu_drop "$lv_venv"; return 1; }
   lv_build=()
   if [ -n "$lv_sdists" ]; then
-    "$lv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
+    iu "$lv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
         --require-hashes --no-deps --only-binary=:all: -r "$HR_LOCKS_DIR/build.lock.txt" \
-      || { rm -rf "$lv_venv"; return 1; }
+      || { iu_drop "$lv_venv"; return 1; }
     lv_build=(--no-binary="$lv_sdists" --no-build-isolation)
   fi
-  "$lv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
+  iu "$lv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
       --require-hashes --no-deps --only-binary=:all: "${lv_build[@]}" -r "$lv_lock" \
-    || { rm -rf "$lv_venv"; return 1; }
+    || { iu_drop "$lv_venv"; return 1; }
+  iu_give "$lv_venv" || { iu_drop "$lv_venv"; return 1; }
 }
 
 # install_unlocked_venv <label> <python> <venv> <requirement…>: an operator's version override,
 # which no lock here covers. Its stamp says "unverified", and install_base says so at the start
-# rather than pretending the check ran; the version check after it still runs.
+# rather than pretending the check ran; the version check after it still runs. pip resolves and may
+# build sdists here, so it runs as the install uid like the locked install.
 install_unlocked_venv() {
   uv_label="$1"; uv_py="$2"; uv_venv="$3"; shift 3
-  rm -rf "$uv_venv"
-  "$uv_py" -I -m venv "$uv_venv" || { rm -rf "$uv_venv"; return 1; }
-  "$uv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir "$@" \
-    || { rm -rf "$uv_venv"; return 1; }
+  rm -rf "$uv_venv"; mkdir -p "$uv_venv"
+  iu_take "$uv_venv" && iu "$uv_py" -I -m venv "$uv_venv" || { iu_drop "$uv_venv"; return 1; }
+  iu "$uv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir "$@" \
+    || { iu_drop "$uv_venv"; return 1; }
+  iu_give "$uv_venv" || { iu_drop "$uv_venv"; return 1; }
 }
 
 # lock_reqs <base>: the requirements <base>.lock.txt was compiled from, as one line.
@@ -1293,7 +1446,7 @@ install_vibe() {
   fi
   # RUN WHAT WAS INSTALLED and compare the version it REPORTS: an installer that exits 0 without a
   # working executable is the same lie as a check with no input (jcode's 505-byte shim).
-  vb_got="$("$TOOLS/vibe-venv/bin/vibe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  vb_got="$(iu "$TOOLS/vibe-venv/bin/vibe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
   if [ "$vb_got" != "$vb_ver" ]; then
     echo "vibe installed but reports '${vb_got:-nothing}', wanted $vb_ver"
     rm -rf "$TOOLS/vibe-venv"; return 1
@@ -1314,7 +1467,7 @@ install_fast_agent() {
   fi
   # RUN what was installed and compare the version it REPORTS, and prove the two surfaces this
   # backend depends on: the generic client's own env-var names and the ACP server the runner drives.
-  "$TOOLS/fast-agent-venv/bin/python" -c '
+  iu "$TOOLS/fast-agent-venv/bin/python" -c '
 import sys, importlib.metadata as md
 have = md.version("fast-agent-mcp")
 if have != sys.argv[1]:
@@ -1356,7 +1509,7 @@ install_docker_agent() {
   rm -rf "$da_tmp"
   # RUN it and compare the version it REPORTS: `docker-agent version` prints
   # "docker-agent version v<version>" — there is no --version flag.
-  da_got="$("$TOOLS/bin/docker-agent" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  da_got="$(iu "$TOOLS/bin/docker-agent" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
   if [ "$da_got" != "$da_ver" ]; then
     echo "docker-agent installed but reports '${da_got:-nothing}', wanted $da_ver"
     rm -f "$TOOLS/bin/docker-agent"; return 1
@@ -1390,10 +1543,10 @@ install_dcode_python() {
     rm -rf "$dp_tmp"; return 1
   fi
   rm -rf "$TOOLS/dcode-python"; mkdir -p "$TOOLS/dcode-python"
-  tar -xzf "$dp_tmp/py.tar.gz" -C "$TOOLS/dcode-python" --strip-components=1 --no-same-owner \
+  iu_untar "$dp_tmp/py.tar.gz" "$TOOLS/dcode-python" --strip-components=1 \
     || { rm -rf "$dp_tmp" "$TOOLS/dcode-python"; return 1; }
   rm -rf "$dp_tmp"
-  dp_got="$("$TOOLS/dcode-python/bin/python3" -c 'import platform; print(platform.python_version())' 2>/dev/null)"
+  dp_got="$(iu "$TOOLS/dcode-python/bin/python3" -c 'import platform; print(platform.python_version())' 2>/dev/null)"
   [ "$dp_got" = "$DCODE_PY_VERSION" ] || { echo "dcode: Python reports '${dp_got:-nothing}', wanted $DCODE_PY_VERSION"; rm -rf "$TOOLS/dcode-python"; return 1; }
 }
 
@@ -1419,12 +1572,14 @@ install_dcode() {
   # for a download. With DEEPAGENTS_CODE_OFFLINE=1 (which the runner sets on every turn) it would
   # instead fall back to "the slow Python regex path" its own documentation names. Not fatal: that
   # fallback is a working search, so a failure here costs speed and nothing else.
-  HOME="$TOOLS/dcode-venv" "$TOOLS/dcode-venv/bin/dcode" tools install --json >/dev/null 2>&1 \
+  iu_take "$TOOLS/dcode-venv" || return 1
+  iu env HOME="$TOOLS/dcode-venv" "$TOOLS/dcode-venv/bin/dcode" tools install --json >/dev/null 2>&1 \
     || echo "[harnessrouter] note: dcode's managed ripgrep was not installed; its grep uses the slower Python path"
+  iu_give "$TOOLS/dcode-venv" || return 1
   # RUN what was installed and compare the version it REPORTS, and prove the surface this backend
   # is driven through: the ACP server mode, whose absence `dcode --acp` reports as an exit rather
   # than as a missing feature.
-  "$TOOLS/dcode-venv/bin/python" -c '
+  iu "$TOOLS/dcode-venv/bin/python" -c '
 import sys, importlib.metadata as md
 have = md.version("deepagents-code")
 if have != sys.argv[1]:
@@ -1470,15 +1625,15 @@ MIMO_PIN="${HR_MIMO_VERSION:-0.1.15}"; MIMO_PIN="${MIMO_PIN#v}"
 # decides which file it reads (2.x mcp.json, 3.x mcp-adapter.json, which the runner writes), so it is
 # part of pi's identity: a volume with another adapter is reinstalled with this one.
 PI_MCP_PIN="${HR_PI_MCP_ADAPTER_VERSION:-3.1.0}"; PI_MCP_PIN="${PI_MCP_PIN#v}"
-npm_g() { npm install -g --prefix "$TOOLS" --no-audit --no-fund "$@"; }
 
 # The npm bases install from a LOCKFILE that ships in this image (/app/locks/npm/<name>/, a
 # package.json and the package-lock.json scripts/lock-npm.sh writes from it): the whole tree, every
 # package by version, by the URL it comes from and by the sha512 npm checks it against, installed
-# with `npm ci --ignore-scripts` into $TOOLS/npm/<name>. A tarball whose bytes differ, or a
-# dependency the lock does not name, fails the install. With scripts off, no package's install code
-# runs as root; the one that is needed is named where it is used (Claude Code's, which hard-links its
-# native binary out of a platform package the lock already holds).
+# with `npm ci --ignore-scripts` into $TOOLS/npm/<name>, as the base's install uid. A tarball whose
+# bytes differ, or a dependency the lock does not name, fails the install. With scripts off, no
+# package's install code runs; the one that is needed is named where it is used (Claude Code's, which
+# hard-links its native binary out of a platform package the lock already holds), and runs as that
+# uid too.
 #
 # Measured (2026-11-08, amd64): for each of the nine, `npm ci` from its lock lands the same packages
 # at the same versions as main's `npm install -g` did that day. The differences are the packages npm
@@ -1486,8 +1641,8 @@ npm_g() { npm install -g --prefix "$TOOLS" --no-audit --no-fund "$@"; }
 # and gemini's node-pty 1.0.0, which has no prebuild and failed to compile with no compiler here, so
 # npm removed it; it is now in the tree unbuilt, and gemini loads @lydell/node-pty (prebuilt) first.
 #
-# An override (any version but the lock's) installs as before, with `npm install -g`, and its stamp
-# says "unverified".
+# An override (any version but the lock's) is an `npm install` of what the operator named, with its
+# install scripts, into the same directory and as the same uid, and its stamp says "unverified".
 # npm_lock_spec <name>: the lock's direct dependencies as name@version, in package.json order.
 npm_lock_spec() {
   node -e 'const d=require(process.argv[1]).dependencies||{};console.log(Object.entries(d).map(([k,v])=>k+"@"+v).join(" "))' \
@@ -1500,47 +1655,80 @@ npm_ident() {
   if npm_is_locked "$1" "$2"; then echo "npm $2 lock:$(file_sha "$HR_LOCKS_DIR/npm/$1/package-lock.json")"
   else echo "npm $2 unverified"; fi
 }
-# npm_link_bins <dir>: $TOOLS/bin/<command> for each command a direct dependency declares, as npm -g
-# links them (relative symlinks). npm ci links bins into node_modules/.bin, not onto PATH.
+# npm_link_bins <name> <dir>: $TOOLS/bin/<command> for each command a direct dependency declares, as
+# npm -g links them (relative symlinks); npm ci links bins into node_modules/.bin, not onto PATH. Root
+# makes these links from a tree that is root's again by then (iu_give), and checks first what each
+# package asks for, which it used to follow as root (a chmod 755 of whatever a bin entry named): the
+# command is a plain name, its file is inside <dir> once every link is resolved, and the name is not
+# one another base already holds in $TOOLS/bin, nor one of the image's own programs: the runner, which
+# is root, finds git, tar, node and npm by name on a PATH that has $TOOLS/bin first.
 npm_link_bins() {
   node -e '
 const fs = require("fs"), path = require("path");
-const [dir, bin] = process.argv.slice(1);
+const [name, dir, bin] = process.argv.slice(1);
+const top = fs.realpathSync(dir) + path.sep;
+const inside = (p) => { try { return fs.realpathSync(p).startsWith(top); } catch { return false; } };
+const refuse = (why) => { console.error(name + ": " + why); process.exit(1); };
+const read = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
 fs.mkdirSync(bin, { recursive: true });
-for (const dep of Object.keys(require(path.join(dir, "package.json")).dependencies || {})) {
-  const pd = path.join(dir, "node_modules", dep), p = require(path.join(pd, "package.json"));
-  const b = typeof p.bin === "string" ? { [p.name.replace(/^@[^/]+\//, "")]: p.bin } : (p.bin || {});
+for (const dep of Object.keys(read(path.join(dir, "package.json")).dependencies || {})) {
+  const pd = path.join(dir, "node_modules", dep), pj = path.join(pd, "package.json");
+  if (!inside(pj)) refuse(dep + ": its package.json is not inside " + dir);
+  const p = read(pj);
+  const b = typeof p.bin === "string" ? { [String(p.name).replace(/^@[^/]+\//, "")]: p.bin } : (p.bin || {});
   for (const [cmd, file] of Object.entries(b)) {
-    const target = path.join(pd, file), link = path.join(bin, cmd);
-    fs.chmodSync(target, 0o755);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cmd)) refuse(dep + " declares the command " + JSON.stringify(cmd) + ", which is not a plain name");
+    const own = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].find((d) => fs.existsSync(path.join(d, cmd)));
+    if (own) refuse(dep + " declares the command " + cmd + ", which would hide the image\x27s " + path.join(own, cmd));
+    const target = path.join(pd, String(file)), link = path.join(bin, cmd);
+    if (!inside(target)) refuse(dep + "\x27s command " + cmd + " is " + JSON.stringify(file) + ", which is not inside " + dir);
+    let was = null;
+    try { was = fs.readlinkSync(link); } catch (e) {
+      if (e.code === "EINVAL") refuse(link + " is not a link, so it is another base\x27s");
+      if (e.code !== "ENOENT") throw e;
+    }
+    if (was !== null && !was.startsWith("../npm/" + name + "/") && !was.startsWith("../lib/node_modules/" + dep + "/"))
+      refuse(link + " is another base\x27s (" + was + ")");
+    fs.chmodSync(fs.realpathSync(target), 0o755);
     fs.rmSync(link, { force: true });
     fs.symlinkSync(path.relative(bin, target), link);
   }
-}' "$1" "$TOOLS/bin"
+}' "$1" "$2" "$TOOLS/bin"
 }
-# npm_locked <name> [<package whose install script runs>…]: $TOOLS/npm/<name> from its lock. What a
-# previous `npm install -g` of the same packages left under $TOOLS/lib goes first.
+# npm_fresh_dir <name>: an empty $TOOLS/npm/<name> of root's, with nothing on PATH still pointing into
+# the one it replaces, and without what a previous `npm install -g` of <name>'s packages left in $TOOLS/lib.
+npm_fresh_dir() {
+  find "$TOOLS/bin" -maxdepth 1 -type l -lname "../npm/$1/*" -delete 2>/dev/null || true
+  for nf_dep in $(npm_lock_spec "$1"); do
+    nf_pkg="${nf_dep%@*}"; rm -rf "$TOOLS/lib/node_modules/$nf_pkg"
+    case "$nf_pkg" in @*/*) rmdir "$TOOLS/lib/node_modules/${nf_pkg%%/*}" 2>/dev/null || true ;; esac
+  done
+  rm -rf "$TOOLS/npm/$1"; mkdir -p "$TOOLS/npm/$1"
+}
+# npm_locked <name> [<package whose install script runs>…]: $TOOLS/npm/<name> from its lock, filled by
+# the install uid, then root's again before root links its commands.
 npm_locked() {
   nl_name="$1"; shift
   nl_src="$HR_LOCKS_DIR/npm/$nl_name"; nl_dir="$TOOLS/npm/$nl_name"
   [ -f "$nl_src/package-lock.json" ] || { echo "$nl_name: no lockfile at $nl_src"; return 1; }
-  for nl_dep in $(npm_lock_spec "$nl_name"); do
-    nl_pkg="${nl_dep%@*}"; rm -rf "$TOOLS/lib/node_modules/$nl_pkg"
-    case "$nl_pkg" in @*/*) rmdir "$TOOLS/lib/node_modules/${nl_pkg%%/*}" 2>/dev/null || true ;; esac
-  done
-  rm -rf "$nl_dir"; mkdir -p "$nl_dir"
-  cp "$nl_src/package.json" "$nl_src/package-lock.json" "$nl_dir/" || { rm -rf "$nl_dir"; return 1; }
-  ( cd "$nl_dir" && npm ci --ignore-scripts --no-audit --no-fund ) || { rm -rf "$nl_dir"; return 1; }
+  npm_fresh_dir "$nl_name"
+  cp "$nl_src/package.json" "$nl_src/package-lock.json" "$nl_dir/" && iu_take "$nl_dir" || { rm -rf "$nl_dir"; return 1; }
+  ( cd "$nl_dir" && iu npm ci --ignore-scripts --no-audit --no-fund ) || { iu_drop "$nl_dir"; return 1; }
   if [ $# -gt 0 ]; then
-    ( cd "$nl_dir" && npm rebuild --foreground-scripts "$@" ) || { rm -rf "$nl_dir"; return 1; }
+    ( cd "$nl_dir" && iu npm rebuild --foreground-scripts "$@" ) || { iu_drop "$nl_dir"; return 1; }
   fi
-  npm_link_bins "$nl_dir" || { rm -rf "$nl_dir"; return 1; }
+  iu_give "$nl_dir" && npm_link_bins "$nl_name" "$nl_dir" || { iu_drop "$nl_dir"; return 1; }
 }
-# npm_unlocked <name> <npm install -g arguments…>: an override, installed the way it always was.
+# npm_unlocked <name> <npm install arguments…>: an override, which no lock here covers. It goes where
+# the locked install goes, $TOOLS/npm/<name>, by the same uid: an `npm install -g` into $TOOLS wrote
+# what every base shares, so it ran as root, and so did every install script of the override's tree.
 npm_unlocked() {
-  find "$TOOLS/bin" -maxdepth 1 -type l -lname "../npm/$1/*" -delete 2>/dev/null || true
-  rm -rf "$TOOLS/npm/$1"; shift
-  npm_g "$@"
+  nu_name="$1"; shift
+  nu_dir="$TOOLS/npm/$nu_name"
+  npm_fresh_dir "$nu_name"
+  printf '{ "private": true }\n' > "$nu_dir/package.json" && iu_take "$nu_dir" || { rm -rf "$nu_dir"; return 1; }
+  ( cd "$nu_dir" && iu npm install --no-audit --no-fund "$@" ) || { iu_drop "$nu_dir"; return 1; }
+  iu_give "$nu_dir" && npm_link_bins "$nu_name" "$nu_dir" || { iu_drop "$nu_dir"; return 1; }
 }
 # install_npm <name> <spec> [<package whose install script runs>…]
 install_npm() {
@@ -1577,7 +1765,7 @@ install_dsh() {
   install_pinned_venv dsh "$PY" "$TOOLS/dsh-venv" "" "${DSH_REQS[@]}" || return 1
   # dsh-ready exists ONLY after the import check proved the runtime executable resolves — a venv
   # whose pip half-failed must not report the backend as available.
-  "$TOOLS/dsh-venv/bin/python" -c 'import deepseek_harness, deepseek_harness_runtime, yaml; deepseek_harness_runtime.bundled_runtime_path()' || return 1
+  iu "$TOOLS/dsh-venv/bin/python" -c 'import deepseek_harness, deepseek_harness_runtime, yaml; deepseek_harness_runtime.bundled_runtime_path()' || return 1
   printf '#!/bin/sh\necho %s\n' "$DSH_PIN" > "$TOOLS/dsh-venv/bin/dsh-ready" && chmod 755 "$TOOLS/dsh-venv/bin/dsh-ready"
 }
 
@@ -1608,9 +1796,11 @@ fi
 HERMES_MCP_PIN="${HR_HERMES_MCP_VERSION:-1.30.0}"
 HERMES_REQS=("hermes-agent[anthropic]==$HERMES_PIN" "boto3==$HERMES_BOTO3_PIN" "mcp==$HERMES_MCP_PIN")
 HERMES_BREAKER=/app/runner/patches/hermes_mcp_breaker.py
+# Everything below that runs hermes's venv (its Python starts by running every .pth file a wheel put
+# there) runs as hermes's install uid, never as root; the import check reads a venv that is root's again.
 install_hermes() {
   install_pinned_venv hermes "$PY" "$TOOLS/venv" "" "${HERMES_REQS[@]}" || return 1
-  "$TOOLS/venv/bin/python" -c '
+  iu "$TOOLS/venv/bin/python" -c '
 import boto3  # noqa: F401 - the bedrock provider
 from mcp.client.streamable_http import streamablehttp_client  # noqa: F401 - the name hermes gates HTTP MCP on
 ' || { echo "hermes: boto3 or mcp's streamablehttp_client does not import"; return 1; }
@@ -1620,19 +1810,28 @@ from mcp.client.streamable_http import streamablehttp_client  # noqa: F401 - the
 # three in a row and every tool of that server is refused for 60 s as "unreachable", so an agent that
 # guessed three ids wrong reports the service down (runner/patches/hermes_mcp_breaker.py). Idempotent,
 # and it writes nothing unless the result compiles; a hermes whose source is not the one it was written
-# for is left as it is, with one line saying so. That line is kept in HERMES_BREAKER_NOTE and said
-# after the install, because try_install shows an installer's output only when it fails.
-HERMES_BREAKER_NOTE=""
+# for is left as it is, with one line saying so. That line is written to HERMES_BREAKER_NOTE_FILE and
+# said after the install, because try_install shows an installer's output only when it fails. (It was
+# a variable, set inside try_install's subshell, so the line that was to say it never saw it.)
+HERMES_BREAKER_NOTE_FILE=""
+hermes_breaker_note() { [ -z "$HERMES_BREAKER_NOTE_FILE" ] || printf '%s\n' "$1" > "$HERMES_BREAKER_NOTE_FILE"; }
 hermes_breaker() {
-  _hmt=$("$TOOLS/venv/bin/python" -c "import importlib.metadata as m; d = m.distribution('hermes-agent'); print(next(str(d.locate_file(f)) for f in d.files if str(f).endswith('tools/mcp_tool.py')))" 2>/dev/null) || _hmt=""
+  _hmt=$(iu "$TOOLS/venv/bin/python" -c "import importlib.metadata as m; d = m.distribution('hermes-agent'); print(next(str(d.locate_file(f)) for f in d.files if str(f).endswith('tools/mcp_tool.py')))" 2>/dev/null) || _hmt=""
   if [ -z "$_hmt" ] || [ ! -f "$_hmt" ]; then
-    HERMES_BREAKER_NOTE="Hermes's MCP module was not found; a tool's own errors may be counted as its server failing"
+    hermes_breaker_note "Hermes's MCP module was not found; a tool's own errors may be counted as its server failing"
     return 0
   fi
-  _out=$("$TOOLS/venv/bin/python" "$HERMES_BREAKER" "$_hmt" 2>&1) || true
+  # The patch rewrites one file of hermes's, so the install uid holds the venv while it runs. A venv
+  # that cannot be handed back fails the install in install_as_uid, which gives back what is held.
+  if iu_take "$TOOLS/venv"; then
+    _out=$(iu "$TOOLS/venv/bin/python" "$HERMES_BREAKER" "$_hmt" 2>&1) || true
+    iu_give "$TOOLS/venv" || true
+  else
+    _out="the patch was not applied: Hermes's venv could not be handed to its install uid"
+  fi
   case "$_out" in
     *"already applied"*|*": applied"*) : ;;
-    *) HERMES_BREAKER_NOTE="$_out" ;;
+    *) hermes_breaker_note "$_out" ;;
   esac
   return 0
 }
@@ -1651,9 +1850,9 @@ hermes_breaker() {
 # provider key an operator passed with -e. Now each sees what fetching and building need: the path and
 # home, the locale, the proxy and CA settings, and the operator's registry settings (PIP_*, NPM_CONFIG_*,
 # UV_*). A base that needs a token to install gets that one name here, never the whole environment.
-# This stops code that reads or reports its environment. It does not stop code that sets out to read
-# the secrets: installs still run as root, who can read /proc/1/environ and /data/secret-key. Running
-# them as their own uid is what closes that.
+# This stops code that reads or reports its environment. Code that sets out to read the secrets is
+# stopped by the uid it runs as: a package's code runs as its base's install uid (install_as_uid),
+# which can read neither /proc/1/environ nor /data/secret-key.
 install_env_ok() {
   case "$1" in
     PATH|HOME|LANG|LANGUAGE|LC_*|TZ|TERM|TMPDIR|PWD|SHLVL|OLDPWD) return 0 ;;
@@ -1862,11 +2061,15 @@ install_backends() {
   fi
   if wanted hermes && ! current hermes "$(pinned_ident hermes "${HERMES_REQS[@]}") breaker:$(file_sha "$HERMES_BREAKER")"; then
     echo "[harnessrouter] installing Hermes $HERMES_PIN (check its upstream license before use)…"
+    HERMES_BREAKER_NOTE_FILE="$(mktemp)"
     install_base hermes "Hermes" install_hermes || true
-    [ -z "$HERMES_BREAKER_NOTE" ] || echo "[harnessrouter] WARNING: $HERMES_BREAKER_NOTE"
+    # the patch's own words, as one line with no control characters
+    if [ -s "$HERMES_BREAKER_NOTE_FILE" ]; then
+      echo "[harnessrouter] WARNING: $(head -c 600 "$HERMES_BREAKER_NOTE_FILE" | tr -d '\000-\037\177' )"
+    fi
+    rm -f -- "$HERMES_BREAKER_NOTE_FILE"; HERMES_BREAKER_NOTE_FILE=""
   fi
 
-  [ -d "$TOOLS/venv/bin" ] && export PATH="$TOOLS/venv/bin:$PATH"
   # Hermes otherwise tries to install its own dependencies mid-turn.
   export HERMES_DISABLE_LAZY_INSTALLS=1
   # Where the runner finds the MCP extension to mount (-e) on pi turns with MCP servers.
@@ -1883,6 +2086,11 @@ install_backends() {
 
 install_backends
 seal_tools    # nothing else is running yet: the runner and the gateway start below
+# The installed CLIs go on PATH now, for the runner, which starts each one by name for a session, and
+# for the processes after it; the order is the one they always had (hermes's venv, then $TOOLS/bin).
+export PATH="$TOOLS/bin:$PATH"
+if [ -d "$TOOLS/venv/bin" ]; then export PATH="$TOOLS/venv/bin:$PATH"; fi
+export NODE_PATH="$TOOLS/lib/node_modules"
 
 pids=()
 cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }

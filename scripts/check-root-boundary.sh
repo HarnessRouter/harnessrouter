@@ -10,6 +10,11 @@ n=$(find /app /data/agent-tools -xdev ! -user root ! -path '/app/ui/.next/cache*
 n=$(find /app /data/agent-tools -xdev -perm /022 ! -type l ! -path '/app/ui/.next/cache*' 2>/dev/null | wc -l)
 [ "$n" = 0 ] || fail "$n paths under /app or the tools can be written by a group or by anyone"
 [ "$(stat -c %u:%a /data)" = "0:1771" ] || fail "/data is $(stat -c %U:%a /data), not root's with the sticky bit"
+# A base's install uid (19001 and up, docker/entrypoint.sh install_as_uid) leaves nothing behind: no process and no HOME.
+n=$(cat /proc/[0-9]*/status 2>/dev/null | awk '/^Uid:/ && $2 >= 19001 && $2 < 19100' | wc -l)
+[ "$n" = 0 ] || fail "$n processes of an install uid are still running"
+n=$(find /tmp -maxdepth 1 -name 'hr-install.*' 2>/dev/null | wc -l)
+[ "$n" = 0 ] || fail "$n install homes are left in /tmp"
 [ "$(stat -c %u:%a /data/workspaces)" = "0:751" ] || fail "/data/workspaces is $(stat -c %U:%a /data/workspaces)"
 
 home_of() { tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | sed -n 's/^HOME=//p'; }
