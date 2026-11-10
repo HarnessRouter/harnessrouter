@@ -121,22 +121,6 @@ async function readCards(h: Record<string, string>, signal?: AbortSignal, limit 
   return d.sessions as TraceCard[];
 }
 
-/** How many of the workspace's newest tasks a list of setups is ordered by. */
-export const RECENT_TASKS = 100;
-/** When each setup last ran a task, among the workspace's newest tasks (seconds; a task still running is now): one read,
- *  for a list of setups that puts the ones in use first. A setup none of those tasks ran is not in it. */
-export async function lastTaskBySetup(limit = RECENT_TASKS): Promise<Map<string, number>> {
-  const cards = await readCards(headers(), undefined, limit);
-  const now = Date.now() / 1000;
-  const out = new Map<string, number>();
-  for (const c of cards) {
-    const hid = c.harness_id || '';
-    const at = RUNNING.has(String(c.status || '')) ? now : Number(c.finished_at) || 0;
-    if (hid && at > (out.get(hid) || 0)) out.set(hid, at);
-  }
-  return out;
-}
-
 function connect(h: Record<string, string>): Conn {
   let stopped = false;
   let ctrl: AbortController | null = null;

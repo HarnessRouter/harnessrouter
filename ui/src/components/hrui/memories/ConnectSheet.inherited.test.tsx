@@ -12,7 +12,6 @@ jest.mock('@/lib/memories', () => ({
 }));
 jest.mock('@/lib/harness', () => ({ gwHeaders: () => ({}), listCustom: jest.fn(async () => []) }));
 jest.mock('@/lib/hfetch', () => ({ harnessFetch: jest.fn() }));
-jest.mock('@/lib/workspace-feed', () => ({ lastTaskBySetup: jest.fn(async () => ({})) }));
 jest.mock('../setup/settingsModel', () => ({ plain: (_e: unknown, s: string) => s }));
 // eslint-disable-next-line import/first
 import { ConnectSheet } from './sheets';

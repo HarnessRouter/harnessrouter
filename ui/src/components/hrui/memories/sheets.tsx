@@ -1,15 +1,13 @@
 'use client';
 // The sheets of the Memories pages: New memory (a name and, if you like, a description: every engine listed, the one
-// chosen for you from them picked and marked Recommended), Use in (give a memory to a setup, which then remembers there), Connect (an engine's
-// address and a key, tried by the service at once), the list of engines to connect, and Rename. Each is the console's
-// Sheet.
+// chosen for you from them picked and marked Recommended), Connect (an engine's address and a key, tried by the service
+// at once), the list of engines to connect, and Rename. Each is the console's Sheet. A memory is given to an agent from
+// its own Settings, never from a sheet here (Richard 11-09: "Used in is sloppy, put it in a Setting tab").
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { listCustom, type CustomHarness } from '@/lib/harness';
 import {
-  agentMemoryOf, chooseEngine, connectProvider, createMemory, listProviderPlugs, setAgentMemory, updateMemory, type EngineChoice, type Memory, type Provider,
+  chooseEngine, connectProvider, createMemory, listProviderPlugs, updateMemory, type EngineChoice, type Memory, type Provider,
 } from '@/lib/memories';
-import { lastTaskBySetup } from '@/lib/workspace-feed';
-import { ConfirmSheet, Sheet, SheetTop } from '../Sheet';
+import { Sheet, SheetTop } from '../Sheet';
 import { Skel, SkLine } from '../Skel';
 import { plain } from '../setup/settingsModel';
 import { serviceFacts, shapeOf } from './caps';
@@ -273,112 +271,6 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
           <button type="submit" className="btn primary" disabled={!sel || !name.trim() || busy}>{busy ? 'Creating…' : 'Create'}</button>
         </div>
       </form>
-    </Sheet>
-  );
-}
-
-/** A setup as Use in lists it: when it last ran a task (seconds, 0 for none among the newest), when it was made, and
- *  the memory it has now, as its record says. */
-export interface SetupPick { id: string; name: string; last: number; created: number; has: SetupMemoryNow }
-/** What memory a setup has now: the one it remembers in (`own`), none (`none`, with the service's why), some it was
- *  given before memory came with every setup (`count`), or nothing said (a service before 0.40). */
-export type SetupMemoryNow = { k: 'own'; id: string; name: string } | { k: 'none' } | { k: 'count'; n: number } | { k: 'unsaid' };
-export function setupMemoryNow(h: CustomHarness): SetupMemoryNow {
-  const r = agentMemoryOf(h);
-  if (r?.memory?.id) return { k: 'own', id: r.memory.id, name: r.memory.name };
-  if (r) return { k: 'none' };
-  const n = h.memories?.count || 0;
-  return n ? { k: 'count', n } : { k: 'unsaid' };
-}
-/** The order Use in lists setups in: the ones that ran a task most lately first, then the newest made, then by name. */
-export const byRecent = (a: SetupPick, b: SetupPick) => b.last - a.last || b.created - a.created || a.name.localeCompare(b.name);
-/** The memory a setup remembers in, as Use in names it: by its name, or "its own memory" where it is named after the
- *  setup (the one made for it) or has no name. */
-const ownName = (has: SetupMemoryNow, setup: string) => (has.k === 'own' && has.name && has.name !== setup ? has.name : 'its own memory');
-/** A setup's line under its name in Use in. */
-export function memoryNowLine(has: SetupMemoryNow, here: string, setup = ''): string {
-  if (has.k === 'own') return has.id === here ? 'Remembers here' : `Remembers in ${ownName(has, setup)}`;
-  if (has.k === 'none') return 'No memory';
-  if (has.k === 'count') return `Uses ${has.n} ${has.n === 1 ? 'memory' : 'memories'}`;
-  return '';
-}
-/** What Use in asks before it replaces the memory a setup has now with `next`. */
-export function replaceAsk(x: Pick<SetupPick, 'name' | 'has'>, next: string): { title: string; body: string } {
-  const then = `From its next task it remembers in ${next} instead.`;
-  if (x.has.k === 'count') {
-    const one = x.has.n === 1;
-    return { title: `Replace its memory in ${x.name}?`, body: `${x.name} uses ${x.has.n} ${one ? 'memory' : 'memories'} now. ${then} ${one ? 'It is kept, with everything in it.' : 'They are kept, with everything in them.'}` };
-  }
-  const now = ownName(x.has, x.name);
-  const kept = now === 'its own memory' ? 'Its own memory' : now;
-  return { title: `Replace ${now} in ${x.name}?`, body: `${x.name} remembers in ${now} now. ${then} ${kept} is kept, with everything in it.` };
-}
-
-/** Use in: give a memory to a setup. The setup then remembers there: it recalls from it, writes to it by default and
- *  keeps what matters from each finished task (PUT /v1/harnesses/{hid}/memory with the memory). The setups come the
- *  ones in use first, each saying the memory it has now; one that has another memory asks before it is replaced, and
- *  one that uses this memory already says so and can't be picked again. */
-export function UseInSheet({ m, onClose, onDone }: { m: Memory; onClose: () => void; onDone: (setup: string) => void }) {
-  const [setups, setSetups] = useState<SetupPick[] | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [q, setQ] = useState('');
-  const [busy, setBusy] = useState('');
-  const [err, setErr] = useState('');
-  const [asking, setAsking] = useState<SetupPick | null>(null);
-  const read = () => {
-    setFailed(false);
-    // the order is the workspace's newest tasks; without them, the newest made first (never a failed read)
-    Promise.all([listCustom(), lastTaskBySetup().catch(() => new Map<string, number>())])
-      .then(([l, last]) => setSetups(l.map((h) => ({ id: h.id, name: h.name, last: last.get(h.id) || 0, created: h.createdAt || 0, has: setupMemoryNow(h) })).sort(byRecent)))
-      .catch(() => setFailed(true));
-  };
-  useEffect(read, []);
-  const using = new Set((m.used_by || []).map((u) => u.harness_id));
-  const here = (x: SetupPick) => using.has(x.id) || (x.has.k === 'own' && x.has.id === m.id);
-  const needle = q.trim().toLowerCase();
-  const shown = (setups || []).filter((x) => !needle || x.name.toLowerCase().includes(needle) || memoryNowLine(x.has, m.id, x.name).toLowerCase().includes(needle));
-  const use = async (x: SetupPick) => {
-    if (busy) return;
-    setBusy(x.id); setErr('');
-    try { await setAgentMemory(x.id, { id: m.id }); onDone(x.name); }
-    catch (e) { setErr(plain(e, `${x.name} was not given ${m.name}. Try again.`)); setBusy(''); setAsking(null); }
-  };
-  const pick = (x: SetupPick) => { if (x.has.k === 'own' || x.has.k === 'count') setAsking(x); else void use(x); };
-  if (asking) {
-    const ask = replaceAsk(asking, m.name);
-    return (
-      <ConfirmSheet id="mmUseR" title={ask.title} confirmLabel="Replace" busy={!!busy} body={ask.body}
-        onClose={() => { if (!busy) { setAsking(null); setErr(''); } }} onConfirm={() => void use(asking)} />
-    );
-  }
-  return (
-    <Sheet onClose={onClose} labelledBy="mmUse" className="small-sheet mm-sheet mm-use" busy={!!busy}>
-      <SheetTop id="mmUse" title={`Use ${m.name} in…`} sub="The setup remembers here from its next task: it recalls before it answers, and keeps what matters." onClose={onClose} />
-      {failed ? (
-        <p className="mm-err" role="alert">Your setups could not be read just now. <button type="button" className="link-q inl" onClick={read}>Try again</button></p>
-      ) : !setups ? (
-        <Skel label="Reading your setups">{[60, 44, 52].map((w, i) => <SkLine key={i} w={`${w}%`} h={13} style={{ margin: '12px 0' }} />)}</Skel>
-      ) : !setups.length ? (
-        <p className="set-help">No setups yet. Make one in Studio, and it can remember here.</p>
-      ) : (
-        <>
-          {setups.length > 6 ? <input className="set-in slim mm-use-q" type="search" placeholder={`Search ${setups.length} setups`} aria-label="Search setups" autoComplete="off" value={q} onChange={(e) => setQ(e.target.value)} /> : null}
-          <div className="mm-use-list" role="list" aria-label="Setups, the ones in use first">
-            {shown.map((x) => {
-              const line = memoryNowLine(x.has, m.id, x.name);
-              return (
-                <div key={x.id} className="mm-use-row" role="listitem">
-                  <span className="mm-use-n"><b title={x.name}>{x.name}</b>{line && !here(x) ? <small>{line}</small> : null}</span>
-                  {here(x) ? <small className="mm-use-here">Remembers here</small>
-                    : <button type="button" className="btn small" disabled={!!busy} onClick={() => pick(x)}>{busy === x.id ? 'Giving…' : 'Use here'}</button>}
-                </div>
-              );
-            })}
-            {!shown.length ? <p className="set-help" role="status">No setup matches that.</p> : null}
-          </div>
-        </>
-      )}
-      {err ? <p className="mm-err" role="alert">{err}</p> : null}
     </Sheet>
   );
 }

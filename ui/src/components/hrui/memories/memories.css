@@ -494,7 +494,7 @@
 #hrui .am-sk{gap:12px}
 #hrui .am-sk .grow{display:flex;flex-direction:column}
 
-/* Memories: search and order above the list, who uses each memory on its card, Use in beside it */
+/* Memories: search and order above the list, and who uses each memory on its card */
 #hrui .mm-top .top-actions{flex-wrap:nowrap}
 #hrui .mm-more{width:40px;height:40px;border:1px solid var(--line);border-radius:999px;display:inline-grid;place-items:center;color:var(--muted)}
 #hrui .mm-more:hover,#hrui .mm-more[aria-expanded="true"]{color:var(--fg);background:var(--surface)}
@@ -508,13 +508,10 @@
 #hrui .mm-cardw{position:relative;display:flex;min-width:0}
 #hrui .mm-cardw>.mm-card{flex:1;min-width:0}
 #hrui .mm-ub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-top:6px;min-height:24px;font-size:12px;color:var(--faint);min-width:0}
-#hrui .mm-ub.none{font-style:normal}
 #hrui .mm-uc{display:inline-block;max-width:150px;padding:2px 8px;border-radius:999px;background:var(--surface);color:var(--muted);font-size:12px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #hrui .mm-uc.more{color:var(--faint)}
-#hrui .mm-cardw>.mm-usein{position:absolute;right:14px;bottom:14px;z-index:1}
 #hrui .mm-roww{position:relative;display:flex;align-items:center;min-width:0}
 #hrui .mm-roww>.mm-row{flex:1;min-width:0}
-#hrui .mm-roww>.mm-usein{flex:none;margin:0 10px 0 6px}
 #hrui .mm-rn .mm-ub{margin-top:4px;font-family:var(--sans);font-weight:400;white-space:normal}
 #hrui .mm-rows .mm-roww{border-bottom:1px solid var(--line)}
 #hrui .mm-rows .mm-roww>.mm-row{border-bottom:0}
@@ -546,19 +543,6 @@
 #hrui .mm-eng-t small.mm-eng-why{color:var(--fg)}
 #hrui .mm-new-act{position:sticky;bottom:0;margin-top:14px;padding-top:12px;background:var(--bg);z-index:2}
 
-/* Use in: the workspace's setups, each with Use here */
-#hrui .mm-use{width:min(480px,100%)}
-#hrui .mm-use-q{width:100%;margin:0 0 10px}
-#hrui .mm-use-list{display:flex;flex-direction:column;max-height:min(52vh,420px);overflow:auto;border:1px solid var(--line);border-radius:12px}
-#hrui .mm-use-row{display:flex;align-items:center;gap:12px;min-height:48px;padding:6px 8px 6px 14px;border-bottom:1px solid var(--line)}
-#hrui .mm-use-row:last-child{border-bottom:0}
-/* a setup: its name, and under it the memory it has now */
-#hrui .mm-use-n{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-#hrui .mm-use-row b{display:block;min-width:0;font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#hrui .mm-use-n small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#hrui .mm-use-here{flex:none;font-size:12.5px;color:var(--faint);padding-right:6px}
-#hrui .mm-use-row .btn{flex:none}
-#hrui .mm-use-list>.set-help{margin:12px 14px}
 
 /* A record: what it says reads as text, not as a heading; what the engine kept beside it is under Details */
 #hrui .mm-sentence,#hrui .mm-bodyed.mm-sentence{font-family:inherit;font-size:17px;font-weight:450;line-height:1.6;letter-spacing:0;color:var(--fg)}
@@ -589,7 +573,6 @@
   #hrui .mm-sort{margin-left:0}
   #hrui .mm-roww{flex-wrap:wrap}
   #hrui .mm-roww>.mm-row{flex-basis:100%}
-  #hrui .mm-roww>.mm-usein{margin:0 0 10px 64px}
 }
 
 /* A standing instruction: its tag under the record's title, and, for a person who may write the memory, the switch that

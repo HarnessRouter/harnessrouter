@@ -97,8 +97,6 @@ export const msOf = (v: string | number | null | undefined): number | null => {
   return whenOf(v || null);
 };
 export { engineOf, shownName, userOf } from '@/lib/memories';
-/** The service speaks of the 0.40 memories contract on this memory: who uses it and with what engine. */
-export const speaksUse = (m: Pick<Memory, 'used_by' | 'engine'> | null | undefined) => !!m && (Array.isArray(m.used_by) || typeof m.engine === 'string');
 /** A sentence the service wrote, carried on after a word of ours ("Mem0, it serves people"): its first letter lowered,
  *  unless the word it begins is a name or an acronym. */
 export const after = (s: string) => (/^[A-Z][a-z]/.test(s) && !/^(I|I['’][a-z]+)\b/.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
