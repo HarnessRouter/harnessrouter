@@ -26,6 +26,18 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "[harnessrouter] ERROR: the container must start as root. It drops privileges itself: the product runs as 'agent', every agent process as its own session uid. Remove --user from docker run."
   exit 1
 fi
+# The per-session uids keep sessions out of each other's files and out of the product's; the host kernel
+# decides whether one user may hard-link another user's file (fs.protected_hardlinks), and the container
+# cannot set it. Said once at start when the host allows it; an unreadable setting says nothing.
+protected_hardlinks_warning() {
+  local v
+  v="$(cat -- "${1:-/proc/sys/fs/protected_hardlinks}" 2>/dev/null)" || v=""
+  if [ "$v" = "0" ]; then
+    echo "[harnessrouter] WARN: this host allows hard links to other users' files (fs.protected_hardlinks=0); set it to 1 on the host"
+  fi
+  return 0
+}
+protected_hardlinks_warning
 PRODUCT=agent
 # Root must never read or run anything the product user can change, or a bug in the gateway or the
 # console (which run as that user) becomes root at the next start (reported privately,
