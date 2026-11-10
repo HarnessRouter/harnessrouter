@@ -40,10 +40,10 @@ let answer: (body: { around?: string; hops?: number }) => unknown;
 const bodies: { around?: string; hops?: number; limit?: number }[] = [];
 let opened: unknown[][];
 
-function show(p: Partial<{ provider: Provider | null; activeRecordId: string; refreshKey: number; changed: string[] }> = {}) {
+function show(p: Partial<{ provider: Provider | null; activeRecordId: string; refreshKey: number; changed: string[]; onFold: () => void }> = {}) {
   return act(async () => {
     root.render(<div id="hrui"><MemoryGraph memory={memory({ id: 'hmem_1', name: 'Customers' })} provider={p.provider === undefined ? CAPS.graphiti : p.provider} schema={null}
-      activeRecordId={p.activeRecordId || ''} refreshKey={p.refreshKey || 0} changed={p.changed} onOpenRecord={(...a: unknown[]) => { opened.push(a); }} /></div>);
+      activeRecordId={p.activeRecordId || ''} refreshKey={p.refreshKey || 0} changed={p.changed} onOpenRecord={(...a: unknown[]) => { opened.push(a); }} onFold={p.onFold} /></div>);
   });
 }
 const nodes = () => canvasProps.elements.filter((x) => !x.data.source);
@@ -257,5 +257,32 @@ describe('search', () => {
     await flush();
     expect(opened.pop()).toEqual(['f1', 'hmem_1']);
     await later(10);
+  });
+});
+
+describe('the panel’s own controls (Richard 11-09)', () => {
+  it('Center is a target, the zoom stack’s last button, and nothing there is called fit', async () => {
+    await show();
+    await flush();
+    const zoom = Array.from(el.querySelectorAll('.mgv-zoom button')).map((b) => [b.getAttribute('aria-label'), b.getAttribute('title')]);
+    expect(zoom).toEqual([['Zoom in', 'Zoom in'], ['Zoom out', 'Zoom out'], ['Center', 'Center']]);
+    // a ring, its centre and four ticks
+    const center = el.querySelector('.mgv-zoom button[aria-label="Center"] svg') as SVGElement;
+    expect(center.querySelectorAll('circle')).toHaveLength(2);
+    expect(center.querySelector('path')?.getAttribute('d')).toBe('M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3');
+  });
+  it('folds from the chevron at the left end of its bar, where the page lets it', async () => {
+    const onFold = jest.fn();
+    await show({ onFold });
+    await flush();
+    const bar = el.querySelector('.sp-explore-bar') as HTMLElement;
+    const first = bar.firstElementChild as HTMLButtonElement;
+    expect(first.getAttribute('aria-label')).toBe('Hide graph');
+    expect(first.getAttribute('aria-expanded')).toBe('true');
+    await click(first);
+    expect(onFold).toHaveBeenCalledTimes(1);
+    await show();
+    await flush();
+    expect(el.querySelector('button[aria-label="Hide graph"]')).toBeNull();
   });
 });

@@ -42,13 +42,14 @@ const sizeOf = (degree) => 30 + Math.min(degree, 10) * 2.2;
 /**
  * @param {{ memory: import('@/lib/memories').Memory, provider: import('@/lib/memories').Provider | null, schema: import('../schemaModel').LSchema | null,
  *   activeRecordId: string, refreshKey: number, changed?: string[], onOpenRecord: (recordId: string, memoryId?: string) => void,
- *   linksFor?: (recordId: string) => import('react').ReactNode }} props   a record's links for its panel, where they can be changed
+ *   linksFor?: (recordId: string) => import('react').ReactNode, onFold?: () => void }} props   a record's links for its panel, where they
+ *   can be changed; `onFold` folds the panel to the right, from the chevron at the end of its bar
  */
 export function MemoryGraph(props) {
   return <Explorer key={props.memory.id} {...props} />;
 }
 
-function Explorer({ memory, provider, schema, activeRecordId, refreshKey, changed, onOpenRecord, linksFor }) {
+function Explorer({ memory, provider, schema, activeRecordId, refreshKey, changed, onOpenRecord, linksFor, onFold }) {
   const mid = memory.id;
   const canvas = useRef(null);
   const body = useRef(null);
@@ -588,6 +589,8 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
       <div className="dg-body" ref={body}>
         <div className="dg-canvas" ref={box}>
           <div className="sp-explore-bar">
+            {/* the panel folds to the right from its left edge, as a setup's Agent stack folds (Richard 11-09) */}
+            {onFold ? <button type="button" className="pane-btn mgv-fold" aria-expanded={true} aria-label="Hide graph" title="Hide graph" onClick={onFold}>{I.chevronRight}</button> : null}
             <div className={`sbar${dropOpen ? ' is-open' : ''}`}>
               <span className="mgv-sic">{I.search}</span>
               <input className="sbar-input" value={q} placeholder="Search nodes" aria-label="Search nodes"
@@ -698,7 +701,7 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
           <div className="mgv-zoom" role="group" aria-label="Zoom">
             <button type="button" className="pane-btn" aria-label="Zoom in" title="Zoom in" onClick={() => { whole.current = false; zoomBy(canvas, 1.25); }}>+</button>
             <button type="button" className="pane-btn" aria-label="Zoom out" title="Zoom out" onClick={() => { whole.current = false; zoomBy(canvas, 0.8); }}>−</button>
-            <button type="button" className="pane-btn" aria-label="Fit to the pane" title="Fit to the pane" onClick={fit}>{I.cornersOut}</button>
+            <button type="button" className="pane-btn" aria-label="Center" title="Center" onClick={fit}>{I.target}</button>
           </div>
         </div>
         {detailEdge ? <DataEdgeDetail edge={detailEdge} nodes={all.nodes} schema={schema} compact={compact} onJump={jump} onClose={() => setDetail(null)} /> : null}

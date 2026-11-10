@@ -38,6 +38,14 @@ test('a narrower window takes from the growing pane, then the others from the la
   expect(resolveWidths(THREE, {}, 942)).toEqual({ tree: 240, graph: 300, doc: 400 });
   expect(resolveWidths(THREE, { tree: 9000 }, 1440)).toEqual({ tree: 738, graph: 300, doc: 400 });
 });
+test('a pane of a fixed width (a folded rail) keeps it, gives nothing up, and has no rule to drag beside it', async () => {
+  const folded = [P('tree', 240, 300), P('doc', 400, 600, true), { ...P('graph', 52, 52), fixed: 52 }];
+  expect(resolveWidths(folded, { graph: 420 }, 1440)).toEqual({ tree: 300, graph: 52, doc: 1086 });
+  expect(resolveWidths(folded, {}, 700)).toEqual({ tree: 246, graph: 52, doc: 400 });
+  await mount(folded);
+  expect(seps()).toHaveLength(1);
+  expect(basis('graph')).toBe('0 0 52px');
+});
 test('a chosen width below a minimum is held at the minimum', () => {
   expect(resolveWidths(THREE, { tree: 10 }, 1440).tree).toBe(240);
 });

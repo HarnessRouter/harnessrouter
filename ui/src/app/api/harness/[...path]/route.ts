@@ -8,7 +8,7 @@
 //
 // SSE responses (text/event-stream from /v1/responses?stream) stream through unbuffered so the
 // Workbench gets live reasoning/tool/text deltas instead of one blob at turn end.
-//   HARNESS_GATEWAY_URL   e.g. https://harness-gateway.<env>.eastus2.azurecontainerapps.io
+//   HARNESS_GATEWAY_URL   e.g. http://127.0.0.1:8080 (self-hosted) or your gateway's URL
 //   HARNESS_INTERNAL_KEY  internal trust key (matches the gateway's secret)
 //
 // SELF-HOSTED: there is no login, so there is no JWT to gate the key on. The BFF is instead the
@@ -20,6 +20,7 @@ import { Agent } from 'undici';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
 import { AUTH_DISABLED, SESSION_COOKIE, sessionValid } from '@/lib/selfhost-auth';
 import { relayContentSecurityPolicy } from '@/lib/public-artifact-response';
+import { gatewayFirstSegment, oddSegment } from '@/lib/relay-path';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 3700; // a synchronous turn may run for the gateway's full hour; this hop must outlast it
@@ -43,16 +44,20 @@ const upstream = new Agent({ headersTimeout: maxDuration * 1000, bodyTimeout: ma
 
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
+  const segs = path || [];
   // The gateway's /internal/* routes are for services that hold the internal key themselves. A
   // browser has no business on them through a multi-tenant console, where this proxy attaches the
   // key beside any bearer: they are not forwarded there at all. (A self-hosted box is its owner's:
   // the signed-in operator may call them, and the gateway refuses any that arrives with a bearer.)
-  if (!SELF_HOSTED && (path || [])[0] === 'internal') {
+  // A segment the gateway's URL could read as another path is refused first, in both editions
+  // (lib/relay-path, the hosted proxy's rule): '..%2finternal%2fx' or '%2e%2e' took a call past the
+  // first-segment check to another route. The check then reads the first segment as the gateway will.
+  if (!segs.length || segs.some(oddSegment) || (!SELF_HOSTED && gatewayFirstSegment(segs) === 'internal')) {
     return new Response(JSON.stringify({ detail: 'not found' }), { status: 404, headers: {
       'content-type': 'application/json', 'x-content-type-options': 'nosniff',
       'content-security-policy': relayContentSecurityPolicy(null, 'application/json') } });
   }
-  const target = `${GATEWAY.replace(/\/$/, '')}/${(path || []).join('/')}${req.nextUrl.search}`;
+  const target = `${GATEWAY.replace(/\/$/, '')}/${segs.join('/')}${req.nextUrl.search}`;
   const headers: Record<string, string> = {};
   const ct = req.headers.get('content-type');
   if (ct) headers['content-type'] = ct;

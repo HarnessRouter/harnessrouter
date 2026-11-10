@@ -38,6 +38,17 @@
 #hrui .pg-turn-meta .pg-acts .icon-btn:hover,
 #hrui .pg-turn-meta .pg-acts .icon-btn:focus-visible { color: var(--fg); background: var(--surface); }
 
+/* where a branched task's history ends (BranchMark): one quiet line across the thread, its words in
+   the middle. A long title is cut rather than wrapped, so the line stays one line. */
+#hrui .pg-branch { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+#hrui .pg-branch::before,
+#hrui .pg-branch::after { content: ""; flex: 1 1 24px; height: 1px; background: var(--line); }
+#hrui .pg-branch-in { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: min(80%, 520px); }
+#hrui .pg-branch-in svg { flex: none; }
+#hrui .pg-branch-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hrui .pg-branch-link { color: var(--accent); }
+#hrui .pg-branch-link:hover { text-decoration: underline; }
+
 /* a task's thread: the store drives it, the page's own scroller follows it */
 #hrui .tk-turns { display: flex; flex-direction: column; gap: 30px; }
 #hrui .uac-user .from { display: block; margin-bottom: 4px; font: 400 12px var(--mono); color: var(--faint); }

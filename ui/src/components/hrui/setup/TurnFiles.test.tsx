@@ -26,7 +26,7 @@ jest.mock('@/lib/hfetch', () => ({ harnessFetch: (...a: unknown[]) => harnessFet
 jest.mock('@/lib/conversation', () => ({ isInternalOutput: (n?: string) => n === 'AGENTS.md' }));
 jest.mock('../toast', () => ({ toast: (m: string) => toast(m) }));
 
-import { archiveOf, FileCards, plainSentence, zipFileName } from './TurnFiles';
+import { archiveOf, FileCards, filesOf, linkedFile, plainSentence, zipFileName } from './TurnFiles';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -106,4 +106,31 @@ test('while the zip is prepared the action says so, then it saves as "<task> fil
   expect(toast).not.toHaveBeenCalled();
   expect(el.querySelector('button[aria-busy="true"]')).toBeNull();
   click.mockRestore();
+});
+
+// #594: a reply's link to a file of its task opens in the preview, read with the sign-in. A file the
+// conversation made opens as its own card does (by its id); any other path of the task opens through
+// the signed-in read by path, never the public address the link itself carries.
+describe('a reply link opens its file in the preview', () => {
+  const made = filesOf([
+    { role: 'assistant', status: 'done', files: [file(1, { filename: 'out/hello-world.pptx' })] },
+  ] as never);
+
+  test('a file the conversation made opens as its card does', () => {
+    expect(linkedFile(made, 'out/hello-world.pptx', 'hsess_1')).toEqual({ files: made, key: 'cfile_1' });
+    expect(made[0].url).toBe('/api/harness/v1/containers/hsess_1/files/cfile_1/content');
+  });
+
+  test('another file of the task opens by its path through the signed-in read', () => {
+    const to = linkedFile(made, 'site/index v2.html', 'hsess_1');
+    expect(to?.key).toBe('path:site/index v2.html');
+    expect(to?.files.slice(0, 1)).toEqual(made);
+    expect(to?.files[1]).toEqual({ key: 'path:site/index v2.html', name: 'index v2.html', path: 'site/index v2.html',
+      url: '/api/harness/a/hsess_1/site/index%20v2.html' });
+  });
+
+  test('with no task to read from, nothing opens', () => {
+    expect(linkedFile(made, 'notes.md', undefined)).toBeNull();
+    expect(linkedFile(made, 'notes.md', '')).toBeNull();
+  });
 });

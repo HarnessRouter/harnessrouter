@@ -88,17 +88,11 @@
 @media (max-width:560px){#hrui .eo-two{grid-template-columns:minmax(0,1fr)}}
 
 /* ── New environment ────────────────────────────────────────────────────────────────────────────── */
-#hrui .sheet.small-sheet.eo-new{width:min(600px,100%)}
-#hrui .eo-new .set-f{margin:0 0 14px}
-#hrui .eo-src{display:grid;grid-template-columns:repeat(4,auto);justify-content:start}
-#hrui .eo-more{margin:0 0 12px;border-top:1px solid var(--line);padding-top:10px}
-#hrui .eo-more summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);padding:2px 0 8px}
-#hrui .eo-more[open] summary{color:var(--fg)}
-#hrui .eo-new-act{border-top:1px solid var(--line);padding-top:14px}
-#hrui .eo-state{flex:1 1 200px;min-width:0;margin-right:auto;font-size:13px;line-height:1.4;color:var(--muted);overflow-wrap:anywhere}
-#hrui .eo-state.bad{color:var(--bad)}
-#hrui .eo-state:empty{flex-basis:0}
-@media (max-width:560px){#hrui .eo-src{grid-template-columns:repeat(2,minmax(0,1fr));width:100%}#hrui .eo-src button{white-space:nowrap}}
+/* The product's form sheet (small-sheet mcp-sheet: Add MCP server, Connect a plugin) as it is; only the description's
+   field and the name's refusal are drawn here. Its own class: .eo-new is the Files bar's new-path row, and a sheet
+   that carried it was laid out as that row (the title and the name side by side; Richard, 11-09). */
+#hrui .eo-create textarea.set-in,#hrui .eo-details textarea.set-in{display:block;resize:vertical;line-height:1.5}
+#hrui .eo-create .set-help.eo-err{color:var(--bad)}
 
 /* ── the environment's sheet ────────────────────────────────────────────────────────────────────── */
 #hrui .sheet.eo-sheet{width:min(1000px,calc(100vw - 48px));max-width:none;height:min(840px,calc(100dvh - 32px));display:flex;flex-direction:column;overflow:hidden;padding:22px 24px 16px}
@@ -112,13 +106,14 @@
 #hrui .eo-body{flex:1;min-height:0;overflow:auto;margin:0 -6px;padding:2px 6px 10px}
 #hrui .eo-body.eo-on-files{display:flex;flex-direction:column;overflow:hidden}
 #hrui .eo-foot{flex:none;margin-top:0;padding-top:12px;border-top:1px solid var(--line);flex-wrap:wrap}
+#hrui .eo-state{flex:1 1 200px;min-width:0;margin-right:auto;font-size:13px;line-height:1.4;color:var(--muted);overflow-wrap:anywhere}
+#hrui .eo-state.bad{color:var(--bad)}
+#hrui .eo-state:empty{flex-basis:0}
 #hrui .eo-del{flex:none}
 #hrui .eo-ask{flex:none;margin:8px 0 0}
 #hrui .eo-sheet .mcp-ask .del-go{white-space:nowrap}
 @media (max-width:600px){
-  #hrui .scrim .sheet.eo-sheet,#hrui .scrim .sheet.eo-full{width:100%;max-width:none;height:100dvh;max-height:100dvh;border-radius:0;padding:16px 16px calc(12px + env(safe-area-inset-bottom,0px))}
-  #hrui .scrim .sheet.eo-full{display:flex;flex-direction:column}
-  #hrui .eo-full .eo-new-act{margin-top:auto}
+  #hrui .scrim .sheet.eo-sheet{width:100%;max-width:none;height:100dvh;max-height:100dvh;border-radius:0;padding:16px 16px calc(12px + env(safe-area-inset-bottom,0px))}
   #hrui .tabs.inline.eo-tabs{gap:18px}
   #hrui .eo-foot .btn{flex:1 1 auto}
   #hrui .eo-foot .eo-state{flex-basis:100%;order:-1}
@@ -136,7 +131,11 @@
 #hrui .eo-tool:hover{background:var(--surface)}
 #hrui .eo-tool:disabled{opacity:.5;cursor:default}
 #hrui .eo-tool svg{width:16px;height:16px;color:var(--muted)}
-@media (max-width:900px){#hrui .eo-tool span{display:none}#hrui .eo-tool:last-child span{display:inline}}
+/* narrower, the tools between Upload files and More options keep their icons only; those two keep their words */
+@media (max-width:900px){#hrui .eo-tool span{display:none}#hrui .eo-tool:first-child span,#hrui .eo-tool:last-child span{display:inline}}
+/* More options (the import) is the bar's last tool: its chevron turns as it opens */
+#hrui .eo-tool span.eo-more-chev{display:grid;margin-left:-2px}
+#hrui .eo-tool .eo-more-chev svg{color:var(--faint)}
 #hrui .eo-imp{flex:none;display:flex;flex-direction:column;gap:12px;padding:14px;margin:0 0 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
 #hrui .eo-imp .seg{align-self:flex-start;background:var(--bg)}
 #hrui .eo-imp .eo-two .set-f,#hrui .eo-imp .eo-pick{margin:0}
@@ -183,9 +182,15 @@
 #hrui .eo-ln{margin:0;padding:12px 10px 12px 14px;min-width:42px;text-align:right;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--faint);overflow:hidden;user-select:none;white-space:pre}
 #hrui .eo-code textarea{display:block;width:100%;height:100%;border:0;resize:none;outline:none;padding:12px 14px 12px 6px;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--fg);background:transparent;white-space:pre;overflow:auto;tab-size:2}
 #hrui .eo-files:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+/* an empty environment's Files: Add files, its two uploads, then a new file and More options in one quiet line */
 #hrui .eo-start{flex:none;padding:22px;border:1px dashed var(--line);border-radius:14px;text-align:center}
 #hrui .eo-start h4{margin:0 0 6px;font-size:16px;font-weight:600}
 #hrui .eo-start p{margin:0 auto 16px;max-width:52ch;font-size:13px;line-height:1.5;color:var(--muted)}
+#hrui .eo-start p .link-q.inl{font-size:inherit}
+#hrui .eo-start-act{display:flex;justify-content:center;flex-wrap:wrap;gap:8px 10px}
+#hrui .eo-start-act .btn svg{width:16px;height:16px}
+#hrui .eo-start .eo-or{margin-top:14px;font-size:13px}
+#hrui .eo-start .eo-or .link-q.inl{font-size:13px}
 #hrui .eo-choices{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;text-align:left}
 #hrui .eo-choice{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--bg);min-width:0}
 #hrui .eo-choice:hover{border-color:var(--accent)}

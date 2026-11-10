@@ -55,3 +55,12 @@ export function buildSchemaElements(graph, posDrafts, typeDrafts, captionOf) {
   });
   return elements;
 }
+
+/** A type's name as the canvas shows it: its title, and under it "Built in" for what the provider makes itself and
+ *  `count` (how many records are of it, in words) where that is known. The Schema tab gives the count, live; a
+ *  memory's cover can't keep a number true, so it gives none (coverShot.js). Both name their types here. */
+export function schemaCaption(graph, label, d, count) {
+  const built = ((graph && graph.vertex_types) || []).some((v) => v.label === label && v.builtin);
+  const sub = [built ? 'Built in' : '', count || ''].filter(Boolean).join(' · ');
+  return `${(graph && graph.titles && graph.titles[label]) || typeLabel((d && d.name) || label)}${sub ? `\n${sub}` : ''}`;
+}

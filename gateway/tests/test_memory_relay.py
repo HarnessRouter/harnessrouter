@@ -112,6 +112,26 @@ def test_a_model_from_the_agents_catalog_goes_where_the_catalog_sends_it(relay):
     assert str(sent[-1].url) == "https://api.openai.com/v1/responses"
 
 
+def test_a_key_whose_address_is_a_full_request_url_is_called_there_and_nowhere_else(relay, monkeypatch):
+    """A custom key saved with "Use Full URL": its address is the request URL for its format, as it is,
+    and a call of another kind has no address there, so nothing is sent."""
+    c, service, sent, _keys = relay
+    tok = service()["credential"]
+    proxy = {"name": "Proxy", "provider": "custom", "config": {
+        "api_key": "proxy-SENTINEL", "base_url": "https://llm.example/team-a/invoke", "api_format": "openai",
+        "full_url": "1"}}
+    monkeypatch.setattr(memory_relay, "pick", lambda *a, **k: (proxy, "proxy-model"))
+    r = c.post("/v1/llm/v1/chat/completions", headers={"authorization": f"Bearer {tok}"},
+               json={"model": "gpt-4o-mini", "messages": []})
+    assert r.status_code == 200
+    assert str(sent[-1].url) == "https://llm.example/team-a/invoke"
+    assert sent[-1].headers["authorization"] == "Bearer proxy-SENTINEL"
+    n = len(sent)
+    r = c.post("/v1/llm/v1/embeddings", headers={"authorization": f"Bearer {tok}"},
+               json={"model": "text-embedding-3-small", "input": ["hi"]})
+    assert r.status_code == 502 and len(sent) == n
+
+
 @pytest.mark.parametrize("method,path,model", [
     ("POST", "embeddings", "text-embedding-3-large"),     # not this service's
     ("POST", "embeddings", "gpt-4o-mini"),                # its model, on the wrong path

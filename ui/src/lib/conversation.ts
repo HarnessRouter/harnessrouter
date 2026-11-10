@@ -71,8 +71,21 @@ export interface TraceCard {
 export interface ChatTarget { name: string; backend: string | null; model?: string; baseId?: string;
   /** The runtime this harness runs on and the model its settings default to (the footer names both). */
   runtime?: string; defaultModel?: string }
+/** A branch the server would not make (setup/branch.ts), in a person's words; '' for anything else, which keeps the
+ *  server's own sentence. Its reasons speak of checkpoints and responses, and every one of them comes to the same:
+ *  this reply can't be branched (an older reply, one whose files weren't kept, one that was deleted). Sending again
+ *  won't change that, so it says where to go instead. A 404 is the task it goes on from, out of reach now. */
+export const BRANCH_REFUSED = "This reply can't be branched. Branch from another reply, or carry on in the original task.";
+export const BRANCH_SOURCE_GONE = "The task this goes on from can't be opened any more, so it can't be branched.";
+export function branchRefusal(branchFrom: string | undefined, status: unknown, code: string): string {
+  if (!branchFrom) return '';
+  if (code === 'branch_unavailable') return BRANCH_REFUSED;
+  if (status === 404) return BRANCH_SOURCE_GONE;
+  return '';
+}
+
 /** `imported`: part of an earlier turn brought with the task's first request (a recorded run carried
- *  into a task of your own, start/fork.ts), never the agent's own. */
+ *  into a task of your own, start/fork.ts; a branch's history), never run in this task. */
 export interface UserMsg { role: 'user'; text: string; attachments?: { name: string; dataUri?: string }[]; imported?: true }
 export interface ToolStep { name: string; args: string; result?: string; callId?: string;
   /** the tool said this call failed (the record's is_error); absent when it worked */
@@ -156,9 +169,10 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
   const m: Msg[] = [];
   let running = false;
   for (const t of turns) {
+    const imported = t.imported ? { imported: true as const } : {};
     if (t.user || (t.user_files || []).length) {
       m.push({ role: 'user', text: t.user,
-        attachments: (t.user_files || []).map((f) => ({ name: f.name })) });
+        attachments: (t.user_files || []).map((f) => ({ name: f.name })), ...imported });
     }
     // the gateway's turns name a tool's result `output` (its first 4,000 characters); `result` is the older name
     const steps: ToolStep[] = (t.tools || []).map((x) => ({ name: x.name, args: x.arguments, result: x.result ?? x.output,
@@ -176,7 +190,7 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
       incompleteDetail: (t as { incomplete_detail?: string }).incomplete_detail || undefined,
       inputRequest: (t as { input_request?: InputRequest }).input_request || undefined,
       elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined,
-      ...(st !== 'running' && turnSpan(t) !== undefined ? { span: turnSpan(t) } : {}) });
+      ...(st !== 'running' && turnSpan(t) !== undefined ? { span: turnSpan(t) } : {}), ...imported });
   }
   return { msgs: m, running };
 }
@@ -767,8 +781,9 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
    */
   /** `opts.input`: the request's whole input, when the caller builds it (a recorded demo's fork,
    *  start/fork.ts: the recorded turn as earlier messages, then this message); the thread shows the
-   *  text and attachments as usual. */
-  async function send(rawText: string, attach: { name: string; dataUri: string }[] = [], opts: { input?: unknown[] } = {}): Promise<boolean> {
+   *  text and attachments as usual. `opts.branchFrom`: this message starts a new session from that
+   *  response (setup/branch.ts). The conversation holds no session yet, so nothing else names one. */
+  async function send(rawText: string, attach: { name: string; dataUri: string }[] = [], opts: { input?: unknown[]; branchFrom?: string } = {}): Promise<boolean> {
     const text = (rawText || '').trim();
     // `busy` is React state, so three clicks landing in one tick all read it as false and all
     // three stream into the same assistant message: the server runs the turn once, but the
@@ -797,7 +812,9 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     // NEW task (no session yet): surface it in Recents IMMEDIATELY via an optimistic entry, the
     // durable card takes seconds (session allocation + first trace write). onRan() re-renders the
     // panel now; the entry swaps for the real card as soon as the server list carries this session.
-    const pendId = !sessionId ? addPendingCard(harnessId, (text || sent[0]?.name || 'New task').split('\n')[0].slice(0, 120)) : null;
+    // (a branch is named after its first message, the first one it brought with it, as the server names it)
+    const named = opts.branchFrom ? msgs.find((x): x is UserMsg => x.role === 'user')?.text : '';
+    const pendId = !sessionId ? addPendingCard(harnessId, (named || text || sent[0]?.name || 'New task').split('\n')[0].slice(0, 120)) : null;
     // A follow-up has a card already; its record turns "running" as the turn starts, so the
     // panel re-reads now too and the task rises to the top of its harness while it runs.
     onRan();
@@ -817,7 +834,8 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
         // its default system prompt rather than having instructions prepended to the first message.
         // sessionHint: continuity fallback, the gateway continues this session even if prevId was
         // lost client-side (interrupted stream), instead of forking a new one.
-        { input: input_payload, backend: target.backend, model: target.model || undefined, previousResponseId: prevId,
+        { input: input_payload, backend: target.backend, model: target.model || undefined,
+          previousResponseId: opts.branchFrom || prevId, ...(opts.branchFrom ? { branch: true } : {}),
           sessionHint: knownSid, harnessId, harnessName: target.name, extraHeaders: extraHeaders?.() || {} },
         { onEvent: (ev) => updateLast((a) => { a.clock = reduceTurn(a.clock || newTurn(), ev as { type: string }, Date.now()); }),
           onCreated: (rid) => { settle(true); setPrevId(rid); },
@@ -891,7 +909,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           ...taskFacts(),
         });
         if (pendId) dropPending(pendId);
-        const detail = e instanceof Error ? e.message : String(e);
+        const detail = branchRefusal(opts.branchFrom, st, code) || (e instanceof Error ? e.message : String(e));
         if (!(sessionId ?? sidRef.current)) onRefused?.(text, sent.map((f) => ({ name: f.name, dataUri: f.dataUri })));
         updateLast((a) => { a.blocks = withText(a.blocks, answered ? `\n\nError: ${detail}` : '\n\nNot sent. Check your connection and try again.'); a.status = 'failed'; });
       }

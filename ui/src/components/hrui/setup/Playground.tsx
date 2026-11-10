@@ -13,7 +13,9 @@
 // is not the setup's own, how it ended and how long it took (when the record kept it), then three small
 // actions (Richard 10-18): copy the reply as Markdown, copy its ID, and copy a request your own app can
 // send to carry on the conversation from that reply. The conversation scrolls in its own column, the
-// composer pinned at its foot.
+// composer pinned at its foot. Where the server branches sessions, a reply its turn says can be branched
+// has a fourth action, Branch: a new conversation with this one up to that reply, whose first message
+// makes the branch (branch.ts).
 //
 // A new setup's first task (start/build.ts) starts with its save card (start/Assembly), and its first
 // request, the one the build wrote as an end user would send it, waits in the box until the person
@@ -27,7 +29,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { isInternalOutput, useConversationTurn, useHarnessBus, type AsstMsg, type ChatTarget } from '@/lib/conversation';
 import { replyMarkdown } from './replyMd';
-import { loadSessionTurns } from '@/lib/chat';
+import { loadSessionOrigin, loadSessionTurns } from '@/lib/chat';
 import { modelAvailability, oobById, oobDefaultModel, oobModels, useModelCatalogRead } from '@/lib/harness';
 import { providerById, useModelProviders } from '@/lib/providers';
 import { toast } from '../toast';
@@ -43,7 +45,7 @@ import { forkFiles, forkInput, forkOffered, importedFirst, inputHistory, noteFor
 import { AgentConversation, AgentComposer } from 'reifyui/agent-chat';
 import { AgentTurns, harnessMark } from './AgentTurns';
 import { InputRequestCard } from './InputRequestCard';
-import { FileCards, filesOf, type OpenFile } from './TurnFiles';
+import { FileCards, filesOf, linkedFile, type OpenFile } from './TurnFiles';
 import { workingNow } from './stackLive';
 import { sec } from './fmt';
 import { Md } from './TaskThread';
@@ -52,6 +54,8 @@ import { failedLine, recalledAtStartOf, recordHref, rememberedOf, type Remembere
 import { recalledIn, recalledLine, recalledTitle } from './memorySteps';
 import { useAgentMemory } from '../memories/AgentMemory';
 import { useMemoryEvents } from '../memories/editor/useMemoryEvents';
+import { branchableTurns, branchMsgs, importedTurnCount, sessionBranching, type BranchDraft } from './branch';
+import { BRANCH_ICON, BranchMark } from './BranchMark';
 const MAX_FILE = 25 * 1024 * 1024;
 
 /** What memory did in each turn, as the turns' records say: what it kept (or that keeping it failed), and how many
@@ -81,7 +85,7 @@ function readFile(f: File): Promise<Attach> {
 }
 
 /** One test: the composer, then its thread once sent. A new test mounts a fresh one. */
-function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay, setupFirst, memoryId = '' }: {
+function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay, setupFirst, memoryId = '', branch, onBranch, taskHref }: {
   r: SetupRow; model: string; defaultModel: string; headerValues: Record<string, string>;
   /** the agent's own memory (0.40), where what a turn remembered is kept: its records are linked from the turn */
   memoryId?: string;
@@ -118,15 +122,23 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   /** this is the setup's first task (its recorded first run, or the first test New setup handed over in
    *  this tab, reopened): once it has finished, it ends in the Next bar */
   setupFirst?: boolean;
+  /** this is a branch not sent yet: what it starts with, and the reply its first message branches from */
+  branch?: BranchDraft | null;
+  /** a reply's Branch action: the page opens the new conversation */
+  onBranch?: (b: BranchDraft) => void;
+  /** the address of one of this setup's tasks (the page's own) */
+  taskHref?: (sid: string) => string;
 }) {
   const oob = oobById(r.h.base);
   const [sid, setSid] = useState<string | null>(resume);
   // the model each turn ran on, in order: read from a continued test's record, then each message sent
-  const [turnModels, setTurnModels] = useState<string[]>([]);
+  const [turnModels, setTurnModels] = useState<string[]>(() => branch?.models ?? []);
   // each turn's response ID, as the record has it (read with the record, and again as a turn ends)
   const [turnIds, setTurnIds] = useState<string[]>([]);
   // what each turn remembered, as its record says once the task's memory has kept it (0.40: `memory` on the turn)
   const [turnMem, setTurnMem] = useState<TurnMemory[]>([]);
+  // which turns a new task can be branched from, as the record says (the server's own test)
+  const [turnBranch, setTurnBranch] = useState<boolean[]>([]);
   const seenRef = useRef(onSeen);
   seenRef.current = onSeen;
   const fromRecord = useRef(false);
@@ -146,6 +158,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
       }));
       setTurnIds(turns.map((x) => String(x.id || '')));
       setTurnMem(memoryOfTurns(turns));
+      setTurnBranch(branchableTurns(turns));
     }).catch(() => { if (alive) t = setTimeout(() => void read(n + 1), Math.min(30_000, 2000 * 2 ** n)); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
@@ -196,16 +209,27 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   useEffect(() => () => liveRef.current?.(null), []);
   // a turn sent here has ended: its response ID is in the record now
   const wasBusy = useRef(false);
+  const branchingRef = useRef(false);
   useEffect(() => {
     const was = wasBusy.current;
     wasBusy.current = conv.busy;
     const live = sid || conv.liveSessionId;
     if (!was || conv.busy || !live) return undefined;
     let alive = true, t: ReturnType<typeof setTimeout> | undefined;
-    // a read that fails keeps the IDs already read, and is read again shortly (at most three more times)
-    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) { setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(memoryOfTurns(turns)); } })
-      .catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1), 1000 * 2 ** n); });
-    void read(0);
+    // a read that fails keeps the IDs already read, and is read again shortly (at most three more times).
+    // A turn stopped here can still be saving its files when the stop is answered, and can be branched
+    // only once they are kept: while its reply can't be, it is read again, twice at most.
+    const read = (n: number, again: number) => loadSessionTurns(live).then(({ turns }) => {
+      if (!alive) return;
+      setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(memoryOfTurns(turns));
+      const can = branchableTurns(turns);
+      setTurnBranch(can);
+      const last = turns[turns.length - 1];
+      if (branchingRef.current && last && !last.imported && !can[can.length - 1] && again < 2) {
+        t = setTimeout(() => void read(0, again + 1), 1500 * 3 ** again);
+      }
+    }).catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1, again), 1000 * 2 ** n); });
+    void read(0, 0);
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [conv.busy, sid, conv.liveSessionId]);
   // What a finished turn remembered is written on its record once the memory has kept it, after the turn ends. The
@@ -220,7 +244,38 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
       loadSessionTurns(live).then(({ turns }) => setTurnMem(memoryOfTurns(turns))).catch(() => { /* read again on its next write */ });
     }, 800);
   });
-  const started = conv.msgs.length > 0 || !!resume || !!top;
+  const started = conv.msgs.length > 0 || !!resume || !!top || !!branch;
+  // a branch not sent yet shows the conversation it goes on from, before anything is drawn empty
+  useLayoutEffect(() => { if (branch) conv.setMsgs(branch.msgs); },
+  // once, as it opens: from here the conversation is the store's
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  []);
+  // Branch is offered only where the server says it branches (an optional capability), and then only on a
+  // reply its turn says can be branched (turnBranch)
+  const [branching, setBranching] = useState(false);
+  branchingRef.current = branching;
+  useEffect(() => {
+    let alive = true;
+    void sessionBranching().then((ok) => { if (alive) setBranching(ok); });
+    return () => { alive = false; };
+  }, []);
+  // The task this one was branched from, for the line where its history ends. A draft knows it; an
+  // opened task is asked only when it holds imported turns, so an ordinary task costs no extra read.
+  // A read that fails is read again, a little later, at most three more times: the line is a
+  // courtesy, and the task is whole without it.
+  const [origin, setOrigin] = useState<{ sid: string; title: string } | null>(() => (branch ? { sid: branch.from, title: branch.title } : null));
+  const hasImported = conv.msgs.some((m) => m.imported);
+  useEffect(() => {
+    if (!resume || !hasImported) return undefined;
+    let alive = true, t: ReturnType<typeof setTimeout> | undefined;
+    const read = (n: number): Promise<void> => loadSessionOrigin(resume).then(async ({ branchedFrom }) => {
+      if (!alive || !branchedFrom) return;
+      const src = await loadSessionOrigin(branchedFrom);
+      if (alive) setOrigin({ sid: src.missing ? '' : branchedFrom, title: src.title });
+    }).catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1), 1000 * 2 ** n); });
+    void read(0);
+    return () => { alive = false; if (t) clearTimeout(t); };
+  }, [resume, hasImported]);
   // a recorded run plays as a live one runs: the page's row and head say it is running until it ends
   const playing = recorded && conv.busy && !whole;
   const replayRef = useRef(onReplay);
@@ -232,16 +287,19 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   const chatRef = useRef<HTMLDivElement | null>(null);
   const atEnd = useRef(false);
   useEffect(() => {
-    if (!resume || atEnd.current || conv.msgs.length === 0) return;
+    if ((!resume && !branch) || atEnd.current || conv.msgs.length === 0) return;
     atEnd.current = true;
     requestAnimationFrame(() => { const sc = chatRef.current?.querySelector<HTMLElement>('.uac-scroll'); if (sc) sc.scrollTop = sc.scrollHeight; });
-  }, [resume, conv.msgs.length]);
+  }, [resume, branch, conv.msgs.length]);
   const mixed = new Set(turnModels.filter(Boolean)).size > 1;
   const opening = !!resume && conv.msgs.length === 0;
   /** a message goes out on the model chosen now; the turn is recorded with it once it is taken */
   const sendNow = (text: string, files: { name: string; dataUri: string }[]) => {
     const m = model;
-    void conv.send(text, files).then((took) => {
+    // a branch's first message is the request that makes it, and stays that until one is taken (a
+    // refusal keeps the draft); from then on this is a task like any other
+    const branching = branch && !sid && !conv.liveSessionId ? branch.responseId : '';
+    void (branching ? conv.send(text, files, { branchFrom: branching }) : conv.send(text, files)).then((took) => {
       if (!took) return;
       setTurnModels((xs) => [...xs, m]);
     });
@@ -373,8 +431,15 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   const next = (!!first?.setup || !!setupFirst) && !conv.busy && conv.msgs.some((m) => m.role === 'assistant' && m.status !== 'running');
   // what this task made, for the links a reply makes to its own files (TaskThread Md)
   const produced = useMemo(() => conv.msgs.flatMap((m) => (m.role === 'assistant' ? m.files.map((f) => f.filename) : [])), [conv.msgs]);
-  const liveSid = sid || conv.liveSessionId || undefined;
-  const md = (text: string) => <Md text={text} sid={liveSid} harnessId={r.h.id} produced={produced} />;
+  // (a branch not sent yet has no files of its own: its links read the task it goes on from)
+  const liveSid = sid || conv.liveSessionId || branch?.from || undefined;
+  // a click on a reply's link to one of them opens it beside the conversation, read with the sign-in, as
+  // its card does; the link's own address is the public one, which opens only a shared task's files (#594)
+  const openLinked = (path: string) => {
+    const to = linkedFile(filesOf(conv.msgs), path, liveSid);
+    if (to) onPreview(to.files, to.key);
+  };
+  const md = (text: string) => <Md text={text} sid={liveSid} harnessId={r.h.id} produced={produced} onOpen={openLinked} />;
   const copyRid = async (id: string) => { try { await navigator.clipboard.writeText(id); toast('Copied'); } catch { toast('Text selected. Press Cmd or Ctrl + C.'); } };
   const copyReply = async (text: string) => {
     try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Couldn’t copy automatically. Try again.'); }
@@ -435,6 +500,19 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
         acts.push(<button key="c" type="button" className="icon-btn xs" aria-label="Copy a request that continues this conversation"
           title="Copy a request that continues from here" onClick={() => void copyNext(t, rid)}>{CODE}</button>);
       }
+      // only where the turn says a branch from it will be made: the server refuses one from a reply it
+      // holds no branch point for (one from before branching, one whose files weren't kept, a turn the
+      // task brought with it). A reply deleted since this was read is still refused (conversation.ts
+      // branchRefusal says so in words).
+      const source = sid || conv.liveSessionId;
+      if (branching && turnBranch[t] === true && onBranch && source && !recorded && !m.imported && m.status !== 'running') {
+        acts.push(<button key="b" type="button" className="icon-btn xs" aria-label="Branch in a new task"
+          title="Branch from here in a new task" onClick={() => {
+            const firstAsked = conv.msgs.find((x) => x.role === 'user');
+            onBranch({ from: source, title: taskTitle || (firstAsked?.role === 'user' ? firstAsked.text.split('\n')[0] : ''), responseId: rid,
+              msgs: branchMsgs(conv.msgs, m), models: turnModels.slice(0, t + 1), model: turnModels[t] || '' });
+          }}>{BRANCH_ICON}</button>);
+      }
     }
     return (
       <span className="agent-meta pg-turn-meta">
@@ -466,7 +544,9 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
             <AgentTurns msgs={conv.msgs} base={r.h.base} md={md}
               userLabel={example ? (t: number) => (t === 0 ? <span className="from">Example task from your app</span> : null) : undefined}
               files={(m) => (m.status === 'running' ? null : <FileCards files={m.files || []} active={previewKey} onOpen={(k) => onPreview(filesOf(conv.msgs), k)} zipName={taskTitle || r.h.name} />)}
-              actions={foot} />
+              actions={foot}
+              after={origin ? (t: number) => (t === importedTurnCount(conv.msgs) - 1
+                ? <BranchMark href={origin.sid && taskHref ? taskHref(origin.sid) : ''} title={origin.title} /> : null) : undefined} />
             {next ? <NextBar id={r.h.id} name={r.h.name} /> : null}
           </div>
         </AgentConversation>
@@ -492,15 +572,21 @@ export interface Slot {
   first?: FirstTest | null;
   /** the setup's recorded first task (start/replay.ts), opened from the list: shown whole, read only */
   recorded?: RecordedRun | null;
+  /** a branch of a task, not sent yet (branch.ts) */
+  branch?: BranchDraft | null;
 }
 
-export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = null, onLive, taskTitle, onFollowUp, onReplay, handedRec = null }: {
+export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = null, onLive, taskTitle, onFollowUp, onReplay, handedRec = null, onBranch, taskHref }: {
   r: SetupRow; onRan: () => void;
   /** the setup's first request handed over by its save, for an unchanged demo: the recorded run its
    *  send plays (the page's: its build's, or the setup's own when the page opened cold) */
   handedRec?: RecordedRun | null;
   /** a recorded first task's Follow up: a new task, run live */
   onFollowUp?: () => void;
+  /** a reply's Branch action: open the new conversation */
+  onBranch?: (b: BranchDraft) => void;
+  /** the address of one of this setup's tasks */
+  taskHref?: (sid: string) => string;
   /** the recorded first task is playing (true) or has ended (false) */
   onReplay?: (playing: boolean) => void;
   /** the open task's title, as its bar shows it */
@@ -555,14 +641,15 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
     return [...own, ...runs.filter((m) => !own.includes(m))];
   }, [cat, oob, r.h.defaultModel]);
   // a past task goes on with no model named (its last one, server side) until its record says which
-  const [model, setModel] = useState(slot.resume ? '' : defaultModel);
+  const [model, setModel] = useState(slot.resume ? '' : slot.branch?.model || defaultModel);
   // a new task starts on the setup's own model; a past one on the model it last ran (onSeen)
   const slotKey = useRef(slot.key);
   useEffect(() => {
     if (slotKey.current === slot.key) return;
     slotKey.current = slot.key;
-    setModel(slot.resume ? '' : defaultModel);
-  }, [slot.key, slot.resume, defaultModel]);
+    // (a branch starts on the model of the reply it goes on from)
+    setModel(slot.resume ? '' : slot.branch?.model || defaultModel);
+  }, [slot.key, slot.resume, slot.branch, defaultModel]);
   const [seen, setSeen] = useState<string[]>([]);
   const [started, setStarted] = useState(false);
   const [pop, setPop] = useState<'model' | 'headers' | null>(null);
@@ -669,7 +756,8 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
         resume={slot.resume} onSeen={onSeen} onPreview={onPreview} previewKey={previewKey} onLive={onLive} taskTitle={taskTitle}
         top={top} hold={hold} recording={slot.recorded || (handed ? handedRec : null)} instant={!!slot.recorded}
         onFollowUp={onFollowUp} onReplay={onReplay} memoryId={own.read?.memory?.id || ''}
-        setupFirst={!!slot.recorded || (!!slot.resume && !!b && b.firstSid === slot.resume)} />
+        setupFirst={!!slot.recorded || (!!slot.resume && !!b && b.firstSid === slot.resume)}
+        branch={slot.branch} onBranch={onBranch} taskHref={taskHref} />
       {modelPop}
       {headersPop}
     </>

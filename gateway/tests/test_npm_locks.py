@@ -78,15 +78,30 @@ def test_every_package_is_fetched_by_url_and_digest(name):
             assert entry["resolved"].startswith("https://registry.npmjs.org/"), key
 
 
-@pytest.mark.parametrize("name", ["claude", "qwen", "pi-mcp-adapter", "minimax"])
+@pytest.mark.parametrize("name", sorted(SPECS))
 def test_musl_builds_carry_libc(name):
     """npm 10 skips a package whose lock entry names another libc, and writes no libc itself
-    (scripts/lock-npm.sh adds it). Without it, `npm ci` installs every musl build on glibc."""
+    (scripts/lock-npm.sh adds it, from the registry or from the lock's libc.json). Without it,
+    `npm ci` installs every musl build on glibc."""
     musl = [(k, e) for k, e in lock(name)["packages"].items()
             if e.get("os") == ["linux"] and "musl" in k.rsplit("/", 1)[-1]]
-    assert musl, "this lock was expected to hold musl builds"
+    if name in ("claude", "qwen", "pi-mcp-adapter", "minimax", "mimo"):
+        assert musl, "this lock was expected to hold musl builds"
     for key, entry in musl:
         assert entry.get("libc") == ["musl"], key
+
+
+@pytest.mark.parametrize("name", sorted(SPECS))
+def test_libc_json_is_in_the_lock(name):
+    """A libc.json entry is a statement about a package the lock holds, applied to it."""
+    path = os.path.join(LOCKS, name, "libc.json")
+    if not os.path.exists(path):
+        return
+    packages = lock(name)["packages"]
+    for pkg, libc in json.load(open(path)).items():
+        entry = packages.get(f"node_modules/{pkg}")
+        assert entry is not None, pkg
+        assert entry.get("libc") == libc, pkg
 
 
 def test_minimax_sqlite_binding_is_the_locks_version():

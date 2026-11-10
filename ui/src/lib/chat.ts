@@ -40,6 +40,8 @@ export interface StreamOpts {
   model?: string;
   backend?: string | null;
   previousResponseId?: string | null;
+  /** start a new session from previousResponseId instead of continuing it (Sessions 1.1) */
+  branch?: boolean;
   sessionHint?: string | null;  // known active session, fallback continuity signal so a
                                 // follow-up never forks a new session when the response id
                                 // was lost client-side (interrupted stream, tab switch)
@@ -107,6 +109,11 @@ export interface SessionTurn {
   /** When the turn began, Unix seconds (whole, as every UHP time is). */
   created_at?: number | null;
   user_files?: { name: string }[];   // caller-attached input files (names; bytes live in the workspace)
+  /** a turn the task was started with (a branch's history, a fork's recording): nothing ran */
+  imported?: boolean;
+  /** a new task can be branched from this turn's reply: the server's own test, the one its branch
+   *  request applies. Absent where the server does not say, which offers no branch (setup/branch.ts). */
+  branchable?: boolean;
   tools: { name: string; arguments: string; result?: string; output?: string; is_error?: boolean }[]; files: RespFile[];
 }
 
@@ -126,6 +133,20 @@ export async function loadSessionTurns(sid: string, signal?: AbortSignal): Promi
   const d = await res.json().catch(() => null) as { turns?: unknown; last_response_id?: unknown } | null;
   if (!d || typeof d !== 'object' || !Array.isArray(d.turns)) throw new TurnsReadError(res.status);
   return { turns: d.turns as SessionTurn[], lastResponseId: typeof d.last_response_id === 'string' && d.last_response_id ? d.last_response_id : null };
+}
+
+/** What a task's detail says of where it came from: its title, and the task it was branched from
+ *  (Sessions 3; null when it was not branched). `missing` is a 404, a task that no longer exists, or
+ *  one this person cannot see. Any other failure throws, as loadSessionTurns does. */
+export async function loadSessionOrigin(sid: string, signal?: AbortSignal): Promise<{ title: string; branchedFrom: string | null; missing?: boolean }> {
+  const res = await harnessFetch(`${BASE}/v1/sessions/${encodeURIComponent(sid)}`,
+    { headers: authHeaders(), ...(signal ? { signal } : {}) });
+  if (res.status === 404) return { title: '', branchedFrom: null, missing: true };
+  if (!res.ok) throw new TurnsReadError(res.status);
+  const d = await res.json().catch(() => null) as { title?: unknown; branched_from?: { session_id?: unknown } | null } | null;
+  if (!d || typeof d !== 'object') throw new TurnsReadError(res.status);
+  const from = d.branched_from?.session_id;
+  return { title: typeof d.title === 'string' ? d.title : '', branchedFrom: typeof from === 'string' && from ? from : null };
 }
 
 /** A task's turns could not be read (not a 404): the caller shows that, never an empty task. */
@@ -269,6 +290,7 @@ export async function streamResponse(
   if (opts.model) body.model = opts.model;
   if (opts.backend) body.backend = opts.backend;
   if (opts.previousResponseId) body.previous_response_id = opts.previousResponseId;
+  if (opts.branch) body.branch = true;
   if (opts.instructions) body.instructions = opts.instructions;
   const metadata: Record<string, string> = {};
   if (opts.harnessId) metadata.harness_id = opts.harnessId;

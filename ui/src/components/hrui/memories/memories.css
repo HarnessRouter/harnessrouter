@@ -20,19 +20,20 @@
    filling four fifths of the box in the direction that limits it (graph/coverShot.js sizes it for that); or its brick from the agent stack, about three fifths of the box high; or, while a cover is still to be
    made, a quiet shape of the same size */
 #hrui .mm-cv{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-width:0;min-height:0}
-#hrui .mm-cover{display:block;width:80%;height:80%;object-fit:contain}
+#hrui .mm-cover{display:block;width:80%;height:80%;min-width:0;object-fit:contain;object-position:center}
 #hrui .mm-brick{display:flex;align-items:center;justify-content:center;height:60%;max-width:80%}
 #hrui .mm-brick svg{display:block;height:100%;width:auto;max-width:100%;overflow:visible}
 #hrui .mm-cv-wait{display:block;width:42%;height:58%;border-radius:18px;background:var(--line);opacity:.4}
-#hrui .mm-mini-box .mm-cover{width:86%;height:86%}
-#hrui .mm-brick.mini{height:26px;max-width:none}
-#hrui .mm-cv-wait.mini{width:22px;height:22px;border-radius:7px}
+#hrui .mm-mini-box .mm-cv{padding:3px;box-sizing:border-box}
+#hrui .mm-mini-box .mm-cover{width:100%;height:100%}
+#hrui .mm-brick.mm-small{height:26px;max-width:none}
+#hrui .mm-cv-wait.mm-small{width:22px;height:22px;border-radius:7px}
 @media (max-width:520px){#hrui .mm-art{height:168px}}
 /* the list: Studio's rows, with the memory's picture small beside its name */
 #hrui .mm-rows-g{grid-template-columns:minmax(0,1.25fr) minmax(0,2fr)!important}
 #hrui .mm-row{color:inherit;text-decoration:none}
 #hrui .mm-row .t{white-space:normal}
-#hrui .mm-mini-box{flex:none;width:40px;height:40px;margin-right:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:grid;place-items:center}
+#hrui .mm-mini-box{flex:none;width:40px;height:40px;margin-right:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:grid;place-items:center;overflow:hidden}
 #hrui .mm-rn{min-width:0;display:block}
 #hrui .mm-rn .mm-ct{justify-content:flex-start}
 #hrui .mm-rn .mm-ct b{font-family:var(--sans);font-size:14px;letter-spacing:0}
@@ -267,7 +268,6 @@
 #hrui .mm-foot{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;z-index:2;width:min(620px,calc(100% - 32px));display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;pointer-events:none}
 #hrui .mm-foot .mm-sstat button{pointer-events:auto}
 #hrui .mm-foot .mm-hint{position:static;transform:none;white-space:normal;margin:0}
-#hrui .mm-guide{margin:0;font-size:13px;color:var(--muted);line-height:1.4}
 #hrui .mm-sstat{margin:0;font-size:12px;color:var(--faint)}
 #hrui .mm-sstat.bad{color:var(--bad)}
 #hrui .mm-err{margin:8px 0 12px;font-size:13px;line-height:1.5;color:var(--bad)}
@@ -381,16 +381,7 @@
 
 /* The Schema tab beside what a provider makes itself (drawn locked, "Built in"): where a person's own types or labels go,
    and the note on a built-in type that says why it can't be changed. */
-/* "Add your own types": under the graph in the page's flow, never over it. The graph keeps room of its own first; where
-   the two don't fit (a phone), the pane scrolls and the graph comes first */
-#hrui .mgv.has-own{overflow-y:auto;overflow-x:hidden}
-#hrui .mgv.has-own>.dg-body{flex:1 0 auto;min-height:max(300px,52vh)}
-#hrui .mm-sch-own{flex:none;box-sizing:border-box;width:min(640px,calc(100% - 32px));margin:14px auto 18px;display:flex;flex-direction:column;gap:6px;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--bg);text-align:left}
-#hrui .mm-sch-own b{font-size:14px;font-weight:600}
-#hrui .mm-sch-own>span{font-size:13px;color:var(--muted);line-height:1.5}
-#hrui .mm-sch-own .mm-starts{margin-top:6px}
 #hrui .mm-locked{margin:0 0 14px;padding:8px 10px;border-radius:8px;background:var(--surface);font-size:12.5px;color:var(--muted);line-height:1.5}
-@media (max-width:720px){#hrui .mm-sch-own{padding:12px;margin:12px auto 16px}#hrui .mm-sch-own .mm-starts{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* New memory. The service is fixed once created, so it is chosen from a comparison: a column a service,
    the same facts in every column so they read across, an unconnected one drawn unbuilt (dashed). */
@@ -398,9 +389,9 @@
 #hrui .mm-kind-svg circle,#hrui .mm-kind-svg rect{fill:var(--bg)}
 #hrui .mm-new-sheet{width:min(760px,100%)}
 #hrui .mm-new-sheet .sheet-top{margin-bottom:18px}
-#hrui .mm-nf{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);column-gap:12px}
+#hrui .mm-nf{display:grid;grid-template-columns:minmax(0,1fr);row-gap:14px}
 #hrui .mm-nf .set-f{margin-bottom:0}
-#hrui .mm-nf-h{grid-column:1 / -1;margin:6px 0 0}
+#hrui .mm-nf-h{margin:-8px 0 0}
 #hrui .mm-kept{margin:22px 0 0}
 #hrui .mm-sv{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 #hrui .mm-sv .mm-pv-o{position:relative;display:flex;flex-direction:column;align-items:stretch;gap:0;padding:12px 12px 12px;border:1px solid var(--line);border-radius:14px;background:var(--bg);text-align:left;min-width:0}
@@ -426,7 +417,7 @@
 #hrui .mm-sv .mm-pv-o.off .btn{margin-top:12px;align-self:flex-start}
 #hrui .mm-lock{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 @media (max-width:760px){#hrui .mm-sv{grid-template-columns:repeat(2,minmax(0,1fr))}#hrui .mm-sv .grow{min-height:0}}
-@media (max-width:520px){#hrui .mm-nf{grid-template-columns:minmax(0,1fr)}#hrui .mm-nf .set-f+.set-f{margin-top:14px}#hrui .mm-sv{grid-template-columns:minmax(0,1fr)}
+@media (max-width:520px){#hrui .mm-sv{grid-template-columns:minmax(0,1fr)}
   #hrui .mm-sv .mm-pv-o{display:grid;grid-template-columns:52px minmax(0,1fr);column-gap:12px;padding-right:40px}#hrui .mm-sv-pic{grid-row:1;margin:0;height:auto}#hrui .mm-sv-pic .mm-kind-svg{width:52px;height:44px}
   #hrui .mm-sv-facts{grid-column:1 / -1;flex-direction:row;gap:10px}#hrui .mm-sv-facts>span{flex:1;min-width:0}#hrui .mm-sv .mm-pv-o.off .btn{grid-column:2}}
 
@@ -612,3 +603,32 @@
 #hrui .mm-stand-t small{font-size:12.5px;line-height:1.45;color:var(--muted);text-wrap:pretty}
 #hrui .mm-stand .tog,#hrui .mm-stand .btn{flex:none}
 @media (max-width:560px){#hrui .mm-stand{flex-wrap:wrap}#hrui .mm-stand .btn{margin-left:auto}}
+
+#hrui .mm-eng-o .mm-eng-cn{flex:none;align-self:center;font-size:13px}
+#hrui .mm-found{margin:0 0 14px;font-size:13px;color:var(--muted)}
+
+/* a record's one section: what it is, label beside value, and on a phone label over value */
+#hrui .mm-pnote{display:block;grid-column:2;margin:-4px 0 4px;font-size:12.5px;color:var(--faint)}
+#hrui .mm-props .mm-pv.mono{font-family:var(--mono);font-size:13px}
+#hrui .mm-props a.mm-pv{color:var(--accent);text-decoration:none}
+#hrui .mm-props .mm-tags{margin:10px 0 0}
+@media (max-width:560px){#hrui .mm-prow{grid-template-columns:minmax(0,1fr);gap:2px;min-height:0;padding:5px 0}#hrui .mm-pnote{grid-column:1;margin:0}}
+
+/* a memory's Settings tab: one column of its own sections, as a setup's Settings, Memory */
+#hrui .mm-settings{flex:1;min-height:0}
+#hrui .mm-set-col{max-width:720px;margin:0 auto;padding:20px 24px 64px;box-sizing:border-box}
+#hrui .mm-set-id{margin-top:14px}
+#hrui .mm-set-idv{display:flex;align-items:center;gap:6px;min-width:0}
+#hrui .mm-set-idv code{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+#hrui .mm-set-v{margin:0;font-size:14px;color:var(--fg);overflow-wrap:anywhere}
+@media (max-width:560px){#hrui .mm-set-col{padding:14px 16px 48px}}
+
+/* the graph folded (Richard 11-09: "collapse to the right as a single column"): a slim rail, as a setup's folded Agent
+   stack, its toggle where the open panel's is and its name read upwards; the line under the toggle meets the bars beside */
+#hrui .mm-conn.mm-rail{align-items:center;gap:28px;padding:12px 0 0;border-left:1px solid var(--line);box-sizing:border-box;
+  background-image:linear-gradient(var(--line),var(--line));background-repeat:no-repeat;background-position:0 55px;background-size:100% 1px}
+#hrui .mm-rail-tog{width:32px;height:32px;flex:none}
+#hrui .mm-rail-l{writing-mode:vertical-rl;font-size:12px;color:var(--muted)}
+#hrui .mgv .sp-explore-bar .mgv-fold{flex:none;background:var(--bg);color:var(--muted)}
+/* with the fold chevron in its bar, the search gives up a little room before the depth wraps under it */
+#hrui .mgv .sp-explore-bar:has(>.mgv-fold) .sbar{min-width:112px;flex-basis:112px}

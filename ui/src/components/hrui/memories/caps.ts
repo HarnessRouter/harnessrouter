@@ -14,17 +14,8 @@ export const schemaGuides = (p?: Provider | null) => p?.schema?.mode === 'guides
 export const schemaLabels = (p?: Provider | null) => p?.schema?.mode === 'labels';
 export const hasProperties = (p?: Provider | null) => schemaGuides(p) && !!p?.schema?.properties;
 export const hasRelations = (p?: Provider | null) => schemaGuides(p) && !!p?.schema?.relations;
-/** What the schema is called here: its tab, and the word for one of its entries. */
 /** What a provider makes itself, if it says. */
 export const builtinOf = (p?: Provider | null) => p?.schema?.builtin || null;
-export const schemaWord = (p?: Provider | null) => (schemaLabels(p) ? 'label' : 'type');
-// Measured on Graphiti: a type renamed leaves the records already kept under the old name, and no vendor here rewrites what
-// it kept. So a schema steers what comes next, and the page says so rather than implying more than a vendor does.
-const FROM_NOW_ON = 'A change applies from here on: what’s already kept stays as it is.';
-/** The line near a schema, saying what reads it. */
-export const guideLine = (p: Provider) => (schemaLabels(p)
-  ? `Facts pulled out of each task get the labels that fit them. What you write yourself is kept as you wrote it. ${FROM_NOW_ON}`
-  : `${vendorName(p.id)} uses these types to decide what to pull out of each task. ${FROM_NOW_ON}`);
 // What was measured on a provider that reads types and relations, said where someone edits them.
 export const TYPES_LINE = 'Types work best for things with a name, like people, companies and products.';
 export const RELATIONS_LINE = 'Relations you name replace the words we’d otherwise pick, so name every kind you care about. Anything else stays linked as related, with its sentence kept.';
@@ -149,7 +140,7 @@ export const relText = (rel?: string | null) => { const r = String(rel || ''); r
  *  rows a person compares before a choice that is fixed once made. */
 export function serviceFacts(p: Provider): { label: string; value: string }[] {
   const schema = schemaGuides(p) ? (hasRelations(p) ? 'Types and relations' : 'Types')
-    : schemaLabels(p) ? 'Labels' : hasFolders(p) ? 'Folders' : 'None';
+    : schemaLabels(p) ? 'Types' : hasFolders(p) ? 'Folders' : 'None';
   const entities = p.graph?.entities === 'derived' ? 'Found for you' : p.graph?.entities === 'stated' ? 'Only what you write' : 'None';
   const finds = ({ write_time: 'As it writes', background: 'In the background', agent: 'Its own agent' } as Record<string, string>)[String(p.derivation)] || 'Keeps what you write';
   return [{ label: 'Schema', value: schema }, { label: 'Entities', value: entities }, { label: 'Pulls out facts', value: finds }];

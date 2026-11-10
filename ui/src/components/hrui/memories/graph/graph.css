@@ -166,7 +166,7 @@
 #hrui .mgv .mgv-live { z-index: 3; }
 #hrui .mgv .dg-canvas-blank .btn, #hrui .mgv .dg-canvas-blank button { pointer-events: auto; }
 #hrui .mgv .dg-eh-pop { max-width: calc(100% - 20px); }
-#hrui .mgv .dg-canvas-tools { flex-wrap: wrap; justify-content: center; }
+#hrui .mgv .dg-canvas-tools { flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); }
 #hrui .mgv .mm-foot .mm-hint { white-space: normal; }
 /* In the graph's column the detail rises from the bottom, so the graph it is about stays in view. */
 #hrui .mgv-explorer .dg-detail.compact { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; max-height: 40%; border-left: 0; border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; box-shadow: 0 -8px 24px rgba(15,23,42,.12); }

@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
-// The API Keys page as a Member meets it: who may make or revoke a key is the gateway's
-// (backend/harness_gateway/app.py, mint_key and _revoke_allowed), and the key list carries no answer per
+// The API Keys page as a Member meets it: who may make or revoke a key is the gateway's call
+// (the hosted gateway's mint_key and _revoke_allowed), and the key list carries no answer per
 // key. So a Revoke the gateway refuses says its own sentence, naming who can by role, in the revoke sheet
 // in place of the red button (never "could not be revoked. Try again."), and a create it refuses says why
 // under the name field. A failure that is not a refusal keeps its own line.

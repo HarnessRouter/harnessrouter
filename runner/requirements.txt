@@ -6,9 +6,8 @@ pyyaml==6.0.2
 # cannot reach a remote server (codex, dsh, goose take no SSE), and the bridge imports this.
 # Without the pin the image installs no mcp at all and every bridged server dies at start. The
 # bridge is not in a release yet (it landed after v0.17.2), so this is the next release's bug
-# rather than a shipped one, caught before the tag. The version matches the hosted runner image
-# (docker/runner.Dockerfile.reference). It requires pydantic 2.11, which is why the pin above
-# moved: gateway and runner share one environment in this image.
+# rather than a shipped one, caught before the tag. It requires pydantic 2.11, which is why the
+# pin above moved: gateway and runner share one environment in this image.
 mcp==1.30.0
 # RS256 for the Vertex relay route: the runner signs the service account's token request itself
 # (_vertex_assertion), so the account's key never reaches the agent. The gateway's pin, since both

@@ -23,7 +23,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   getCustom, saveCustom, getSkillFiles, pluginSchemas, getHarnessPlugs, setHarnessPlugs, PLUGS_ENTRY_ID,
-  oobById, oobDefaultModel, oobModels, modelAvailability, availabilityNote, promptSeenNote, useBases, useModelCatalogRead, useRuntimeDefaults,
+  oobById, oobDefaultModel, oobModels, modelAvailability, availabilityNote, useBases, useModelCatalogRead, useRuntimeDefaults,
   type CustomHarness, type HarnessPlugin, type HarnessPlugs, type McpServer,
 } from '@/lib/harness';
 import { listEnvironments, type Environment } from '@/lib/environments';
@@ -437,8 +437,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       </div>
       {field('setName', 'Name', <input id="setName" className="set-in" value={c.name} aria-invalid={inv('setName')} onChange={(e) => set('name', e.target.value)} />)}
       {field('setHarness', 'Agent harness',
-        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>,
-        promptSeenNote(rec.base))}
+        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>)}
       {sub('Model', '', null, <>
         {field('setModel', 'Default model',
           <select id="setModel" className="set-in" value={c.model} onChange={(e) => set('model', e.target.value)}>

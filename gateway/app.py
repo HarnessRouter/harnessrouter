@@ -1,15 +1,16 @@
-"""harness-gateway — thin, stateless control plane for Harness-as-a-Service.
+"""harness-gateway: thin, stateless control plane in front of the runner.
 
-Responsibilities (see docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md):
-  - Allocate an isolated sandbox per session from the ACA Dynamic Sessions pool and proxy
-    turns into the in-sandbox runner (`{POOL}/turn?identifier=<session_id>`, Entra token
-    aud `dynamicsessions.io` via the gateway's managed identity).
-  - Credential BROKER over the existing Vault service: resolve a provider *connection*
+Responsibilities:
+  - Route each session to a runner and proxy turns into it
+    (`{POOL}/turn?identifier=<session_id>`). Self-hosted, the pool is one runner process; a
+    deployment can put a session pool in front of runner replicas instead.
+  - Credential BROKER over the configured secret store: resolve a provider *connection*
     (org-own first, a shared `global` pool as fallback) and try an ordered fallback chain.
-  - Concurrency gating (global + per-tenant); session state externalized to VectorGraph
-    (`HarnessSession` vertex) so any replica serves any session.
+  - Concurrency gating (global + per-org); session state lives in the backing store
+    (`HarnessSession` record) so any replica serves any session.
 
-State lives in VectorGraph + git + Blob, never in-process — this service is replaceable.
+State lives in the backing stores (records, blobs, secrets) and git, never in-process, so this
+service is replaceable.
 """
 from __future__ import annotations
 
@@ -86,9 +87,9 @@ BILLING_INTERNAL_KEY = os.environ.get("BILLING_INTERNAL_KEY", "")
 ENGINE_URL = os.environ.get("ENGINE_URL", "").rstrip("/")
 
 # ── backing stores (graph / blob / secrets) ───────────────────────────────────────
-# THE seam between this gateway and everything it persists to. Production ("vg") is the
-# AgentStudio infra — vg-gateway's Cosmos graph + Azure blob, and the vault service. Local
-# ("local") is SQLite + filesystem + env vars, so a clone runs with no cloud at all. Selected by
+# THE seam between this gateway and everything it persists to. "local" is SQLite + filesystem +
+# env vars, so a clone runs with no cloud at all; "vg" is a deployment's remote graph, blob and
+# secret services, whose client this repository does not ship (see backing.py). Selected by
 # HR_BACKING; unset ⇒ vg when VG_GATEWAY_URL is configured, local otherwise. Call sites below use
 # only the semantic interface (get/upsert/find/add_edge, blob get/put/list) and never build
 # backend queries — that is what makes the two interchangeable.
@@ -346,8 +347,8 @@ AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")        # UAMI client id 
 DEFAULT_BACKEND = os.environ.get("HARNESS_DEFAULT_BACKEND", "claude")
 # Concurrency: gate turns so we never exceed the session pool's sandbox ceiling, but allow many
 # sessions per org to run at once (a single user routinely fires off several tasks in parallel).
-# Concurrency caps are a back-pressure ceiling, not the scaling limit — the Dynamic Sessions pool
-# scales sandboxes on demand (maxConcurrentSessions). Keep these high so a burst of turns runs
+# Concurrency caps are a back-pressure ceiling, not the scaling limit: a hosted session pool
+# scales sandboxes on demand. Keep these high so a burst of turns runs
 # concurrently and waits for the pool to scale, rather than being queued/starved in-process.
 # Self-hosted, the ceiling is this ONE machine rather than a pool that scales on demand, so 512
 # would just be 512 agent CLIs contending for the same cores. The limit is therefore resolved at
@@ -475,8 +476,8 @@ RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(64 *
 # into a turn, so their cap above is not bound to this one.)
 _UPLOAD_MAX_BYTES = int(os.environ.get("HARNESS_UPLOAD_MAX_BYTES", str(25 * 1024 * 1024)))
 RESP_BLOB_KB = os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")  # response records + container files
-# Durable session-workspace store (git checkpoint tarball per session) lives in vg-gateway blob
-# storage under this "graph" namespace: <KB>/sessions/<sid>/workspace.tgz.
+# Durable session-workspace store (git checkpoint tarball per session) lives in the blob store
+# under this namespace: <KB>/sessions/<sid>/workspace.tgz.
 BLOB_KB = os.environ.get("HARNESS_BLOB_KB", "harness-sessions")
 # Public base for URLs we hand back to clients (annotations, files listings). The content
 # proxy stays header-authenticated; this only makes the returned links resolvable OUTSIDE
@@ -581,7 +582,7 @@ _adopting: set = set()  # session ids with a detached orphan-adoption harvest in
 # upsert silently un-cancels the session and the CLI runs the whole task anyway. ONE signal, two
 # tiers: this in-process flag (instant, same-replica) + the durable per-response cancel latch
 # (cross-replica). _stop_session always sets both, so the turn loop no longer reads the vertex
-# status to catch a cross-replica session cancel (HR-INF-010 — that Gremlin read is gone).
+# status to catch a cross-replica session cancel (HR-INF-010: that graph read is gone).
 _cancel_req: dict[str, float] = {}  # sid -> when Stop was requested
 # Artifact-serving hot caches (per replica). The workspace tar is downloaded ONCE per session
 # and reused for every file open on that session (a share page opening 20 files used to pull
@@ -641,8 +642,9 @@ _WS_FILES_CACHE: dict[str, tuple[float, dict[str, bytes]]] = {}
 _WS_FILES_TTL, _WS_FILES_MAX = 300.0, 4
 _WS_FILE_CAP, _WS_TOTAL_CAP = 32 * 1024 * 1024, 192 * 1024 * 1024
 # Request idempotency: a repeated request with the same Idempotency-Key returns the FIRST
-# request's response instead of starting a second run. The durable control store (Cosmos) is the
-# SINGLE authority (create_item = atomic reservation) — there is no in-process/blob/Redis mirror.
+# request's response instead of starting a second run. The durable control store
+# (control_store.py) is the SINGLE authority (create_item = atomic reservation) — there is no
+# in-process/blob/Redis mirror.
 _IDEM_TTL = 3600.0
 
 
@@ -1382,7 +1384,13 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # A connection that carries request headers is brokered here too, for the same reason: a header
     # value is often a gateway's credential (cf-aig-authorization, Helicone-Auth), and the broker is
     # the one place every base's requests pass, so the agent never holds it (see _conn_headers).
-    if SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn):
+    #
+    # And a custom connection whose address is the full request URL ("Use Full URL"): every agent CLI
+    # appends its own resource (/chat/completions, /responses, /v1/messages) to the base it is given,
+    # so the address can be used as it is only where every base's model calls pass, the broker
+    # (_conn_request_url). Handed over, the key went to the stored URL with a resource appended.
+    if (SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn)
+            and not _conn_full_url(conn)):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -1408,6 +1416,9 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
         return None
     out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""), effort)
     out["base_url"] = f"{_sandbox_broker_origin()}/v1/llm"
+    # `full_url` describes the connection's own address, which the broker uses; the base handed over
+    # is the broker's, to which the CLI appends its resource as it does to any base.
+    out.pop("full_url", None)
     return out
 
 
@@ -2152,7 +2163,7 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
                         params: dict | None = None, *, attempts: int = 28, base: float = 0.75) -> dict:
     """Call the sandbox and parse JSON, retrying transient failures with exponential backoff.
 
-    Under a burst of concurrent sessions the Dynamic Sessions pool allocates cold sandboxes on demand
+    Under a burst of concurrent sessions a hosted session pool allocates cold sandboxes on demand
     and can briefly return an empty / non-JSON body or a 429/5xx while one spins up (and a follow-up
     must additionally rehydrate a possibly-large workspace). WAIT for that scale-up rather than fail —
     treating a cold start as a hard error was the dominant concurrency failure.
@@ -2185,7 +2196,7 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
     raise RuntimeError(f"sandbox {path} failed after {i + 1} of {attempts} tries ({last})")
 
 
-# ── durable session workspace (git checkpoint tarball in vg-gateway blob storage) ──
+# ── durable session workspace (git checkpoint tarball in the blob store) ──
 def _ws_blob(sid: str) -> str:
     return f"sessions/{sid}/workspace.tgz"
 
@@ -2910,8 +2921,21 @@ def _branch_point_key(rid: str) -> str:
     return f"branch-points/{rid}.json"
 
 
-async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: str, ws_sha: str) -> None:
-    """The commit an end-of-turn checkpoint closed on, kept as the response's branch point.
+# The point a record from before records carried their own (`_branch_point`) was answered with by
+# the store (_branch_point_of), None for none: read once per replica, not at every read of the turns.
+# Such a record has ended, and its point is written before its end and removed only with it, so the
+# answer holds; it is forgotten whenever the record (_resp_cache_forget) or the point is written here.
+_BRANCH_SEEN: "collections.OrderedDict[str, dict | None]" = collections.OrderedDict()
+
+
+def _branch_seen_forget(rid: str) -> None:
+    _BRANCH_SEEN.pop(rid, None)
+
+
+async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: str, ws_sha: str) -> dict | None:
+    """The commit an end-of-turn checkpoint closed on, kept as the response's branch point. Answers
+    the point once it is kept, None when there is none: the turn's record carries the answer as
+    `_branch_point` (_branch_point_of), so a branch, and a session's turns, read it from there.
 
     Only the point: the runner checks it against the HEAD of the checkpoint it is given, so no
     copy of the session's latest commit is kept in step with the tarball (one was, written after
@@ -2921,19 +2945,23 @@ async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: s
     turn's end reads nothing back from the store for it. Optional: a failure is recorded on the
     turn's record, never raised, since the durable checkpoint has already succeeded. A runner that
     sends no full commit (one from before branching) leaves no point, and a branch from this
-    response is then branch_unavailable."""
+    response is then branch_unavailable. The point is kept in the store as well as on the record: a
+    record from before the record carried it is answered from the store (_branch_point_of)."""
     if not re.fullmatch(r"[0-9a-f]{40}", git_commit or ""):
-        return
+        return None
     point = {"commit": git_commit, "ws_sha": ws_sha, "session_id": sid,
              "response_id": response_id, "backend": rec.get("backend") or ""}
+    _branch_seen_forget(response_id)
     try:
-        if not await _blob_put(_branch_point_key(response_id), json.dumps(point).encode(), kb=RESP_BLOB_KB):
-            rec["branch_checkpoint_unavailable"] = True
+        if await _blob_put(_branch_point_key(response_id), json.dumps(point).encode(), kb=RESP_BLOB_KB):
+            return point
     except Exception:  # noqa: BLE001
-        rec["branch_checkpoint_unavailable"] = True
+        pass
+    rec["branch_checkpoint_unavailable"] = True
+    return None
 
 
-async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_id: str = "") -> None:
+async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_id: str = "") -> dict | None:
     """Pull the committed /workspace from the sandbox and persist it to durable blob storage.
 
     `mid_turn`: taken after a tool step while the turn runs (_step_checkpoint_maybe, #505). It does
@@ -2943,7 +2971,9 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
 
     `response_id`: the turn this end-of-turn checkpoint closes. Its commit is saved as that
     response's branch point (Sessions §1.1). A mid-turn checkpoint never saves one: it commits
-    nothing, and the turn has not ended."""
+    nothing, and the turn has not ended. Answers the branch point it kept, None when it kept none
+    (a mid-turn checkpoint, a skipped or failed one, a runner that sends no full commit)."""
+    point = None
     if not mid_turn:
         await _step_checkpoint_settle(sid)
     _ws_tar_evict(sid)             # workspace changed — next file open refetches
@@ -2955,7 +2985,7 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
         # the good durable blob from it would destroy the user's work. Skip the checkpoint entirely.
         if rec.get("hydrate_failed_with_checkpoint"):
             rec["checkpoint_skipped_hydrate_failed"] = True
-            return
+            return None
         # Fence backstop (HR-INF-012): if a NEWER turn has taken the session lease, THIS turn's
         # workspace is superseded — writing it would clobber the newer turn's checkpoint
         # (last-writer-wins). Checked BEFORE the relay so a superseded turn doesn't even pull the
@@ -2967,7 +2997,7 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
                     print(f"[lease] stale checkpoint sid={sid} mode={LEASE_MODE} fence={_fence}", flush=True)
                     if LEASE_MODE == "enforce":
                         rec["checkpoint_skipped_stale"] = True
-                        return
+                        return None
             except Exception:  # noqa: BLE001
                 pass
         # Stream runner tar -> VG blob without buffering the whole workspace (HR-INF-015).
@@ -2985,11 +3015,12 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
                                            "ws_sha": ws_sha,
                                            "ws_mid_turn_at": str(taken_at) if mid_turn else ""})
                 if response_id and not mid_turn:
-                    await _branch_point_put(sid, rec, response_id, git_commit, ws_sha)
+                    point = await _branch_point_put(sid, rec, response_id, git_commit, ws_sha)
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
         rec["checkpoint_error"] = str(e)[:200]
+    return point
 
 
 # ── checkpoints while a turn runs (#505) ──────────────────────────────────────────
@@ -3485,7 +3516,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     await _browser_close(sid, "turn_end")
     # Saved before the answer completes, as on the primary path: whether a file too large to
     # attach is in the task's files is known only once the save has landed (_too_large_saved).
-    await _checkpoint(sid, rec, response_id=resp_id)
+    translator.ended_checkpoint(await _checkpoint(sid, rec, response_id=resp_id))
     try:
         _too_large_saved(produced, rec)
         # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
@@ -3506,7 +3537,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member, "_input": (_orig_rec or {}).get("_input") or [],
-                  "_backend": (_orig_rec or {}).get("_backend") or rec.get("backend") or ""}
+                  "_backend": (_orig_rec or {}).get("_backend") or rec.get("backend") or "",
+                  **translator.branch_mark()}
         if _status == "incomplete" and translator.input_request:
             # the question the turn ended on, for the answer to be checked against (§3.2)
             stored["_pending_input"] = translator.pending_input()
@@ -3856,8 +3888,8 @@ async def _start_reconcile() -> None:
     async def loop() -> None:
         while True:
             try:
-                # Single-flight across replicas (HR-INF-010): the sweep is a full-label Gremlin scan
-                # on the shared partition; running it on every replica every cycle was O(replicas)
+                # Single-flight across replicas (HR-INF-010): the sweep is a full-label graph scan
+                # on a shared store; running it on every replica every cycle was O(replicas)
                 # identical scans. A one-shot TTL lock elects one sweeper per cycle. Safe because the
                 # sweep is an idempotent healer of orphaned 'running' vertices derived from durable
                 # blob truth — a skipped cycle only delays healing (nothing depends on multiplicity),
@@ -3944,7 +3976,7 @@ def _turn_harness_check(harness_id: str, hv: dict | None) -> None:
 async def _harness_vertex(harness_id: str) -> dict | None:
     """Read a Harness vertex (HR tenant) as a flat dict — its config (mcp_servers, skills props)."""
     # harness_id is caller-controlled (metadata / X-Harness-Id) and now drives BILLING — keep it to
-    # the id charset (chrn<hex> / builtin slugs) so it can never smuggle Gremlin syntax.
+    # the id charset (chrn<hex> / builtin slugs) so it can never smuggle query syntax.
     if not harness_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", harness_id):
         return None
     # The label scope is load-bearing: harness_id is caller-controlled, and billing keys off this
@@ -4328,7 +4360,7 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
 # account" are very different grants.
 #
 # The surface below is the complete documented one for every brokered provider, taken from what the
-# runner actually configures (harness_runner/server.py): Claude Code speaks the Anthropic Messages
+# runner actually configures (runner/server.py): Claude Code speaks the Anthropic Messages
 # API, Codex speaks Responses or Chat Completions, hermes speaks Chat Completions. Matching is on
 # the suffix AFTER the v1/ collapse, so it is the same string for every base_url shape.
 #
@@ -4351,6 +4383,32 @@ HR_BROKER_PATHS = os.environ.get("HR_BROKER_PATHS", "enforce").strip().lower()
 # and that is exactly the case that opts in.
 _BROKER_IMAGE_PATHS = {"images/generations", "images/edits", "images/variations"}
 HR_BROKER_IMAGES = os.environ.get("HR_BROKER_IMAGES", "0").strip().lower() in ("1", "on", "true")
+
+
+# The resource each custom format's clients call, as the broker sees it after its v1/ collapse: the paths
+# the console's form says are appended to an address that is not a full URL.
+_FULL_URL_RESOURCE = {"openai": "chat/completions", "responses": "responses", "anthropic": "messages"}
+
+
+def _conn_full_url(conn: dict | None) -> bool:
+    """Whether a connection's address is the full request URL: "Use Full URL" on a custom connection
+    (stored "1"). Read under the vendor's own name, which a turn's connection carries as `_vendor`
+    beside the runner's name for it, and the broker's as `provider`."""
+    c = conn or {}
+    vendor = str(c.get("_vendor") or c.get("provider") or "").strip().lower()
+    return vendor == "custom" and str(c.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _conn_request_url(conn: dict, base: str, suffix: str) -> str | None:
+    """Where a call for `suffix` goes on this connection, before any query: the connection's base with
+    the suffix joined, as always; or, when the connection's address is the full request URL, that
+    address exactly, for the one resource its API format names. Any other path has no address on such
+    a connection (the stored URL is no model list, token count or compaction, and no other format's
+    endpoint): None, and the caller sends nothing."""
+    if not _conn_full_url(conn):
+        return f"{base}/{suffix}" if suffix else base
+    fmt = str(conn.get("api_format") or "openai").strip().lower()
+    return base if suffix.strip("/").lower() == _FULL_URL_RESOURCE.get(fmt) else None
 
 
 def _broker_path_allowed(suffix: str) -> bool:
@@ -5231,8 +5289,11 @@ async def _memory_relay(tok: str, path: str, request: Request):
     else:
         headers["authorization"] = f"Bearer {key}"
     body = _strip_unsupported(memory_relay.with_model(raw, pid), provider=provider, byok=True, path=suffix, keep_thinking=False)
+    url = _conn_request_url(conn, base, suffix)
+    if url is None:
+        raise HTTPException(502, f"that key's address is a full request URL, with no address for {suffix}")
     rc = _relay_client()
-    up = await rc.send(rc.build_request("POST", f"{base}/{suffix}", headers=headers, content=body), stream=True)
+    up = await rc.send(rc.build_request("POST", url, headers=headers, content=body), stream=True)
     print(f"[memory-relay] {sid} {svc.get('vendor')} {suffix} {model} -> {integ.get('name')} {up.status_code}", flush=True)
 
     async def pump():
@@ -5291,9 +5352,15 @@ async def llm_broker(path: str, request: Request):
               f"mode={HR_BROKER_PATHS}", flush=True)
         if HR_BROKER_PATHS == "enforce":
             raise HTTPException(403, "this path is not available through the model broker")
-    url = f"{base}/{suffix}" if suffix else base
+    url = _conn_request_url(conn, base, suffix)
+    if url is None:
+        print(f"[broker] {suffix!r} has no address on a connection whose address is a full request URL "
+              f"(sid={sid}); nothing sent", flush=True)
+        raise HTTPException(404, "This connection's address is the full request URL for its API format, "
+                                 "so this path has no address on it.")
     if request.url.query:
-        url = f"{url}?{request.url.query}"
+        # a stored full URL may carry its own query (an api-version); the client's joins it
+        url = f"{url}{'&' if _conn_full_url(conn) and '?' in url else '?'}{request.url.query}"
 
     headers = _relay_out_headers(request.headers)
     key = str(conn.get("api_key") or "")
@@ -5600,7 +5667,7 @@ async def readyz(response: Response) -> dict:
     checks: dict = {}
     ok = True
     # Blob/graph plane: a RAISING probe (the normal _blob_list swallows errors and returns
-    # empty, so it could never fail readiness). This does the keyed vg-gateway round-trip and
+    # empty, so it could never fail readiness). This does a keyed round-trip to the store and
     # treats a non-2xx / unreachable / unconfigured plane as NOT ready.
     try:
         await asyncio.wait_for(BACKING.blob.probe(), timeout=5)
@@ -7391,6 +7458,12 @@ class _RespTranslator:
                  sid: str = "", ignored: list[str] | None = None):
         self.resp_id, self.model, self.prev, self.store, self.created_at = resp_id, model, prev, store, created_at
         self.branched_from = ""
+        # The branch point the turn's end-of-turn checkpoint kept (Sessions §1.1), or None when it
+        # kept none; known only once that checkpoint has run (ended_checkpoint). The stored record
+        # carries it from then on (branch_mark), so whether the response can be branched is read
+        # from the record itself (_branch_point_of).
+        self.branch_point: dict | None = None
+        self.branch_point_known = False
         self.sid = sid   # surfaced in response.metadata so the client can highlight/track the session
         # Request fields we accepted and did not act on (tasks.md 1.1). `tools` and `include` are
         # reserved and ignored (1.4), and ignoring has to be observable: a silently dropped field
@@ -7448,6 +7521,16 @@ class _RespTranslator:
         e = {"type": type_, "sequence_number": self.seq, **f}
         self.seq += 1
         return e
+
+    def ended_checkpoint(self, point: dict | None) -> None:
+        """The turn's end-of-turn checkpoint has run, and kept `point` (None: no branch point)."""
+        self.branch_point, self.branch_point_known = point, True
+
+    def branch_mark(self) -> dict:
+        """What the stored record says of its branch point: `_branch_point`, the point or None, once
+        the end-of-turn checkpoint has run; nothing before (a running turn, a turn that never
+        reached it), which _branch_point_of answers from the store."""
+        return {"_branch_point": self.branch_point} if self.branch_point_known else {}
 
     def _response_obj(self, status: str) -> dict:
         meta: dict = {}
@@ -9882,6 +9965,7 @@ _RESP_CACHE_MAX = 4000
 
 def _resp_cache_forget(rid: str) -> None:
     _RESP_CACHE.pop(rid, None)
+    _branch_seen_forget(rid)
 
 
 async def _resp_get(rid: str, *, strict: bool = False) -> dict | None:
@@ -10097,6 +10181,59 @@ def _branch_origin(value) -> dict:
     return {}
 
 
+# A response can be branched from once its turn has ended, however it ended (Sessions §1.1).
+_BRANCH_FROM_STATUS = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+
+def _branch_ended(rec: dict) -> bool:
+    return _UHP_STATUS.get(str(rec.get("status"))) in _BRANCH_FROM_STATUS
+
+
+def _branch_point_valid(point, rid: str, sid: str) -> dict | None:
+    """`point` when it is response `rid`'s branch point in session `sid`, on a full commit; else None."""
+    if (isinstance(point, dict) and point.get("response_id") == rid and point.get("session_id") == sid
+            and isinstance(point.get("commit"), str) and re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
+        return point
+    return None
+
+
+async def _branch_point_of(rid: str, rec: dict, *, strict: bool = False) -> dict | None:
+    """The point response `rid` (its record, `rec`) can be branched from, or None when it can't be:
+    the one test of whether a response can be branched. The branch route refuses with 409
+    branch_unavailable exactly where this answers None (_branch_source), and a session's turns
+    carry it as `branchable` (_session_turns_data), so the two never disagree.
+
+    A response can be branched once its turn has ended (completed, failed, cancelled or incomplete)
+    and the turn's end-of-turn checkpoint kept a point. A turn the task was started with ran nothing
+    here and has none. A record written since records carry their point (`_branch_point`, the point
+    or None) answers from itself, with no read. An older one, and one settled before its turn's
+    checkpoint ran, answers from the point in the store, read once per replica (_BRANCH_SEEN).
+    strict: a read of the store that failed raises, for the route's 503; otherwise it answers None,
+    and the answer is not kept."""
+    if not _branch_ended(rec) or rec.get("_imported"):
+        return None
+    sid = str(rec.get("_session_id") or "")
+    if "_branch_point" in rec:
+        return _branch_point_valid(rec["_branch_point"], rid, sid)
+    if rid in _BRANCH_SEEN:
+        _BRANCH_SEEN.move_to_end(rid)
+        return _BRANCH_SEEN[rid]
+    try:
+        raw = await _blob_get_or_raise(_branch_point_key(rid), kb=RESP_BLOB_KB)
+    except Exception:
+        if strict:
+            raise
+        return None
+    try:
+        point = _branch_point_valid(json.loads(raw or b"null"), rid, sid)
+    except ValueError:
+        point = None
+    _BRANCH_SEEN[rid] = point
+    while len(_BRANCH_SEEN) > _RESP_CACHE_MAX:
+        _BRANCH_SEEN.popitem(last=False)
+    return point
+
+
 async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> dict:
     """Authorize before disclosing whether a response can be restored."""
     try:
@@ -10109,19 +10246,13 @@ async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> d
             or vertex.get("status") == "deleted" or not _scope_keeps(caller, vertex.get("workspace"))
             or str(vertex.get("harness_id") or "") != harness_id):
         raise uhp_error(404, "session_not_found", "No session with that id.")
-    if _UHP_STATUS.get(str(rec.get("status"))) not in {"completed", "failed", "cancelled", "incomplete"}:
-        raise uhp_error(409, "branch_unavailable", "Only a completed response checkpoint can be branched.")
     try:
-        point_bytes = await _blob_get_or_raise(_branch_point_key(rid), kb=RESP_BLOB_KB)
+        point = await _branch_point_of(rid, rec, strict=True)
     except Exception as error:
         raise uhp_error(503, "server_error", "The checkpoint could not be read. Try again.") from error
-    try:
-        point = json.loads(point_bytes or b"null")
-        if (not isinstance(point, dict) or point["response_id"] != rid or point["session_id"] != sid
-                or not isinstance(point["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
-            raise ValueError("missing checkpoint position")
-    except (ValueError, TypeError, KeyError):
-        raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint.")
+    if point is None:
+        raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint." if _branch_ended(rec)
+                        else "Only a completed response checkpoint can be branched.")
     return {"point": point, "source_sid": sid,
             "backend": str(point.get("backend") or vertex.get("backend") or ""),
             "workspace": str(vertex.get("workspace") or "")}
@@ -10986,7 +11117,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         rec["charge"] = translator.charge      # a remote runtime's own bill for the turn, beside the tokens
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
-    await _checkpoint(sid, rec, response_id=translator.resp_id)
+    translator.ended_checkpoint(await _checkpoint(sid, rec, response_id=translator.resp_id))
     _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
@@ -11053,10 +11184,10 @@ async def _apikey_resolve(tok: str) -> dict | None:
     if not tok:
         return None
     sha = _hash_key(tok)
-    # HR-INF-010: hot path = control-store point-read (off the shared Gremlin partition). The
+    # HR-INF-010: hot path = control-store point-read (off the graph). The
     # store is a write-through cache of the graph key record kept in sync by mint/revoke; a HIT is
     # authoritative (revocation dual-writes it). A MISS (or store-down) falls back to the graph and
-    # backfills, so pre-existing keys migrate on first use and Gremlin is never hit for them again.
+    # backfills, so pre-existing keys migrate on first use and the graph is never read for them again.
     if control_store.enabled():
         doc = await control_store.apikey_get(sha)
         if doc is not None:
@@ -12176,7 +12307,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             pending = tr.pending_input() if status == "incomplete" else None
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
                       "_member": member, "_input": input_items, "_backend": backend,
-                      **({"_pending_input": pending} if pending else {}),
+                      **({"_pending_input": pending} if pending else {}), **tr.branch_mark(),
                       **{"_" + k: v for k, v in trace_ctx.items()}}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
             if pending and control_store.enabled():
@@ -12602,7 +12733,7 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     ?limit=N returns only the LAST N turns (HR-INF-015: bounds the per-open blob fan-out on
     long-horizon sessions; 0/absent = all, preserving existing callers)."""
     _org, v = await _owned_session(request, sid)   # LIVE-B: enforce org ownership before returning content
-    return await _session_turns_data(sid, limit=limit, strict=True, v=v)
+    return await _session_turns_data(sid, limit=limit, strict=True, v=v, branchable=True)
 
 
 def _unix_s(ts) -> int | None:
@@ -12650,7 +12781,10 @@ def _turn_elapsed(rec: dict) -> float | None:
     return round(ended - began, 1) if began > 0 and ended >= began else None
 
 
-async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None) -> dict:
+async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None,
+                              branchable: bool = False) -> dict:
+    """`branchable`: each turn says whether a branch can be made from it (_branch_point_of), for the
+    session's own readers; a share link's reader and the gateway's own reads of a history don't ask."""
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
     safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
@@ -12696,6 +12830,17 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
         _turns_reads.bump("record_failed")
         print(f"[turns] a turn's record could not be read sid={safe_sid}: {type(e).__name__}", flush=True)
         raise uhp_error(503, "server_error", _TURNS_UNREADABLE) from e
+    # Whether each turn can be branched, by the branch route's own test. A record answers it itself; one
+    # from before records said so reads its point from the store, those reads bounded and in parallel as
+    # the records' are, and kept (_branch_point_of). A point that could not be read is not offered.
+    can_branch: dict[str, bool] = {}
+    if branchable:
+        async def _can(rid: str, rec: dict) -> tuple[str, bool]:
+            async with _sem:
+                return rid, await _branch_point_of(rid, rec) is not None
+
+        can_branch = dict(await asyncio.gather(*(_can(rid, rec) for rid, rec in zip(ids, recs)
+                                                 if rec and not rec.get("_deleted"))))
     for rid, rec in zip(ids, recs):
         if not rec or rec.get("_deleted"):
             continue
@@ -12760,6 +12905,8 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
                       # a turn the task was started with (Tasks §2.1): nothing ran, nothing was spent
                       "imported": bool(rec.get("_imported")),
                       **({"cost_usd": 0.0} if rec.get("_imported") else {}),
+                      # a branch can be made from it (Sessions §1.1): the branch route's own test, on this record
+                      **({"branchable": can_branch.get(rid, False)} if branchable else {}),
                       "_model": rec.get("model") or "",
                       "_since_ms": _turn_since_ms(rec, for_result=False)})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
@@ -12819,6 +12966,9 @@ async def delete_response(response_id: str, request: Request):
     now = _now_ms()
     rec["_deleted"] = True
     rec["_deleted_at"] = now
+    # its branch point goes now (below), and from the record too: one restored within its 30 days
+    # can't be branched, as it couldn't be before records carried their point (_branch_point_of)
+    rec["_branch_point"] = None
     try:
         _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
@@ -12918,7 +13068,9 @@ async def _session_shared(sid: str) -> bool:
 async def workspace_by_path(harness_id: str, sid: str, path: str) -> Response:
     """Canonical artifact URL: /{harness}/{session}/workspace/{path}. Access is one fresh
     session-level check: is the session shared? (The console BFF maps its same-shaped route
-    here.) harness_id is part of the address, not the auth — the sid is the lookup key."""
+    here for anyone it cannot vouch for; a self-hosted console's signed-in member goes to /a/
+    instead, #594.) harness_id is part of the address, not the auth — the sid is the lookup key.
+    This route never reads a caller: a sign-in sent here changes nothing."""
     if not await _session_shared(sid):
         raise HTTPException(404, "file not found")
     return await _serve_workspace_path(sid, path, public=True)
@@ -12926,11 +13078,13 @@ async def workspace_by_path(harness_id: str, sid: str, path: str) -> Response:
 
 @app.get("/a/{sid}/{path:path}")
 async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
-    """Authenticated artifact-by-path: org members open workspace files directly (inline)."""
-    p = await _principal(request)
-    v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
-        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    """Authenticated artifact-by-path: org members open workspace files directly (inline).
+
+    The same check as the content route beside it (_owned_session), not a copy of part of it: this
+    route checked the organization and the workspace and stopped, so a deleted task's files went on
+    opening here while GET /v1/containers/{sid}/files/{id}/content refused them. The console's reply
+    links read here now (#594), so the two signed-in addresses answer alike."""
+    await _owned_session(request, sid)
     return await _serve_workspace_path(sid, path)
 
 
@@ -20218,7 +20372,7 @@ def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
 # `tools` carries BOTH the real name and how far disabling it actually goes, because those differ by
 # runtime and the console must not imply a guarantee the runtime cannot keep (see the protocol's
 # harnesses.md §4.3):
-#   hard        — the CLI enforces it (claude: --disallowedTools takes these exact names).
+#   hard        — the CLI enforces it (claude: a permissions.deny rule takes these exact names).
 #   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
 _BASE_CATALOG: dict[str, dict] = {
     "codex": {
@@ -20227,8 +20381,13 @@ _BASE_CATALOG: dict[str, dict] = {
                           "a real git workspace with shell access, reading and editing files and "
                           "running commands to complete the task, returning reviewable diffs and "
                           "results."),
-        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("read_file", "File Read"),
-                  ("write_file", "File Write"), ("git", "Git")],
+        # The core tools a codex 0.154 turn offers (the runner's CODEX_TOOLS). "shell" is the id
+        # harnesses store for the shell, which 0.154 sends the model as exec_command and write_stdin;
+        # the runner switches it off by either name, and web_search too. apply_patch, update_plan and
+        # view_image have no switch, so the base stays "instruction". It has no read_file, write_file
+        # or git tool: reading, writing and git go through the shell.
+        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("update_plan", "Plan"),
+                  ("view_image", "View Image"), ("web_search", "Web Search")],
         "tool_enforcement": "instruction",
     },
     "claude-code": {
@@ -20236,11 +20395,14 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are Claude Code, an agentic coding assistant. You work on a real "
                           "local git working tree with bash, edit files, run tests, and use "
                           "sub-agents to complete engineering tasks end to end."),
-        # These are the names Claude Code's --disallowedTools accepts. They are the real thing, not
-        # display labels: a label with a suffix would silently fail to match and disable nothing.
+        # These are the names a permissions.deny rule takes (the runner's CLAUDE_TOOLS, 2.1.280). They
+        # are the real thing, not display labels: a label with a suffix would silently fail to match
+        # and disable nothing. "Task" is the subagent tool's earlier name and the id harnesses store;
+        # the runner writes it as Agent (_CLAUDE_TOOL_RENAMES). NotebookEdit writes files too, so with
+        # Edit and Write off it is the one left that does.
         "tools": [("Bash", "Bash"), ("Read", "Read"), ("Edit", "Edit"), ("Write", "Write"),
-                  ("Grep", "Grep"), ("Glob", "Glob"), ("WebFetch", "WebFetch"),
-                  ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
+                  ("NotebookEdit", "Notebook Edit"), ("Grep", "Grep"), ("Glob", "Glob"),
+                  ("WebFetch", "WebFetch"), ("WebSearch", "WebSearch"), ("Task", "Subagents")],
         "tool_enforcement": "hard",
         "input_requests": True,     # the runner serves `ask_user` here (Tasks §3.2, #476)
     },
@@ -20772,12 +20934,13 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
-        # The tool names its own turns record (measured: write_file, read_file). Its agent CLI has
-        # NO per-tool deny list — `--permissions` chooses a posture (restricted / bypass / full) —
-        # so this list is deliberately short: it names what a turn was seen to call rather than
-        # advertising a switch for every tool in the runtime when none of them can be withheld.
-        "tools": [("exec", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
-                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep", "Search"),
+        # Tool names as 0.5.6 registers them (the runner's OPENSQUILLA_TOOLS): the shell is
+        # exec_command and content search is grep_search. Its agent CLI has NO per-tool deny list —
+        # `--permissions` chooses a posture (restricted / bypass / full) — so this list is
+        # deliberately short: the everyday tools, rather than a switch for every tool in the runtime
+        # when none of them can be withheld.
+        "tools": [("exec_command", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep_search", "Search"),
                   ("web_search", "Web Search"), ("web_fetch", "Web Fetch")],
         # "instruction", and for a stated reason rather than for lack of looking: there is no deny
         # list on `opensquilla agent`, so the disabled set reaches the model as a line in AGENTS.md
@@ -24039,12 +24202,14 @@ def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> 
     base = _provider_base_url(vendor, str(cfg.get("base_url") or "") or _PROVIDER_BASE.get(vendor, ""))
     if not base:
         return None
-    full = vendor == "custom" and str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+    url = _conn_request_url({**cfg, "provider": vendor}, base, "chat/completions")
+    if not url:
+        return None
     header = {"api-key": key} if vendor in ("azure", "azure-foundry") else {"authorization": f"Bearer {key}"}
     # The builder calls the provider from here rather than through the broker, so it adds the
     # connection's headers itself, after the key's, which none of them may name.
     _with_conn_headers(header, cfg)
-    return {"url": base if full else f"{base}/chat/completions", "headers": header,
+    return {"url": url, "headers": header,
             "model": model_id or canonical, "canonical": canonical, "route": vendor}
 
 
