@@ -71,6 +71,7 @@ root_file() {
   fi
 }
 
+ pids=()
 if [ "$ROLE" != "gateway" ]; then
 # Session workspaces live on the volume so a restart doesn't discard work in flight. Created HERE
 # rather than in the image: /data is a volume mount, and Docker only seeds a volume from the image
@@ -353,7 +354,7 @@ fi
 # and an operator who wants them out sets HR_BACKENDS.
 # (A base left out is no longer a failing row: the list of what installed is exported to the
 # gateway as HR_BACKENDS_INSTALLED below, and the console does not offer the rest.)
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,grok}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -2205,6 +2206,30 @@ install_backends() {
 }
 
 if [ "$ROLE" != "gateway" ]; then
+  HR_RUNNER_STATE="${HR_RUNNER_STATE:-$DATA_DIR/runner-state.json}"
+  export HR_RUNNER_STATE
+  write_runner_state() {
+    "$PY" - "$HR_RUNNER_STATE" "$1" "$2" "$3" "$4" "$5" <<'PYEOF'
+import json, os, pathlib, sys, tempfile, time
+path, phase, ready, accepting, reason, installed = sys.argv[1:]
+data = {"phase": phase, "ready": ready == "1", "accepting": accepting == "1", "reason": reason,
+        "requested_backends": [x for x in os.environ.get("HR_BACKENDS", "").split(",") if x],
+        "installed_backends": [x for x in installed.split(",") if x], "failed_backends": [],
+        "version": os.environ.get("HR_VERSION", "dev"), "active": 0,
+        "capacity": int(os.environ.get("HR_RUNNER_CAPACITY", "0") or 0), "at": time.time()}
+pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=str(pathlib.Path(path).parent), prefix="runner-state.")
+with os.fdopen(fd, "w") as f:
+    json.dump(data, f); f.flush(); os.fsync(f.fileno())
+os.replace(tmp, path)
+PYEOF
+  }
+  write_runner_state starting 0 0 starting ""
+  RUNNER_HOST="${HR_RUNNER_BIND:-$([ "$ROLE" = "runner" ] && echo 0.0.0.0 || echo 127.0.0.1)}"
+  ( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
+      HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host "$RUNNER_HOST" --port 8081 --log-level warning ) &
+  pids+=($!)
+  write_runner_state installing 0 0 installing_backends ""
 install_backends
 iu_sweep || { echo "[harnessrouter] FATAL: what an install left behind could not be removed"; exit 1; }
 seal_tools    # nothing else is running yet: the runner and the gateway start below
@@ -2215,7 +2240,6 @@ if [ -d "$TOOLS/venv/bin" ]; then export PATH="$TOOLS/venv/bin:$PATH"; fi
 export NODE_PATH="$TOOLS/lib/node_modules"
 fi
 
-pids=()
 cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup TERM INT EXIT
 
@@ -2235,6 +2259,31 @@ export HR_BACKENDS_INSTALLED="$(echo $avail | tr ' ' ',')"
 if [ -n "$missing" ]; then
   echo "[harnessrouter] WARN: requested but not installed:$missing — those backends cannot run"
 fi
+if [ -n "$missing" ]; then
+  write_runner_state failed 0 0 backend_install_failed "$HR_BACKENDS_INSTALLED"
+else
+  write_runner_state ready 1 1 "" "$HR_BACKENDS_INSTALLED"
+fi
+if [ -n "${HR_ROUTER_URL:-}" ] && [ -n "${HR_RUNNER_NAME:-}" ]; then
+  (
+    while true; do
+      code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${HR_ROUTER_URL%/}/register" \
+        -H "X-Harness-Internal: $HARNESS_INTERNAL_KEY" -H 'content-type: application/json' \
+        -d "{\"name\":\"$HR_RUNNER_NAME\",\"url\":\"${HR_RUNNER_ADVERTISE_URL:-http://$HR_RUNNER_NAME:8081}\",\"version\":\"${HR_VERSION:-dev}\",\"capacity\":${HR_RUNNER_CAPACITY:-0}}" 2>/dev/null || true)"
+      [ "$code" = "200" ] || [ "$code" = "409" ] && break
+      sleep "${HR_RUNNER_HEARTBEAT_S:-10}"
+    done
+    while true; do
+      curl -fsS -X POST "${HR_ROUTER_URL%/}/heartbeat" \
+        -H "X-Harness-Internal: $HARNESS_INTERNAL_KEY" \
+        -H 'content-type: application/json' \
+        -d "{\"name\":\"$HR_RUNNER_NAME\",\"phase\":\"ready\",\"ready\":true,\"accepting\":true,\"active\":0,\"capacity\":${HR_RUNNER_CAPACITY:-0},\"installed_backends\":[\"${HR_BACKENDS_INSTALLED//,/\",\"}\"],\"version\":\"${HR_VERSION:-dev}\"}" \
+        >/dev/null 2>&1 || true
+      sleep "${HR_RUNNER_HEARTBEAT_S:-10}"
+    done
+  ) &
+  pids+=($!)
+fi
 fi
 
 if [ "$ROLE" != "gateway" ]; then
@@ -2245,10 +2294,6 @@ if [ "$ROLE" != "gateway" ]; then
 # The split images cannot use loopback for this: the gateway is in another container. There the
 # runner binds the network interface and only the compose network reaches it; the internal key
 # (above) is what refuses every caller that is not the gateway.
-RUNNER_HOST="${HR_RUNNER_BIND:-$([ "$ROLE" = "runner" ] && echo 0.0.0.0 || echo 127.0.0.1)}"
-( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
-    HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host "$RUNNER_HOST" --port 8081 --log-level warning ) &
-pids+=($!)
 fi
 
 if [ "$ROLE" != "runner" ]; then

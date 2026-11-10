@@ -18,6 +18,8 @@ services:
       HR_ROLE: runner
       HARNESS_INTERNAL_KEY: ${HARNESS_INTERNAL_KEY:?Set HARNESS_INTERNAL_KEY in .env}
       HARNESS_GATEWAY_URL: http://gateway:8080
+      HR_ROUTER_URL: http://session-router:8090
+      HR_RUNNER_NAME: runner-1
     volumes:
       - runner-1-data:/data
     expose: ["8081"]
@@ -30,6 +32,12 @@ services:
 
   runner-2:
     <<: *runner
+    environment:
+      HR_ROLE: runner
+      HARNESS_INTERNAL_KEY: ${HARNESS_INTERNAL_KEY:?Set HARNESS_INTERNAL_KEY in .env}
+      HARNESS_GATEWAY_URL: http://gateway:8080
+      HR_ROUTER_URL: http://session-router:8090
+      HR_RUNNER_NAME: runner-2
     volumes:
       - runner-2-data:/data
 
@@ -43,10 +51,7 @@ services:
       - router-data:/data
     expose: ["8090"]
     depends_on:
-      runner-1:
-        condition: service_healthy
-      runner-2:
-        condition: service_healthy
+      []
     restart: unless-stopped
 
   gateway:

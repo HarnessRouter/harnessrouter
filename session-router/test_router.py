@@ -223,7 +223,7 @@ def test_a_dead_owners_session_reassigns(tmp_path):
             await _post(c, "http://router/turn?identifier=s1", json={})
 
     asyncio.run(go())
-    assert [h[0] for h in sb["hits"]] == ["/healthz", "/hydrate", "/turn", "/turn"]
+    assert [h[0] for h in sb["hits"]] == ["/healthz", "/readyz", "/hydrate", "/turn", "/turn"]
 
 
 def test_no_alive_runner_is_a_503_that_names_itself(tmp_path):
@@ -237,7 +237,7 @@ def test_no_alive_runner_is_a_503_that_names_itself(tmp_path):
             return await _post(c, "http://router/turn?identifier=s1", json={})
 
     r = asyncio.run(go())
-    assert r.status_code == 503 and "no runner" in r.json()["detail"]
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "no_runner"
 
 
 def test_a_turn_naming_an_environment_lands_on_the_layer(tmp_path):

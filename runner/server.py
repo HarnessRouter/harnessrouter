@@ -835,7 +835,7 @@ async def _internal_callers_only(request: Request, call_next):
     """Behind the write-wall the runner is reachable from every agent process on loopback, and its
     routes address any session by identifier. The gateway presents the internal key (which
     _child_env strips from agent processes); nothing else may drive this API."""
-    if _SESSION_UIDS and _INTERNAL_KEY and request.url.path != "/healthz":
+    if _SESSION_UIDS and _INTERNAL_KEY and request.url.path not in ("/healthz", "/readyz"):
         if not hmac.compare_digest(request.headers.get("x-harness-internal", ""), _INTERNAL_KEY):
             return JSONResponse({"error": "internal key required"}, status_code=401)
     return await call_next(request)
@@ -17223,7 +17223,24 @@ def _run_hermes_proc(turn_id: str, cwd: str, env: dict, model: str, provider: st
 # ── HTTP surface ─────────────────────────────────────────────────────────────────
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"ok": True, "host": socket.gethostname()}
+    state = _runner_state()
+    return {"ok": True, "host": socket.gethostname(), **state}
+
+
+def _runner_state() -> dict:
+    path = os.environ.get("HR_RUNNER_STATE", "/data/runner-state.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {"phase": "starting", "ready": False, "accepting": False}
+    except (OSError, ValueError):
+        return {"phase": "starting", "ready": False, "accepting": False, "reason": "state_unavailable"}
+
+
+@app.get("/readyz")
+def readyz() -> JSONResponse:
+    state = _runner_state()
+    return JSONResponse({"ok": bool(state.get("ready")), **state}, status_code=200 if state.get("ready") else 503)
 
 
 @app.get("/backends")
@@ -18166,6 +18183,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     """Start a turn. Its routes leave when its runner thread returns (_routes_end_with_turn), or here
     when none started: a builder that refused the turn, or a retry answered by the turn already
     running, may have registered routes that nothing would ever use."""
+    state = _runner_state()
+    if not state.get("ready") or not state.get("accepting", state.get("ready")):
+        raise HTTPException(503, detail={"code": "runner_not_ready", "message": "Runner is still preparing.",
+                                          "phase": state.get("phase", "starting")})
     tokens: list[str] = []
     _TURN_ROUTE_TOKENS.set(tokens)
     prompt_io: dict = {}

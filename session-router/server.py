@@ -105,14 +105,23 @@ def static_runners_from_env() -> list[tuple[str, str]]:
 class _Runner:
     """One registered runner and the health facts that decide routability."""
 
-    __slots__ = ("name", "url", "static", "last_ok", "last_error", "draining", "active", "capacity")
+    __slots__ = ("name", "url", "static", "last_ok", "last_heartbeat", "last_error", "phase",
+                 "ready", "accepting", "version", "backends", "active", "capacity", "draining")
 
     def __init__(self, name: str, url: str, static: bool):
         self.name, self.url, self.static = name, url, static
         # Optimistic: alive until a health check says otherwise, so a fresh router serves turns
         # before its first sweep. A wrong guess costs one 502 retry at the gateway.
         self.last_ok = time.time()
+        self.last_heartbeat = 0.0
         self.last_error = ""
+        self.phase = "starting"
+        # Static registrations predate the readiness protocol. They remain optimistically ready
+        # until a runner exposes /readyz, while dynamic registrations start closed.
+        self.ready = static
+        self.accepting = static
+        self.version = ""
+        self.backends: list[str] = []
         self.draining = False
         self.active = 0
         self.capacity = 0
@@ -126,6 +135,9 @@ class RegisterBody(BaseModel):
 
     name: str
     url: str
+    version: str = ""
+    capacity: int = 0
+    backends: list[str] = []
 
 
 class DeregisterBody(BaseModel):
@@ -138,6 +150,17 @@ class DrainBody(BaseModel):
     name: str
     draining: bool = True
     capacity: int = 0
+
+
+class HeartbeatBody(BaseModel):
+    name: str
+    phase: str = "ready"
+    ready: bool = False
+    accepting: bool = False
+    active: int = 0
+    capacity: int = 0
+    installed_backends: list[str] = []
+    version: str = ""
 
 
 class _Store:
@@ -247,10 +270,13 @@ def create_app(*, db_path: str | None = None, static_runners: list[tuple[str, st
     def _least_loaded(now: float) -> _Runner:
         """The alive runner carrying the fewest identifiers. Ties go to the first registered —
         deterministic, so a fresh cluster's first sessions land in a stable order."""
-        alive = [r for r in runners.values() if _alive(r, now) and not r.draining
+        alive = [r for r in runners.values() if _alive(r, now) and r.ready and r.accepting and not r.draining
                  and (not r.capacity or r.active < r.capacity)]
         if not alive:
-            raise HTTPException(503, "no runner is reachable; the router has nowhere to send this")
+            any_alive = any(_alive(r, now) for r in runners.values())
+            if any_alive:
+                raise HTTPException(503, {"code": "runner_not_ready", "message": "Runner is still preparing."})
+            raise HTTPException(503, {"code": "no_runner", "message": "No runner is reachable."})
         counts = _counts()
         return min(alive, key=lambda r: (r.active / (r.capacity or 1), counts.get(r.name, 0), r.name))
 
@@ -308,6 +334,14 @@ def create_app(*, db_path: str | None = None, static_runners: list[tuple[str, st
                 resp = await client.get(f"{r.url}/healthz", timeout=HEALTH_TIMEOUT_S)
                 if resp.status_code < 400:
                     r.last_ok, r.last_error = time.time(), ""
+                    ready = await client.get(f"{r.url}/readyz", timeout=HEALTH_TIMEOUT_S)
+                    if ready.status_code == 404:
+                        r.ready = r.accepting = True
+                    else:
+                        data = ready.json() if ready.headers.get("content-type", "").startswith("application/json") else {}
+                        r.ready = bool(data.get("ready", ready.status_code < 400))
+                        r.accepting = bool(data.get("accepting", r.ready))
+                        r.phase = str(data.get("phase") or ("ready" if r.ready else "starting"))
                 else:
                     r.last_error = f"HTTP {resp.status_code}"
             except Exception as e:  # noqa: BLE001 — a dead runner is a health fact, not an error
@@ -342,7 +376,7 @@ def create_app(*, db_path: str | None = None, static_runners: list[tuple[str, st
 
     @app.get("/readyz")
     async def readyz():
-        available = any(_alive(r, time.time()) and not r.draining for r in runners.values())
+        available = any(_alive(r, time.time()) and r.ready and r.accepting and not r.draining for r in runners.values())
         return JSONResponse({"ok": available}, status_code=200 if available else 503)
 
     @app.get("/runners")
@@ -350,8 +384,11 @@ def create_app(*, db_path: str | None = None, static_runners: list[tuple[str, st
         now = time.time()
         counts = _counts()
         return {"runners": [{"name": r.name, "url": r.url, "static": r.static,
-                             "alive": _alive(r, now), "sessions": counts.get(r.name, 0),
-                             "draining": r.draining, "active": r.active, "capacity": r.capacity,
+                             "alive": _alive(r, now), "ready": r.ready, "accepting": r.accepting,
+                             "phase": r.phase, "version": r.version, "backends": r.backends,
+                             "last_heartbeat": r.last_heartbeat or None,
+                             "sessions": counts.get(r.name, 0), "draining": r.draining,
+                             "active": r.active, "capacity": r.capacity,
                              "last_error": r.last_error} for r in runners.values()],
                 "reassigned": stats["reassigned"]}
 
@@ -384,9 +421,27 @@ def create_app(*, db_path: str | None = None, static_runners: list[tuple[str, st
             raise HTTPException(409, f"{name} is a static runner (HR_RUNNERS); "
                                      f"remove it from the environment instead")
         runners[name] = _Runner(name, url, static=False)
+        runners[name].version = body.version
+        runners[name].capacity = body.capacity
+        runners[name].backends = list(body.backends)
         store.add_runner(name, url)
         print(f"[router] registered {name} -> {url}", flush=True)
         return {"ok": True, "name": name, "url": url}
+
+    @app.post("/heartbeat")
+    async def heartbeat(body: HeartbeatBody, request: Request) -> dict:
+        refused = _require_key(request)
+        if refused:
+            return refused
+        r = runners.get(body.name.strip())
+        if not r:
+            raise HTTPException(404, "no such runner")
+        r.last_ok = r.last_heartbeat = time.time()
+        r.last_error = ""
+        r.phase, r.ready, r.accepting = body.phase, body.ready, body.accepting
+        r.active, r.capacity = max(0, body.active), max(0, body.capacity)
+        r.version, r.backends = body.version, list(body.installed_backends)
+        return {"ok": True, "ready": r.ready, "accepting": r.accepting, "phase": r.phase}
 
     @app.post("/deregister")
     async def deregister(body: DeregisterBody, request: Request) -> dict:

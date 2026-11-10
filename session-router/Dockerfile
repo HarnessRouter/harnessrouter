@@ -28,6 +28,6 @@ VOLUME ["/data"]
 EXPOSE 8090
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s \
-  CMD curl -fsS http://127.0.0.1:8090/readyz >/dev/null || exit 1
+  CMD curl -fsS http://127.0.0.1:8090/healthz >/dev/null || exit 1
 
 CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8090", "--workers", "1", "--log-level", "warning"]
