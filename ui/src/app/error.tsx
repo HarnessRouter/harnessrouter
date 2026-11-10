@@ -24,9 +24,9 @@ export default function RouteError({ error, reset }: { error: Error & { digest?:
         </div>
         <button type="button" onClick={() => { try { sessionStorage.removeItem('hr:reloaded-for-chunk'); } catch { /* ignore */ } window.location.reload(); }}
           style={{ font: 'inherit', fontSize: 13, fontWeight: 500, padding: '8px 14px', border: '1px solid #e0dcd9', borderRadius: 8, background: '#fff', color: '#57534e', cursor: 'pointer' }}>
-          Reload
+          重新加载
         </button>
-        {!isStaleChunk(error) && <button type="button" onClick={reset} style={{ marginLeft: 8, font: 'inherit', fontSize: 13, fontWeight: 500, padding: '8px 14px', border: 0, borderRadius: 8, background: '#1a5cf5', color: '#fff', cursor: 'pointer' }}>Try again</button>}
+        {!isStaleChunk(error) && <button type="button" onClick={reset} style={{ marginLeft: 8, font: 'inherit', fontSize: 13, fontWeight: 500, padding: '8px 14px', border: 0, borderRadius: 8, background: '#1a5cf5', color: '#fff', cursor: 'pointer' }}>重试</button>}
       </div>
     </div>
   );

@@ -31,7 +31,7 @@ export function openWorkspaceMenu(anchor: HTMLElement): void {
 }
 
 const NOTE_KEY = 'hrui.toast.next';      // a toast for the page a reload lands on
-const LAND = '/start';                   // where a new workspace lands (the design: go('start'))
+const LAND = '/studio';                   // where a new workspace lands (the design: go('start'))
 
 const ssGet = (k: string) => { try { return sessionStorage.getItem(k) || ''; } catch { return ''; } };
 const ssSet = (k: string, v: string) => { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch { /* private mode */ } };
@@ -103,11 +103,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <Sheet onClose={onClose} labelledBy="nwh" className="small-sheet" busy={busy} initialFocus={nameRef}>
-      <SheetTop id="nwh" title="New workspace" onClose={onClose} />
+      <SheetTop id="nwh" title="新建工作区" onClose={onClose} />
       <div className="keyrow">
-        <label className="sr" htmlFor="nwName">Workspace name</label>
+        <label className="sr" htmlFor="nwName">工作区名称</label>
         <input id="nwName" ref={nameRef} className={`keyname plain${bad === 'nwName' ? ' bad' : ''}`} aria-invalid={bad === 'nwName' || undefined}
-          aria-describedby={refused ? 'nwWhy' : undefined} placeholder="Workspace name" autoComplete="off" maxLength={80} value={name}
+          aria-describedby={refused ? 'nwWhy' : undefined} placeholder="工作区名称" autoComplete="off" maxLength={80} value={name}
           onChange={(e) => { setName(e.target.value); clearBad(); }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void go(); } }} />
       </div>
@@ -115,7 +115,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
         <p className="kb-why" id="nwWhy" role="alert">{refused}</p>
       ) : null}
       <div className="sheet-actions">
-        <button type="button" className="btn primary" disabled={busy} onClick={() => void go()}>Create workspace</button>
+        <button type="button" className="btn primary" disabled={busy} onClick={() => void go()}>创建工作区</button>
       </div>
     </Sheet>
   );
@@ -134,9 +134,9 @@ export function PeopleSheet({ onClose }: { onClose: () => void }) {
           <WsBadge name={current.name} size={36} />
           <h3 id="wsh">{current.name}</h3>
         </div>
-        <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>{X}</button>
+        <button type="button" className="icon-btn" aria-label="关闭" onClick={onClose}>{X}</button>
       </div>
-      <div className="ins-h ws-set-h">Settings</div>
+      <div className="ins-h ws-set-h">设置</div>
       <WsProfile onSaving={setSaving} />
       <CloudUploadRow />
     </Sheet>

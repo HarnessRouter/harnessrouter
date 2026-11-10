@@ -28,7 +28,7 @@ import { toast } from './toast';
 import { ConfirmSheet } from './Sheet';
 import { Skel, SkRows, SkLine } from './Skel';
 import {
-  HOSTED, claimsFor, getDoc, imageMapFor, isEntra, look, mapFor, nameFor, pollHandoff, putDoc, servable, servableImages, startHandoff,
+  HOSTED, claimsFor, getDoc, imageMapFor, isEntra, look, mapFor, putDoc, servable, servableImages,
   type CatalogEntry, type Doc, type Integration, type MediaChain, type MediaCandidate, type PutBody,
 } from './byok/doc';
 import { KeyForm } from './byok/KeyForm';
@@ -39,8 +39,6 @@ const CAP_TITLE: Record<string, string> = {
   text_to_video: 'Video, from text', image_to_video: 'Video, from a picture', text_to_image: 'Pictures',
   image_to_image: 'Picture edits', text_to_speech: 'Speech', text_to_music: 'Music', export: 'Film assembly',
 };
-/** How long between reads of an open HarnessRouter key hand-off. */
-export const HANDOFF_POLL_MS = 2000;
 const mono = (p: Provider) => p.name.charAt(0).toUpperCase() + (p.name.charAt(1) || '').toLowerCase();
 /** A provider's tile: its own mark on white, so a dark mark reads in dark mode too; else a monogram. */
 function PvIc({ p }: { p: Provider }) {
@@ -97,11 +95,11 @@ function Routes({ id, title, routes, busy, provName, onRoute }: {
     <section className="pv-g" id={id}>
       <header><h2>{title}</h2><span className="kicker">{plural(routes.length, 'model')}{off ? ` · ${off} off` : ''}</span></header>
       <div className="pv-routes">
-        <p className="set-help">When several of your keys can serve a model, choose the one that does. A model set to Off cannot be chosen anywhere.</p>
+        <p className="set-help">多个密钥支持同一模型时，请选择使用的密钥。关闭的模型无法被选用。</p>
         {routes.length > ROUTES_SHOWN ? (
           <>
-            <label className="sr" htmlFor={`${id}Q`}>Find a model</label>
-            <input id={`${id}Q`} className="dd-q" placeholder="Find a model" autoComplete="off" spellCheck={false} value={q} onChange={(e) => setQ(e.target.value)} />
+            <label className="sr" htmlFor={`${id}Q`}>查找模型</label>
+            <input id={`${id}Q`} className="dd-q" placeholder="查找模型" autoComplete="off" spellCheck={false} value={q} onChange={(e) => setQ(e.target.value)} />
           </>
         ) : null}
       </div>
@@ -110,14 +108,14 @@ function Routes({ id, title, routes, busy, provName, onRoute }: {
           <span className="mono">{r.m}</span>
           <select className="set-in slim" aria-label={`Which key serves ${r.m}`} disabled={busy} value={r.at} onChange={(e) => onRoute(r.m, e.target.value)}>
             {r.opts.map((i) => <option key={i.name} value={i.name}>{provName(i.provider)} · {i.name}</option>)}
-            <option value="">Off: no key serves it</option>
+            <option value="">已关闭，无可用密钥</option>
           </select>
         </div>
       ))}
       {!needle && shown.length > ROUTES_SHOWN ? (
         <div className="pv-routes"><button type="button" className="link-q inl" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${shown.length} models`}</button></div>
       ) : null}
-      {needle && !shown.length ? <div className="pv-routes"><p className="set-help">No model matches that.</p></div> : null}
+      {needle && !shown.length ? <div className="pv-routes"><p className="set-help">没有匹配的模型。</p></div> : null}
     </section>
   );
 }
@@ -138,18 +136,18 @@ function Chain({ chain, busy, onMove, onToggle }: { chain: MediaChain; busy: boo
   return (
     <section className="pv-g" data-capability={chain.capability}>
       <header><h2>{CAP_TITLE[chain.capability] || chain.capability}</h2><span className="kicker">{plural(n, 'model')}</span></header>
-      <div className="pv-routes"><p className="set-help">Tried in this order. The first one whose provider is connected, and that can do what was asked, runs.</p></div>
+      <div className="pv-routes"><p className="set-help">按此顺序尝试，使用首个服务商已连接且支持任务的模型。</p></div>
       {chain.candidates.map((c, i) => (
         <div key={c.model} className="pv-route pv-chain">
           <span>
             <span className="mono">{i + 1}. {c.model}</span>
             {/* never colour alone: the state is a word */}
-            {c.off ? <span className="muted"> · switched off</span> : !c.connected ? <span className="muted"> · no key</span> : c.unavailable ? <span className="muted"> · unavailable</span> : null}
+            {c.off ? <span className="muted"> · 已关闭</span> : !c.connected ? <span className="muted"> · 无密钥</span> : c.unavailable ? <span className="muted"> · 不可用</span> : null}
             <small className="sub2">{[c.provider, ...facts(c)].join(' · ')}</small>
           </span>
           <span className="pv-act">
-            <button type="button" className="link-q" disabled={busy || i === 0} aria-label={`Move ${c.model} up`} onClick={() => onMove(i, i - 1)}>Up</button>
-            <button type="button" className="link-q" disabled={busy || i === n - 1} aria-label={`Move ${c.model} down`} onClick={() => onMove(i, i + 1)}>Down</button>
+            <button type="button" className="link-q" disabled={busy || i === 0} aria-label={`Move ${c.model} up`} onClick={() => onMove(i, i - 1)}>上移</button>
+            <button type="button" className="link-q" disabled={busy || i === n - 1} aria-label={`Move ${c.model} down`} onClick={() => onMove(i, i + 1)}>下移</button>
             <button type="button" className="link-q" disabled={busy} onClick={() => onToggle(c.model)}>{c.off ? 'Switch on' : 'Switch off'}</button>
           </span>
         </div>
@@ -158,7 +156,6 @@ function Chain({ chain, busy, onMove, onToggle }: { chain: MediaChain; busy: boo
   );
 }
 
-type Handoff = { code: string; url: string; state: 'waiting' | 'failed'; note: string };
 
 export function ByokPage() {
   const [doc, setDoc] = useState<Doc | null>(null);
@@ -167,22 +164,19 @@ export function ByokPage() {
   const [form, setForm] = useState<{ provider: string; editing?: string } | null>(null);
   const [removing, setRemoving] = useState<Integration | null>(null);
   const [models, setModels] = useState<Record<string, boolean>>({});      // a provider's full model list, opened
-  const [handoff, setHandoff] = useState<Handoff | null>(null);
   const setups = useAllSetups();
-  // the document as it is now, for work that lands later (a key arriving from the hand-off)
   const docRef = useRef(doc);
   docRef.current = doc;
 
   const reload = useCallback(async () => {
     try { setDoc(await getDoc()); setErr(''); }
-    catch { setErr('Your keys could not be read just now.'); }
+    catch { setErr('暂时无法读取密钥。'); }
   }, []);
   useEffect(() => { void reload(); }, [reload]);
 
   const keysOf = useCallback((id: string) => (doc?.integrations || []).filter((i) => i.provider === id), [doc]);
   const metaOf = useCallback((id: string) => doc?.catalog.find((c) => c.id === id), [doc]);
   const provName = useCallback((id: string) => { const c = metaOf(id); return c ? look(c).name : id; }, [metaOf]);
-  const hosted = doc?.catalog.find((c) => c.id === HOSTED) || null;
   const total = (doc?.integrations || []).length;
   const servedBy = (i: Integration) => Object.values(doc?.model_map || {}).filter((v) => v === i.name).length;
   const usersOf = (i: Integration): string[] | null => {
@@ -254,57 +248,18 @@ export function ByokPage() {
     } finally { setBusy(false); }
   }
 
-  // the HarnessRouter key hand-off: the page it names opens in a new tab, and the code is read until
-  // the key is ready, which is then saved as a connection at once
-  async function getKey() {
-    setHandoff(null);
-    try {
-      const h = await startHandoff();
-      setHandoff({ ...h, state: 'waiting', note: 'Finish in the HarnessRouter tab. The key lands here on its own.' });
-      window.open(h.url, '_blank', 'noopener');
-    } catch {
-      setHandoff({ code: '', url: '', state: 'failed', note: 'HarnessRouter could not be reached just now. Try again.' });
-    }
-  }
-  useEffect(() => {
-    if (!handoff || handoff.state !== 'waiting' || !handoff.code) return;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      const r = await pollHandoff(handoff.code);
-      if (!alive) return;
-      if (r === 'waiting') { timer = setTimeout(() => void tick(), HANDOFF_POLL_MS); return; }
-      if (r === 'failed') { setHandoff({ ...handoff, state: 'failed', note: 'That key hand-off ended without a key. Get a key again.' }); return; }
-      const d = docRef.current;
-      const meta = d?.catalog.find((c) => c.id === HOSTED);
-      setHandoff(null);
-      if (!d || !meta) return;
-      const entry: Integration = {
-        name: nameFor(d, HOSTED, (r.name || '').trim() || 'HarnessRouter API'), provider: HOSTED, models: [],
-        config: { api_key: r.api_key, ...(r.endpoint ? { base_url: r.endpoint } : {}), ...(r.models_url ? { models_url: r.models_url } : {}), ...(r.balance_url ? { balance_url: r.balance_url } : {}) },
-      };
-      await submit(meta, entry);
-    };
-    timer = setTimeout(() => void tick(), HANDOFF_POLL_MS);
-    return () => { alive = false; if (timer) clearTimeout(timer); };
-  // the document is read through docRef at the moment the key lands
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handoff]);
-
   function keyLine(meta: CatalogEntry, i: Integration) {
     const n = servedBy(i);
-    const bal = i.balance;
     return (
       <div key={i.name} className="pv-key">
         <span className="pv-k">
-          <i className="pv-dot" />Connected · <b>{i.name}</b>
+          <i className="pv-dot" />已连接 · <b>{i.name}</b>
           {isEntra(i) ? <> · Microsoft Entra</> : null}
           <span className="pv-serves"> · {n ? `serves ${plural(n, 'model')}` : 'serves no model now'}</span>
-          {bal ? <span className="pv-serves"> · {bal.usd <= 0 ? '$0.00 left' : `$${bal.usd.toFixed(2)} left`} <a className="link-q inl" href={`${doc?.hosted_console || 'https://app.harnessrouter.ai'}/billing`} target="_blank" rel="noopener noreferrer">Add credit ↗</a></span> : null}
         </span>
         <span className="pv-act">
-          <button type="button" className="link-q" disabled={busy} onClick={() => setRemoving(i)}>Remove</button>
-          <button type="button" className="btn small line" disabled={busy} onClick={() => setForm({ provider: meta.id, editing: i.name })}>Edit</button>
+          <button type="button" className="link-q" disabled={busy} onClick={() => setRemoving(i)}>移除</button>
+          <button type="button" className="btn small line" disabled={busy} onClick={() => setForm({ provider: meta.id, editing: i.name })}>编辑</button>
         </span>
       </div>
     );
@@ -321,25 +276,18 @@ export function ByokPage() {
         <PvIc p={p} />
         <span className="pv-x">
           <b>{p.name}</b>
-          {meta.id === HOSTED ? <small>One key for every model on its list, at its listed price.</small> : null}
           {list.length ? (
             <small>{plural(list.length, 'model')} · {opened ? list.join(', ') : list.slice(0, 2).join(', ')}
               {list.length > 2 ? <> <button type="button" className="link-q inl" aria-expanded={opened}
                 onClick={() => setModels({ ...models, [meta.id]: !opened })}>{opened ? 'Show fewer' : `+${list.length - 2}`}</button></> : null}
             </small>
-          ) : meta.id === 'custom' ? <small>Any endpoint that speaks the OpenAI or Anthropic API.</small> : null}
+          ) : meta.id === 'custom' ? <small>支持 OpenAI 或 Anthropic API 的任意接口。</small> : null}
         </span>
         <span className="pv-act">
-          {meta.id === HOSTED ? <button type="button" className="btn small line" disabled={busy || handoff?.state === 'waiting'} onClick={() => void getKey()}>Get a key</button> : null}
           {!f || f.editing ? (
             <button type="button" className="btn small line" disabled={busy} onClick={() => setForm({ provider: meta.id })}>{mine.length ? 'Add another' : meta.id === 'custom' ? 'Add endpoint' : 'Add key'}</button>
           ) : null}
         </span>
-        {meta.id === HOSTED && handoff ? (
-          <p className={`pv-form set-help${handoff.state === 'failed' ? ' kl-bad' : ''}`} role="status">
-            {handoff.note}{handoff.url && handoff.state === 'waiting' ? <> <a className="link-q inl" href={handoff.url} target="_blank" rel="noopener noreferrer">Open HarnessRouter ↗</a></> : null}
-          </p>
-        ) : null}
         {mine.length ? <div className="pv-keys">{mine.map((i) => keyLine(meta, i))}</div> : null}
         {f && doc ? (
           <KeyForm key={`${meta.id}:${f.editing || ''}`} meta={meta} name={p.name} doc={doc} busy={busy}
@@ -376,17 +324,17 @@ export function ByokPage() {
       <div className="list-wrap prov">
         <div className="list-top">
           <div>
-            <h1>Bring your own key</h1>
-            <p className="sub">Every model call runs on a key you add here, through your own account at that provider, which bills you directly.</p>
-            <p className="prov-note">Not the same as <Link className="link-q inl" href="/keys">API keys</Link>, which your app uses to send tasks to this instance.</p>
+            <h1>使用自己的密钥</h1>
+            <p className="sub">模型调用使用这里添加的密钥，由服务商通过你的账户直接计费。</p>
+            <p className="prov-note">不同于 <Link className="link-q inl" href="/keys">API 密钥</Link>，后者用于应用向当前实例发送任务。</p>
           </div>
           {doc ? <span className="kicker prov-count">{total ? plural(total, 'key') : 'No keys yet'}</span> : null}
         </div>
 
-        {err ? <p className="sub" role="alert">{err}{' '}<button type="button" className="link-q inl" onClick={() => void reload()}>Try again</button></p> : null}
+        {err ? <p className="sub" role="alert">{err}{' '}<button type="button" className="link-q inl" onClick={() => void reload()}>重试</button></p> : null}
         {!doc && !err ? (
           // shaped like what lands: a group of providers, each a mark, a name and its models, and a button
-          <Skel label="Loading your keys">
+          <Skel label="正在加载密钥">
             {[4, 3].map((n, g) => (
               <section key={g} className="pv-g" aria-hidden="true">
                 <header><SkLine w={130} h={14} /><SkLine w={52} h={10} /></header>
@@ -394,12 +342,6 @@ export function ByokPage() {
               </section>
             ))}
           </Skel>
-        ) : null}
-        {doc && hosted ? (
-          <section className="pv-g" id="pvHosted">
-            <header><h2>HarnessRouter API</h2><span className="kicker">{keysOf(HOSTED).length ? plural(keysOf(HOSTED).length, 'key') : 'No keys'}</span></header>
-            {row(hosted)}
-          </section>
         ) : null}
         {doc ? GROUPS.map((g) => {
           const list = doc.catalog.filter((c) => c.id !== HOSTED && look(c).group === g.key);
@@ -413,8 +355,8 @@ export function ByokPage() {
           );
         }) : null}
 
-        {chatRoutes.length ? <Routes id="pvRoutes" title="Which key serves each model" routes={chatRoutes} busy={busy} provName={provName} onRoute={(m, to) => void route(m, to, false)} /> : null}
-        {imageRoutes.length ? <Routes id="pvImageRoutes" title="Which key serves each image model" routes={imageRoutes} busy={busy} provName={provName} onRoute={(m, to) => void route(m, to, true)} /> : null}
+        {chatRoutes.length ? <Routes id="pvRoutes" title="各模型使用的密钥" routes={chatRoutes} busy={busy} provName={provName} onRoute={(m, to) => void route(m, to, false)} /> : null}
+        {imageRoutes.length ? <Routes id="pvImageRoutes" title="各图像模型使用的密钥" routes={imageRoutes} busy={busy} provName={provName} onRoute={(m, to) => void route(m, to, true)} /> : null}
         {chains.map((c) => {
           const order = c.candidates.map((x) => x.model);
           const off = new Set(doc?.media_policy?.[c.capability]?.disabled || c.candidates.filter((x) => x.off).map((x) => x.model));
@@ -432,7 +374,7 @@ export function ByokPage() {
           onClose={() => setRemoving(null)} onConfirm={() => void remove(removing)}
           body={<>{rm === null ? rmAfter
             : rm.length ? <><b>{listNames(rm)}</b> {rm.length === 1 ? 'uses' : 'use'} it. {rmAfter}</>
-              : `No setup uses it right now. ${rmAfter}`}Usage so far stays billed by {provName(removing.provider)}.</>} />
+              : `No setup uses it right now. ${rmAfter}`}已有用量仍由原服务商计费 {provName(removing.provider)}.</>} />
       ) : null}
     </div>
   );

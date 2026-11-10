@@ -67,11 +67,11 @@ export function ExtensionsPage() {
       <div className="list-wrap lw-n">
         <div className="list-top ph">
           <div>
-            <h1>Add-ons</h1>
+            <h1>扩展</h1>
           </div>
           <PagePic kind="ext" />
         </div>
-        <div className="tabs inline" role="tablist" aria-label="Add-ons" onKeyDown={(e) => tabKeys(e, TAB_KEYS, tab, pick)}>
+        <div className="tabs inline" role="tablist" aria-label="扩展" onKeyDown={(e) => tabKeys(e, TAB_KEYS, tab, pick)}>
           {TABS.map(([k, label, fam]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>
               <span className="tab-brick" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('built', fam) }} />{label}{' '}
@@ -79,7 +79,7 @@ export function ExtensionsPage() {
             </button>
           ))}
         </div>
-        {tab === 'plugins' ? <PluginsTab data={plugins} workspace={loading ? '' : workspace} /> : null}
+        {tab === 'plugins' ? <PluginsTab data={plugins} workspace={loading ? '' : workspace} setups={setups} reloadSetups={reloadSetups} /> : null}
         {tab === 'skills' ? <SkillsTab setups={setups} reload={reloadSetups} failed={setupsFailed} retry={retrySetups} /> : null}
         {tab === 'tools' ? <ToolsTab setups={setups} reload={reloadSetups} failed={setupsFailed} retry={retrySetups} /> : null}
         {tab === 'envs' ? <EnvsTab data={envs} setups={setups} reloadSetups={reloadSetups} /> : null}

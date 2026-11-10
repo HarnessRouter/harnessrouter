@@ -1,0 +1,172 @@
+# HarnessRouter gateway — the console and the gateway, without the runner.
+#
+# This is the split image: the UI, the gateway process and the data volume. It holds no agent CLI
+# and executes no turn; every turn is handed to the runner (Dockerfile.runner) over the compose
+# network. The two share ONE data volume: the gateway keeps its SQLite databases, blobs, secret
+# store and console credentials there, the runner its tools and workspaces.
+#
+# What stays here and does NOT move to the runner: the built-in skills and starter kits (the
+# gateway serves them), LibreOffice and ffmpeg (the console's document and film previews run in
+# this process tree), and every provider key. The runner's environment never receives them.
+
+# ── UI build ──────────────────────────────────────────────────────────────────
+# This is the SAME console the hosted product runs. Surfaces with no self-hosted backend
+# (billing, marketplace, analytics, sign-in) are hidden by the edition flag rather than removed,
+# so the two stay one codebase. See ui/src/lib/edition.ts.
+FROM node:22-slim AS ui
+WORKDIR /ui
+# git: the UI depends on the ReifyUI component library straight from its repository.
+RUN apt-get update -y && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# .npmrc matters at THIS layer: it carries legacy-peer-deps, without which npm refuses the
+# tree (several deps still declare React 18 peers while the app runs 19).
+COPY ui/package.json ui/package-lock.json* ui/.npmrc ./
+COPY ui/vendor ./vendor
+RUN npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
+COPY ui/ ./
+# Inlined into the client bundle at build time, so a self-hosted image can never present a
+# hosted-only surface no matter how it is run.
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NEXT_PUBLIC_HR_EDITION=selfhost
+RUN npm run build
+# The bundles have no room for their packages' notices, and those licences ask that a copy carries them.
+RUN node scripts/third-party-licenses.mjs > THIRD-PARTY-console.txt
+
+# ── runtime ───────────────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HR_DATA_DIR=/data \
+    HR_ROLE=gateway
+
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        curl ca-certificates git bash tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Document preview. The built-in skills create .docx/.pptx/.xlsx routinely, and LibreOffice is
+# also how those become a PDF — the officecli skill's own PDF export needs a plugin that is not
+# installed. A presentation you can only download is a worse answer than one you can look at.
+# Browsers render none of them, so the console asks the gateway for a PDF rendition and LibreOffice
+# headless is what makes it. Impress/Writer/Calc only, no recommends: the full libreoffice
+# metapackage drags in Java and a desktop stack for no benefit here.
+ARG WITH_DOC_PREVIEW=1
+RUN set -eux; \
+    if [ "$WITH_DOC_PREVIEW" = "1" ]; then \
+      apt-get update -y && apt-get install -y --no-install-recommends \
+        libreoffice-impress libreoffice-writer libreoffice-calc fonts-dejavu-core \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Assembling generated clips into one film. ffmpeg cuts and letterboxes the shots; ffprobe is how
+# the gateway learns a clip's real duration and how the assembled film's length is checked against
+# the timeline it was cut from. Built without it, the media server reports export unavailable and
+# refuses honestly — every clip is still downloadable on its own — rather than degrading silently.
+ARG WITH_MEDIA=1
+RUN set -eux; \
+    if [ "$WITH_MEDIA" = "1" ]; then \
+      apt-get update -y && apt-get install -y --no-install-recommends ffmpeg \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Node is needed for the console server (Next standalone). The agent CLIs — and therefore the
+# npm dependency — belong to the runner image.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+WORKDIR /app
+
+COPY gateway/requirements.txt /app/gateway/requirements.txt
+# The gateway's requirements include hosted-only clients (cloud identity, the hosted document
+# store). They are imported lazily and never touched self-hosted, so they are stripped here to
+# keep the image small and the dependency surface honest about what this build actually uses.
+RUN grep -viE "^(azure-|azure_)" /app/gateway/requirements.txt > /app/gateway/req.local.txt \
+    && pip install --no-cache-dir -r /app/gateway/req.local.txt
+
+# Built-in skills, from their own repository. Pinned by ref so two builds of the same image tag
+# ship the same catalogue; HR_SKILLS_REF=<sha> for an exact pin, WITH_BUILTIN_SKILLS=0 for none.
+#
+# The FILES live here — the gateway owns the catalogue and serves a harness its skills. Their
+# declared apt/pip dependencies do NOT: a skill's scripts execute in the session, on the runner,
+# so that half belongs to Dockerfile.runner.
+ARG WITH_BUILTIN_SKILLS=1
+ARG HR_SKILLS_REPO=https://github.com/HarnessRouter/skills.git
+ARG HR_SKILLS_REF=main
+ENV HR_BUILTIN_SKILLS_DIR=/opt/harnessrouter/skills
+COPY docker/install-skills.sh /tmp/install-skills.sh
+RUN chmod +x /tmp/install-skills.sh \
+    && WITH_BUILTIN_SKILLS="$WITH_BUILTIN_SKILLS" HR_SKILLS_REPO="$HR_SKILLS_REPO" \
+       HR_SKILLS_REF="$HR_SKILLS_REF" HR_SKILLS_DIR=/opt/harnessrouter/skills \
+       HR_SKILLS_INSTALL_DEPS=0 \
+       /tmp/install-skills.sh \
+    && rm -f /tmp/install-skills.sh
+
+# Starter Kits: a Harness plus an app, both baked in. Same pull-and-pin shape as the skills
+# bundle above, and the same rule: pass a commit sha to get the newest catalogue, because that
+# is what changes the layer's inputs.
+ARG WITH_STARTER_KITS=1
+ARG HR_KITS_REPO=https://github.com/HarnessRouter/starter-kit.git
+ARG HR_KITS_REF=main
+ENV HR_KITS_DIR=/opt/harnessrouter/kits
+COPY docker/install-kits.sh /tmp/install-kits.sh
+RUN chmod +x /tmp/install-kits.sh \
+    && WITH_STARTER_KITS="$WITH_STARTER_KITS" HR_KITS_REPO="$HR_KITS_REPO" \
+       HR_KITS_REF="$HR_KITS_REF" HR_KITS_DIR=/opt/harnessrouter/kits \
+       /tmp/install-kits.sh \
+    && rm -f /tmp/install-kits.sh
+
+# What this build IS, for the discovery document and anything else that reports a version. The
+# release workflow passes the tag; a local build says so honestly rather than claiming a number.
+ARG HR_VERSION=dev
+ENV HR_VERSION=${HR_VERSION}
+
+COPY gateway/ /app/gateway/
+# Two runner modules are shared BY PATH, not by import: gateway/app.py loads runner/reasoning.py
+# and runner/tracecontext.py (parents[1] / "runner") so both services apply one set of rules.
+# They are pure stdlib and carry no runner dependency; the rest of runner/ is not in this image.
+COPY runner/reasoning.py runner/tracecontext.py /app/runner/
+COPY docker/entrypoint.sh /app/entrypoint.sh
+COPY docker/hr-retention /usr/local/bin/hr-retention
+RUN chmod +x /app/entrypoint.sh /usr/local/bin/hr-retention
+
+# Next.js standalone output: server + only the modules it actually needs.
+COPY --from=ui /ui/.next/standalone /app/ui/
+COPY --from=ui /ui/.next/static     /app/ui/.next/static
+COPY --from=ui /ui/public           /app/ui/public
+# Apache-2.0 asks that these travel with a copy, and NOTICE is what says what this image carries.
+COPY LICENSE NOTICE /app/
+COPY --from=ui /ui/THIRD-PARTY-console.txt /app/THIRD-PARTY-console.txt
+
+# `agent` is the PRODUCT's user: the gateway and the console run as it and it owns the data
+# volume. The container starts as root and the entrypoint drops privileges per process, because
+# the volume's layout (root's key files beside the product's databases) needs root to set up. The
+# same uid exists in the runner image: the two share the volume and must agree on who owns what.
+#
+# The `rm -rf` of the npm caches is not tidying: root-owned build-time files in a cache a runtime
+# user reads made every install fail with EACCES on a fresh volume. The cache has no runtime value.
+#
+# Everything under /app is root's, and `agent` owns only what it keeps. The gateway's and the
+# console's own code are root's too: neither writes there at run time but for Next's cache, and
+# code that cannot change itself cannot keep a compromise across a restart. Compiled here because
+# `agent` cannot write __pycache__.
+RUN useradd -m -u 10001 agent \
+    && rm -rf /home/agent/.npm /root/.npm \
+    && mkdir -p /data /app/ui/.next/cache \
+    && chown -R root:root /app \
+    && chmod -R go-w,a+rX /app \
+    && python -m compileall -q /app/gateway \
+    && chown -R agent:agent /data /home/agent /app/ui/.next/cache \
+    && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits
+
+EXPOSE 3000
+VOLUME ["/data"]
+
+# The console is the only published port. The gateway listens on the compose network too, because
+# the runner container reaches the model broker and the hosted MCP servers through it.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s \
+  CMD curl -fsS http://127.0.0.1:8080/healthz >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]

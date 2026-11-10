@@ -137,14 +137,14 @@ export function StepRecord({ step, harnessId, sid, closed }: { step: BrowserStep
   const result = resultText(step.output);
   return (
     <div className="tk-brec">
-      {closed ? <p className="tk-brec-note">This browser has closed.</p> : null}
+      {closed ? <p className="tk-brec-note">浏览器已关闭。</p> : null}
       {shot.state === 'ready' ? <img className="tk-brec-shot" src={shot.src} alt={`Screenshot from this step: ${step.label}`} />
         : shot.state === 'loading' ? <div className="tk-brec-shot is-loading" role="img" aria-label="Loading the screenshot" />
-          : shot.state === 'failed' ? <p className="tk-brec-none">The screenshot could not be loaded.</p> : null}
+          : shot.state === 'failed' ? <p className="tk-brec-none">无法加载截图。</p> : null}
       <h3 className="tk-brec-t">{step.label}</h3>
-      {args ? (<section className="tk-brec-sec"><h4>Input</h4><pre>{args}</pre></section>) : null}
+      {args ? (<section className="tk-brec-sec"><h4>输入</h4><pre>{args}</pre></section>) : null}
       {result ? (<section className={'tk-brec-sec' + (step.status === 'failed' ? ' is-failed' : '')}><h4>{step.status === 'failed' ? 'Error' : 'Result'}</h4><pre>{result}</pre></section>)
-        : shot.state === 'none' ? <p className="tk-brec-none">This step kept no screenshot and no result.</p> : null}
+        : shot.state === 'none' ? <p className="tk-brec-none">此步骤未保留截图和结果。</p> : null}
     </div>
   );
 }
@@ -247,7 +247,7 @@ function Drawer({ onClose, focus, children }: { onClose: () => void; focus: bool
   return (
     <>
       <div className="tk-bscrim" aria-hidden="true" onClick={onClose} />
-      <div ref={ref} tabIndex={-1} className="tk-bdrawer hrui-legacy tk-bhost" role="dialog" aria-modal="true" aria-label="Browser">{children}</div>
+      <div ref={ref} tabIndex={-1} className="tk-bdrawer hrui-legacy tk-bhost" role="dialog" aria-modal="true" aria-label="浏览器">{children}</div>
     </>
   );
 }
@@ -261,7 +261,7 @@ export function BrowserSlot({ harnessId, sid, tb, overlay }: { harnessId: string
     onClose={() => tb.close()} closedView={closedView} />;
   if (overlay) return <Drawer onClose={() => tb.close()} focus={!tb.popped}>{card}</Drawer>;
   return (
-    <aside className="tk-preview tk-bslot" aria-label="Browser">
+    <aside className="tk-preview tk-bslot" aria-label="浏览器">
       <div className="hrui-legacy tk-bhost">{card}</div>
     </aside>
   );
@@ -274,7 +274,7 @@ const BROWSER_IC = <svg viewBox="0 0 24 24" width="16" height="16" fill="none" s
 export function BrowserControl({ shown, live, onToggle }: { shown: boolean; live: BrowserState | undefined; onToggle: () => void }) {
   const on = !!live?.open;
   return (
-    <button type="button" className={'icon-btn tk-ib tk-bctl' + (shown ? ' on' : '')} aria-pressed={shown} aria-label="Browser"
+    <button type="button" className={'icon-btn tk-ib tk-bctl' + (shown ? ' on' : '')} aria-pressed={shown} aria-label="浏览器"
       title={shown ? 'Hide the browser' : on ? 'Show the browser the agent is using' : 'Show the browser'} onClick={onToggle}>
       {BROWSER_IC}
       {on ? <span className={'tk-bdot' + (live?.control === 'user' ? ' is-user' : '')} aria-hidden="true" /> : null}

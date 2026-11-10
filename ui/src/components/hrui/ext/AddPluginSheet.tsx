@@ -81,25 +81,25 @@ export function AddPluginSheet({ workspace, setup, binding, busy, focus, onSet, 
 
   return (
     <Sheet onClose={onClose} labelledBy="aph" className="pl-add" busy={busy}>
-      <SheetTop id="aph" title="Add plugin" onClose={onClose} />
+      <SheetTop id="aph" title="添加插件" onClose={onClose} />
       <div className="pl-q" role="search">
         {SEARCH}
-        <input className="dd-q" type="search" value={q} autoComplete="off" spellCheck={false} placeholder="Search plugins" aria-label="Search plugins"
+        <input className="dd-q" type="search" value={q} autoComplete="off" spellCheck={false} placeholder="搜索插件" aria-label="搜索插件"
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape' && q) { e.preventDefault(); e.stopPropagation(); setQ(''); } }} />
       </div>
 
       {data.failed ? <ReadFailed what="plugins" retry={data.retry} /> : null}
-      {loading ? <Skel label="Loading your plugins"><SkRows n={3} /></Skel> : read && (!searching || shown.length) ? (
+      {loading ? <Skel label="正在加载插件"><SkRows n={3} /></Skel> : read && (!searching || shown.length) ? (
         <section className="pl-sec" aria-labelledby="ap-con-h">
-          <h2 className="pl-h" id="ap-con-h">Connected <span className="count">{shown.length}</span></h2>
+          <h2 className="pl-h" id="ap-con-h">已连接 <span className="count">{shown.length}</span></h2>
           {shown.length ? <div className="cap-list">{shown.map(lineView)}</div>
-            : <div className="empty-list pl-empty">Nothing connected yet. Connect a plugin below.</div>}
+            : <div className="empty-list pl-empty">尚未连接，请在下方连接插件。</div>}
         </section>
       ) : null}
 
       {read ? (
         <section className="pl-sec" aria-labelledby="ap-all-h" ref={availRef}>
-          <h2 className="pl-h" id="ap-all-h">Available</h2>
+          <h2 className="pl-h" id="ap-all-h">可用</h2>
           {items.length ? (
             <ul className="pl-grid pl-grid-sheet" aria-label="Plugins you can connect">
               {items.map((r) => (
@@ -117,8 +117,8 @@ export function AddPluginSheet({ workspace, setup, binding, busy, focus, onSet, 
       ) : null}
 
       <div className="sheet-actions pl-add-foot">
-        <Link className="btn" href="/extensions">Open Add-ons</Link>
-        {onInstall ? <button type="button" className="btn" disabled={busy} onClick={onInstall}>Install from folder</button> : null}
+        <Link className="btn" href="/extensions">打开扩展</Link>
+        {onInstall ? <button type="button" className="btn" disabled={busy} onClick={onInstall}>从文件夹安装</button> : null}
       </div>
       {plugConnect.sheet}
     </Sheet>

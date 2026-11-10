@@ -88,6 +88,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 import environments   # the read-only project layer a turn may name (runner/environments.py)
+import environment_snapshots  # registers internal environment transfer routes
 import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
 import tracecontext   # the caller's W3C trace context: its checks and a child for the relay (#473)
 import ask_user_mcp   # the `ask_user` tool a base asks the person through, and what its arguments mean (#476)

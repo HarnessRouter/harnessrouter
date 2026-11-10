@@ -88,7 +88,7 @@ export function PreviewGrip({ pv }: { pv: PreviewWidth }) {
   const max = previewMax(room);
   return (
     <div className={`tk-pv-grip${on ? ' on' : ''}`} role="separator" aria-orientation="vertical" tabIndex={0}
-      aria-label="Resize the preview" title="Drag to resize. Double-click to reset."
+      aria-label="Resize the preview" title="拖动调整大小，双击重置。"
       aria-valuenow={width} aria-valuemin={PREVIEW_MIN} aria-valuemax={Number.isFinite(max) ? max : undefined}
       onPointerDown={(e) => {
         if (e.button !== 0) return;

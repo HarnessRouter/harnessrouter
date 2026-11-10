@@ -1,6 +1,6 @@
 'use client';
 // Deploy to another workspace (Deploy to Cloud's menu, DeployCloud.tsx): this setup copied to a
-// workspace on HarnessRouter Cloud other than the one its one-click deploy goes to, one way. This
+// workspace on 云端服务 other than the one its one-click deploy goes to, one way. This
 // instance stays the source: a deploy creates the cloud copy, and each later one replaces it. Where it
 // goes is one of the cloud workspaces this instance keeps a key for (the workspace settings' Cloud
 // upload lists them); one can be added here by pasting a key from that workspace. The key is kept on
@@ -73,35 +73,35 @@ export function CloudUploadSheet({ id, name, status, onClose, onDone }: {
   const line = cloudLine(status);
   return (
     <Sheet onClose={onClose} labelledBy="cuh" className="small-sheet" busy={busy}>
-      <SheetTop id="cuh" title="Deploy to another workspace" sub={`Deploys ${name} to a workspace on HarnessRouter Cloud. This instance stays the source: deploying again replaces the copy.`} onClose={onClose} />
+      <SheetTop id="cuh" title="部署到其他工作区" sub={`Deploys ${name} to a workspace on 云端服务. This instance stays the source: deploying again replaces the copy.`} onClose={onClose} />
       {line ? <p className="set-help">{line}.</p> : null}
       {targets === null ? (
         failed
-          ? <div className="empty-list ld-fail" role="alert">The cloud workspaces could not be read just now. <button type="button" className="link-q inl" onClick={read}>Try again</button></div>
-          : <div className="empty-list" role="status" style={{ padding: '16px 0' }}>Reading your cloud workspaces…</div>
+          ? <div className="empty-list ld-fail" role="alert">暂时无法读取云端工作区。 <button type="button" className="link-q inl" onClick={read}>重试</button></div>
+          : <div className="empty-list" role="status" style={{ padding: '16px 0' }}>正在读取云端工作区…</div>
       ) : (
         <>
-          <div className="set-f"><label htmlFor="cloudTo">To</label>
+          <div className="set-f"><label htmlFor="cloudTo">目标</label>
             <select id="cloudTo" className="set-in" value={choice} disabled={busy} onChange={(e) => setChoice(e.target.value)}>
               {targets.map((t) => <option key={t.id} value={t.id} disabled={t.revoked}>{t.label}{t.revoked ? ' (its key was revoked)' : ''}</option>)}
-              <option value={ADD}>Add a cloud workspace…</option>
+              <option value={ADD}>添加云端工作区…</option>
             </select>
           </div>
           {adding ? (
-            <div className="set-f"><label htmlFor="cloudKey">A key from the cloud workspace</label>
+            <div className="set-f"><label htmlFor="cloudKey">云端工作区密钥</label>
               <div className="keyrow">
                 <input id="cloudKey" ref={keyRef} className="set-in" type="password" autoComplete="off" placeholder="sk-hr-…" value={key}
                   onChange={(e) => setKey(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void add(); } }} />
                 <button type="button" className="btn" disabled={busy || !key.trim()} onClick={() => void add()}>{busy ? 'Adding' : 'Add'}</button>
               </div>
-              <p className="set-help">From the cloud console, inside the workspace, under API Keys.</p>
+              <p className="set-help">在云端控制台的工作区中打开 API 密钥页面。</p>
             </div>
           ) : null}
         </>
       )}
       <div className="sheet-actions">
-        <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+        <button type="button" className="btn" disabled={busy} onClick={onClose}>取消</button>
         <button type="button" className="btn primary" disabled={busy || adding || !choice || targets === null} onClick={() => void upload()}>
           {busy && !adding ? 'Deploying…' : 'Deploy'}
         </button>

@@ -15,7 +15,7 @@ import { Skel, SkLine } from './Skel';
 
 /** The letter with this instance's own facts in the marked places. */
 export function fill(html: string, bases: number | null): string {
-  const many = bases == null || bases <= 3 ? 'or another' : bases >= 10 ? `or one of ${Math.floor(bases / 5) * 5}+` : `or one of ${bases}`;
+  const many = bases == null || bases <= 3 ? '或其他' : bases >= 10 ? `或 ${Math.floor(bases / 5) * 5} 多种其他` : `或 ${bases} 种其他`;
   return html
     .replace(/<!--hr:bases-->[\s\S]*?<!--\/hr:bases-->/, many)
     .replace(/<!--hr:ps-->[\s\S]*?<!--\/hr:ps-->/, '');
@@ -55,15 +55,15 @@ export function LetterPage() {
   if (failed) {
     return (
       <div className="letter-page letter-off">
-        <p>The letter did not load.</p>
-        <button type="button" className="btn small" onClick={() => load()}>Try again</button>
+        <p>使用说明加载失败。</p>
+        <button type="button" className="btn small" onClick={() => load()}>重试</button>
       </div>
     );
   }
   if (doc === null) {
     return (
       <div className="letter-page">
-        <Skel label="Loading the letter" className="letter-skel">
+        <Skel label="正在加载使用说明" className="letter-skel">
           <SkLine w="52%" h={12} />
           <SkLine w="88%" h={30} r={8} style={{ marginTop: 22 }} />
           <SkLine w="60%" h={30} r={8} style={{ marginTop: 10 }} />
@@ -75,7 +75,7 @@ export function LetterPage() {
   }
   return (
     <div className="letter-page">
-      <iframe ref={frame} className="letter-frame" title="How it works, a letter from the team" srcDoc={doc} onLoad={wire} />
+      <iframe ref={frame} className="letter-frame" title="使用说明" srcDoc={doc} onLoad={wire} />
     </div>
   );
 }

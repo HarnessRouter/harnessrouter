@@ -1,0 +1,88 @@
+# Self-hosted HarnessRouter, split across two images.
+#
+#   1. cp .env.example .env      and put YOUR provider key in it
+#   2. docker compose -f docker-compose.split.yml up -d --build
+#   3. open http://localhost:3000
+#
+# Why this exists beside docker-compose.yml: the all-in-one image is the default and the simplest.
+# This file is for deployments that want the runner and the gateway to be separate containers —
+# to run the runner on a Linux host (or WSL2) while the console lives elsewhere, to give the agent
+# CLIs their own resource limits, or to replace one half without rebuilding the other.
+#
+# THE INTERNAL KEY IS NOT IN THIS FILE. Both entrypoints read (or create once) /data/internal-key
+# on the shared volume, and the runner refuses every caller that does not present it. Set
+# HARNESS_INTERNAL_KEY in .env to supply your own, or run the two halves on separate volumes and
+# set it in both — a mismatch is a runner that answers 401 to every turn.
+#
+# Only the console's port is published. The runner's 8081 is on the compose network alone; never
+# publish it. The gateway's 8080 must be reachable by the runner (the model broker and the MCP
+# servers the agent calls are there), and is likewise not published.
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+      args:
+        # Both images must agree on the skills commit: the gateway serves the catalogue and the
+        # runner installs the dependencies those same files declare. Put a sha in .env to pin
+        # both builds at once.
+        HR_SKILLS_REF: ${HR_SKILLS_REF:-main}
+        WITH_BROWSER: ${WITH_BROWSER:-0}
+    image: harnessrouter/runner:latest
+    # Shared with the gateway so HR_BACKENDS, the backend version pins and the tuning variables
+    # work exactly as they do in the all-in-one image. The image itself carries no provider key;
+    # the gateway hands each turn only the credential that turn's route resolves to, and the runner
+    # strips secret-shaped variables from every agent process (_SECRET_ENV in runner/server.py).
+    env_file:
+      - .env
+    environment:
+      HR_ROLE: runner
+    volumes:
+      - harnessrouter-data:/data
+    expose:
+      - "8081"
+    restart: unless-stopped
+    # The first boot installs the agent CLIs; the runner binds only after that. The gateway waits
+    # for this to be healthy, so the console never comes up beside a runner that cannot answer.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+      args:
+        HR_SKILLS_REF: ${HR_SKILLS_REF:-main}
+        HR_KITS_REF: ${HR_KITS_REF:-main}
+        WITH_DOC_PREVIEW: ${WITH_DOC_PREVIEW:-1}
+        WITH_MEDIA: ${WITH_MEDIA:-1}
+    image: harnessrouter/gateway:latest
+    env_file:
+      - .env
+    environment:
+      HR_ROLE: gateway
+      # The runner is a compose service, not a process in this container.
+      POOL_MGMT_ENDPOINT: http://runner:8081
+      # The address the RUNNER reaches the gateway on: the model broker (/v1/llm) and the hosted
+      # MCP servers (/v1/mcp/...) are absolute URLs embedded in each turn. The console is pinned
+      # to loopback by the entrypoint, so this value is for the runner's side of the wire only.
+      HARNESS_GATEWAY_URL: http://gateway:8080
+    ports:
+      # This machine only. To reach it from elsewhere, put it behind TLS and a password you chose
+      # (see docs/self-hosting-guide.md) and change this to "3000:3000".
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - harnessrouter-data:/data
+    depends_on:
+      runner:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # One volume, two halves: the gateway's databases, blobs, secret store and console credentials,
+  # beside the runner's tools, workspaces and environment layers. The internal key they share is a
+  # file on it.
+  harnessrouter-data:

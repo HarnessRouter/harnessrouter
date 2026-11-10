@@ -1357,6 +1357,59 @@ Storage sits behind a small adapter interface for records, files, and secrets. T
 local implementations; the hosted deployment supplies its own against the same interface. That
 seam is why this is genuinely the same codebase rather than a fork that drifts.
 
+### Two containers instead of one
+
+`Dockerfile` builds the all-in-one image described above, and it stays the default. Two more
+Dockerfiles build the same product as two images, for a deployment that wants the runner on its
+own host (or WSL2) and the console somewhere else:
+
+- `Dockerfile.gateway` — the console, the gateway, the built-in skills and kits, LibreOffice and
+  ffmpeg, the `hr-retention` helper, and the `/data` volume the console writes to.
+- `Dockerfile.runner` — the agent CLIs, the per-session users and the runner. It executes turns and
+  holds no provider key; the gateway hands each turn the credential it needs.
+
+```bash
+cp .env.example .env          # put your provider key in it
+docker compose -f docker-compose.split.yml up -d --build
+```
+
+The two share one `/data` volume: the gateway keeps its databases, blobs, secret store and console
+credentials there, and the runner keeps its tools, workspaces and environment layers. The internal
+key the gateway signs its calls to the runner with is `/data/internal-key`, created by whichever
+entrypoint starts first, so a default split install has nothing to configure. Set
+`HARNESS_INTERNAL_KEY` in `.env` (or `HR_INTERNAL_KEY_FILE`) to supply your own; a mismatch is a
+runner that answers 401 to every turn.
+
+In this layout the gateway listens on the compose network rather than loopback: every turn carries
+absolute URLs to the model broker and to the MCP servers the gateway hosts, and the agent processes
+run in the runner container. Only the console's port is published; never publish the runner's 8081.
+If the two halves are on separate hosts instead of one compose project, set `POOL_MGMT_ENDPOINT` to
+the runner's address, `HARNESS_GATEWAY_URL` to the address the runner can reach the gateway on, and
+the same `HARNESS_INTERNAL_KEY` on both. The runner is a Linux container: it uses `/proc`, process
+groups and per-session uids, so it runs under Docker's Linux VM (Docker Desktop on Windows is fine)
+and not natively on Windows.
+
+### Multiple runners
+
+`docker-compose.cluster.yml` runs a gateway, a session-router and two runners. Copy
+`.env.example` to `.env`, configure your provider, and set `HARNESS_INTERNAL_KEY` to a random
+value shared by all four services. Generate it with `python -c "import secrets; print(secrets.token_hex(32))"`.
+
+```bash
+docker compose -f docker-compose.cluster.yml up -d --build
+```
+
+Each service has its own persistent data volume. The gateway stores records and checkpoints,
+the router stores session ownership, and each runner stores its workspaces and environment
+layers. The gateway sends runner requests through the router. Runners reach the gateway's
+broker and MCP endpoints at `http://gateway:8080`. The console is available on
+`http://localhost:3000`.
+
+Keep the router at one replica with one worker. To add capacity, add a runner with its own
+data volume and add its address to `HR_RUNNERS` on the router. Existing sessions retain their
+owner. Keep the router's data volume when replacing its container. See
+[session-router](../session-router/README.md) for registration and recovery behavior.
+
 ## Resources
 
 - **[Documentation and Cloud](https://harnessrouter.ai)**: hosted service, guides, and pricing.

@@ -1,6 +1,5 @@
-'use client';
-import { LetterPage } from '@/components/hrui/LetterPage';
+import { redirect } from 'next/navigation';
 
 export default function Page() {
-  return <LetterPage />;
+  redirect('/studio');
 }

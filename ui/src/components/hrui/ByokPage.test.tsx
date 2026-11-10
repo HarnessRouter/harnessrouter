@@ -24,7 +24,7 @@ jest.mock('./Skel', () => ({ Skel: () => null, SkRows: () => null, SkLine: () =>
 
 import { harnessFetch } from '@/lib/hfetch';
 import { toast } from './toast';
-import { ByokPage, HANDOFF_POLL_MS } from './ByokPage';
+import { ByokPage } from './ByokPage';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -201,26 +201,9 @@ it('a media list is reordered and switched whole, as the policy for its capabili
   expect(lastPut()).toEqual({ integrations: [], media_policy: { text_to_video: { order: ['vid-b', 'vid-a'], disabled: [] } } });
 });
 
-it('Get a key opens the hand-off, reads the code until the key is ready, and saves it as a connection', async () => {
-  jest.useFakeTimers();
-  const opened = jest.fn();
-  Object.defineProperty(window, 'open', { value: opened, configurable: true });
-  let ready = false;
-  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
-    if (url.startsWith('/api/harness/v1/harnesses')) return ok({ harnesses: [] });
-    if (url === '/api/harness/v1/admin/connect') return ok({ code: 'c1', url: 'https://hosted.example/connect/c1' });
-    if (url === '/api/harness/v1/admin/connect/c1') return ready ? ok({ status: 'ready', api_key: 'hr-key-1', endpoint: 'https://hosted.example/v1', name: 'My account' }) : ok({}, 202);
-    if (url === '/api/harness/v1/admin/integrations' && init?.method === 'PUT') { puts.push(JSON.parse(init.body || '{}')); return ok({}); }
-    return ok(doc);
-  });
+it('omits the removed hosted provider and its key hand-off', async () => {
   await open();
-  await click('Get a key', rowOf('harnessrouter'));
-  expect(opened).toHaveBeenCalledWith('https://hosted.example/connect/c1', '_blank', 'noopener');
-  expect(rowOf('harnessrouter').querySelector('[role="status"] a')?.getAttribute('href')).toBe('https://hosted.example/connect/c1');
-  await act(async () => { await jest.advanceTimersByTimeAsync(HANDOFF_POLL_MS); });
-  expect(puts).toHaveLength(0);
-  ready = true;
-  await act(async () => { await jest.advanceTimersByTimeAsync(HANDOFF_POLL_MS); });
-  const put = lastPut() as { integrations: { name: string; provider: string; config: Record<string, string> }[] };
-  expect(put.integrations).toEqual([{ name: 'My account', provider: 'harnessrouter', models: [], config: { api_key: 'hr-key-1', base_url: 'https://hosted.example/v1' } }]);
+  expect(document.querySelector('[data-provider="harnessrouter"]')).toBeNull();
+  expect(document.getElementById('pvHosted')).toBeNull();
+  expect(text()).not.toContain('获取密钥');
 });

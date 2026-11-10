@@ -116,26 +116,26 @@ export function StartPage() {
     <div className="scroll">
       <div className="sg sg5">
         <header className="sg-head">
-          <p className="sg-eye">Three ways to start</p>
-          <h1 className="sg-q"><label htmlFor="stAsk">What do you want to ship to your users?</label></h1>
+          <p className="sg-eye">三种开始方式</p>
+          <h1 className="sg-q"><label htmlFor="stAsk">你想为用户交付什么？</label></h1>
         </header>
         <div ref={box} className="st-ask-box sg-ask">
-          <textarea ref={ta} id="stAsk" rows={1} placeholder="e.g. Support replies: look up the order, then draft an answer in our tone." value={ask}
+          <textarea ref={ta} id="stAsk" rows={1} placeholder="例如：查询订单，再按我们的语气起草客服回复。" value={ask}
             onChange={(e) => { typeTok.current++; setTypingDemo(null); setAsk(e.target.value); }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); startAsk(); } }} />
           <div className="st-ask-bar">
             <span className="st-ask-n" id="stAskN" />
-            <button ref={go} type="button" className={`btn primary${pulse ? ' pulse' : ''}`} id="stAskGo" disabled={!ask.trim() || typingDemo != null} onClick={startAsk}>Continue</button>
+            <button ref={go} type="button" className={`btn primary${pulse ? ' pulse' : ''}`} id="stAskGo" disabled={!ask.trim() || typingDemo != null} onClick={startAsk}>继续</button>
           </div>
         </div>
         <div className="sg-tiles">
           <section className="tile tile-demo sg-way sg-main" style={{ '--wd': 0 } as CSSProperties} aria-labelledby="sgMainT" onMouseEnter={replay}
             onClick={(e) => { if (!(e.target as HTMLElement).closest('button, a')) focusAsk(); }}>
             <Pic kind="hr" play={play} />
-            <h2 className="sg-tt" id="sgMainT">Start in HarnessRouter</h2>
-            <p className="sg-d"><span className="sg-d1">Choose an agent harness and model, and run a task.</span> <span className="sg-d2">Then your coding agent connects it to your app.</span></p>
+            <h2 className="sg-tt" id="sgMainT">从智能体网关开始</h2>
+            <p className="sg-d"><span className="sg-d1">选择智能体运行环境和模型，执行任务。</span> <span className="sg-d2">然后由编程智能体将它连接到应用。</span></p>
             <div className="sg-ex">
-              <span className="sg-exl">Pick a demo task</span>
+              <span className="sg-exl">选择示例任务</span>
               <div className="td-list">
                 {DEMOS.map((d, i) => (
                   <button key={i} type="button" className={`td${onDemo === i ? ' on' : ''}`} aria-pressed={onDemo === i} title={titleOf(i)} onClick={() => startDemo(i)}>
@@ -148,14 +148,14 @@ export function StartPage() {
           <button type="button" className="tile sg-way sg-side" style={{ '--wd': 1 } as CSSProperties} onMouseEnter={replay} onClick={() => setHand('new')}>
             <Pic kind="build" play={play} />
             <span className="sg-go" aria-hidden="true">›</span>
-            <h2 className="sg-tt">Start in your codebase</h2>
-            <p className="sg-d"><span className="sg-d1">Use the setup guide with your coding agent to build a new agent feature in your app</span> <span className="sg-d2">and connect the app to HarnessRouter.</span></p>
+            <h2 className="sg-tt">从代码库开始</h2>
+            <p className="sg-d"><span className="sg-d1">使用配置指南，在应用中构建智能体功能</span> <span className="sg-d2">并连接到智能体网关。</span></p>
           </button>
           <button type="button" className="tile sg-way sg-side" style={{ '--wd': 2 } as CSSProperties} onMouseEnter={replay} onClick={() => setHand('move')}>
             <Pic kind="move" play={play} />
             <span className="sg-go" aria-hidden="true">›</span>
-            <h2 className="sg-tt">Migrate an existing agent</h2>
-            <p className="sg-d"><span className="sg-d1">Use the migration guide with your coding agent to move your existing agent’s execution to HarnessRouter</span> <span className="sg-d2">while keeping your app and user experience.</span></p>
+            <h2 className="sg-tt">迁移现有智能体</h2>
+            <p className="sg-d"><span className="sg-d1">使用迁移指南，将现有智能体迁移到智能体网关</span> <span className="sg-d2">同时保留现有应用和用户体验。</span></p>
           </button>
         </div>
       </div>

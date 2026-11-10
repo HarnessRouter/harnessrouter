@@ -166,20 +166,20 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
   return (
     <Sheet onClose={onClose} labelledBy="mch" className="small-sheet mcp-sheet mcp-x" busy={busy} initialFocus={nameRef}>
       <SheetTop id="mch" title={server ? 'Edit MCP server' : 'Add MCP server'} onClose={onClose} />
-      <div className="set-f"><label htmlFor="mcName">Name</label>
-        <input id="mcName" ref={nameRef} className={`set-in${bad === 'name' ? ' bad' : ''}`} placeholder="Order lookup" value={name} aria-invalid={bad === 'name' || undefined}
+      <div className="set-f"><label htmlFor="mcName">名称</label>
+        <input id="mcName" ref={nameRef} className={`set-in${bad === 'name' ? ' bad' : ''}`} placeholder="查询订单" value={name} aria-invalid={bad === 'name' || undefined}
           onChange={(e) => { setName(e.target.value); if (bad === 'name') { setBad(''); setSay(''); } }} onKeyDown={enter} /></div>
-      <div className="set-f"><label htmlFor="mcUrl">Endpoint</label>
+      <div className="set-f"><label htmlFor="mcUrl">接口地址</label>
         <input id="mcUrl" ref={urlRef} className={`set-in mono${bad === 'url' ? ' bad' : ''}`} inputMode="url" spellCheck={false} autoComplete="off"
           placeholder="https://mcp.your-api.com/mcp" value={url} aria-invalid={bad === 'url' || undefined}
           onChange={(e) => { setUrl(e.target.value); if (bad === 'url') { setBad(''); setSay(''); } }} onKeyDown={enter} /></div>
-      <div className="set-f"><label htmlFor="mcTok">Bearer token {typedHdr ? <span className="mcp-kind">per-request header</span> : <span className="muted">optional</span>}</label>
+      <div className="set-f"><label htmlFor="mcTok">访问令牌 {typedHdr ? <span className="mcp-kind">每次请求的请求头</span> : <span className="muted">可选</span>}</label>
         <input id="mcTok" className="set-in mono" type={typedHdr ? 'text' : 'password'} autoComplete="off" spellCheck={false}
           placeholder={stored ? 'Stored. Leave empty to keep it.' : 'Paste a token, or $headers.Name'} value={tok}
           aria-describedby={typedHdr ? 'mcTokHelp' : undefined} onChange={(e) => setTok(e.target.value)} onKeyDown={enter} />
         {/* said only once a header reference is typed: what it does differs from a token */}
         {typedHdr ? (
-          <p className="set-help" id="mcTokHelp">Not stored. The value of the <code>{hdrName || 'Name'}</code> header your app sends with each task is passed to this server on every call.</p>
+          <p className="set-help" id="mcTokHelp">不保存，将传递 <code>{hdrName || 'Name'}</code> 应用随任务发送的请求头值。</p>
         ) : null}
         {lacking.length ? (
           <p className="set-help mcp-warn">{lacking.join(', ')} {lacking.length === 1 ? 'does' : 'do'} not take a <code>{hdrName}</code> header yet. Add it in Environment &amp; limits under Headers, or the server gets no token.</p>
@@ -187,23 +187,23 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
         {!typedHdr && offered.length ? (
           <div className="mcp-hdrs" role="group" aria-label="Use a header your app sends">
             {offered.map((h) => (
-              <button key={h} type="button" className="mcp-hdr" onClick={() => setTok(HEADER_REF + h)}>Use the <code>{h}</code> header</button>
+              <button key={h} type="button" className="mcp-hdr" onClick={() => setTok(HEADER_REF + h)}>使用 <code>{h}</code> 请求头</button>
             ))}
           </div>
         ) : null}
       </div>
 
       <div className="mcp-test">
-        <button type="button" className="btn small line" disabled={!url.trim() || !!cur?.busy || busy} onClick={() => void runTest()}>Test connection</button>
+        <button type="button" className="btn small line" disabled={!url.trim() || !!cur?.busy || busy} onClick={() => void runTest()}>测试连接</button>
         <span className={`set-help mcp-st${cur && !cur.busy ? (cur.ok ? ' ok' : ' bad') : ''}`} role="status">
           {cur && !cur.busy ? (cur.ok
-            ? <>Connected{cur.server ? <> to <b>{cur.server}</b></> : null} · {cur.tools.length === 1 ? '1 tool' : `${cur.tools.length} tools`}</>
+            ? <>已连接{cur.server ? <> 到 <b>{cur.server}</b></> : null} · {cur.tools.length === 1 ? '1 tool' : `${cur.tools.length} tools`}</>
             : cur.error) : null}
-          {typedHdr && cur && !cur.busy ? <span className="mcp-st-note"> Tested without a token: the header’s value only comes with each task.</span> : null}
+          {typedHdr && cur && !cur.busy ? <span className="mcp-st-note"> 测试未携带令牌，请求头值仅随实际任务传入。</span> : null}
         </span>
       </div>
       {cur?.busy ? (
-        <Skel label="Testing the connection" className="mcp-tools">
+        <Skel label="正在测试连接" className="mcp-tools">
           {[58, 72, 50].map((w, i) => <div key={i} className="mcp-tool"><SkLine w={`${w * 0.5}%`} h={12} /><SkLine w={`${w}%`} h={10} style={{ marginTop: 6 }} /></div>)}
         </Skel>
       ) : cur && cur.ok && cur.tools.length ? (
@@ -234,27 +234,27 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
                 );
               })}
             </div>
-          ) : <p className="set-help">No setups yet. Make one in Harness Studio first.</p>}
-          {dropping.length ? <p className="set-help mcp-warn">Saving removes it from {dropping.join(', ')}.</p> : null}
+          ) : <p className="set-help">暂无配置，请先在工作台创建。</p>}
+          {dropping.length ? <p className="set-help mcp-warn">保存时将其移出 {dropping.join(', ')}.</p> : null}
         </div>
       ) : null}
 
       {asking ? (
         <div className="mcp-ask" role="alertdialog" aria-labelledby="mcAskT">
-          <span id="mcAskT">Remove <b>{name.trim() || server?.name}</b> from {removeWhere}?{targets ? '' : ' It comes off when you save Settings.'}</span>
+          <span id="mcAskT">移除 <b>{name.trim() || server?.name}</b> 从 {removeWhere}?{targets ? '' : ' It comes off when you save Settings.'}</span>
           <span className="mcp-ask-b">
-            <button type="button" className="btn small" disabled={busy} onClick={() => setAsking(false)}>Keep</button>
-            <button type="button" className="btn small del-go" disabled={busy} onClick={() => void remove()} autoFocus>Remove</button>
+            <button type="button" className="btn small" disabled={busy} onClick={() => setAsking(false)}>保留</button>
+            <button type="button" className="btn small del-go" disabled={busy} onClick={() => void remove()} autoFocus>移除</button>
           </span>
         </div>
       ) : null}
 
       <div className="sheet-actions mcp-act">
-        {server && onRemove && !asking ? <button type="button" className="link-q danger mcp-rm" disabled={busy} onClick={() => { setSay(''); setAsking(true); }}>Remove</button> : null}
+        {server && onRemove && !asking ? <button type="button" className="link-q danger mcp-rm" disabled={busy} onClick={() => { setSay(''); setAsking(true); }}>移除</button> : null}
         <span className={`set-help mcp-say${say ? ' bad' : ''}`} role="status">
           {say}
         </span>
-        <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+        <button type="button" className="btn" disabled={busy} onClick={onClose}>取消</button>
         <button type="button" className="btn primary" disabled={busy || asking} onClick={() => void save()}>{server ? 'Save' : next || 'Add MCP server'}</button>
       </div>
     </Sheet>

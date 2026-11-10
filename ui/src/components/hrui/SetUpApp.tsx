@@ -60,7 +60,7 @@ export function SetUpApp({ r, onClose, kit, kitTitle }: {
             ? `Your coding agent takes the kit’s app from GitHub and changes it. This instance keeps running ${runs} behind it.`
             : `Your coding agent adds ${r.h.name} to your app. This instance runs ${runs} behind it, and every task your app sends shows in its task list.`}</p>
         </div>
-        <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>{X}</button>
+        <button type="button" className="icon-btn" aria-label="关闭" onClick={onClose}>{X}</button>
       </div>
       <div className="hand">
         <ol className="hx">
@@ -69,7 +69,7 @@ export function SetUpApp({ r, onClose, kit, kitTitle }: {
             state={s1 === 'built' ? 'next' : 'empty'} onKey={setKey} entry={keyEntry} />
         </ol>
         <div className="hand-foot">
-          {done ? <span className="grow ok-t">{CHECK}Ready for your coding agent</span> : <span className="grow" />}
+          {done ? <span className="grow ok-t">{CHECK}已为编程智能体准备就绪</span> : <span className="grow" />}
           <button type="button" className="link-q" onClick={onClose}>{done ? 'Done' : 'Close'}</button>
         </div>
       </div>

@@ -1,0 +1,11 @@
+# Files that are executed (or read as directives) inside Linux containers keep LF, whatever
+# platform checks them out. With core.autocrlf on Windows the working tree carried CRLF, so
+# "#!/usr/bin/env bash" resolved to bash\r and the image build died with exit 127; the entrypoint
+# would have failed the same way at container start.
+*.sh                    text eol=lf
+docker/hr-retention     text eol=lf
+Dockerfile              text eol=lf
+Dockerfile.*            text eol=lf
+docker/*.Dockerfile*    text eol=lf
+# pip --require-hashes reads these line by line; a trailing CR becomes part of the hash token.
+docker/locks/*          text eol=lf

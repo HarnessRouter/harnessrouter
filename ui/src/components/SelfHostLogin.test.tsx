@@ -38,17 +38,17 @@ test('the card has the instance’s two fields, and nothing a box without accoun
   await open('/start');
   expect(document.getElementById('sh-user')?.getAttribute('autocomplete')).toBe('username');
   expect(document.getElementById('sh-pass')?.getAttribute('type')).toBe('password');
-  expect(el.querySelector('#hrui .au-card h1')?.textContent).toBe('Sign in');
+  expect(el.querySelector('#hrui .au-card h1')?.textContent).toBe('登录');
   expect(text()).not.toMatch(/Google|Microsoft|Create account|Forgot password|Sign up/i);
 });
 
 test('an empty field is said under it and nothing is sent', async () => {
   await open('/start');
   await submit();
-  expect(document.getElementById('sh-userMsg')?.textContent).toBe('Enter your username.');
+  expect(document.getElementById('sh-userMsg')?.textContent).toBe('请输入用户名。');
   await type('sh-user', 'admin');
   await submit();
-  expect(document.getElementById('sh-passMsg')?.textContent).toBe('Enter your password.');
+  expect(document.getElementById('sh-passMsg')?.textContent).toBe('请输入密码。');
   expect(fetchMock).not.toHaveBeenCalled();
 });
 

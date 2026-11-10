@@ -10,6 +10,8 @@
 // the address the workspace's Entra application lists (/plugins, which opens here with the code and
 // state it carries), and this tab finishes the sign-in.
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { CreatePluginSheet } from './CreatePluginSheet';
+import type { CustomHarness } from '@/lib/harness';
 import { microsoftComplete, setPlug } from '@/lib/plugs';
 import { toast } from '../toast';
 import { ConfirmSheet } from '../Sheet';
@@ -39,9 +41,10 @@ function forgetReturn() {
   window.history.replaceState(window.history.state, '', window.location.pathname + (qs ? `?${qs}` : ''));
 }
 
-export function PluginsTab({ data, workspace }: { data: PluginsData; workspace: string }) {
+export function PluginsTab({ data, workspace, setups = null, reloadSetups = async () => {} }: { data: PluginsData; workspace: string; setups?: CustomHarness[] | null; reloadSetups?: () => Promise<void> }) {
   const { plugs, uses, reload } = data;
   const [q, setQ] = useState('');
+  const [creating, setCreating] = useState(false);
   const [off, setOff] = useState<Row | null>(null);
   const [finishing, setFinishing] = useState(false);
   const { busy, setBusy, connect, manage, sheet } = usePlugConnect(reload);
@@ -85,20 +88,21 @@ export function PluginsTab({ data, workspace }: { data: PluginsData; workspace: 
 
   return (
     <>
+      <div className="sheet-actions"><button type="button" className="btn primary" disabled={!workspace} onClick={() => setCreating(true)}>创建插件</button></div>
       <div className="pl-q" role="search">
         {SEARCH}
-        <input className="dd-q" type="search" value={q} autoComplete="off" spellCheck={false} placeholder="Search plugins" aria-label="Search plugins"
+        <input className="dd-q" type="search" value={q} autoComplete="off" spellCheck={false} placeholder="搜索插件" aria-label="搜索插件"
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape' && q) { e.preventDefault(); setQ(''); } }} />
       </div>
 
       {data.failed ? <ReadFailed what="plugins" retry={data.retry} /> : null}
-      {finishing ? <p className="pl-note" role="status">Finishing your sign-in with Microsoft…</p> : null}
-      {loading ? <Skel label="Loading the plugins"><SkRows n={4} /></Skel> : null}
+      {finishing ? <p className="pl-note" role="status">正在完成 Microsoft 登录…</p> : null}
+      {loading ? <Skel label="正在加载插件"><SkRows n={4} /></Skel> : null}
 
       {read && (!searching || shownConnected.length) ? (
         <section className="pl-sec" aria-labelledby="pl-con-h">
           {/* the count is of the rows under it: all of them, or the ones the search finds */}
-          <h2 className="pl-h" id="pl-con-h">Connected <span className="count">{searching ? shownConnected.length : connected.length}</span></h2>
+          <h2 className="pl-h" id="pl-con-h">已连接 <span className="count">{searching ? shownConnected.length : connected.length}</span></h2>
           {shownConnected.length ? (
             <div className="rows">
               {shownConnected.map((r) => {
@@ -115,21 +119,21 @@ export function PluginsTab({ data, workspace }: { data: PluginsData; workspace: 
                     </span>
                     <span className="lib-act">
                       {lapsed
-                        ? <button type="button" className="btn small" disabled={busy === r.key || !workspace} onClick={() => manage(r)}>Reconnect</button>
-                        : <button type="button" className="btn small line" disabled={busy === r.key || !workspace} onClick={() => manage(r)}>Manage</button>}
-                      <button type="button" className="link-q danger" disabled={busy === r.key} onClick={() => setOff(r)}>Disconnect</button>
+                        ? <button type="button" className="btn small" disabled={busy === r.key || !workspace} onClick={() => manage(r)}>重新连接</button>
+                        : <button type="button" className="btn small line" disabled={busy === r.key || !workspace} onClick={() => manage(r)}>管理</button>}
+                      <button type="button" className="link-q danger" disabled={busy === r.key} onClick={() => setOff(r)}>断开连接</button>
                     </span>
                   </div>
                 );
               })}
             </div>
-          ) : <div className="empty-list pl-empty">Nothing connected yet. Connect a plugin below.</div>}
+          ) : <div className="empty-list pl-empty">尚未连接，请在下方连接插件。</div>}
         </section>
       ) : null}
 
       {read ? (
         <section className="pl-sec" aria-labelledby="pl-all-h">
-          <h2 className="pl-h" id="pl-all-h">Available</h2>
+          <h2 className="pl-h" id="pl-all-h">可用</h2>
           {tiles.length ? (
             <ul className="pl-grid" aria-label="Plugins you can connect">
               {tiles.map((r) => (
@@ -146,10 +150,12 @@ export function PluginsTab({ data, workspace }: { data: PluginsData; workspace: 
         </section>
       ) : null}
 
+      {setups?.some((setup) => setup.plugins?.length) ? <section className="pl-sec"><h2 className="pl-h">自定义插件</h2><div className="rows">{setups.flatMap((setup) => (setup.plugins || []).map((plugin) => <div className="row" key={`${setup.id}:${plugin.name}`}><span className="grow"><b>{plugin.name}</b><small className="sub2">{plugin.manifest?.description} · {setup.name}</small></span></div>))}</div></section> : null}
+      {creating ? <CreatePluginSheet key={workspace} setups={setups} onCreated={async () => { await reloadSetups(); toast('插件已创建并安装。'); }} onClose={() => setCreating(false)} /> : null}
       {sheet}
 
       {off ? (
-        <ConfirmSheet id="ld" title={`Disconnect ${off.name}`} confirmLabel="Disconnect" busy={busy === off.key}
+        <ConfirmSheet id="ld" title={`Disconnect ${off.name}`} confirmLabel="断开连接" busy={busy === off.key}
           onClose={() => setOff(null)} onConfirm={() => void disconnect(off)}
           body={offUsers && offUsers.length
             ? <><b>{offUsers.slice(0, 3).join(', ')}{offUsers.length > 3 ? ` and ${offUsers.length - 3} more` : ''}</b> {offUsers.length === 1 ? 'uses' : 'use'} it. Their tasks lose access to {off.name} until you connect it again.</>

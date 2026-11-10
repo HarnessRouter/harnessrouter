@@ -3431,3 +3431,7 @@
   #hrui .set-split .lg-del.m:where(:not(.hrui-legacy *)){display:inline-block;margin-top:28px}
 }
 @media (max-width:700px){#hrui .ag-bar .ag-name:where(:not(.hrui-legacy *)){max-width:52vw}#hrui .ag-l2:where(:not(.hrui-legacy *)){max-width:calc(100vw - 140px)}#hrui .ag-l2 .sep-id:where(:not(.hrui-legacy *)),#hrui .ag-l2 .ag-hid:where(:not(.hrui-legacy *)){display:none}}
+
+#hrui .gateway-mark{display:grid;place-items:center;width:28px;height:28px;line-height:0}#hrui .gateway-mark img{display:block;width:28px;height:28px}#hrui .hexa-brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.01em}#hrui .hexa-brand img{display:block}
+
+#hrui .pv-model-discovery{display:flex;align-items:center;gap:10px;width:100%}#hrui .pv-model-discovery>.set-in{flex:1;min-width:0;width:0}#hrui .pv-model-discovery>.btn{flex:none;white-space:nowrap}

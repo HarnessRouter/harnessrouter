@@ -2765,9 +2765,12 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
     checkpoint even when the sandbox still holds it (a recycle on purpose)."""
     params = {}
     v = await _vertex_get(sid) or {}          # single durable read: blackboard room + checkpoint sha
+    environment_id = (rec.get("environment") or {}).get("id") or v.get("environment")
+    if environment_id:
+        params["environment"] = str(environment_id)
     room = (v.get("brain_room") or None) if COLLAB_URL else None
     if COLLAB_URL and room:
-        params = {"collab_url": COLLAB_URL, "room": room, "collab_token": COLLAB_TOKEN}
+        params.update({"collab_url": COLLAB_URL, "room": room, "collab_token": COLLAB_TOKEN})
     try:
         # Instant resume on a warm sandbox: if the sandbox still holds EXACTLY the last
         # checkpoint (sha marker kept by the runner), skip the blob download and the full
@@ -5057,7 +5060,7 @@ def uhp_discovery() -> dict:
             # The version this build IS (baked by the release workflow). "dev" for a build that
             # was never released, which is the honest answer: the literal that used to sit here
             # went stale and told every client 0.3.0 six releases later.
-            "implementation": {"name": "HarnessRouter Community Edition",
+            "implementation": {"name": "智能体网关",
                                "version": os.environ.get("HR_VERSION") or "dev"}}
 
 
@@ -5975,7 +5978,7 @@ _PROVIDER_CATALOG: dict[str, dict] = {
     # endpoint fixed by this gateway (the person never types it). The key comes from the hosted
     # "get a key" flow through /v1/admin/connect, or is pasted. Keys read sk-hr-<64 hex>.
     "harnessrouter": {
-        "label": "HarnessRouter API",
+        "label": "云端模型 API",
         "base_url": HR_HOSTED_PROVIDER_BASE,
         "fields": [],
         "secret": "api_key",
@@ -6232,6 +6235,8 @@ def _provider_catalog_public() -> list[dict]:
     """The catalog the console renders its Add-Integration form from."""
     out = []
     for pid, meta in _PROVIDER_CATALOG.items():
+        if pid == "harnessrouter":
+            continue
         backends = _provider_backends(pid)
         out.append({"id": pid,
                     "label": meta["label"],
@@ -6447,6 +6452,64 @@ async def admin_connect_poll(code: str, request: Request):
                       "balance_url": balance_url, "org": j.get("org") or "", "name": str(j.get("name") or ""),
                       "models": list(_HOSTED_MODELS["ids"])}
     return entry["ready"]
+
+
+class DiscoverModelsBody(BaseModel):
+    base_url: str
+    api_key: str = ""
+    api_format: str = "openai"
+    integration_name: str = ""
+
+
+@app.post("/v1/admin/integrations/models")
+async def admin_integration_models(body: DiscoverModelsBody, request: Request) -> dict:
+    await _require_integrations_admin(request)
+    from urllib.parse import urlsplit, urlunsplit
+    base = body.base_url.strip().rstrip("/")
+    parsed = urlsplit(base)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(400, "请输入有效的 HTTP 或 HTTPS 接口地址。")
+    key = body.api_key.strip()
+    if key == _SECRET_SENTINEL:
+        prior = next((i for i in await _integrations_doc()
+                      if i.get("name") == body.integration_name and i.get("provider") == "custom"), None)
+        cfg = (prior or {}).get("config") or {}
+        if str(cfg.get("base_url") or "").strip().rstrip("/") != base:
+            raise HTTPException(400, "接口地址已改变，请重新输入密钥。")
+        key = str(cfg.get("api_key") or "")
+    route = parsed.path.rstrip("/")
+    for suffix in ("/chat/completions", "/responses", "/messages", "/models"):
+        if route.endswith(suffix):
+            route = route[:-len(suffix)]
+            break
+    if not route:
+        route = "/v1"
+    url = urlunsplit((parsed.scheme, parsed.netloc, route + "/models", "", ""))
+    blocked = await _ssrf_check(url)
+    if blocked:
+        raise HTTPException(400, "此接口地址不可访问。")
+    headers = {"accept": "application/json"}
+    if key:
+        if body.api_format == "anthropic":
+            headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
+        else:
+            headers["authorization"] = f"Bearer {key}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            response = await client.get(url, headers=headers)
+        if response.status_code >= 300:
+            raise HTTPException(502, f"获取模型列表失败（HTTP {response.status_code}），请检查地址和密钥。")
+        payload = response.json()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "无法读取模型列表，请检查接口是否支持 GET /models。")
+    entries = payload.get("data", payload.get("models", [])) if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        raise HTTPException(502, "接口返回的模型列表格式无效。")
+    models = sorted({str(item.get("id") or "").strip() if isinstance(item, dict) else item.strip()
+                     for item in entries if isinstance(item, (dict, str))} - {""})
+    return {"models": models}
 
 
 class IntegrationsBody(BaseModel):
@@ -9569,6 +9632,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # that comes after waits, reads the session again under the lock, and is refused (_ws_busy_now).
     # In this process only, like the lock itself.
     async with _ws_change_lock(sid):
+        if environment:
+            rec["environment"] = environment
         await _hydrate(sid, rec)
     if rec.get("hydrate_failed_with_checkpoint"):
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
@@ -22637,8 +22702,8 @@ def _openapi_public() -> dict:
             if not r.include_in_schema:
                 continue
             routes.append(r)
-        doc = get_openapi(title="HarnessRouter API", version="1", routes=routes,
-                          description=("The HarnessRouter API: run a harness (an OpenAI Responses-compatible surface "
+        doc = get_openapi(title="智能体网关 API", version="1", routes=routes,
+                          description=("智能体网关 API：运行智能体（兼容 OpenAI Responses 接口） "
                                        "at /v1/responses), attach files, read sessions, turns and produced files, "
                                        "manage harnesses, keys and provider connections. Authenticate with an API "
                                        "key or a login token as a bearer."))
@@ -22654,7 +22719,7 @@ async def openapi_public() -> dict:
 @app.get("/v1/docs", include_in_schema=False)
 async def openapi_docs():
     from fastapi.openapi.docs import get_swagger_ui_html
-    return get_swagger_ui_html(openapi_url="/v1/openapi.json", title="HarnessRouter API")
+    return get_swagger_ui_html(openapi_url="/v1/openapi.json", title="智能体网关 API")
 
 
 @app.get("/v1/bases")

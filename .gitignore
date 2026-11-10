@@ -4,6 +4,9 @@ node_modules/
 .hr-data/
 __pycache__/
 *.pyc
+session-router.db*
+session-router/*.db*
+*.db.snapshots/
 .env
 .env.local
 .DS_Store

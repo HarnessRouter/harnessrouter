@@ -414,15 +414,15 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
     harness: <>
       {/* the Harness ID first, read only: what a task names to reach this setup (it left the page's bar) */}
       <div className="set-f">
-        <span className="set-lb" id="setHidL">Harness ID</span>
+        <span className="set-lb" id="setHidL">智能体 ID</span>
         <div className="set-ro set-hid" role="group" aria-labelledby="setHidL">
           <code className="mono" title={id}>{id}</code>
-          <button type="button" className="icon-btn xs" aria-label="Copy Harness ID" title="Copy Harness ID" onClick={() => void copyId(id)}>{COPY}</button>
+          <button type="button" className="icon-btn xs" aria-label="复制智能体 ID" title="复制智能体 ID" onClick={() => void copyId(id)}>{COPY}</button>
         </div>
       </div>
       {field('setName', 'Name', <input id="setName" className="set-in" value={c.name} aria-invalid={inv('setName')} onChange={(e) => set('name', e.target.value)} />)}
       {field('setHarness', 'Agent harness',
-        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>)}
+        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}保存后固定</span></div>)}
       {sub('Model', '', null, <>
         {field('setModel', 'Default model',
           <select id="setModel" className="set-in" value={c.model} onChange={(e) => set('model', e.target.value)}>
@@ -432,10 +432,10 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
               return <option key={m} value={m}>{m}{keyOf(m) ? ' · your key' : ''}{note ? ` · ${note}` : ''}</option>;
             })}
           </select>,
-          catalog.failed ? <>The models could not be read just now.{' '}<button type="button" className="link-q inl" onClick={catalog.retry}>Try again</button></> : undefined)}
+          catalog.failed ? <>暂时无法读取模型。{' '}<button type="button" className="link-q inl" onClick={catalog.retry}>重试</button></> : undefined)}
         {levels.length || c.thinking ? field('setThinking', 'Reasoning effort',
           <select id="setThinking" className="set-in" value={c.thinking} onChange={(e) => set('thinking', e.target.value)}>
-            <option value="">Model default</option>
+            <option value="">默认模型</option>
             {(keptLevel ? [...levels, c.thinking] : levels).map((lv) => <option key={lv} value={lv}>{thinkingLabel(lv)}</option>)}
           </select>,
           keptLevel ? 'This model does not have that level. Its tasks get the nearest one it has.' : undefined) : null}
@@ -476,7 +476,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
             onManagePackage={(name) => setPop({ k: 'pkg', name })} onConnect={() => setPop({ k: 'plugin' })}
             reload={ws.reload} />
         </> : capT === 'skill' ? (
-          !takesSkills ? <p className="set-help" style={{ margin: 0 }}>{r.baseName} doesn’t use skills.</p>
+          !takesSkills ? <p className="set-help" style={{ margin: 0 }}>{r.baseName} 不支持技能。</p>
             : skillList.length ? (
               <div className="cap-list">
                 {skillList.map((x) => {
@@ -487,7 +487,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
                         <span className="cap-ic" dangerouslySetInnerHTML={brick(on)} />
                         <span className="grow"><b>{x.name}</b><small>{b.description || `Built into ${r.baseName}`}</small></span>
                         <button type="button" className="link-q" disabled={!!busy}
-                          onClick={() => setPop({ k: 'skill', ed: skillDraft(null, b.name, [{ path: 'SKILL.md', content: `---\nname: ${b.name}\ndescription: ${JSON.stringify(b.description || '')}\n---\n\n` }]) })}>Replace</button>
+                          onClick={() => setPop({ k: 'skill', ed: skillDraft(null, b.name, [{ path: 'SKILL.md', content: `---\nname: ${b.name}\ndescription: ${JSON.stringify(b.description || '')}\n---\n\n` }]) })}>替换</button>
                         {tog(on, x.name, () => toggleBuiltin(b), !!busy)}
                       </div>
                     );
@@ -501,8 +501,8 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
                     <div key={x.key} className={`cap-row cap-mcp${on ? '' : ' off'}`} hidden={!found(s.name, small)}>
                       <span className="cap-ic" dangerouslySetInnerHTML={brick(on)} />
                       <span className="grow"><b>{s.name}</b>{small ? <small>{small}</small> : null}</span>
-                      <button type="button" className="link-q" data-editmcp="" disabled={!!busy} onClick={() => void openSkill(s)}>Edit</button>
-                      <button type="button" className="link-q danger" data-delrow="" aria-label={`Delete ${s.name}`} disabled={!!busy} onClick={() => setPop({ k: 'delskill', s })}>Delete</button>
+                      <button type="button" className="link-q" data-editmcp="" disabled={!!busy} onClick={() => void openSkill(s)}>编辑</button>
+                      <button type="button" className="link-q danger" data-delrow="" aria-label={`Delete ${s.name}`} disabled={!!busy} onClick={() => setPop({ k: 'delskill', s })}>删除</button>
                       {tog(on, s.name, () => void apply((h) => ({ skills: (h.skills || []).map((x) => (idOf(x) === idOf(s) ? { ...x, enabled: !on } : x)) }), 'The skill was not changed. Try again.'), !!busy)}
                       <i className="cap-br" aria-hidden="true" />
                     </div>
@@ -519,7 +519,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
                 return (
                 <div key={x.key} className={`cap-row${on ? '' : ' off'}`} hidden={!found(t.name)}>
                   <span className="cap-ic" dangerouslySetInnerHTML={brick(on)} />
-                  <span className="grow"><b className="mono">{t.name}</b>{t.enforcement === 'instruction' ? <small>Off asks the agent not to use it.</small> : null}</span>
+                  <span className="grow"><b className="mono">{t.name}</b>{t.enforcement === 'instruction' ? <small>关闭后智能体将不使用此项。</small> : null}</span>
                   {tog(on, t.name, () => set('tools', on ? [...c.tools, t.name] : c.tools.filter((n) => n !== t.name)))}
                 </div>
                 );
@@ -528,9 +528,9 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
               return (
                 <div key={x.key} className={`cap-row cap-mcp${on ? '' : ' off'}`} hidden={!found(nm, m.url)}>
                   <span className="cap-ic" dangerouslySetInnerHTML={brick(on)} />
-                  <span className="grow"><b>{nm}</b><small>Custom MCP · <span className="mono">{urlBreaks(m.url || 'endpoint')}</span></small></span>
-                  <button type="button" className="link-q" data-editmcp={i} onClick={() => setPop({ k: 'mcp', i })}>Edit</button>
-                  <button type="button" className="link-q danger" data-delrow={`mcp:${i}`} aria-label={`Delete ${nm}`} onClick={() => setPop({ k: 'delmcp', i })}>Delete</button>
+                  <span className="grow"><b>{nm}</b><small>自定义 MCP · <span className="mono">{urlBreaks(m.url || 'endpoint')}</span></small></span>
+                  <button type="button" className="link-q" data-editmcp={i} onClick={() => setPop({ k: 'mcp', i })}>编辑</button>
+                  <button type="button" className="link-q danger" data-delrow={`mcp:${i}`} aria-label={`Delete ${nm}`} onClick={() => setPop({ k: 'delmcp', i })}>删除</button>
                   {tog(on, nm, () => set('mcp', c.mcp.map((x, k) => (k === i ? { ...x, enabled: !on } : x))))}
                   <i className="cap-br" aria-hidden="true" />
                 </div>
@@ -538,7 +538,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
             })}
           </div>
         )}
-        {capQ.trim() && !capHits && capT !== 'plugin' ? <p className="set-help cap-none">Nothing matches.</p> : null}
+        {capQ.trim() && !capHits && capT !== 'plugin' ? <p className="set-help cap-none">没有匹配项。</p> : null}
       </div>
     </>,
     runtime: <>
@@ -550,16 +550,16 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           <span className="grow">
             <b>{envX ? envX.name : rec.environment ? (envs === null ? (envsFailed ? 'Environment' : '') : 'Not found') : 'None'}</b>
             {srv?.takesEnvironments === false
-              ? <small className="warn">{r.baseName} can’t use an environment. Remove it, or every task on this setup is refused.</small>
+              ? <small className="warn">{r.baseName} 不支持执行环境，请移除环境后再运行任务。</small>
               : envX ? (envX.status === 'ready' ? (envX.description ? <small>{envX.description}</small> : null)
-                : <small className="warn">It has no built version yet, so tasks on this setup are refused until it is built.</small>)
-                : rec.environment ? (envs === null ? (envsFailed ? <small className="warn">Your environments could not be read just now.</small> : null)
-                  : <small className="warn">This environment is no longer there. Choose another or none.</small>)
+                : <small className="warn">尚无构建完成的版本，请完成构建后再运行任务。</small>)
+                : rec.environment ? (envs === null ? (envsFailed ? <small className="warn">暂时无法读取环境。</small> : null)
+                  : <small className="warn">此环境已不存在，请选择其他环境或清空。</small>)
                   : null}
           </span>
-          {envsFailed && envs === null ? <button type="button" className="link-q" onClick={readEnvs}>Try again</button> : null}
+          {envsFailed && envs === null ? <button type="button" className="link-q" onClick={readEnvs}>重试</button> : null}
           {srv?.takesEnvironments === false
-            ? <button type="button" className="btn small line" disabled={!!busy} onClick={() => void apply(() => ({ environment: '' }), 'The environment was not changed. Try again.')}>Remove</button>
+            ? <button type="button" className="btn small line" disabled={!!busy} onClick={() => void apply(() => ({ environment: '' }), 'The environment was not changed. Try again.')}>移除</button>
             : <button type="button" className="btn small line" onClick={() => setPop({ k: 'env' })}>{rec.environment ? 'Change' : 'Choose'}</button>}
         </div></div>)}
       {sub('Environment variables', c.vars.length ? String(c.vars.length) : '', addBtn('Add variable', () => { focusNext.current = `setVar${c.vars.length}`; set('vars', [...c.vars, { name: '', value: '' }]); }),
@@ -582,7 +582,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
               ))}
             </div>
           ) : null}
-          {c.vars.length ? <p className="set-help">Use a reference, never the secret itself: <code>$headers.X-Api-Key</code> or <code>secret:name</code>.</p> : null}
+          {c.vars.length ? <p className="set-help">使用密钥引用 <code>$headers.X-Api-Key</code> 或 <code>secret:name</code>.</p> : null}
         </>)}
       {sub('Request headers', c.headers.length ? String(c.headers.length) : '', addBtn('Add header', () => { focusNext.current = `setHdr${c.headers.length}`; set('headers', [...c.headers, '']); }),
         <>
@@ -618,7 +618,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
         onKeyDown={(e) => tabKeys(e, LAYER_ORDER, Ly, onLayer, { orientation: 'vertical' })}>
         {SET_LAYERS.map(([k, label]) => (
           <button key={k} type="button" className={`ly-n${k === Ly ? ' on' : ''}`} role="tab" aria-selected={k === Ly} tabIndex={k === Ly ? 0 : -1} aria-controls="lgEd" onClick={() => onLayer(k)}>
-            <b>{label}{dirtyL(k) ? <span className="brk-dot" title="Unsaved changes" /> : null}</b><small>{SUM[k]}</small>
+            <b>{label}{dirtyL(k) ? <span className="brk-dot" title="未保存的更改" /> : null}</b><small>{SUM[k]}</small>
           </button>
         ))}
       </div>
@@ -634,13 +634,13 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
 
   // the save bar sits in the open layer's 56 px bar, on the right of its name (savebarHtml)
   const savebar = dirty ? (
-    <div className="savebar" id="savebar"><span className="sv-st"><i aria-hidden="true" />Unsaved changes</span>
-      <button type="button" className="btn small sv-b" disabled={busy === 'save'} onClick={discard}>Discard</button>
-      <button type="button" className="btn small sv-ink" disabled={busy === 'save'} onClick={() => void save()}>Save</button>
+    <div className="savebar" id="savebar"><span className="sv-st"><i aria-hidden="true" />未保存的更改</span>
+      <button type="button" className="btn small sv-b" disabled={busy === 'save'} onClick={discard}>放弃</button>
+      <button type="button" className="btn small sv-ink" disabled={busy === 'save'} onClick={() => void save()}>保存</button>
     </div>
   ) : justSaved ? (
-    <div className="savebar" id="savebar"><span className="sv-st ok"><i aria-hidden="true" />Saved</span>
-      {onNewTask ? <button type="button" className="btn small sv-b" onClick={onNewTask}>New task</button> : null}
+    <div className="savebar" id="savebar"><span className="sv-st ok"><i aria-hidden="true" />已保存</span>
+      {onNewTask ? <button type="button" className="btn small sv-b" onClick={onNewTask}>新建任务</button> : null}
     </div>
   ) : <div className="savebar-none" id="savebar" />;
 
@@ -654,9 +654,9 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   // layer.
   const delRow = (where: 'rail' | 'foot') => (
     <div className="lg-dz" data-where={where}>
-      <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete setup</b></button>
-      <button type="button" className="ly-n lg-dup" aria-haspopup="dialog" title="Duplicate with another agent harness"
-        onClick={() => setPop({ k: 'dup' })}><b>Duplicate</b></button>
+      <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>删除配置</b></button>
+      <button type="button" className="ly-n lg-dup" aria-haspopup="dialog" title="使用其他运行环境创建副本"
+        onClick={() => setPop({ k: 'dup' })}><b>创建副本</b></button>
     </div>
   );
 
@@ -665,7 +665,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   return (
     <div className="lg-set">
       <div className="lg-left">
-        <div className="lg-lbar"><span>These settings apply to every task.</span></div>
+        <div className="lg-lbar"><span>这些设置适用于所有任务。</span></div>
         <div className="lg-rows">{stack}{delRow('rail')}</div>
       </div>
       <div className="lg-ed" id="lgEd" role="tabpanel" aria-label={layerName}>
@@ -697,8 +697,8 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           onRemove={pop.i != null ? async () => { const i = pop.i; set('mcp', c.mcp.filter((_, k) => k !== i)); setPop(null); return ''; } : undefined} />
       ) : null}
       {pop?.k === 'delmcp' && c.mcp[pop.i] ? (
-        <ConfirmSheet id="dmc" title="Remove MCP server?" confirmLabel="Remove" focusConfirm
-          body={<><b>{c.mcp[pop.i].name || 'This MCP server'}</b> comes off this setup when you save.</>}
+        <ConfirmSheet id="dmc" title="移除 MCP 服务器？" confirmLabel="移除" focusConfirm
+          body={<><b>{c.mcp[pop.i].name || 'This MCP server'}</b> 将在保存时从配置中移除。</>}
           onClose={() => setPop(null)} onConfirm={() => { const i = pop.i; set('mcp', c.mcp.filter((_, k) => k !== i)); setPop(null); }} />
       ) : null}
       {pop?.k === 'plugin' && included !== undefined ? (
@@ -720,7 +720,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       ) : null}
       {pop?.k === 'delskill' ? (
         <ConfirmSheet id="sdl" title={`Delete skill · ${pop.s.name}`} confirmLabel="Delete skill" busy={!!busy} onClose={() => setPop(null)}
-          body={<>From its next task, <b>{rec.name}</b> stops following it. This can’t be undone.</>}
+          body={<>从下次任务开始， <b>{rec.name}</b> stops following it. This can’t be undone.</>}
           onConfirm={() => { const s = pop.s; void apply((h) => ({ skills: (h.skills || []).filter((x) => idOf(x) !== idOf(s)) }), 'The skill was not deleted. Try again.').then((ok) => { if (ok) { setPop(null); toast('Skill deleted.'); } }); }} />
       ) : null}
       {pop?.k === 'del' ? (

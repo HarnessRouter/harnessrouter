@@ -3,7 +3,7 @@
 // setup New setup composed, put together brick by brick, at the top of its first task's
 // conversation. A brick lands when the call that saves it has answered, never on a timer of its own:
 // the agent harness, the model and the instructions with the harness itself; the skills with it too
-// (they are saved in the same record); each plugin when its attach answers. HarnessRouter's included
+// (they are saved in the same record); each plugin when its attach answers. 智能体网关's included
 // parts are the platform's own features, the same for every harness, so they are on as soon as the
 // harness exists; they land one after another only so the eye can follow (a few tenths of a second,
 // after the save that made them true). Reopened later, the card is drawn from the setup's record
@@ -58,7 +58,7 @@ export function withRecord(s: AssemblyState, r: SetupRow | null | undefined): As
 }
 
 /** The card a saved setup's record draws, settled: its agent harness, model and instructions, the
- *  parts HarnessRouter runs, and what a person added that is on (its skills, tools and plugins,
+ *  parts 智能体网关 runs, and what a person added that is on (its skills, tools and plugins,
  *  setup/setupParts.ts scope 'added', plugins by their names where they are known: `labels`, the
  *  workspace plugins' names by type). */
 export function assemblyOfRow(r: SetupRow, labels: Record<string, string> = {}): AssemblyState {
@@ -103,11 +103,11 @@ export function Assembly({ s }: { s: AssemblyState }) {
   const still = s.done && saved && Date.now() - (s.savedAt as number) > SETTLED_MS;
   const g1: ReactNode[] = [
     <Chip still={still} key="h" fam="harness" lab="Agent harness" name={cfg.baseName} tip={`Agent harness: ${cfg.baseName}`} look={saved ? 'on' : 'now'} />,
-    <Chip still={still} key="m" fam="model" lab="Model" name={cfg.model} tip={`Model: ${cfg.model}`} look={saved ? 'on' : 'now'} delay={saved ? STAGGER_MS : 0} />,
-    <Chip still={still} key="i" fam="task" lab="Instructions" name={cutWords(cfg.instructions)} tip={`Instructions: ${cfg.instructions}`} look={saved ? 'on' : 'now'} delay={saved ? 2 * STAGGER_MS : 0} />,
+    <Chip still={still} key="m" fam="模型" lab="Model" name={cfg.model} tip={`Model: ${cfg.model}`} look={saved ? 'on' : 'now'} delay={saved ? STAGGER_MS : 0} />,
+    <Chip still={still} key="i" fam="任务" lab="Instructions" name={cutWords(cfg.instructions)} tip={`Instructions: ${cfg.instructions}`} look={saved ? 'on' : 'now'} delay={saved ? 2 * STAGGER_MS : 0} />,
   ];
   const included = SUBS.map(([k, , label], i) => (
-    <Chip still={still} key={k} fam="backend" name={label} tip={`${label}, run by HarnessRouter`} look={saved ? 'on' : 'wait'} delay={(3 + i) * STAGGER_MS} />
+    <Chip still={still} key={k} fam="backend" name={label} tip={`${label}, 由智能体网关运行`} look={saved ? 'on' : 'wait'} delay={(3 + i) * STAGGER_MS} />
   ));
   const late = (3 + SUBS.length) * STAGGER_MS;
   const g3: ReactNode[] = [];
@@ -141,7 +141,7 @@ export function Assembly({ s }: { s: AssemblyState }) {
       </div>
       <div className="bs-board">
         <div className="bs-grid bs-g1">{g1}</div>
-        <span className="bs-gl">HarnessRouter · included</span>
+        <span className="bs-gl">智能体网关 · 已包含</span>
         <div className="bs-grid">{included}</div>
         {g3.length ? <div className="bs-grid bs-g3">{g3}</div> : null}
       </div>

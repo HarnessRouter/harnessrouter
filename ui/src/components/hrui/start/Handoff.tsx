@@ -137,15 +137,15 @@ export function Handoff({ kind, onClose }: { kind: HandKind; onClose: () => void
   const since = h.keyAt ? Math.max(0, Math.round((Date.now() - h.keyAt) / 60e3)) : null;
   const s2 = mv ? (
     <div className="hx-bub me"><span id="moveLine" ref={moveLine}>{MOVE_LINE}</span>
-      <button type="button" className="icon-btn xs" aria-label="Copy this line" title="Copy" onClick={() => void copyFrom(MOVE_LINE, moveLine.current)}>{COPY}</button>
+      <button type="button" className="icon-btn xs" aria-label="Copy this line" title="复制" onClick={() => void copyFrom(MOVE_LINE, moveLine.current)}>{COPY}</button>
     </div>
   ) : (
     <div className="hx-bub me hx-ex" aria-label={`For example: ${HX_SAMPLES[0]}`}>
-      <span className="hx-eg" aria-hidden="true">e.g.</span>
+      <span className="hx-eg" aria-hidden="true">例如</span>
       <span className="hx-exs">{HX_SAMPLES.map((t, i) => <span key={i} className="hx-exl" style={{ '--i': i } as CSSProperties} aria-hidden="true">{t}</span>)}</span>
     </div>
   );
-  const s3 = since == null ? null : <span className="hx-live"><i className="dot run" />Started {since < 1 ? 'just now' : `${since} min ago`}</span>;
+  const s3 = since == null ? null : <span className="hx-live"><i className="dot run" />开始时间 {since < 1 ? 'just now' : `${since} min ago`}</span>;
   const checks: [boolean, string, string][] = mv
     ? [[made.length > 0, 'Saves a setup per feature', made.length ? `${made.length} created` : ''], [ok, 'Checks each with a real task', made.length ? `${conn} of ${made.length} connected` : '']]
     : [[!!a, 'Saves the setup', a ? a.id : ''], [ok, 'Checks it with a real task', ok ? 'Connected' : '']];
@@ -158,7 +158,7 @@ export function Handoff({ kind, onClose }: { kind: HandKind; onClose: () => void
           <div key={i} className={`hs${x[0] ? ' on' : i === cur ? ' busy' : ''}`}><i>{x[0] ? CHECK : null}</i><span>{x[1]}</span><small>{x[2]}</small></div>
         ))}
       </div>
-      {ok || !(d1 && d4) ? null : <div className="hx-wait"><button type="button" className="btn small primary" onClick={toList}>Go to Harness Studio →</button></div>}
+      {ok || !(d1 && d4) ? null : <div className="hx-wait"><button type="button" className="btn small primary" onClick={toList}>前往工作台 →</button></div>}
     </>
   );
 
@@ -168,7 +168,7 @@ export function Handoff({ kind, onClose }: { kind: HandKind; onClose: () => void
     <Sheet onClose={onClose} labelledBy="hdh" className="hand-sheet use-sheet" initialFocus={h.copied ? keyEntry : 'dialog'}>
       <div className="sheet-top">
         <h3 id="hdh">{mv ? 'Migrate an existing agent' : 'Start in your codebase'}</h3>
-        <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>{X}</button>
+        <button type="button" className="icon-btn" aria-label="关闭" onClick={onClose}>{X}</button>
       </div>
       <div className="hand">
         <ol className="hx">
@@ -176,12 +176,12 @@ export function Handoff({ kind, onClose }: { kind: HandKind; onClose: () => void
           <HxStep n={2} state={st2} title={mv ? 'When it is ready, tell it to migrate' : 'When it asks, tell it what to build'} sum="Sent">{s2}</HxStep>
           <KeyStep n={3} k={k} surface={mv ? 'start_migrate' : 'start_codebase'} base={KEY_BASE} state={d1 ? 'next' : 'empty'} onKey={onKey} entry={keyEntry} />
           <HxStep n={4} state={st4} title={mv ? 'It moves your agents' : 'It builds your app'} sum={mv ? 'Moved' : 'Built'}>{s3}</HxStep>
-          <HxStep n={5} state={st5} title={mv ? 'They connect to HarnessRouter' : 'It connects to HarnessRouter'}>{s5}</HxStep>
+          <HxStep n={5} state={st5} title={mv ? '连接到智能体网关' : '连接到智能体网关'}>{s5}</HxStep>
         </ol>
         <div className="hand-foot">
           {ok ? (mv
-            ? <><span className="grow ok-t">{CHECK}All {made.length} connected</span><button type="button" className="btn small primary" onClick={() => toStudio('/studio')}>Open Harness Studio</button></>
-            : <><span className="grow ok-t">{CHECK}Connected</span><button type="button" className="btn small primary" onClick={() => a && openMade(a.id)}>Open {a?.name}</button></>)
+            ? <><span className="grow ok-t">{CHECK}全部 {made.length} 已连接</span><button type="button" className="btn small primary" onClick={() => toStudio('/studio')}>打开工作台</button></>
+            : <><span className="grow ok-t">{CHECK}已连接</span><button type="button" className="btn small primary" onClick={() => a && openMade(a.id)}>打开 {a?.name}</button></>)
             : <span className="grow" />}
           <button type="button" className="link-q" onClick={onClose}>{ok ? 'Done' : 'Close'}</button>
         </div>

@@ -24,8 +24,8 @@ export function SelfHostLogin({ next, go = assignTo }: { next: string; go?: (hre
     e.preventDefault();
     if (busy) return;
     setErr(''); setFe(null);
-    if (!username.trim()) { setFe({ at: 'user', msg: 'Enter your username.' }); userRef.current?.focus(); return; }
-    if (!password) { setFe({ at: 'pass', msg: 'Enter your password.' }); passRef.current?.focus(); return; }
+    if (!username.trim()) { setFe({ at: 'user', msg: '请输入用户名。' }); userRef.current?.focus(); return; }
+    if (!password) { setFe({ at: 'pass', msg: '请输入密码。' }); passRef.current?.focus(); return; }
     setBusy(true);
     try {
       const r = await fetch('/api/selfhost/login', {
@@ -35,31 +35,31 @@ export function SelfHostLogin({ next, go = assignTo }: { next: string; go?: (hre
       });
       if (!r.ok) {
         const d = await r.json().catch(() => null);
-        setErr(typeof d?.detail === 'string' && d.detail ? d.detail : 'Incorrect username or password.');
+        setErr(typeof d?.detail === 'string' && d.detail ? d.detail : '用户名或密码错误。');
         setBusy(false);
         return;
       }
       // Only a path on this site: `next` is whatever the link said (GHSA-59mq-hx4p-fw48).
       go(safeNext(next));
     } catch {
-      setErr('Could not reach this instance.');
+      setErr('无法连接网关。');
       setBusy(false);
     }
   }
 
   return (
     <AuthFrame n={3}>
-      <h1>Sign in</h1>
-      <p className="au-sub">Sign in to this instance.</p>
+      <h1>登录</h1>
+      <p className="au-sub">登录智能体网关。</p>
       <form onSubmit={submit} noValidate>
-        <Field id="sh-user" name="username" label="Username" ac="username" value={username} autoFocus inputRef={userRef}
+        <Field id="sh-user" name="username" label="用户名" ac="username" value={username} autoFocus inputRef={userRef}
           err={fe?.at === 'user' ? fe.msg : ''} onChange={(v) => { if (fe?.at === 'user') setFe(null); setUsername(v); }} />
-        <Field id="sh-pass" name="password" label="Password" type="password" ac="current-password" value={password} inputRef={passRef}
+        <Field id="sh-pass" name="password" label="密码" type="password" ac="current-password" value={password} inputRef={passRef}
           err={fe?.at === 'pass' ? fe.msg : ''} onChange={(v) => { if (fe?.at === 'pass') setFe(null); setPassword(v); }} />
         <LooseErr err={err} />
-        <button type="submit" className="btn primary au-wide" id="auGo" disabled={busy} aria-busy={busy || undefined}>{busy ? 'Signing in' : 'Sign in'}</button>
+        <button type="submit" className="btn primary au-wide" id="auGo" disabled={busy} aria-busy={busy || undefined}>{busy ? '登录中' : '登录'}</button>
       </form>
-      <p className="au-hint">The first sign-in uses <code>HR_AUTH_USER</code> and <code>HR_AUTH_PASSWORD</code> from the container. Change them from Profile once you are in.</p>
+      <p className="au-hint">首次登录使用容器中的 <code>HR_AUTH_USER</code> 和 <code>HR_AUTH_PASSWORD</code> 。登录后可在个人资料中修改。</p>
     </AuthFrame>
   );
 }

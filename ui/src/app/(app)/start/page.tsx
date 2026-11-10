@@ -1,6 +1,5 @@
-'use client';
-import { StartPage } from '@/components/hrui/StartPage';
+import { redirect } from 'next/navigation';
 
-export default function Start() {
-  return <StartPage />;
+export default function Page() {
+  redirect('/studio');
 }

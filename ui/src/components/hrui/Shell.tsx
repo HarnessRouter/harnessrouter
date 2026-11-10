@@ -15,7 +15,6 @@ import { wsColor, WsBadge } from './ws';
 import { toast, ToastHost } from './toast';
 import { NewWorkspaceSheet, PeopleSheet, useWorkspaceSheets, WS_MENU_EVENT } from './WorkspaceSheets';
 import { movedTo } from './moved';
-import { letterUnread, markLetterRead } from './letter';
 import { Skel, SkHead, SkRows } from './Skel';
 
 export const LINKS = {
@@ -29,11 +28,10 @@ export const LINKS = {
 // it (they are in More there)
 type Place = { key: string; href: string; label: string; icon: React.ReactNode; aria?: string; nav: string };
 const PLACES: Place[] = [
-  { key: 'start', href: '/start', label: 'Start', icon: Ic.start, nav: 'start' },
-  { key: 'studio', href: '/studio', label: 'Studio', icon: Ic.studio, aria: 'Harness Studio', nav: 'agents' },
-  { key: 'shop', href: '/shop', label: 'Shop', icon: Ic.shop, nav: 'harbor' },
-  { key: 'extensions', href: '/extensions', label: 'Add-ons', icon: Ic.extensions, nav: 'library' },   // 'Extensions' was too long for the rail (Richard, 10-21)
-  { key: 'keys', href: '/keys', label: 'API Keys', icon: Ic.keys, nav: 'keys' },
+  { key: 'studio', href: '/studio', label: '工作台', icon: Ic.studio, aria: '工作台', nav: 'agents' },
+  { key: 'shop', href: '/shop', label: 'Agent 中心', icon: Ic.shop, nav: 'harbor' },
+  { key: 'extensions', href: '/extensions', label: '扩展', icon: Ic.extensions, nav: 'library' },   // 'Extensions' was too long for the rail (Richard, 10-21)
+  { key: 'keys', href: '/keys', label: 'API 密钥', icon: Ic.keys, nav: 'keys' },
 ];
 
 /** Which rail place a path belongs to. */
@@ -41,24 +39,11 @@ function placeOf(path: string): string {
   if (/^\/(studio|harnesses|tasks)(\/|$)/.test(path)) return 'studio';
   if (/^\/(shop|kits|marketplace)(\/|$)/.test(path)) return 'shop';
   if (/^\/(extensions|plugins|environments)(\/|$)/.test(path)) return 'extensions';
-  if (/^\/(start|quickstart|dashboard|overview)(\/|$)/.test(path)) return 'start';
-  if (/^\/letter\/?$/.test(path)) return 'letter';
+  if (/^\/(start|quickstart|dashboard|overview)(\/|$)/.test(path)) return 'studio';
   const p = PLACES.find((x) => path === x.href || path.startsWith(x.href + '/'));
   return p ? p.key : '';
 }
 
-function useGithubStars(): string | null {
-  const [stars, setStars] = useState<number | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetch('/api/github-stars', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive && d && Number.isFinite(d.stars)) setStars(d.stars); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
-  if (stars === null) return null;
-  return stars >= 1000 ? `${(stars / 1000).toFixed(stars >= 10000 ? 0 : 1)}k` : String(stars);
-}
 
 /** A menu that opens beside the button that opened it, closes on a click outside or Escape. `also`:
  *  another element that opened it (a press on it is not outside). */
@@ -118,10 +103,6 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
     window.addEventListener(WS_MENU_EVENT, on);
     return () => window.removeEventListener(WS_MENU_EVENT, on);
   }, [wsOpen, setWsOpen, setMeOpen]);
-  // the letter's dot, until it has been opened here
-  const [unread, setUnread] = useState(false);
-  useEffect(() => { if (here === 'letter') markLetterRead(); setUnread(letterUnread()); }, [here]);
-  const stars = useGithubStars();
   const op = useOperator();
   useEffect(() => { setWsOpen(false); setMeOpen(false); }, [pathname, setWsOpen, setMeOpen]);
   // an older address (a bookmark, a link in a guide or an email) opens its place in the redesign
@@ -168,13 +149,13 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
   return (
     <div id="hrui" data-theme="light">
       <div className="app">
-        <nav className="rail" aria-label="Console">
-          <Link className="rail-logo" href="/start" aria-label="Go to Start" title="Start">
+        <nav className="rail" aria-label="控制台">
+          <Link className="rail-logo" href="/studio" aria-label="返回工作台" title="工作台">
             {/* the brand's own mark file (brand decisions live with the brand pack, not a mockup) */}
-            <img className="hr-mark" src="/brand/hr-mark-duo-light.svg" alt="" width={24} height={24} />
+            <span className="gateway-mark" aria-hidden="true"><img src="/hexa-mark.svg" alt="" width={28} height={28} /></span>
           </Link>
           <button ref={wsBtn} type="button" className={`ws-rail${known ? '' : ' ws-rail-x'}`} aria-haspopup="menu" aria-expanded={wsOpen}
-            aria-label="Switch workspace" title={known ? `${current.name} · switch workspace` : 'Switch workspace'}
+            aria-label="切换工作区" title={known ? `${current.name} · 切换工作区` : '切换工作区'}
             style={known ? { background: wsColor(current.name) } : undefined} onClick={() => { const fromHead = !!wsAnchor.current; wsAnchor.current = null; setMeOpen(false); setWsOpen(fromHead || !wsOpen); setWsAt((n) => n + 1); }}>
             {known ? current.name.charAt(0).toUpperCase() : ''}
           </button>
@@ -184,15 +165,10 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
               {p.icon}{p.key === 'studio' ? <span className="rail-l2">{p.label}</span> : p.label}
             </Link>
           ))}
-          {/* How it works: the team's letter, above the account button (in More on a phone) */}
-          <Link href="/letter" className={`rail-btn rail-letter${here === 'letter' ? ' on' : ''}`} data-nav="letter"
-            aria-current={here === 'letter' ? 'page' : undefined} title="How it works · a letter from the team" aria-label="How it works, a letter from the team">
-            {Ic.letter}Letter<i className="letter-dot" aria-hidden="true" hidden={!unread} />
-          </Link>
-          <button ref={meBtn} type="button" className={`rail-me${meOpen || pathname.startsWith('/profile') || pathname.startsWith('/byok') ? ' on' : ''}${meMore ? ' more-on' : ''}${unread ? ' dot' : ''}`}
-            aria-haspopup="menu" aria-expanded={meOpen} aria-label="Account and settings"
+          <button ref={meBtn} type="button" className={`rail-me${meOpen || pathname.startsWith('/profile') || pathname.startsWith('/byok') ? ' on' : ''}${meMore ? ' more-on' : ''}`}
+            aria-haspopup="menu" aria-expanded={meOpen} aria-label="账户与设置"
             onClick={() => { setWsOpen(false); setMeOpen(!meOpen); }}>
-            <MyPic className="me-av" /><span className="me-l">More</span>
+            <MyPic className="me-av" /><span className="me-l">更多</span>
           </button>
         </nav>
         <section className="page" id="page">
@@ -200,15 +176,15 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
             <div className="scroll">
               <div className="list-wrap lw-n">
                 <div className="empty-list ws-fail" role="alert">
-                  Your workspaces could not be read just now.{' '}
-                  <button type="button" className="link-q inl" disabled={retrying} onClick={retry}>Try again</button>
+                  暂时无法读取工作区。{' '}
+                  <button type="button" className="link-q inl" disabled={retrying} onClick={retry}>重试</button>
                 </div>
               </div>
             </div>
           ) : waiting ? (
             <div className="scroll">
               <div className="list-wrap lw-n">
-                <Skel label="Loading"><SkHead /><SkRows n={4} /></Skel>
+                <Skel label="加载中"><SkHead /><SkRows n={4} /></Skel>
               </div>
             </div>
           ) : children}
@@ -216,13 +192,13 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
       </div>
 
       {wsOpen && (
-        <div ref={wsPop} className="ws-pop" role="menu" aria-label="Workspaces">
+        <div ref={wsPop} className="ws-pop" role="menu" aria-label="工作区">
           {listFailed ? (
             <button type="button" className="ws-row ws-fail" role="menuitem" disabled={retrying} onClick={retry}>
-              <span className="grow"><b>Your workspaces could not be read just now.</b><small>Try again</small></span>
+              <span className="grow"><b>暂时无法读取工作区。</b><small>重试</small></span>
             </button>
           ) : waiting ? (
-            <Skel label="Loading workspaces"><SkRows n={2} /></Skel>
+            <Skel label="正在加载工作区"><SkRows n={2} /></Skel>
           ) : (
             <div className="ws-list">
               {workspaces.map((w) => (
@@ -237,39 +213,28 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
           )}
           {!known ? null : (<>
             <hr />
-            <button type="button" className="ws-row plain" role="menuitem" onClick={() => openSheet('people')}>Workspace settings</button>
-            <button type="button" className="ws-row plain" role="menuitem" onClick={() => openSheet('newws')}>New workspace</button>
+            <button type="button" className="ws-row plain" role="menuitem" onClick={() => openSheet('people')}>工作区设置</button>
+            <button type="button" className="ws-row plain" role="menuitem" onClick={() => openSheet('newws')}>新建工作区</button>
           </>)}
         </div>
       )}
 
       {meOpen && (
-        <div ref={mePop} className="ws-pop me-pop" role="menu" aria-label="Account">
+        <div ref={mePop} className="ws-pop me-pop" role="menu" aria-label="账户">
           {op?.user ? <div className="me-h">{op.user}</div> : null}
-          {/* How it works stays in this menu at every width, first, with the unread dot until it is read */}
-          <button type="button" className={`me-row${here === 'letter' ? ' on' : ''}`} role="menuitem" onClick={() => go('/letter')}>
-            {Ic.letter}How it works{unread ? <i className="me-dot" role="img" aria-label="Unread" /> : null}
-          </button>
           <hr />
           {PLACES.filter((p) => ['extensions', 'keys'].includes(p.key)).map((p) => (
             <button key={p.key} type="button" className={`me-row me-mob${here === p.key ? ' on' : ''}`} role="menuitem" onClick={() => go(p.href)}>{p.icon}{p.label}</button>
           ))}
           <hr className="me-mob" />
           {/* the instance's sign-in: its username and password */}
-          <button type="button" className={`me-row${pathname.startsWith('/profile') ? ' on' : ''}`} role="menuitem" onClick={() => go('/profile')}>{Ic.account}Profile</button>
-          <button type="button" className={`me-row${pathname.startsWith('/byok') ? ' on' : ''}`} role="menuitem" onClick={() => go('/byok')}>{Ic.byok}Bring your own key</button>
-          <a className="me-row" href={LINKS.docs} target="_blank" rel="noopener noreferrer" role="menuitem">{Ic.docs}Docs<span className="me-n" aria-hidden="true">↗</span></a>
+          <button type="button" className={`me-row${pathname.startsWith('/profile') ? ' on' : ''}`} role="menuitem" onClick={() => go('/profile')}>{Ic.account}个人资料</button>
+          <button type="button" className={`me-row${pathname.startsWith('/byok') ? ' on' : ''}`} role="menuitem" onClick={() => go('/byok')}>{Ic.byok}使用自己的密钥</button>
           <hr />
-          <div className="me-h me-sec" role="presentation">Get help</div>
-          <a className="me-row" href={LINKS.discord} target="_blank" rel="noopener noreferrer" role="menuitem">{Ic.discord}Join our Discord<span className="me-n" aria-hidden="true">↗</span></a>
-          <a className="me-row" href={LINKS.demo} target="_blank" rel="noopener noreferrer" role="menuitem">{Ic.calendar}Book a demo<span className="me-n" aria-hidden="true">↗</span></a>
-          <a className="me-gh" href={LINKS.repo} target="_blank" rel="noopener noreferrer" role="menuitem">
-            {Ic.github}Star us on GitHub{stars ? <span className="me-star">{Ic.star}{stars}</span> : null}
-          </a>
           {op?.gated === false ? null : (<>
             <hr />
             <button type="button" className="me-row" role="menuitem"
-              onClick={() => { setMeOpen(false); void fetch('/api/selfhost/logout', { method: 'POST' }).catch(() => {}).finally(() => window.location.assign('/login')); }}>{Ic.logout}Log out</button>
+              onClick={() => { setMeOpen(false); void fetch('/api/selfhost/logout', { method: 'POST' }).catch(() => {}).finally(() => window.location.assign('/login')); }}>{Ic.logout}退出登录</button>
           </>)}
         </div>
       )}

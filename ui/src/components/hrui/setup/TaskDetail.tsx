@@ -70,19 +70,19 @@ function ShareSheet({ sid, state, onState, onClose }: {
   };
   return (
     <Sheet onClose={onClose} labelledBy="shth" className="small-sheet share-sheet">
-      <SheetTop id="shth" title="Share task" onClose={onClose} />
+      <SheetTop id="shth" title="分享任务" onClose={onClose} />
       <div className="share-list">
         {ch(false, PRIVATE, 'Keep private', 'Only those who can sign in here can see it')}
         {ch(true, PUBLIC, 'Create public link', 'Anyone with the link can read the conversation and download its files')}
       </div>
       {link ? (
         <div className="share-link">
-          <label className="sr" htmlFor="shareUrl">Public link</label>
+          <label className="sr" htmlFor="shareUrl">公开链接</label>
           <input ref={inRef} id="shareUrl" className="set-in mono" readOnly value={link} onFocus={(e) => e.currentTarget.select()} />
-          <button type="button" className="btn" onClick={() => void copyLink()}>Copy</button>
+          <button type="button" className="btn" onClick={() => void copyLink()}>复制</button>
         </div>
       ) : null}
-      <div className="sheet-actions share-done"><button type="button" className="btn primary" onClick={onClose}>Done</button></div>
+      <div className="sheet-actions share-done"><button type="button" className="btn primary" onClick={onClose}>完成</button></div>
     </Sheet>
   );
 }
@@ -115,8 +115,8 @@ export function DeleteTask({ card, onClose, onGone }: { card: TraceCard; onClose
     }
   };
   return (
-    <ConfirmSheet id="dt" title="Delete task" confirmLabel="Delete task" focusConfirm busy={busy}
-      body={<><b>{cutWords(titleOf(card), 60)}</b> is removed with its conversation and files.{shared === true ? ' Its public link stops working.' : shared === 'unknown' ? ' Whether it has a public link could not be checked.' : ''} This can’t be undone.</>}
+    <ConfirmSheet id="dt" title="删除任务" confirmLabel="删除任务" focusConfirm busy={busy}
+      body={<><b>{cutWords(titleOf(card), 60)}</b> 将连同对话和文件一起删除。{shared === true ? ' Its public link stops working.' : shared === 'unknown' ? ' Whether it has a public link could not be checked.' : ''} 此操作无法撤销。</>}
       onConfirm={() => void del()} onClose={onClose} />
   );
 }
@@ -127,7 +127,7 @@ export function NewTaskHead({ onBack }: { onBack: () => void }) {
     <div className="task-head tp-head tp-new">
       <div className="th-row">
         <button type="button" className="tk-back" aria-label="All tasks" onClick={onBack}>{BACK_IC}</button>
-        <h2 className="tp-t">New task</h2>
+        <h2 className="tp-t">新建任务</h2>
       </div>
     </div>
   );
@@ -143,8 +143,8 @@ export function RecordedHead({ title, running, onBack }: { title: string; runnin
         <button type="button" className="tk-back" aria-label="All tasks" onClick={onBack}>{BACK_IC}</button>
         <h2 className="tp-t" title={title}>{title}</h2>
         <div className="tk-acts">
-          <span className="chip demo-chip">Recorded</span>
-          {running ? <span className="tk-running" role="status"><span className="dot run" aria-hidden="true" />Running</span> : null}
+          <span className="chip demo-chip">已录制</span>
+          {running ? <span className="tk-running" role="status"><span className="dot run" aria-hidden="true" />运行中</span> : null}
         </div>
       </div>
     </div>
@@ -199,7 +199,7 @@ export function TaskHead({ card, onStopped, onBack, browser }: {
         <div className="tk-acts">
           {sid ? browser : null}
           {!sid ? null : running ? (
-            <button type="button" className="btn small tk-stop" disabled={stopping} onClick={() => void stop()}>Stop task</button>
+            <button type="button" className="btn small tk-stop" disabled={stopping} onClick={() => void stop()}>停止任务</button>
           ) : (
             <button type="button" className={'icon-btn tk-ib tk-share' + (share?.enabled ? ' on' : '')} aria-label={share?.enabled ? 'Shared publicly. Manage the link' : 'Share task'}
               title={share?.enabled ? 'Shared publicly' : 'Share task'} onClick={() => setSharing(true)}>{LINK}</button>

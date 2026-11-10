@@ -95,9 +95,9 @@ export function LaunchSheet({ kit, bases, basesFailed = false, onRetryBases, mod
 
       {!reconnect && !custom ? (
         <div className="set-f">
-          <span className="kl-l" id="klRun">Runs on</span>
+          <span className="kl-l" id="klRun">运行于</span>
           {nothingAvailable ? (
-            <p className="keywarn kl-warn">None of these can run yet. Add a provider key in <Link className="link-q inl" href="/byok">Bring your own key</Link>, or choose a different one.</p>
+            <p className="keywarn kl-warn">当前均无法运行，请添加服务商密钥 <Link className="link-q inl" href="/byok">使用自己的密钥</Link>，或选择其他项。</p>
           ) : null}
           <div className="ship-opts" role="radiogroup" aria-labelledby="klRun">
             {runnable.map((c) => {
@@ -107,7 +107,7 @@ export function LaunchSheet({ kit, bases, basesFailed = false, onRetryBases, mod
                   onClick={() => setSel(id)}>
                   <span className="so-box">{CHECK}</span>
                   <span>
-                    <b><HLogo base={c.base} />{c.baseLabel || c.base}{c.recommended ? <span className="h-pre"><span className="sr">, </span>Recommended</span> : null}</b>
+                    <b><HLogo base={c.base} />{c.baseLabel || c.base}{c.recommended ? <span className="h-pre"><span className="sr">, </span>推荐</span> : null}</b>
                     <small className="mono">{c.model}</small>
                   </span>
                 </button>
@@ -118,21 +118,21 @@ export function LaunchSheet({ kit, bases, basesFailed = false, onRetryBases, mod
       ) : null}
 
       {!reconnect && custom && basesFailed ? (
-        <p className="set-help kl-bad" role="alert">The agent harnesses you can run could not be read just now.{' '}
-          <button type="button" className="link-q inl" onClick={onRetryBases}>Try again</button></p>
+        <p className="set-help kl-bad" role="alert">暂时无法读取可用的智能体运行环境。{' '}
+          <button type="button" className="link-q inl" onClick={onRetryBases}>重试</button></p>
       ) : null}
       {!reconnect && custom && !basesFailed ? (
         <>
-          <div className="set-f"><label htmlFor="klBase">Agent harness</label>
+          <div className="set-f"><label htmlFor="klBase">智能体运行环境</label>
             <select id="klBase" className="set-in" value={cBase} onChange={(e) => setCBase(e.target.value)}>
               {runBases.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
             </select></div>
-          <div className="set-f"><label htmlFor="klModel">Model</label>
+          <div className="set-f"><label htmlFor="klModel">模型</label>
             <select id="klModel" className="set-in" value={cModel} onChange={(e) => setCModel(e.target.value)}>
-              {!baseModels.some((m) => m.available) ? <option value="">No models</option> : null}
+              {!baseModels.some((m) => m.available) ? <option value="">暂无模型</option> : null}
               {baseModels.filter((m) => m.available).map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
             </select>
-            {bases && !runBases.length ? <p className="set-help">Nothing you have connected can run an agent harness yet.</p> : null}
+            {bases && !runBases.length ? <p className="set-help">当前连接尚不能运行智能体。</p> : null}
           </div>
         </>
       ) : null}
@@ -141,16 +141,16 @@ export function LaunchSheet({ kit, bases, basesFailed = false, onRetryBases, mod
         <>
           <div className="set-f">
             <label htmlFor="klDb">{kit.launched ? 'Change the database it reads' : 'Connect your database'}</label>
-            {kit.launched && !reconnect ? <p className="set-help kl-help">Leave this blank to keep reading what it reads today.</p> : null}
+            {kit.launched && !reconnect ? <p className="set-help kl-help">留空则保留当前读取方式。</p> : null}
             {kit.database.engines.length > 1 ? (
-              <select className="set-in kl-eng" aria-label="Type" value={db.engine} onChange={(e) => setD({ engine: e.target.value })}>
+              <select className="set-in kl-eng" aria-label="输入" value={db.engine} onChange={(e) => setD({ engine: e.target.value })}>
                 {kit.database.engines.map((e) => <option key={e} value={e}>{ENGINE_LABEL[e] || e}</option>)}
               </select>
             ) : null}
             <input id="klDb" ref={dbRef} className="set-in mono" type="text" spellCheck={false} autoComplete="off" value={db.connectionString}
               placeholder={ENGINE_EXAMPLE[db.engine] || ''} onChange={(e) => setD({ connectionString: e.target.value })}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void go(); } }} />
-            <p className="set-help">Use an account that can only read.</p>
+            <p className="set-help">请使用只读账户。</p>
             <div className="kl-test">
               <button type="button" className="btn small line" disabled={!db.connectionString.trim() || !!test?.busy} onClick={() => void runTest()}>
                 {test?.busy ? 'Testing…' : 'Test connection'}
@@ -162,7 +162,7 @@ export function LaunchSheet({ kit, bases, basesFailed = false, onRetryBases, mod
             <button type="button" role="checkbox" aria-checked={db.sampleRows} className={'ship-opt' + (db.sampleRows ? ' on' : '')}
               onClick={() => setD({ sampleRows: !db.sampleRows })}>
               <span className="so-box">{CHECK}</span>
-              <span><b>Let it see a few example rows</b></span>
+              <span><b>允许读取几行示例数据</b></span>
             </button>
           </div>
         </>
@@ -172,7 +172,7 @@ export function LaunchSheet({ kit, bases, basesFailed = false, onRetryBases, mod
         {!reconnect ? (
           <button type="button" className="link-q kl-alt" onClick={() => setCustom((v) => !v)}>{custom ? 'Back to recommended' : 'Choose a different one'}</button>
         ) : null}
-        <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+        <button type="button" className="btn" disabled={busy} onClick={onClose}>取消</button>
         <button type="button" className="btn primary" disabled={busy || !canGo} onClick={() => void go()}>{goLabel}</button>
       </div>
     </Sheet>

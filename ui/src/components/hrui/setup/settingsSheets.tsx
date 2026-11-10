@@ -40,15 +40,15 @@ export function DeleteSetupSheet({ h, onClose, onDeleted }: { h: CustomHarness; 
   }
   return (
     <Sheet onClose={onClose} labelledBy="dlh" describedBy="dlp" className="small-sheet del-sheet" alert busy={busy} initialFocus={inRef}>
-      <SheetTop id="dlh" title="Delete setup" onClose={onClose} />
+      <SheetTop id="dlh" title="删除配置" onClose={onClose} />
       <p className="del-p" id="dlp"><b>{name || 'This setup'}</b> stops working at once, and tasks sent to its Harness ID are refused. Its past tasks stay readable. It is removed for good after 30 days.</p>
-      <label className="del-l nm" htmlFor="delConfirm">Type <b>{want}</b> to confirm.</label>
+      <label className="del-l nm" htmlFor="delConfirm">输入 <b>{want}</b> 以确认。</label>
       <input id="delConfirm" ref={inRef} className="set-in" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
         value={v} onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (e.metaKey || e.ctrlKey) void go(); } }} />
       <div className="del-act">
-        <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel<kbd>Esc</kbd></button>
-        <button type="button" className="btn del-go" id="delGo" disabled={!ok || busy} onClick={() => void go()}>Delete<kbd>{mac ? '⌘' : 'Ctrl '}↵</kbd></button>
+        <button type="button" className="btn" disabled={busy} onClick={onClose}>取消<kbd>Esc</kbd></button>
+        <button type="button" className="btn del-go" id="delGo" disabled={!ok || busy} onClick={() => void go()}>删除<kbd>{mac ? '⌘' : 'Ctrl '}↵</kbd></button>
       </div>
     </Sheet>
   );
@@ -60,10 +60,10 @@ export function EnvPickSheet({ envs, failed = false, retry, current, busy, onPic
 }) {
   return (
     <Sheet onClose={onClose} labelledBy="eh" className="small-sheet">
-      <SheetTop id="eh" title="Environment" onClose={onClose} />
+      <SheetTop id="eh" title="环境" onClose={onClose} />
       {envs === null && failed ? <ReadFailed what="environments" retry={() => retry?.()} />
-        : envs === null ? <div className="empty-list" role="status" style={{ padding: '16px 0' }}>Reading your environments…</div>
-        : !envs.length ? <div className="empty-list" style={{ padding: '16px 0' }}>No environments yet. <Link className="link-q inl" href="/extensions?tab=envs">Add one in Add-ons</Link></div>
+        : envs === null ? <div className="empty-list" role="status" style={{ padding: '16px 0' }}>正在读取环境…</div>
+        : !envs.length ? <div className="empty-list" style={{ padding: '16px 0' }}>暂无环境。 <Link className="link-q inl" href="/extensions?tab=envs">在扩展中添加</Link></div>
           : (
             <div className="pick-list">
               {envs.map((x) => {
@@ -77,7 +77,7 @@ export function EnvPickSheet({ envs, failed = false, retry, current, busy, onPic
               })}
             </div>
           )}
-      <div className="sheet-actions"><Link className="btn" href="/extensions?tab=envs">Open Add-ons</Link></div>
+      <div className="sheet-actions"><Link className="btn" href="/extensions?tab=envs">打开扩展</Link></div>
     </Sheet>
   );
 }
@@ -115,17 +115,17 @@ export function PackageSheet({ p, hid, busy, onToggle, onDetach, onClose }: {
             <small>{[plural(skills.length, 'skill'), plural(servers.length, 'tool'), ...(m.author?.name ? [`by ${m.author.name}`] : []), ...(m.license ? [m.license] : [])].join(' · ')}</small></span>
           <button type="button" className={`tog${on ? ' on' : ''}`} aria-pressed={on} aria-label={p.name} disabled={busy} onClick={onToggle}><i />{on ? 'On' : 'Off'}</button>
         </div>
-        {skills.map((s) => <div key={'s' + s.name} className="cap-row"><span className="grow"><b className="mono">{s.name}</b>{s.description ? <small>Skill · {s.description}</small> : <small>Skill</small>}</span></div>)}
-        {servers.map((s) => <div key={'t' + s.name} className="cap-row"><span className="grow"><b className="mono">{s.name}</b><small>Tool · {s.transport === 'stdio' ? `runs ${s.command || ''}${(s.args || []).length ? ' ' + (s.args || []).join(' ') : ''}` : s.url}</small></span></div>)}
-        {skipped.map((s) => <div key={'x' + s.path} className="cap-row off"><span className="grow"><b className="mono">{s.path}</b><small className="warn">Not loaded · {s.reason}</small></span></div>)}
+        {skills.map((s) => <div key={'s' + s.name} className="cap-row"><span className="grow"><b className="mono">{s.name}</b>{s.description ? <small>技能 · {s.description}</small> : <small>技能</small>}</span></div>)}
+        {servers.map((s) => <div key={'t' + s.name} className="cap-row"><span className="grow"><b className="mono">{s.name}</b><small>工具 · {s.transport === 'stdio' ? `runs ${s.command || ''}${(s.args || []).length ? ' ' + (s.args || []).join(' ') : ''}` : s.url}</small></span></div>)}
+        {skipped.map((s) => <div key={'x' + s.path} className="cap-row off"><span className="grow"><b className="mono">{s.path}</b><small className="warn">未加载 · {s.reason}</small></span></div>)}
       </div>
       {m.homepage || m.repository ? (
-        <p className="set-help">{m.homepage ? <a className="link-q inl" href={m.homepage} target="_blank" rel="noreferrer">Homepage</a> : null}
-          {m.homepage && m.repository ? ' · ' : null}{m.repository ? <a className="link-q inl" href={m.repository} target="_blank" rel="noreferrer">Source</a> : null}</p>
+        <p className="set-help">{m.homepage ? <a className="link-q inl" href={m.homepage} target="_blank" rel="noreferrer">主页</a> : null}
+          {m.homepage && m.repository ? ' · ' : null}{m.repository ? <a className="link-q inl" href={m.repository} target="_blank" rel="noreferrer">源代码</a> : null}</p>
       ) : null}
       <div className="sheet-actions">
-        {!pending ? <button type="button" className="btn" disabled={dl} onClick={() => void download()}>Download</button> : null}
-        <button type="button" className="btn line" disabled={busy} onClick={onDetach}>Detach</button>
+        {!pending ? <button type="button" className="btn" disabled={dl} onClick={() => void download()}>下载</button> : null}
+        <button type="button" className="btn line" disabled={busy} onClick={onDetach}>解除关联</button>
       </div>
     </Sheet>
   );
@@ -191,26 +191,26 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
 
   return (
     <Sheet onClose={onClose} labelledBy="duh" className="small-sheet" busy={busy}>
-      <SheetTop id="duh" title="Duplicate setup" sub="Same skills, plugins and instructions, new Harness ID." onClose={onClose} />
-      <div className="set-f"><label htmlFor="duName">Name</label>
+      <SheetTop id="duh" title="复制配置" sub="保留技能、插件和指令，生成新的智能体 ID。" onClose={onClose} />
+      <div className="set-f"><label htmlFor="duName">名称</label>
         <input id="duName" className="set-in" value={name} onChange={(e) => setName(e.target.value)} /></div>
-      <div className="set-f"><label htmlFor="duBase">Agent harness</label>
+      <div className="set-f"><label htmlFor="duBase">智能体运行环境</label>
         <select id="duBase" className="set-in" value={base} onChange={(e) => setBase(e.target.value)}>
           {offered.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
           {offered.some((x) => x.id === h.base) ? null : <option value={h.base}>{h.baseLabel || h.base}</option>}
         </select>
-        <p className="set-help">Fixed once saved.</p></div>
-      <div className="set-f"><label htmlFor="duModel">Model</label>
+        <p className="set-help">保存后固定。</p></div>
+      <div className="set-f"><label htmlFor="duModel">模型</label>
         <select id="duModel" className="set-in" value={model} onChange={(e) => setModel(e.target.value)}>
           <option value="">{`The harness default${harnessDefault ? ` (${harnessDefault})` : ''}`}</option>
           {(models.includes(model) ? models : [model, ...models]).filter(Boolean).map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
         {cantRun ? <p className="set-help warn">{`${o?.name || base} does not run ${model}. Choose a model for the copy.`}</p> : null}
-        {catalog.failed ? <p className="set-help">The models could not be read just now. <button type="button" className="link-q inl" onClick={catalog.retry}>Try again</button></p> : null}
+        {catalog.failed ? <p className="set-help">暂时无法读取模型。 <button type="button" className="link-q inl" onClick={catalog.retry}>重试</button></p> : null}
         {notes.length ? <p className="set-help">{notes.join(' ')}</p> : null}</div>
       <div className="sheet-actions">
-        <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-        <button type="button" className="btn primary" disabled={busy || !name.trim() || cantRun} onClick={() => void save()}>Save setup</button>
+        <button type="button" className="btn" disabled={busy} onClick={onClose}>取消</button>
+        <button type="button" className="btn primary" disabled={busy || !name.trim() || cantRun} onClick={() => void save()}>保存配置</button>
       </div>
     </Sheet>
   );

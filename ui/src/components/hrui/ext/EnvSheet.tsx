@@ -265,15 +265,15 @@ export function EnvSheet({ id, tab: firstTab = 'files', notice = '', taken = [],
 
       {loadErr ? <p className="eo-msg bad" role="alert">{loadErr}</p> : null}
 
-      {!env && !loadErr ? <Skel label="Loading the environment"><SkRows n={5} /></Skel> : null}
+      {!env && !loadErr ? <Skel label="正在加载环境"><SkRows n={5} /></Skel> : null}
 
       {env && declared ? (
         <>
-          <div className="tabs inline eo-tabs" role="tablist" aria-label="Environment" onKeyDown={(e) => tabKeys(e, TABS.map(([k]) => k), tab, setTab)}>
+          <div className="tabs inline eo-tabs" role="tablist" aria-label="环境" onKeyDown={(e) => tabKeys(e, TABS.map(([k]) => k), tab, setTab)}>
             {TABS.map(([k, label, n]) => (
               <button key={k} type="button" role="tab" id={`eot-${k}`} aria-controls="eo-panel" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>
                 {label}{n !== null ? <span className="count">{n}</span> : null}
-                {(k === 'files' && editCount) || (k === 'packages' && pkgDirty) || (k === 'details' && detailsDirty) ? <><span className="eo-held" aria-hidden="true" /><span className="sr">, not saved</span></> : null}
+                {(k === 'files' && editCount) || (k === 'packages' && pkgDirty) || (k === 'details' && detailsDirty) ? <><span className="eo-held" aria-hidden="true" /><span className="sr">，未保存</span></> : null}
               </button>
             ))}
           </div>
@@ -297,12 +297,12 @@ export function EnvSheet({ id, tab: firstTab = 'files', notice = '', taken = [],
 
           {ask === 'delete' ? (
             <div className="mcp-ask eo-ask" role="alertdialog" aria-labelledby="eoAskD">
-              <span id="eoAskD">Delete <b>{env.name}</b>?{' '}
+              <span id="eoAskD">删除<b>{env.name}</b>?{' '}
                 {users?.length
                   ? <>{users.slice(0, 3).map((u) => u.name).join(', ')}{users.length > 3 ? ` and ${users.length - 3} more` : ''} {users.length === 1 ? 'uses' : 'use'} it; it comes off {users.length === 1 ? 'that setup' : 'them'}, and from the next task {users.length === 1 ? 'its tasks start' : 'their tasks start'} with no files.</>
-                  : 'No setup uses it.'}{' '}Its files and every version go. This can’t be undone.</span>
+                  : 'No setup uses it.'}{' '}文件及所有版本都会删除，此操作无法撤销。</span>
               <span className="mcp-ask-b">
-                <button type="button" className="btn small" disabled={busy === 'delete'} onClick={() => setAsk('')}>Keep</button>
+                <button type="button" className="btn small" disabled={busy === 'delete'} onClick={() => setAsk('')}>保留</button>
                 <button type="button" className="btn small del-go" disabled={busy === 'delete'} onClick={() => void remove()} autoFocus>
                   {busy === 'delete' ? 'Deleting…' : 'Delete environment'}</button>
               </span>
@@ -310,10 +310,10 @@ export function EnvSheet({ id, tab: firstTab = 'files', notice = '', taken = [],
           ) : null}
           {ask === 'close' ? (
             <div className="mcp-ask eo-ask" role="alertdialog" aria-labelledby="eoAskC">
-              <span id="eoAskC">Your changes are not saved: {heldWhat}.</span>
+              <span id="eoAskC">尚未保存更改 {heldWhat}.</span>
               <span className="mcp-ask-b">
-                <button type="button" className="btn small" onClick={() => setAsk('')} autoFocus>Keep editing</button>
-                <button type="button" className="btn small del-go" onClick={() => { discard(); onClose(); }}>Discard and close</button>
+                <button type="button" className="btn small" onClick={() => setAsk('')} autoFocus>继续编辑</button>
+                <button type="button" className="btn small del-go" onClick={() => { discard(); onClose(); }}>放弃并关闭</button>
               </span>
             </div>
           ) : null}
@@ -321,10 +321,10 @@ export function EnvSheet({ id, tab: firstTab = 'files', notice = '', taken = [],
           <div className="sheet-actions eo-foot">
             {/* not while a build runs: the service keeps an environment that is building */}
             {tab === 'details' && !ask && !building ? (
-              <button type="button" className="link-q danger eo-del" disabled={!!busy} onClick={() => { setSay(''); setAsk('delete'); }}>Delete</button>
+              <button type="button" className="link-q danger eo-del" disabled={!!busy} onClick={() => { setSay(''); setAsk('delete'); }}>删除</button>
             ) : null}
             <span className={`eo-state${say ? ' bad' : ''}`} role="status" aria-live="polite">{footLine}</span>
-            {dirty ? <button type="button" className="btn" disabled={!!busy} onClick={discard}>Discard</button> : null}
+            {dirty ? <button type="button" className="btn" disabled={!!busy} onClick={discard}>放弃</button> : null}
             {primary ? (
               <button type="button" className="btn primary" disabled={!!busy || primary.disabled} onClick={primary.act}>{primary.label}</button>
             ) : null}
@@ -476,9 +476,9 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
           <span className={`eo-chev${n.dir && open.has(n.path) ? ' open' : ''}`} aria-hidden="true">{n.dir ? IC.chev : null}</span>
           <span className="eo-ic" aria-hidden="true">{n.dir ? IC.folder : IC.file}</span>
           <span className="eo-fn">{n.name}</span>
-          {n.dir ? <span className="eo-n">{n.count}</span> : edits[n.path] !== undefined ? <><span className="eo-held" aria-hidden="true" /><span className="sr">, edited</span></> : null}
+          {n.dir ? <span className="eo-n">{n.count}</span> : edits[n.path] !== undefined ? <><span className="eo-held" aria-hidden="true" /><span className="sr">，已编辑</span></> : null}
         </button>
-        <button type="button" className="eo-ib" aria-label={`Remove ${n.name}`} title="Remove" disabled={busy}
+        <button type="button" className="eo-ib" aria-label={`Remove ${n.name}`} title="移除" disabled={busy}
           onClick={() => { setMsg(null); setAsking({ path: n.path, dir: n.dir, count: n.count }); }}>{IC.x}</button>
       </div>
       {n.dir && open.has(n.path) && n.children.length ? <ul>{n.children.map((c) => row(c, depth + 1))}</ul> : null}
@@ -499,29 +499,29 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
     <div className="eo-files-pane">
       {pickers}
       <div className="eo-bar">
-        <label className="eo-find"><span className="sr">Find a file</span>{IC.search}
-          <input type="search" value={q} placeholder="Find a file" spellCheck={false} onChange={(ev) => setQ(ev.target.value)} /></label>
+        <label className="eo-find"><span className="sr">查找文件</span>{IC.search}
+          <input type="search" value={q} placeholder="查找文件" spellCheck={false} onChange={(ev) => setQ(ev.target.value)} /></label>
         <span className="eo-tools">
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'file', value: '' }); }} title="New file">{IC.fileAdd}<span>New file</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'dir', value: '' }); }} title="New folder">{IC.folderAdd}<span>New folder</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => filesRef.current?.click()} title="Upload files">{IC.upload}<span>Upload files</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => folderRef.current?.click()} title="Upload a folder">{IC.folderUp}<span>Upload a folder</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setImp({ kind: 'git', url: '', ref: '', file: null, replace: false }); }} title="Import a git repository or an archive">{IC.git}<span>Import</span></button>
+          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'file', value: '' }); }} title="新建文件">{IC.fileAdd}<span>新建文件</span></button>
+          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'dir', value: '' }); }} title="新建文件夹">{IC.folderAdd}<span>新建文件夹</span></button>
+          <button type="button" className="eo-tool" disabled={busy} onClick={() => filesRef.current?.click()} title="上传文件">{IC.upload}<span>上传文件</span></button>
+          <button type="button" className="eo-tool" disabled={busy} onClick={() => folderRef.current?.click()} title="上传文件夹">{IC.folderUp}<span>上传文件夹</span></button>
+          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setImp({ kind: 'git', url: '', ref: '', file: null, replace: false }); }} title="导入 Git 仓库或压缩包">{IC.git}<span>导入</span></button>
         </span>
       </div>
 
       {imp ? (
-        <div className="eo-imp" role="group" aria-label="Import a project">
+        <div className="eo-imp" role="group" aria-label="导入项目">
           <div className="seg" role="radiogroup" aria-label="Import from">
-            <button type="button" role="radio" aria-checked={imp.kind === 'git'} className={imp.kind === 'git' ? 'on' : ''} onClick={() => setImp({ ...imp, kind: 'git' })}>Git repository</button>
-            <button type="button" role="radio" aria-checked={imp.kind === 'archive'} className={imp.kind === 'archive' ? 'on' : ''} onClick={() => setImp({ ...imp, kind: 'archive' })}>Archive</button>
+            <button type="button" role="radio" aria-checked={imp.kind === 'git'} className={imp.kind === 'git' ? 'on' : ''} onClick={() => setImp({ ...imp, kind: 'git' })}>Git 仓库</button>
+            <button type="button" role="radio" aria-checked={imp.kind === 'archive'} className={imp.kind === 'archive' ? 'on' : ''} onClick={() => setImp({ ...imp, kind: 'archive' })}>压缩包</button>
           </div>
           {imp.kind === 'git' ? (
             <div className="eo-two">
-              <div className="set-f"><label htmlFor="eoGitU">Repository address</label>
+              <div className="set-f"><label htmlFor="eoGitU">仓库地址</label>
                 <input id="eoGitU" className="set-in mono" value={imp.url} placeholder="https://github.com/your-org/project" spellCheck={false} autoFocus
                   onChange={(ev) => setImp({ ...imp, url: ev.target.value })} onKeyDown={(ev) => { if (ev.key === 'Enter') void runImport(); }} /></div>
-              <div className="set-f"><label htmlFor="eoGitR">Branch or tag <span className="muted">optional</span></label>
+              <div className="set-f"><label htmlFor="eoGitR">分支或标签 <span className="muted">可选</span></label>
                 <input id="eoGitR" className="set-in mono" value={imp.ref} placeholder="main" spellCheck={false}
                   onChange={(ev) => setImp({ ...imp, ref: ev.target.value })} onKeyDown={(ev) => { if (ev.key === 'Enter') void runImport(); }} /></div>
             </div>
@@ -532,9 +532,9 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
             </div>
           )}
           <label className="eo-check"><input type="checkbox" checked={imp.replace} onChange={(ev) => setImp({ ...imp, replace: ev.target.checked })} />
-            <span><b>Replace the current files</b></span></label>
+            <span><b>替换当前文件</b></span></label>
           <div className="eo-imp-act">
-            <button type="button" className="btn small" disabled={busy} onClick={() => setImp(null)}>Cancel</button>
+            <button type="button" className="btn small" disabled={busy} onClick={() => setImp(null)}>取消</button>
             <button type="button" className="btn small primary" disabled={busy || (imp.kind === 'git' ? !imp.url.trim() : !imp.file)} onClick={() => void runImport()}>{busy ? 'Importing…' : 'Import'}</button>
           </div>
         </div>
@@ -547,28 +547,28 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
           <input id="eoNewP" className="set-in slim mono" value={newPath.value} autoFocus spellCheck={false} placeholder={newPath.kind === 'dir' ? 'folder name' : 'file name, e.g. run.py'}
             onChange={(ev) => setNewPath({ ...newPath, value: ev.target.value })}
             onKeyDown={(ev) => { if (ev.key === 'Enter') void createPath(); }} />
-          <button type="button" className="btn small" disabled={busy} onClick={() => setNewPath(null)}>Cancel</button>
+          <button type="button" className="btn small" disabled={busy} onClick={() => setNewPath(null)}>取消</button>
           <button type="button" className="btn small primary" disabled={busy} onClick={() => void createPath()}>{newPath.kind === 'dir' ? 'Add folder' : 'Add file'}</button>
         </div>
       ) : null}
 
       {asking ? (
         <div className="mcp-ask" role="alertdialog" aria-labelledby="eoAskP">
-          <span id="eoAskP">Remove <b className="mono">{asking.path}</b>{asking.dir ? ` and the ${plural(asking.count, 'file')} in it` : ''}?</span>
+          <span id="eoAskP">移除 <b className="mono">{asking.path}</b>{asking.dir ? ` and the ${plural(asking.count, 'file')} in it` : ''}?</span>
           <span className="mcp-ask-b">
-            <button type="button" className="btn small" disabled={busy} onClick={() => setAsking(null)}>Keep</button>
-            <button type="button" className="btn small del-go" disabled={busy} onClick={() => void remove()} autoFocus>Remove</button>
+            <button type="button" className="btn small" disabled={busy} onClick={() => setAsking(null)}>保留</button>
+            <button type="button" className="btn small del-go" disabled={busy} onClick={() => void remove()} autoFocus>移除</button>
           </span>
         </div>
       ) : null}
 
       {msg || filesErr ? <p className={`eo-msg${msg?.bad || (!msg && filesErr) ? ' bad' : ''}`} role="status">{msg?.text || filesErr}</p> : null}
 
-      {entries === null ? <Skel label="Loading the files"><SkRows n={4} lead={false} /></Skel>
+      {entries === null ? <Skel label="正在加载文件"><SkRows n={4} lead={false} /></Skel>
         : empty ? (imp || newPath ? null : (
           // the bar above has every way in: one line and the likeliest one
-          <p className="eo-none eo-nofiles">No files yet.{' '}
-            <button type="button" className="link-q inl" onClick={() => { setMsg(null); setImp({ kind: 'git', url: '', ref: '', file: null, replace: false }); }}>Import a project</button></p>
+          <p className="eo-none eo-nofiles">暂无文件。{' '}
+            <button type="button" className="link-q inl" onClick={() => { setMsg(null); setImp({ kind: 'git', url: '', ref: '', file: null, replace: false }); }}>导入项目</button></p>
         )) : (
           <div className="eo-files">
             <div className="eo-tree-pane">
@@ -580,7 +580,7 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
                         <span className="eo-ic" aria-hidden="true">{IC.file}</span><span className="eo-fn">{m.path}</span></button>
                     </div></li>
                   ))}</ul>
-                ) : <p className="eo-none">No file matches.</p>
+                ) : <p className="eo-none">没有匹配的文件。</p>
               ) : <ul className="eo-tree" aria-label="Project files">{tree.map((n) => row(n, 0))}</ul>}
             </div>
             <div className="eo-view">
@@ -589,10 +589,10 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
                   <div className="eo-view-head">
                     <code title={openPath}>{openPath}</code>
                     <span className="eo-dim">{file ? fmtBytes(file.bytes) : ''}{edits[openPath] !== undefined ? ' · edited' : ''}</span>
-                    {edits[openPath] !== undefined ? <button type="button" className="link-q" onClick={() => setEdits((cur) => { const n = { ...cur }; delete n[openPath]; return n; })}>Undo edits</button> : null}
+                    {edits[openPath] !== undefined ? <button type="button" className="link-q" onClick={() => setEdits((cur) => { const n = { ...cur }; delete n[openPath]; return n; })}>撤销编辑</button> : null}
                   </div>
                   {fileErr ? <p className="eo-none bad">{fileErr}</p>
-                    : !file ? <Skel label="Opening the file" className="eo-view-sk"><SkLine w="60%" /><SkLine w="80%" style={{ marginTop: 10 }} /><SkLine w="45%" style={{ marginTop: 10 }} /></Skel>
+                    : !file ? <Skel label="正在打开文件" className="eo-view-sk"><SkLine w="60%" /><SkLine w="80%" style={{ marginTop: 10 }} /><SkLine w="45%" style={{ marginTop: 10 }} /></Skel>
                       : file.text === null ? <FileShow path={openPath} blob={file.blob || null} type={file.type} />
                         : (
                           // the one scroll for the open file: the editor grows with its lines inside it
@@ -655,8 +655,8 @@ function FileShow({ path, blob, type }: { path: string; blob: Blob | null; type:
   }, [blob, kind, as]);
 
   const name = path.split('/').pop() || path;
-  if (!media) return <p className="eo-none">This file is not text, and it has no preview here.</p>;
-  if (!src) return <Skel label="Opening the file" className="eo-view-sk"><SkLine h={160} r={10} /></Skel>;
+  if (!media) return <p className="eo-none">此文件不是文本，暂不支持预览。</p>;
+  if (!src) return <Skel label="正在打开文件" className="eo-view-sk"><SkLine h={160} r={10} /></Skel>;
   // ph-no-capture: the person's own file, kept out of session recordings (as FilePreview does)
   return (
     <div className={`eo-show is-${media.kind} ph-no-capture`}>
@@ -705,7 +705,7 @@ function PackagesPane({ env, runtimes, declared, setDeclared, python, setPython,
     ? (runtimes?.python.length ? (
       <label className="eo-rt">Python
         <select className="set-in slim" value={python} onChange={(ev) => setPython(ev.target.value)}>
-          <option value="">Default</option>
+          <option value="">默认</option>
           {runtimes.python.map((v) => <option key={v} value={v}>{v}</option>)}
           {python && !runtimes.python.includes(python) ? <option value={python}>{python}</option> : null}
         </select>
@@ -731,7 +731,7 @@ function PackagesPane({ env, runtimes, declared, setDeclared, python, setPython,
       </div>
       {segment === 'apt' && aptOff ? null : (
         <form className="eo-add" onSubmit={(ev) => { ev.preventDefault(); void add(); }}>
-          <label className="sr" htmlFor="eoSpec">Add a {segment} package</label>
+          <label className="sr" htmlFor="eoSpec">添加 {segment} 依赖包</label>
           <input id="eoSpec" className={`set-in mono${err ? ' bad' : ''}`} value={spec} placeholder={SPEC_HINT[segment]} spellCheck={false} autoComplete="off"
             aria-invalid={err ? true : undefined} aria-describedby="eoSpecSay"
             onChange={(ev) => { setSpec(ev.target.value); if (err) setErr(''); }} />
@@ -748,18 +748,18 @@ function PackagesPane({ env, runtimes, declared, setDeclared, python, setPython,
               <li key={x} className="eo-pkg">
                 <code className="eo-pkg-n">{r.name}</code>
                 <span className="eo-pkg-v">{r.text ? <span className="mono">{r.text}</span> : null}{r.note ? <em>{r.note}</em> : null}</span>
-                <button type="button" className="eo-ib" aria-label={`Remove ${r.name}`} title="Remove" onClick={() => drop(x)}>{IC.x}</button>
+                <button type="button" className="eo-ib" aria-label={`Remove ${r.name}`} title="移除" onClick={() => drop(x)}>{IC.x}</button>
               </li>
             );
           })}
         </ul>
       ) : (
-        <p className="eo-none left">No {segment} packages yet.</p>
+        <p className="eo-none left">无 {segment} 依赖包。</p>
       )}
 
       {env.version && installed.length ? (
         <details className="eo-all">
-          <summary>Everything version {env.version} installed with {segment} <span className="count">{installed.length}</span></summary>
+          <summary>全部版本 {env.version} 安装方式 {segment} <span className="count">{installed.length}</span></summary>
           <ul>{installed.map((p) => <li key={p.name}><code>{p.name}</code><span className="mono">{p.version}</span></li>)}</ul>
         </details>
       ) : null}
@@ -810,29 +810,29 @@ function BuildsPane({ id, env, build, elapsed, picked, setPicked, busy, onUse }:
           <div className="eo-run-head">
             <span className={`pill ${VERSION_STATUS[showing.status].tone}`}>{showing.status === 'building' ? <span className="dot run" aria-hidden="true" /> : null}{VERSION_STATUS[showing.status].label}</span>
             <b>{head.title}</b>
-            {picked !== null && picked !== build?.version ? <button type="button" className="link-q" onClick={() => setPicked(null)}>Back to the latest</button> : null}
+            {picked !== null && picked !== build?.version ? <button type="button" className="link-q" onClick={() => setPicked(null)}>返回最新版本</button> : null}
           </div>
-          <p className={`eo-run-line${showing.status === 'failed' ? ' bad' : ''}`}>{showing.status === 'failed' ? <><b>Why it failed:</b> {head.line}</> : head.line}</p>
+          <p className={`eo-run-line${showing.status === 'failed' ? ' bad' : ''}`}>{showing.status === 'failed' ? <><b>失败原因</b> {head.line}</> : head.line}</p>
           {showing.log || showing.status === 'building' ? (
             <pre className="eo-term" ref={term} aria-live={showing.status === 'building' ? 'polite' : undefined} aria-label={`Build log of version ${showing.version}`} tabIndex={0}
               onScroll={(ev) => { const el = ev.currentTarget; atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; }}>
               {(showing.log || '').split('\n').map((l, k) => <span key={k} className={l.startsWith('$ ') ? 'cmd' : undefined}>{l}{'\n'}</span>)}
               {showing.status === 'building' ? <span className="eo-cursor" aria-hidden="true" /> : null}
             </pre>
-          ) : <p className="eo-none left">This build kept no log.</p>}
+          ) : <p className="eo-none left">此次构建未保留日志。</p>}
         </section>
       ) : recErr ? <p className="eo-msg bad">{recErr}</p>
-        : picked !== null ? <Skel label="Opening the log"><SkLine w="40%" /><SkLine h={140} r={12} style={{ marginTop: 12 }} /></Skel>
+        : picked !== null ? <Skel label="正在打开日志"><SkLine w="40%" /><SkLine h={140} r={12} style={{ marginTop: 12 }} /></Skel>
           : <p className="eo-none left">{env.files.count ? 'No builds yet.' : 'No builds yet. Add files first.'}</p>}
 
       {rows.length ? (
         <>
-          <h4 className="eo-h">Versions</h4>
+          <h4 className="eo-h">版本</h4>
           <div className="eo-v eo-vh" aria-hidden="true">
-            <span>Version</span><span>Status</span><span className="eo-c-start">Started</span><span className="eo-c-took">Took</span>
-            <span className="eo-c-files">Files</span><span className="eo-c-pk">Packages</span><span className="eo-c-act" />
+            <span>版本</span><span>状态</span><span className="eo-c-start">开始时间</span><span className="eo-c-took">耗时</span>
+            <span className="eo-c-files">文件</span><span className="eo-c-pk">依赖包</span><span className="eo-c-act" />
           </div>
-          <ul className="eo-vt" aria-label="Versions">
+          <ul className="eo-vt" aria-label="版本">
             {rows.map((v) => {
               const st = VERSION_STATUS[v.status] || VERSION_STATUS.unknown;
               const shown = (picked ?? build?.version) === v.version;
@@ -840,7 +840,7 @@ function BuildsPane({ id, env, build, elapsed, picked, setPicked, busy, onUse }:
               const pk = typeof v.packages === 'number' && v.status === 'ready' ? plural(v.packages, 'package') : '';
               return (
                 <li key={v.version} className={`eo-v${shown ? ' shown' : ''}`}>
-                  <span className="eo-c-ver"><b>Version {v.version}</b>{v.active ? <span className="chip eo-inuse">In use</span> : null}
+                  <span className="eo-c-ver"><b>版本 {v.version}</b>{v.active ? <span className="chip eo-inuse">使用中</span> : null}
                     <small className="eo-c-sub">{[when(v.started_at), v.status === 'building' ? '' : took(v.started_at, v.finished_at), files, pk].filter(Boolean).join(' · ')}</small></span>
                   <span><span className={`pill ${st.tone}`}>{st.label}</span></span>
                   <span className="eo-c-start">{when(v.started_at)}</span>
@@ -850,7 +850,7 @@ function BuildsPane({ id, env, build, elapsed, picked, setPicked, busy, onUse }:
                   <span className="eo-c-act">
                     <button type="button" className="link-q" aria-pressed={shown} aria-label={`${v.status === 'failed' ? 'Why version' : 'Log of version'} ${v.version} ${v.status === 'failed' ? 'failed' : ''}`.trim()}
                       onClick={() => setPicked(v.version === build?.version ? null : v.version)}>{v.status === 'failed' ? 'Why' : 'Log'}</button>
-                    {v.canUse ? <button type="button" className="btn small line" disabled={busy} onClick={() => onUse(v.version)}>Use this version</button> : null}
+                    {v.canUse ? <button type="button" className="btn small line" disabled={busy} onClick={() => onUse(v.version)}>使用此版本</button> : null}
                   </span>
                   {v.status === 'failed' && v.error ? <small className="eo-v-err">{v.error}</small> : null}
                 </li>
@@ -871,19 +871,19 @@ function DetailsPane({ env, form, setForm, users }: {
 }) {
   return (
     <div className="eo-details">
-      <div className="set-f"><label htmlFor="eoName">Name</label>
+      <div className="set-f"><label htmlFor="eoName">名称</label>
         <input id="eoName" className={`set-in${form.name.trim() ? '' : ' bad'}`} value={form.name} onChange={(ev) => setForm({ ...form, name: ev.target.value })} /></div>
-      <div className="set-f"><label htmlFor="eoDesc">Description <span className="muted">optional</span></label>
-        <input id="eoDesc" className="set-in" value={form.description} placeholder="What the project does" onChange={(ev) => setForm({ ...form, description: ev.target.value })} /></div>
-      <div className="set-f"><label htmlFor="eoEntry">How it is run <span className="muted">optional</span></label>
+      <div className="set-f"><label htmlFor="eoDesc">描述<span className="muted">可选</span></label>
+        <input id="eoDesc" className="set-in" value={form.description} placeholder="项目功能描述" onChange={(ev) => setForm({ ...form, description: ev.target.value })} /></div>
+      <div className="set-f"><label htmlFor="eoEntry">运行方式 <span className="muted">可选</span></label>
         <input id="eoEntry" className="set-in mono" value={form.entry} placeholder="python3 run.py --episode <id>" spellCheck={false} onChange={(ev) => setForm({ ...form, entry: ev.target.value })} /></div>
-      <div className="set-f"><span className="eo-l">Where tasks find it</span>
+      <div className="set-f"><span className="eo-l">任务访问位置</span>
         <div className="set-ro"><code>{env.mount}</code></div></div>
-      <div className="set-f"><span className="eo-l">Used by</span>
-        {users === null ? <Skel label="Reading the setups that use it"><SkLine w="50%" /></Skel>
+      <div className="set-f"><span className="eo-l">使用方</span>
+        {users === null ? <Skel label="正在读取关联配置"><SkLine w="50%" /></Skel>
           : users.length ? (
             <ul className="eo-users">{users.map((u) => <li key={u.id}><Link className="link-q inl" href={setupHref(u.id)}>{u.name || 'Untitled setup'}</Link></li>)}</ul>
-          ) : <p className="set-help">No setup uses it yet.</p>}
+          ) : <p className="set-help">尚无配置使用此资源。</p>}
       </div>
     </div>
   );

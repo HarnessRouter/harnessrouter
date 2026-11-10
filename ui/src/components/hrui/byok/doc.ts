@@ -176,3 +176,13 @@ export async function pollHandoff(code: string): Promise<HandedKey | 'waiting' |
   const j = await r.json().catch(() => null) as (HandedKey & { status?: string }) | null;
   return r.ok && j?.status === 'ready' && j.api_key ? j : 'failed';
 }
+
+export async function discoverModels(body: { base_url: string; api_key: string; api_format: string; integration_name?: string }): Promise<string[]> {
+  const r = await harnessFetch('/api/harness/v1/admin/integrations/models', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(body),
+  });
+  const result = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(typeof result?.detail === 'string' ? result.detail : '获取模型列表失败。');
+  if (!Array.isArray(result?.models)) throw new Error('模型列表格式无效。');
+  return result.models.filter((model: unknown): model is string => typeof model === 'string');
+}

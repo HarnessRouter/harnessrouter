@@ -1,13 +1,13 @@
 'use client';
 // Deploy to Cloud: the setup page bar's second action, beside Connect your app (10-23: "one click
-// deploy the local harness into HarnessRouter cloud"). One button, in the one place a setup's actions
+// deploy the local harness into 智能体网关 cloud"). One button, in the one place a setup's actions
 // live, and it always says where the setup stands:
 //   - Deploy to Cloud: never deployed. One click deploys it. The first time this instance has no cloud
-//     workspace yet, so the click opens HarnessRouter Cloud's sign-in in a new tab (the same hand-off
+//     workspace yet, so the click opens 云端服务's sign-in in a new tab (the same hand-off
 //     Bring your own key's Get a key uses). The person signs in or up there, the key minted for their
 //     workspace lands on this instance's server (never in this page), and the deploy goes on by itself.
 //   - Update Cloud: deployed, and the setup changed since. One click replaces the cloud copy.
-//   - In Cloud: deployed and current. Its menu opens the copy in HarnessRouter Cloud, deploys again, or
+//   - In Cloud: deployed and current. Its menu opens the copy in 云端服务, deploys again, or
 //     deploys to another workspace (the destinations this instance keeps: CloudUploadSheet).
 // The cloud copy is one way: this instance stays the source, and every deploy replaces the copy under
 // the same cloud id. What it says of the copy (deployed, changed since) is the server's own status.
@@ -65,7 +65,7 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
       if (!alive.current) return;
       if (!r.ok) { toast(plain(new Error(r.error || ''), `${name} could not be deployed. Try again.`)); return; }
       setStatus({ ...r.status, open_url: r.open_url || r.status?.open_url || '' });
-      toast(r.action === 'create' ? `${name} is deployed to HarnessRouter Cloud.` : `${name} is updated in HarnessRouter Cloud.`);
+      toast(r.action === 'create' ? `${name} 已部署到云端。` : `${name} 的云端副本已更新。`);
     } catch (e) {
       if (alive.current) toast(plain(e, `${name} could not be deployed. Try again.`));
     } finally {
@@ -73,7 +73,7 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
     }
   };
 
-  // the first deploy: sign in to HarnessRouter Cloud in a new tab, then deploy as soon as the key lands
+  // the first deploy: sign in to 云端服务 in a new tab, then deploy as soon as the key lands
   const signIn = async () => {
     // opened now, in the click itself, so the browser lets it open; pointed at the sign-in once known
     const tab = typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null;
@@ -87,7 +87,7 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
       if (tab) tab.location.href = s.url;
     } catch (e) {
       tab?.close();
-      if (alive.current) { setPhase('idle'); toast(plain(e, 'HarnessRouter Cloud could not be reached just now. Try again.')); }
+      if (alive.current) { setPhase('idle'); toast(plain(e, '暂时无法连接云端，请重试。')); }
       return;
     }
     const until = Date.now() + SIGNIN_MAX_MS;
@@ -120,10 +120,10 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
   const label = phase === 'deploying' ? 'Deploying…'
     : phase === 'signin' ? 'Finish signing in'
       : current ? 'In Cloud' : deployed ? 'Update Cloud' : 'Deploy to Cloud';
-  const tip = phase === 'signin' ? 'Finish signing in to HarnessRouter Cloud in the tab it opened. The deploy goes on by itself.'
-    : current ? `${name} is deployed to HarnessRouter Cloud${status?.target ? `, ${status.target}` : ''}.`
-      : deployed ? `${name} changed since its deploy. Update the copy in HarnessRouter Cloud.`
-        : `Deploy ${name} to HarnessRouter Cloud.`;
+  const tip = phase === 'signin' ? '请在打开的标签页完成云端登录，随后会自动部署。'
+    : current ? `${name} is deployed to 云端服务${status?.target ? `, ${status.target}` : ''}.`
+      : deployed ? `${name} 已更改，请更新云端副本。`
+        : `将 ${name} 部署到云端。`;
   return (
     <span ref={wrap} className="dc-w">
       <button type="button" className={`btn small ag-act dc-b${current ? ' on' : ''}`} aria-label={label} title={tip}
@@ -134,12 +134,12 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
         {deployed && !current && phase === 'idle' ? <i className="dc-dot" aria-hidden="true" /> : null}
       </button>
       {menu ? (
-        <span className="rng-pop dc-pop" role="menu" aria-label="In HarnessRouter Cloud">
+        <span className="rng-pop dc-pop" role="menu" aria-label="In 智能体网关 Cloud">
           {status?.open_url ? (
-            <button type="button" role="menuitem" onClick={() => { setMenu(false); window.open(status.open_url, '_blank', 'noopener'); }}>Open in HarnessRouter Cloud ↗</button>
+            <button type="button" role="menuitem" onClick={() => { setMenu(false); window.open(status.open_url, '_blank', 'noopener'); }}>在云端打开 ↗</button>
           ) : null}
-          <button type="button" role="menuitem" onClick={deploy}>Deploy again</button>
-          <button type="button" role="menuitem" onClick={() => { setMenu(false); setAnother(true); }}>Deploy to another workspace…</button>
+          <button type="button" role="menuitem" onClick={deploy}>重新部署</button>
+          <button type="button" role="menuitem" onClick={() => { setMenu(false); setAnother(true); }}>部署到其他工作区…</button>
         </span>
       ) : null}
       {another ? (

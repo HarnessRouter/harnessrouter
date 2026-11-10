@@ -25,7 +25,7 @@ export function InputRequestCard({ request, disabled, onAnswer }: {
   const secret = request.kind === 'secret';
   const choices = choicesOf(request);
   if (requestExpired(request)) {
-    return <div className="input-request" role="status"><p className="input-request-note">This question has expired. Write a message to go on.</p></div>;
+    return <div className="input-request" role="status"><p className="input-request-note">此问题已过期，请发送消息以继续。</p></div>;
   }
   const submit = () => {
     const v = value.trim();
@@ -35,7 +35,7 @@ export function InputRequestCard({ request, disabled, onAnswer }: {
   };
   return (
     <form className="input-request" aria-label="Answer the question" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <p className="input-request-lead">Waiting for your answer</p>
+      <p className="input-request-lead">等待你的回答</p>
       {choices.length ? (
         <div className="input-request-choices">
           {choices.map((o) => (
@@ -47,10 +47,10 @@ export function InputRequestCard({ request, disabled, onAnswer }: {
           <input type={secret ? 'password' : 'text'} value={value} onChange={(e) => setValue(e.target.value)}
             aria-label={request.prompt} placeholder={secret ? 'Your answer stays private' : 'Your answer'}
             autoComplete="off" spellCheck={false} disabled={disabled} />
-          <button type="submit" className="btn small primary" disabled={disabled || !value.trim()}>Send answer</button>
+          <button type="submit" className="btn small primary" disabled={disabled || !value.trim()}>发送回答</button>
         </div>
       )}
-      {secret ? <p className="input-request-note">Only this task can use it. It isn&apos;t saved or shown in the conversation, unless the agent repeats it.</p> : null}
+      {secret ? <p className="input-request-note">仅当前任务可以使用，不会保存或显示在对话中，智能体复述时除外。</p> : null}
     </form>
   );
 }

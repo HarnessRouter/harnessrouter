@@ -64,6 +64,15 @@ for entry in manifest.get("skills", []):
 print(f"skills: {len(out)} bundled")
 PY
 
+# A skill's files and a skill's dependencies have different homes in the split images: the gateway
+# serves the files, and the scripts they describe execute in the session, on the runner. This
+# switch lets the gateway image take the catalogue alone instead of installing a session toolchain
+# it will never run.
+if [ "${HR_SKILLS_INSTALL_DEPS:-1}" != "1" ]; then
+    echo "skills: dependencies skipped (HR_SKILLS_INSTALL_DEPS=$HR_SKILLS_INSTALL_DEPS) — files only"
+    exit 0
+fi
+
 # Dependencies, declared by the skills themselves. Union across every bundled skill so a shared
 # package is installed once.
 APT=$(cat "$DEST"/*/apt-packages.txt 2>/dev/null | sed 's/#.*//' | tr -d '\r' | awk 'NF' | sort -u || true)

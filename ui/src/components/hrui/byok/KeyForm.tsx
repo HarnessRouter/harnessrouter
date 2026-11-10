@@ -10,10 +10,10 @@
 // lists its own models: the id a harness asks for and the name the endpoint wants on the wire. Any
 // other provider serves the models the catalog lists, and a model newer than this release is one row
 // away (its id and its name on the wire).
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { OOB } from '@/lib/harness';
 import { toast } from '../toast';
-import { HOSTED, SECRET, isEntra, nameFor, type CatalogEntry, type Doc, type Integration, type ModelRow, type ProviderField } from './doc';
+import { HOSTED, SECRET, discoverModels, isEntra, nameFor, type CatalogEntry, type Doc, type Integration, type ModelRow, type ProviderField } from './doc';
 
 const X = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>;
 const FORMATS: [string, string][] = [['openai', 'OpenAI Chat Completions'], ['responses', 'OpenAI Responses'], ['anthropic', 'Anthropic Messages']];
@@ -53,6 +53,35 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
   // a custom endpoint's rows are its whole list; any other provider's rows are what differs from its
   // catalog: a model beyond it, or a listed one sent under another name
   const [rows, setRows] = useState<ModelRow[]>(() => (editing?.models || []).filter((m) => custom || table.get(m.canonical) !== m.provider_id));
+  const [discovered, setDiscovered] = useState<string[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [modelError, setModelError] = useState('');
+  const discoveryVersion = useRef(0);
+  useEffect(() => {
+    discoveryVersion.current++;
+    setDiscovered([]);
+    setModelError('');
+    setRefreshing(false);
+    return () => { discoveryVersion.current++; };
+  }, [cfg.base_url, cfg.api_key, cfg.api_format]);
+
+  async function refreshModels() {
+    if (refreshing || busy) return;
+    if (!cfg.base_url?.trim()) { setModelError('请先填写接口地址。'); return; }
+    const version = ++discoveryVersion.current;
+    setRefreshing(true);
+    setModelError('');
+    try {
+      const models = await discoverModels({ base_url: cfg.base_url, api_key: cfg.api_key || '', api_format: cfg.api_format || 'openai', integration_name: editing?.name });
+      if (version !== discoveryVersion.current) return;
+      setDiscovered(models);
+      if (!models.length) setModelError('接口未返回模型，可手动添加模型 ID。');
+    } catch (error) {
+      if (version === discoveryVersion.current) setModelError(error instanceof Error ? error.message : '获取模型列表失败。');
+    } finally {
+      if (version === discoveryVersion.current) setRefreshing(false);
+    }
+  }
   const [label, setLabel] = useState('');
   const [how, setHow] = useState<'key' | 'entra'>(editing && isEntra(editing) ? 'entra' : 'key');
   const [refused, setRefused] = useState('');
@@ -101,7 +130,7 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
           <select id={id(f.key)} className="set-in" value={fmt} onChange={(e) => set(f.key, e.target.value)}>
             {FORMATS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
           </select>
-          <p className="set-help">The API your endpoint accepts. The harnesses it can drive are listed under its models.</p>
+          <p className="set-help">接口地址支持的 API 类型，可驱动的智能体列在模型下方。</p>
         </div>
       );
     }
@@ -140,11 +169,22 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
   const rowsBox = (help: string) => (
     <>
       {custom ? (
-        <datalist id="custom-model-ids">{(meta.canonicals || []).map((c) => <option key={c} value={c} />)}</datalist>
+        <>
+          <div className="pv-model-discovery">
+            <select className="set-in" aria-label="从接口选择模型" value="" disabled={refreshing || !discovered.length}
+              onChange={(e) => { const model = e.target.value; if (model) setRows((current) => current.some((r) => r.canonical === model) ? current : [...current.filter((r) => r.canonical || r.provider_id), { canonical: model, provider_id: model }]); }}>
+              <option value="">{discovered.length ? `选择模型（${discovered.length}）` : '刷新后选择模型'}</option>
+              {discovered.map((model) => <option key={model} value={model}>{model}</option>)}
+            </select>
+            <button type="button" className="btn small line" disabled={busy || refreshing} onClick={() => void refreshModels()}>{refreshing ? '获取中…' : '刷新模型列表'}</button>
+          </div>
+          {modelError ? <p className="set-help" role="alert">{modelError}</p> : null}
+          <datalist id="custom-model-ids">{[...new Set([...discovered, ...(meta.canonicals || [])])].map((c) => <option key={c} value={c} />)}</datalist>
+        </>
       ) : null}
       {rows.map((r, i) => (
         <div className="keyrow pv-mrow" key={i}>
-          <input type="text" className="keyname mono" list={custom ? 'custom-model-ids' : undefined} aria-label="Model" placeholder="Model id" value={r.canonical}
+          <input type="text" className="keyname mono" list={custom ? 'custom-model-ids' : undefined} aria-label="模型" placeholder="模型 ID" value={r.canonical}
             onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, canonical: e.target.value } : x)))} />
           <input type="text" className="keyname mono" aria-label="Name on the wire" placeholder={r.canonical || 'Same as the model id'}
             value={r.provider_id === r.canonical ? '' : r.provider_id}
@@ -153,7 +193,7 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
         </div>
       ))}
       <p className="set-help">{help}</p>
-      <div><button type="button" className="btn small line" onClick={() => setRows([...rows, { canonical: '', provider_id: '' }])}>Add model</button></div>
+      <div><button type="button" className="btn small line" onClick={() => setRows([...rows, { canonical: '', provider_id: '' }])}>添加模型</button></div>
     </>
   );
 
@@ -162,27 +202,27 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
     <div className="pv-form ship-sheet">
       {meta.entra ? (
         <div className="set-f pv-how">
-          <label id={id('how')}>Signs in with</label>
-          <Seg label="Signs in with" value={how} onChange={(v) => { setHow(v); setRefused(''); }} options={[['key', 'API key'], ['entra', 'Microsoft Entra']]} />
-          {entra ? <p className="set-help">Tasks sign in to Microsoft Entra as this application. Give the application a role on your Azure resource.</p> : null}
+          <label id={id('how')}>登录方式</label>
+          <Seg label="登录方式" value={how} onChange={(v) => { setHow(v); setRefused(''); }} options={[['key', 'API key'], ['entra', 'Microsoft Entra']]} />
+          {entra ? <p className="set-help">任务将以此应用登录 Microsoft Entra，请为应用分配 Azure 资源角色。</p> : null}
         </div>
       ) : null}
       {editing ? null : (
         <div className="set-f">
-          <label htmlFor={id('label')}>Name <span className="muted">optional</span></label>
+          <label htmlFor={id('label')}>名称<span className="muted">可选</span></label>
           <input id={id('label')} className="set-in" autoComplete="off" placeholder={nameFor(doc, meta.id, '')} value={label} onChange={(e) => setLabel(e.target.value)} onKeyDown={enter} />
-          <p className="set-help">How this connection is named in your list and in which key serves each model.</p>
+          <p className="set-help">连接名称会显示在列表和模型密钥分配中。</p>
         </div>
       )}
       {fields.map(field)}
-      {meta.base_url ? <p className="set-help">Endpoint: <code>{cfg.base_url || meta.base_url}</code></p> : null}
+      {meta.base_url ? <p className="set-help">接口地址 <code>{cfg.base_url || meta.base_url}</code></p> : null}
       <div className="set-f">
         <label>{custom ? 'Models' : 'Models it serves'}</label>
         {custom ? rowsBox(`Each model a harness picks, and the name this endpoint wants for it (blank: the model id as it is). Compatible harnesses: ${meta.format_backends?.[fmt]?.length ? baseNames(meta.format_backends[fmt]).join(', ') + '.' : 'not known for this format.'}`)
           : list.length ? (
             <>
               <details className="hk-more">
-                <summary>{list.length} model{list.length === 1 ? '' : 's'}: {list.slice(0, 4).map((m) => m.canonical).join(', ')}{list.length > 4 ? ` and ${list.length - 4} more` : ''}</summary>
+                <summary>{list.length} 模型{list.length === 1 ? '' : 's'}: {list.slice(0, 4).map((m) => m.canonical).join(', ')}{list.length > 4 ? ` and ${list.length - 4} more` : ''}</summary>
                 <p className="set-help mono">{list.map((m) => m.canonical).join(', ')}</p>
               </details>
               {rowsBox('A model newer than this release: add it with the id the provider uses on the wire, and it shows in every model list this provider serves.')}
@@ -192,7 +232,7 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
       {refused ? <div className="keywarn" role="alert">{refused}</div> : null}
       <div className="sheet-actions">
         <button type="button" className="btn primary" disabled={busy} onClick={() => void save()}>{busy ? 'Saving' : editing ? 'Save' : 'Create'}</button>
-        <button type="button" className="btn" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn" disabled={busy} onClick={onCancel}>取消</button>
       </div>
     </div>
   );

@@ -70,7 +70,7 @@ export function PromptStep({ n = 1, state, text, preId, preRef, copied, failed, 
     <>{copied ? 'Copied · ' : null}<button ref={again} type="button" className="link-q inl" onClick={onCopy}>{copied ? 'Copy again' : 'Copy prompt'}</button></>
   );
   return (
-    <HxStep n={n} state={state} title="Copy the prompt and send it" sum={sum} keep={<PasteHint />}>
+    <HxStep n={n} state={state} title="复制并发送提示词" sum={sum} keep={<PasteHint />}>
       <PromptCopy text={text} preId={preId} preRef={preRef} copied={copied} failed={failed} onCopy={onCopy} />
     </HxStep>
   );

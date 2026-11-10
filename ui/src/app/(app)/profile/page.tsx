@@ -91,15 +91,15 @@ export default function ProfilePage() {
       <div className="list-wrap lw-n" id="view-profile">
         <div className="list-top">
           <div>
-            <h1>Profile</h1>
+            <h1>个人资料</h1>
           </div>
         </div>
 
         {loadErr ? (
-          <p className="empty-list ld-fail" role="alert">Your profile could not be read just now.{' '}
-            <button type="button" className="link-q inl" onClick={() => void load()}>Try again</button></p>
+          <p className="empty-list ld-fail" role="alert">暂时无法读取个人资料。{' '}
+            <button type="button" className="link-q inl" onClick={() => void load()}>重试</button></p>
         ) : !profile ? (
-          <Skel label="Loading your profile">
+          <Skel label="正在加载个人资料">
             <div className="org-me"><SkLine w={64} h={64} r={32} /><div className="org-me-x"><SkLine w="40%" h={16} /><SkLine w="60%" h={12} style={{ marginTop: 10 }} /></div></div>
           </Skel>
         ) : (
@@ -108,39 +108,39 @@ export default function ProfilePage() {
               <MyPic size={64} />
               <div className="org-me-x">
                 <b className="pf-name">{profile.user}</b>
-                <p className="fine">The username and password you sign in to this instance with.</p>
+                <p className="fine">用于登录当前实例的用户名和密码。</p>
               </div>
             </div>
 
             {profile.usingDefaultPassword ? (
-              <div className="keywarn" role="alert"><b>You are using the default password.</b> It is published in the documentation, so anyone who can reach this address can sign in. Set your own below.</div>
+              <div className="keywarn" role="alert"><b>你正在使用默认密码。</b> 默认密码已公开，请在下方设置自己的密码。</div>
             ) : null}
 
             <form onSubmit={save} noValidate style={{ maxWidth: 520, marginTop: 22, display: 'grid', gap: 16 }}>
               <div className="set-f">
-                <label htmlFor="pf-user">Username</label>
+                <label htmlFor="pf-user">用户名</label>
                 <input id="pf-user" className="set-in" value={username} autoComplete="username" spellCheck={false}
                   onChange={(e) => setUsername(e.target.value)} />
               </div>
               <div className="set-f">
-                <label htmlFor="pf-new">New password</label>
+                <label htmlFor="pf-new">新密码</label>
                 <input id="pf-new" className="set-in" type="password" value={newPassword} autoComplete="new-password"
-                  placeholder="Leave blank to keep your current password" onChange={(e) => setNewPassword(e.target.value)} />
+                  placeholder="留空则保留当前密码" onChange={(e) => setNewPassword(e.target.value)} />
               </div>
               {changingPassword ? (
                 <div className="set-f">
-                  <label htmlFor="pf-confirm">Confirm new password</label>
+                  <label htmlFor="pf-confirm">确认新密码</label>
                   <input id="pf-confirm" className="set-in" type="password" value={confirmPassword} autoComplete="new-password"
                     aria-invalid={mismatch || undefined} aria-describedby={mismatch ? 'pfMismatch' : undefined}
                     onChange={(e) => setConfirmPassword(e.target.value)} />
-                  {mismatch ? <p className="kb-why" id="pfMismatch" role="alert">Both passwords must match.</p> : null}
+                  {mismatch ? <p className="kb-why" id="pfMismatch" role="alert">两次输入的密码必须一致。</p> : null}
                 </div>
               ) : null}
               <div className="set-f">
-                <label htmlFor="pf-current">Current password</label>
+                <label htmlFor="pf-current">当前密码</label>
                 <input id="pf-current" className="set-in" type="password" value={currentPassword} autoComplete="current-password"
                   onChange={(e) => setCurrentPassword(e.target.value)} />
-                <p className="set-help">Needed to change either one, so a tab left open cannot be used to take over this instance.</p>
+                <p className="set-help">修改用户名或密码时需验证当前密码。</p>
               </div>
               {err ? <p className="kb-why" role="alert">{err}</p> : null}
               {notice ? <p className="set-help" role="status">{notice}</p> : null}

@@ -48,23 +48,23 @@ export function NextBar({ id, name }: { id: string; name: string }) {
   // the drawing itself is hidden, and the button is read after it.
   return (
     <div className="bs-next nx2">
-      <span className="bs-nk">Next</span>
+      <span className="bs-nk">下一步</span>
       <div className="nx-flow" role="group"
-        aria-label={`Your app, built by your coding agent, sends each task to ${name}. It runs in HarnessRouter and the result comes back.`}>
+        aria-label={`Your app, built by your coding agent, sends each task to ${name}. It runs in 智能体网关 and the result comes back.`}>
         <div className="nx-end nx-app" aria-hidden="true">
           <Brick state="next" />
-          <b>Your app</b>
-          <span>Built by your coding agent</span>
+          <b>你的应用</b>
+          <span>由编程智能体构建</span>
         </div>
         <div className="nx-mid">
-          <div className="nx-wire" aria-hidden="true"><i className="go"><em>task</em></i><i className="back"><em>result</em></i></div>
+          <div className="nx-wire" aria-hidden="true"><i className="go"><em>任务</em></i><i className="back"><em>结果</em></i></div>
           <button type="button" className="btn small primary"
-            onClick={() => window.dispatchEvent(new CustomEvent(SET_UP_APP_EVENT, { detail: { id } }))}>Connect your app</button>
+            onClick={() => window.dispatchEvent(new CustomEvent(SET_UP_APP_EVENT, { detail: { id } }))}>连接你的应用</button>
         </div>
         <div className="nx-end nx-setup" aria-hidden="true">
           <Brick state="built" />
           <b title={name}>{name}</b>
-          <span>Runs every task in HarnessRouter</span>
+          <span>在智能体网关执行所有任务</span>
         </div>
       </div>
     </div>

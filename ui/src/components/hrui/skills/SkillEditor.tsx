@@ -374,14 +374,14 @@ export function SkillEditor<T extends SkillDraft>({ ed, setEd, busy, onSave, onC
               <span className={`ske-gap${n.dir ? ' chev' : ''}${open ? ' open' : ''}`} aria-hidden="true">{n.dir ? I.chev : null}</span>
               <span className="ske-ic" aria-hidden="true">{n.dir ? I.folder : I.file}</span>
               <FileName path={n.name} />
-              {n.dir && !n.n ? <small className="ske-tag">empty</small> : null}
+              {n.dir && !n.n ? <small className="ske-tag">空</small> : null}
             </button>
           )}
           {!md && !editing ? (
             <span className="ske-acts">
-              <button type="button" className="ske-ib" title="Rename" aria-label={`Rename ${n.path}`} disabled={hold}
+              <button type="button" className="ske-ib" title="重命名" aria-label={`Rename ${n.path}`} disabled={hold}
                 onClick={() => { setEntry(null); setAsk(null); setRen({ path: n.path, dir: n.dir, value: n.name, err: '' }); }}>{I.pen}</button>
-              <button type="button" className="ske-ib" title="Remove" aria-label={`Remove ${n.path}`} disabled={hold}
+              <button type="button" className="ske-ib" title="移除" aria-label={`Remove ${n.path}`} disabled={hold}
                 onClick={() => askRemove(n)}>{I.bin}</button>
             </span>
           ) : null}
@@ -391,8 +391,8 @@ export function SkillEditor<T extends SkillDraft>({ ed, setEd, busy, onSave, onC
           <div className="ske-ask" data-esc={key} style={style} role="group" aria-label={`Remove ${n.path}`}>
             <span>{n.dir ? `Remove ${n.name} and the ${plural(n.n, 'file')} in it?` : `Remove ${n.name}?`}</span>
             <span className="ske-ask-b">
-              <button type="button" className="link-q" onClick={() => { setAsk(null); focusRow(key); }}>Keep</button>
-              <button type="button" className="link-q danger" ref={askRef} onClick={() => remove(n.path, n.dir)}>Remove</button>
+              <button type="button" className="link-q" onClick={() => { setAsk(null); focusRow(key); }}>保留</button>
+              <button type="button" className="link-q danger" ref={askRef} onClick={() => remove(n.path, n.dir)}>移除</button>
             </span>
           </div>
         ) : null}
@@ -402,34 +402,34 @@ export function SkillEditor<T extends SkillDraft>({ ed, setEd, busy, onSave, onC
   }
 
   const nameHelp = !typed ? null
-    : !slug ? <>Use letters or digits. A skill’s name is stored as lowercase letters, digits and hyphens.</>
-      : slug !== typed ? <>Saved as <code>{slug}</code>: lowercase letters, digits and hyphens, {SKILL_NAME_MAX} characters at most.</>
+    : !slug ? <>技能名称使用小写字母、数字和连字符。</>
+      : slug !== typed ? <>保存为 <code>{slug}</code>，使用小写字母、数字和连字符，最多 {SKILL_NAME_MAX} 个字符。</>
         : null;
   const empties = (ed.dirs || []).length > 0;
 
   return (
     <Sheet onClose={onClose} labelledBy="skh" className="sk-sheet ske-sheet" busy={busy} initialFocus={desktop ? nameRef : 'dialog'}>
       <SheetTop id="skh" title={ed.id ? 'Edit skill' : 'Create a skill'} onClose={onClose} />
-      <div className="sk-f"><label htmlFor="skN">Skill name</label>
-        <input id="skN" ref={nameRef} className="set-in" placeholder="Weekly status report" autoComplete="off" value={ed.name}
+      <div className="sk-f"><label htmlFor="skN">技能名称</label>
+        <input id="skN" ref={nameRef} className="set-in" placeholder="每周状态报告" autoComplete="off" value={ed.name}
           aria-describedby={nameHelp ? 'skNh' : undefined} onChange={(e) => put({ name: e.target.value })} />
         {nameHelp ? <p className="set-help" id="skNh">{nameHelp}</p> : null}
       </div>
-      <div className="sk-f"><label htmlFor="skD">Description</label>
+      <div className="sk-f"><label htmlFor="skD">描述</label>
         <textarea id="skD" ref={descRef} className="set-in sk-desc" rows={2} value={ed.desc}
-          placeholder="Generate weekly status reports from recent work. Use when asked for updates or progress summaries."
+          placeholder="根据近期工作生成每周状态报告，用于汇报更新和进度。"
           onChange={(e) => put({ desc: e.target.value })} /></div>
 
       <div ref={boxRef} className={`ske${drop ? ' drop' : ''}`}
         onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); if (!drop) setDrop(true); } }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDrop(false); }}
         onDrop={onDrop}>
-        <div className="ske-bar" role="group" aria-label="Files">
-          <span className="ske-cap">Files</span>
-          <button type="button" className="sk-add" data-p="bar:file" aria-label="New file" title="New file" disabled={hold} onClick={() => start('file')}>{I.newFile}<span>New file</span></button>
-          <button type="button" className="sk-add" data-p="bar:dir" aria-label="New folder" title="New folder" disabled={hold} onClick={() => start('dir')}>{I.newDir}<span>New folder</span></button>
-          <button type="button" className="sk-add" aria-label="Upload files" title="Upload files" disabled={hold} onClick={() => upRef.current?.click()}>{I.upFile}<span>Upload files</span></button>
-          <button type="button" className="sk-add" aria-label="Upload folder" title="Upload folder" disabled={hold} onClick={() => dirRef.current?.click()}>{I.upDir}<span>Upload folder</span></button>
+        <div className="ske-bar" role="group" aria-label="文件">
+          <span className="ske-cap">文件</span>
+          <button type="button" className="sk-add" data-p="bar:file" aria-label="新建文件" title="新建文件" disabled={hold} onClick={() => start('file')}>{I.newFile}<span>新建文件</span></button>
+          <button type="button" className="sk-add" data-p="bar:dir" aria-label="新建文件夹" title="新建文件夹" disabled={hold} onClick={() => start('dir')}>{I.newDir}<span>新建文件夹</span></button>
+          <button type="button" className="sk-add" aria-label="上传文件" title="上传文件" disabled={hold} onClick={() => upRef.current?.click()}>{I.upFile}<span>上传文件</span></button>
+          <button type="button" className="sk-add" aria-label="上传文件夹" title="上传文件夹" disabled={hold} onClick={() => dirRef.current?.click()}>{I.upDir}<span>上传文件夹</span></button>
           <input type="file" ref={upRef} multiple hidden tabIndex={-1} onChange={(e) => fromInput(e.currentTarget)} />
           <input type="file" ref={dirInput} hidden tabIndex={-1} onChange={(e) => fromInput(e.currentTarget)} />
         </div>
@@ -454,8 +454,8 @@ export function SkillEditor<T extends SkillDraft>({ ed, setEd, busy, onSave, onC
             ) : null}
             {unread ? (
               <p className="ske-err ske-unread" role="alert">
-                {unreadLine(unread.names)} Nothing from that upload was added.{' '}
-                <button type="button" className="link-q inl" disabled={hold} onClick={unread.again}>Try again</button>
+                {unreadLine(unread.names)} 未添加任何上传内容。{' '}
+                <button type="button" className="link-q inl" disabled={hold} onClick={unread.again}>重试</button>
               </p>
             ) : null}
             {reading ? (
@@ -464,7 +464,7 @@ export function SkillEditor<T extends SkillDraft>({ ed, setEd, busy, onSave, onC
               </Skel>
             ) : null}
             <ul className="ske-tree" aria-label="Files in this skill">{tree.map((n) => row(n, 0))}</ul>
-            {empties ? <p className="ske-hint">An empty folder is saved once a file is in it.</p> : null}
+            {empties ? <p className="ske-hint">添加文件后才会保存空文件夹。</p> : null}
           </div>
 
           <div className="ske-pane">
@@ -473,7 +473,7 @@ export function SkillEditor<T extends SkillDraft>({ ed, setEd, busy, onSave, onC
             </div>
             {binary ? (
               <div className="ske-bin">
-                <p>This file is not text, so it is kept as it is.</p>
+                <p>此文件不是文本，将原样保留。</p>
                 <small>{fmtBytes(bytesOf(f.content_b64 || ''))}</small>
               </div>
             ) : (
@@ -499,12 +499,12 @@ export function SkillEditor<T extends SkillDraft>({ ed, setEd, busy, onSave, onC
             )}
           </div>
         </div>
-        {drop ? <div className="ske-drop" aria-hidden="true"><span>Drop files or a folder to add them{at ? ` to ${at}` : ''}</span></div> : null}
+        {drop ? <div className="ske-drop" aria-hidden="true"><span>拖入文件或文件夹以添加{at ? ` to ${at}` : ''}</span></div> : null}
       </div>
 
       <div className="sheet-actions sk-foot">
         <span className="grow" />
-        <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+        <button type="button" className="btn" disabled={busy} onClick={onClose}>取消</button>
         <button type="button" className="btn primary" disabled={hold || !!why} title={why || undefined} onClick={() => onSave(edRef.current)}>{primary || (ed.id ? 'Save' : 'Create')}</button>
       </div>
     </Sheet>

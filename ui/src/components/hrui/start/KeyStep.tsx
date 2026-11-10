@@ -109,14 +109,14 @@ export function KeyStep({ n, k, surface, base, state, onKey, entry }: {
   const sum = made ? (
     <>
       <span className="kb-n">{made.name}</span> · <span className="mono">{keyMask(made.tail)}</span>
-      <button ref={again} type="button" className="link-q inl" onClick={newKey}>New key</button>
+      <button ref={again} type="button" className="link-q inl" onClick={newKey}>新建密钥</button>
     </>
   ) : null;
   // the list could not be read: which names are taken is not known, so no name is offered and none is
   // checked against a list that may be missing keys; the line says so, with Try again
   const unread = k.error ? (
-    <p className="kb-why" role="alert">Your keys could not be read just now.{' '}
-      <button type="button" className="link-q inl" onClick={k.retry}>Try again</button></p>
+    <p className="kb-why" role="alert">暂时无法读取密钥。{' '}
+      <button type="button" className="link-q inl" onClick={k.retry}>重试</button></p>
   ) : null;
   const body = shown ? (
     <div className="reveal kb-reveal">
@@ -128,9 +128,9 @@ export function KeyStep({ n, k, surface, base, state, onKey, entry }: {
   ) : unread || (
     <>
       <div className="keyrow">
-        <label className="sr" htmlFor={`${id}-name`}>Key name</label>
+        <label className="sr" htmlFor={`${id}-name`}>密钥名称</label>
         <input id={`${id}-name`} ref={(el) => { input.current = el; if (entry) entry.current = el; }}
-          className={`keyname${why ? ' bad' : ''}`} placeholder="Key name, e.g. production" autoComplete="off" spellCheck={false}
+          className={`keyname${why ? ' bad' : ''}`} placeholder="密钥名称，例如生产环境" autoComplete="off" spellCheck={false}
           aria-invalid={why ? true : undefined} aria-describedby={why ? `${id}-why` : undefined} value={name}
           onChange={(e) => { setTyped(e.target.value); setWhy(''); }}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void create(); } }} />

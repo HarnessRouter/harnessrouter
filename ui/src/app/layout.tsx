@@ -50,36 +50,37 @@ const jbmono = localFont({ variable: '--font-jbmono', display: 'swap', src: [
   { path: '../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-600-normal.woff2', weight: '600', style: 'normal' },
 ] });
 
-const SITE = 'https://app.harnessrouter.ai';
+const SITE = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 // Self-hosted bills nothing and indexes nothing — a private box must not describe itself in
 // hosted terms, and must not invite a crawler.
 const SELF_HOSTED = process.env.NEXT_PUBLIC_HR_EDITION === 'selfhost';
 const DESC = SELF_HOSTED
-  ? 'Run coding agents like Codex, Claude Code and Hermes on your own machine, with your own keys.'
-  : 'One API routes your app to coding agents like Codex, Claude Code, Hermes, and Pi: '
-    + 'run tasks, stream results, and pay per use with credits.';
+  ? '在自己的设备上使用自己的密钥运行编程智能体。'
+  : '统一连接编程智能体，'
+    + '执行任务、实时查看结果并管理用量。';
 
 // The console is light whatever the system's appearance: its design is drawn for one palette (Richard, 2026-11-03).
 export const viewport: Viewport = { colorScheme: 'light' };
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
-  title: { default: 'HarnessRouter: one API for every coding agent', template: '%s · HarnessRouter' },
+  icons: { icon: "/hexa-mark.svg", apple: "/hexa-mark.svg" },
+  title: { default: '智能体网关', template: '%s · 智能体网关' },
   description: DESC,
-  applicationName: 'HarnessRouter',
+  applicationName: '智能体网关',
   keywords: ['coding agent API', 'Codex', 'Claude Code', 'Hermes', 'agent harness', 'AI agent router'],
   openGraph: {
-    type: 'website', siteName: 'HarnessRouter', url: SITE,
-    title: 'HarnessRouter, one API for every coding agent', description: DESC,
-    images: ['/share-mark.png'],
+    type: 'website', siteName: '智能体网关', url: SITE,
+    title: '智能体网关', description: DESC,
+    images: ['/hexa-mark.svg'],
   },
-  twitter: { card: 'summary', title: 'HarnessRouter', description: DESC, images: ['/share-mark.png'] },
+  twitter: { card: 'summary', title: '智能体网关', description: DESC, images: ['/hexa-mark.svg'] },
   robots: SELF_HOSTED ? { index: false, follow: false } : { index: true, follow: true },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable} ${display.variable} ${inter.variable} ${jbmono.variable}`}>
+    <html lang="zh-CN" className={`${sans.variable} ${mono.variable} ${display.variable} ${inter.variable} ${jbmono.variable}`}>
       <body>{children}</body>
     </html>
   );

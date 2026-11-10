@@ -32,12 +32,12 @@ export const BACK_IC = <svg viewBox="0 0 24 24" width="18" height="18" fill="non
 /** A setup's health from its tasks of the last 24 h (setups.ts healthOf): Healthy, Failing (too many
  *  of its finished tasks failed) or Idle (none ran). Its tasks not read yet: nothing is claimed. */
 export function HealthPill({ r }: { r: SetupRow }) {
-  if (!r.tasksKnown) return <span className="pill-sk" aria-busy="true"><span className="sr">Health loading</span><SkLine w={84} h={22} r={999} /></span>;
+  if (!r.tasksKnown) return <span className="pill-sk" aria-busy="true"><span className="sr">正在加载健康状态</span><SkLine w={84} h={22} r={999} /></span>;
   const h = healthOf(r.day);
   const tip = r.day.n ? `${r.day.n}${r.dayCapped ? '+' : ''} task${r.day.n === 1 && !r.dayCapped ? '' : 's'} in 24 h` : 'No tasks in 24 h';
-  if (h === 'failing') return <span className="pill bad" title={tip}>Failing</span>;
-  if (h === 'healthy') return <span className="pill ok" title={tip}><span className="dot ok" />Healthy</span>;
-  return <span className="pill neutral" title={tip}>Idle</span>;
+  if (h === 'failing') return <span className="pill bad" title={tip}>异常</span>;
+  if (h === 'healthy') return <span className="pill ok" title={tip}><span className="dot ok" />正常</span>;
+  return <span className="pill neutral" title={tip}>空闲</span>;
 }
 
 /** The setup page's one bar (agentHead, as the hosted console's setup page redesign draws it): back to
@@ -71,7 +71,7 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
   return (
     <header className="ag-bar ag-rt">
       <div className="ag-lft">
-        <Link className="ag-back" href="/studio" aria-label="Back to Harness Studio" title="Harness Studio">{BACK_IC}</Link>
+        <Link className="ag-back" href="/studio" aria-label="返回工作台" title="工作台">{BACK_IC}</Link>
         <div className="ag-ident">
           <div className="ag-l1">
             <h1 className="ag-name" title={r.h.name}>{r.h.name}</h1>
@@ -92,7 +92,7 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
       </div>
       <div ref={tabsRef} className="tabs inline ag-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, SETUP_TABS, tab, (k) => { refocusTab = true; onTab(k); })}>
         {tb('tasks', TASKS_IC, 'Tasks')}
-        {tb('settings', SETTINGS_IC, <>Settings{dirty ? <i className="dirty-dot" role="img" aria-label="Unsaved changes" /> : null}</>)}
+        {tb('settings', SETTINGS_IC, <>设置{dirty ? <i className="dirty-dot" role="img" aria-label="未保存的更改" /> : null}</>)}
       </div>
     </header>
   );
@@ -152,7 +152,7 @@ export function useSideOff(): [boolean, () => void] {
 const PART_FAM: Record<string, string> = { plugin: 'plugin', skill: 'skill', mcp: 'mcp', env: 'tool' };
 
 /** The Agent stack column (the design's full towerHtml): status, the tower with every brick named,
- *  the four optional parts by colour, and what each zone is (HarnessRouter, agent harness, model).
+ *  the four optional parts by colour, and what each zone is (智能体网关, agent harness, model).
  *  Every brick, part and zone is a way into the Settings layer it is.
  *  `live`: the bricks a test's turn on this page is working through now (stackLive), so each layer
  *  lights as the turn reaches it; without one, a running task lights the layers it uses.
@@ -169,7 +169,7 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
   const st = tower.st;
   const built = LAYERS.filter((L) => st[L.key] === 'built' || st[L.key] === 'run').length;
   const running = runningNames(tower, !!live);
-  // the parts HarnessRouter runs for it
+  // the parts 智能体网关 runs for it
   const subsOn = SUBS.filter(([k]) => st[k] === 'built' || st[k] === 'run').length;
   // what a part's slot names on hover: what a person added that is on (setupParts.ts), when every
   // one is named
@@ -184,8 +184,8 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
     <div className="zr" data-zone={z}><button type="button" className="zr-b" data-tw={tw}><span className="zr-k">{kick}</span><span className={`zr-v${cls ? ` ${cls}` : ''}`}>{val}</span></button></div>
   );
   return (
-    <aside className="agent-side" aria-label="Agent stack" data-focus={focus}>
-      <div className="ins-h stack-h"><span>Agent stack</span><span className="stack-n">{built} of {LAYERS.length} layers</span>
+    <aside className="agent-side" aria-label="智能体组成" data-focus={focus}>
+      <div className="ins-h stack-h"><span>智能体组成</span><span className="stack-n">{built} / {LAYERS.length} 层</span>
         <button type="button" className="icon-btn side-tog" aria-expanded={!off} aria-label={`${off ? 'Show' : 'Hide'} agent stack`} title={`${off ? 'Show' : 'Hide'} agent stack`} onClick={onToggle}>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={off ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6'} /></svg>
         </button>
@@ -193,8 +193,8 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
       {/* the status floats over the top of the illustration's room, so one line or two never moves it */}
       <div className="stack-art">
         <div className="now">
-          {now ? <><span className="dot run" /><span>{now}</span></> : running.length ? <><span className="dot run" /><span><b>Running now</b> · {running.join(', ')}</span></>
-            : <><span className="dot" /><span>Idle{r.lastAny ? ` · last task ${ago(r.lastAny)}` : ''}</span></>}
+          {now ? <><span className="dot run" /><span>{now}</span></> : running.length ? <><span className="dot run" /><span><b>正在运行</b> · {running.join(', ')}</span></>
+            : <><span className="dot" /><span>空闲{r.lastAny ? ` · last task ${ago(r.lastAny)}` : ''}</span></>}
         </div>
         <div className="iso-wrap" aria-hidden="true" dangerouslySetInnerHTML={{ __html: isoSvg(tower, 24, true, false, drops || null) }} />
       </div>
@@ -206,10 +206,10 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
           return n ? (
             <button key={k} type="button" className="part built" data-tw={k} title={names[k].length === n ? names[k].join(', ') : undefined}>
               <span className="part-ic" dangerouslySetInnerHTML={{ __html: partIcon('built', PART_FAM[k]) }} />
-              <span className="part-n">{label}</span><small>{n} added</small>
+              <span className="part-n">{label}</span><small>{n} 已添加</small>
             </button>
           ) : (
-            <button key={k} type="button" className="part locked" data-partlock={k} title="Add it in Settings" aria-label={`${label}, none yet`}>
+            <button key={k} type="button" className="part locked" data-partlock={k} title="在设置中添加" aria-label={`${label}, none yet`}>
               <span className="part-ic" dangerouslySetInnerHTML={{ __html: partIcon('empty', '') }} />
               <span className="part-n">{label}</span>
             </button>
@@ -217,7 +217,7 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
         })}
       </div>
       <div className="zones">
-        {zr('run', 'HarnessRouter', st.backend === 'run' ? 'Running a task' : `Included · ${subsOn} parts`, st.backend === 'run' ? 'run' : '', 'backend')}
+        {zr('run', '智能体网关', st.backend === 'run' ? 'Running a task' : `Included · ${subsOn} parts`, st.backend === 'run' ? 'run' : '', 'backend')}
         {zr('you', 'Agent harness', r.baseName ? <>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</> : 'Not chosen yet', '', 'b-runtime')}
         {zr('mdl', 'Model', r.h.defaultModel ? <span className="mono">{r.h.defaultModel}</span> : 'Harness default', '', 'model')}
       </div>

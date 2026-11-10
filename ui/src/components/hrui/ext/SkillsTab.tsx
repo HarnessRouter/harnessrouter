@@ -130,12 +130,12 @@ export function SkillsTab({ setups, reload, failed = false, retry }: {
   const empty = !loading && !rows.length;
   return (
     <>
-      <div className="lib-form"><button type="button" className="btn primary" disabled={loading} onClick={() => { setStep2(false); setEd({ ...skillDraft(null, '', []), hid: '', setup: '' }); }}>{PLUS}Create a skill</button></div>
+      <div className="lib-form"><button type="button" className="btn primary" disabled={loading} onClick={() => { setStep2(false); setEd({ ...skillDraft(null, '', []), hid: '', setup: '' }); }}>{PLUS}创建技能</button></div>
       <div className="rows">
         {failed ? <ReadFailed what="skills" retry={retry || (() => void reload())} /> : null}
-        {loading && !failed ? <Skel label="Loading your skills"><SkRows n={4} /></Skel> : null}
+        {loading && !failed ? <Skel label="正在加载技能"><SkRows n={4} /></Skel> : null}
         {empty ? (
-          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'skill') }} /><span>No skills yet.</span></div>
+          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'skill') }} /><span>暂无技能。</span></div>
         ) : null}
         {!loading ? rows.map((r) => (
           <div key={`${r.h.id}:${r.s.id || r.s.name}`} className="row lib-g">
@@ -148,8 +148,8 @@ export function SkillsTab({ setups, reload, failed = false, retry }: {
               </span>
             </span>
             <span className="lib-act">
-              <button type="button" className="btn small line" disabled={busy} onClick={() => void open(r)}>Edit</button>
-              <button type="button" className="link-q danger" disabled={busy} onClick={() => setDel(r)}>Delete</button>
+              <button type="button" className="btn small line" disabled={busy} onClick={() => void open(r)}>编辑</button>
+              <button type="button" className="link-q danger" disabled={busy} onClick={() => setDel(r)}>删除</button>
             </span>
           </div>
         )) : null}

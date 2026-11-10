@@ -6,6 +6,6 @@ import { useRouter } from 'next/navigation';
 // session to the login page, so whoever reaches this is signed in.
 export default function Root() {
   const router = useRouter();
-  useEffect(() => { router.replace('/start'); }, [router]);
+  useEffect(() => { router.replace('/studio'); }, [router]);
   return null;
 }

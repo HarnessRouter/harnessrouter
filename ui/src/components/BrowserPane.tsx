@@ -152,28 +152,28 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
 
   const card = (
     <div className={'wbx-browser-card is-' + mode + (open ? (control === 'user' ? ' is-user' : ' is-agent') : closedView ? ' is-record' : ' is-empty') + (acting ? ' is-acting' : '')}
-         role="region" aria-label="Browser">
+         role="region" aria-label="浏览器">
       {mode === 'docked' && onResizeStart && (
-        <div className="wbx-browser-grip" onMouseDown={onResizeStart} title="Drag to resize" aria-hidden="true" />
+        <div className="wbx-browser-grip" onMouseDown={onResizeStart} title="拖动以调整大小" aria-hidden="true" />
       )}
       <div className="wbx-browser-bar">
         <span className={'wbx-live-dot' + (acting ? ' is-on' : control === 'user' && open ? ' is-user' : open ? ' is-idle' : '')} aria-hidden="true" />
         <div className="wbx-browser-title">
-          <b>Browser</b>
+          <b>浏览器</b>
           <span className="wbx-browser-status">{status}</span>
         </div>
         {open && control === 'user' && (
-          <button type="button" className="wbx-browser-btn is-primary" onClick={handBack} disabled={pending}>Hand back to the agent</button>
+          <button type="button" className="wbx-browser-btn is-primary" onClick={handBack} disabled={pending}>交还智能体</button>
         )}
         {open && control === 'agent' && (
-          <button type="button" className="wbx-browser-btn" onClick={takeOver} disabled={pending}>Take over</button>
+          <button type="button" className="wbx-browser-btn" onClick={takeOver} disabled={pending}>接管</button>
         )}
         <span className="wbx-browser-bar-gap" aria-hidden="true" />
         <button type="button" className="wbx-browser-ic" onClick={() => setMode(mode === 'full' ? 'docked' : 'full')}
           title={mode === 'full' ? 'Exit full screen' : 'Full screen'} aria-label={mode === 'full' ? 'Exit full screen' : 'Full screen'}>
           <Icon d={mode === 'full' ? ICONS.restore : ICONS.full} />
         </button>
-        <button type="button" className="wbx-browser-ic" onClick={onClose} aria-label="Close the browser view" title="Close">
+        <button type="button" className="wbx-browser-ic" onClick={onClose} aria-label="Close the browser view" title="关闭">
           <Icon d={ICONS.close} />
         </button>
       </div>
@@ -193,7 +193,7 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
               <path d="M148 98l14 30 5-11 11-5z" className="art-cursor" />
             </svg>
           </div>
-          <p className="wbx-browser-empty-title">When the agent opens a page, it shows here.</p>
+          <p className="wbx-browser-empty-title">智能体打开的页面会显示在这里。</p>
         </div>
       ) : (
         <div className={'wbx-browser-stream' + (mode === 'docked' ? '' : ' is-fit')}>
@@ -202,7 +202,7 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
               over the screen blocks the pointer and is "take over". Both go the moment the person has it. */}
           <div className="wbx-browser-view" inert={control === 'agent' ? true : undefined}>
             {src ? (
-              <iframe ref={frameRef} src={src} title="Live browser" allow="autoplay" tabIndex={control === 'agent' ? -1 : 0} />
+              <iframe ref={frameRef} src={src} title="实时浏览器" allow="autoplay" tabIndex={control === 'agent' ? -1 : 0} />
             ) : (
               <div className="wbx-browser-loading">{info === null ? 'Connecting to the live view' : 'The live view is not available for this browser.'}</div>
             )}
@@ -215,7 +215,7 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
               {live?.point && live.viewport && (
                 <GhostCursor point={live.point} viewport={live.viewport} tool={live.lastTool} at={live.lastCallAt} host={screenRef} />
               )}
-              <button type="button" className="wbx-browser-takeover" onClick={takeOver} disabled={pending} title="Click to take over the browser"
+              <button type="button" className="wbx-browser-takeover" onClick={takeOver} disabled={pending} title="点击接管浏览器"
                 aria-label="Take over the browser" />
             </>
           )}

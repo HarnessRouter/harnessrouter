@@ -18,8 +18,8 @@ export const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
 export function ReadFailed({ what, retry }: { what: string; retry: () => void }) {
   return (
     <div className="empty-list ld-fail" role="alert">
-      Your {what} could not be loaded just now.{' '}
-      <button type="button" className="link-q inl" onClick={retry}>Try again</button>
+      你的 {what} 暂时无法加载。{' '}
+      <button type="button" className="link-q inl" onClick={retry}>重试</button>
     </div>
   );
 }

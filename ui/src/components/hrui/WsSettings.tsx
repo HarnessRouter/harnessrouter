@@ -37,7 +37,7 @@ export function WsProfile({ onSaving }: { onSaving: (busy: boolean) => void }) {
       if (nm !== current.name) patch.name = nm;
       if (desc.trim() !== current.description) patch.description = desc.trim();
       await update(patch);
-      toast('Saved');
+      toast('已保存');
     } catch (e) {
       toast(e instanceof Error && e.message && !/^save failed/.test(e.message) ? e.message : 'It could not be saved. Try again in a moment.');
     } finally { setBusy(false); onSaving(false); }
@@ -46,12 +46,12 @@ export function WsProfile({ onSaving }: { onSaving: (busy: boolean) => void }) {
 
   return (
     <div className="set-form">
-      <label className="set-row" htmlFor="wsName"><span className="set-l">Name</span>
+      <label className="set-row" htmlFor="wsName"><span className="set-l">名称</span>
         <input id="wsName" ref={nameRef} className={`keyname plain${bad === 'name' ? ' bad' : ''}`} aria-invalid={bad === 'name' || undefined}
           autoComplete="off" maxLength={80} value={name} onKeyDown={enter} onChange={(e) => { setName(e.target.value); setBad(''); }} />
       </label>
-      <label className="set-row" htmlFor="wsDesc"><span className="set-l">Description</span>
-        <input id="wsDesc" className="keyname plain" autoComplete="off" maxLength={300} placeholder="Optional" value={desc}
+      <label className="set-row" htmlFor="wsDesc"><span className="set-l">描述</span>
+        <input id="wsDesc" className="keyname plain" autoComplete="off" maxLength={300} placeholder="可选" value={desc}
           onKeyDown={enter} onChange={(e) => setDesc(e.target.value)} />
       </label>
       <div className="set-act">
@@ -89,8 +89,8 @@ function FailedRow({ label, onRetry }: { label: string; onRetry: () => void }) {
     <div className="set-item">
       <div className="set-row" role="alert">
         <span className="set-l">{label}</span>
-        <span className="set-v">Could not be read just now.</span>
-        <button type="button" className="link-q" onClick={onRetry}>Try again</button>
+        <span className="set-v">暂时无法读取。</span>
+        <button type="button" className="link-q" onClick={onRetry}>重试</button>
       </div>
     </div>
   );
@@ -109,7 +109,7 @@ export function CloudUploadRow() {
     listTargets().then((r) => setTargets(r.targets)).catch(() => setFailed(true));
   }, []);
   useEffect(read, [read]);
-  if (failed && targets === null) return <FailedRow label="Cloud upload" onRetry={read} />;
+  if (failed && targets === null) return <FailedRow label="上传到云端" onRetry={read} />;
   const n = targets ? targets.length : 0;
   const state = targets === null ? '' : n ? `${n} workspace${n === 1 ? '' : 's'}` : 'Off';
 
@@ -128,17 +128,17 @@ export function CloudUploadRow() {
   }
 
   return (
-    <SetRow label="Cloud upload" state={state} onDone={() => setKey('')}>
-      <p className="set-note">Uploading a harness replaces its cloud copy.</p>
+    <SetRow label="上传到云端" state={state} onDone={() => setKey('')}>
+      <p className="set-note">上传智能体将替换云端副本。</p>
       {(targets || []).map((t) => (
         <div key={t.id} className="set-row set-sub">
           <span className="set-l">{t.label}</span>
           <span className="set-v">{t.revoked ? 'Key revoked. Paste a new one.' : t.key_hint}</span>
-          <button type="button" className="link-q" disabled={busy} onClick={() => void remove(t.id)}>Remove</button>
+          <button type="button" className="link-q" disabled={busy} onClick={() => void remove(t.id)}>移除</button>
         </div>
       ))}
       <div className="keyrow">
-        <label className="sr" htmlFor="cloudKey">A key from the cloud workspace</label>
+        <label className="sr" htmlFor="cloudKey">云端工作区密钥</label>
         <input id="cloudKey" className="keyname plain" type="password" autoComplete="off" placeholder="sk-hr-…  (the cloud console, inside the workspace, under API Keys)"
           value={key} onChange={(e) => setKey(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void add(); } }} />

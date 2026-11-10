@@ -67,7 +67,7 @@ export function BuildPage() {
   if (!b) {
     return none ? (
       <div className="scroll"><div className="list-wrap">
-        <p className="sub">Nothing is being set up here. <button type="button" className="link-q inl" onClick={() => setRetry(true)}>Set up an agent harness</button></p>
+        <p className="sub">当前没有正在配置的内容。 <button type="button" className="link-q inl" onClick={() => setRetry(true)}>配置智能体运行环境</button></p>
         {retry ? <NewSetup onClose={() => setRetry(false)} /> : null}
       </div></div>
     ) : null;
@@ -77,14 +77,14 @@ export function BuildPage() {
   const hn = cfg?.baseName || b.pick.baseName, md = cfg?.model || b.pick.model;
   const logo = cfg ? harnessLogoSrc(cfg.base) : '';
   const { mark, motion } = harnessMark(cfg?.base || '');
-  const now = b.phase === 'composing' ? <><b>Setting up</b> · your harness</> : b.phase === 'saving' ? <><b>Saving</b> · your setup</> : null;
+  const now = b.phase === 'composing' ? <><b>配置中</b> · 你的智能体</> : b.phase === 'saving' ? <><b>保存中</b> · 你的配置</> : null;
   return (
     <div className="tk-page">
       {/* the setup page's own bar (setup/parts AgentHead): Tasks · Settings at its right end with their icons, the same
           layout while it builds, never its own. The setup's actions join it once the setup exists, before the tabs */}
       <header className="ag-bar ag-rt">
         <div className="ag-lft">
-          <Link className="ag-back" href="/studio" aria-label="Back to Harness Studio" title="Harness Studio">{BACK_IC}</Link>
+          <Link className="ag-back" href="/studio" aria-label="返回工作台" title="工作台">{BACK_IC}</Link>
           <div className="ag-ident">
             <div className="ag-l1"><h1 className="ag-name" title={cfg?.name || 'New setup'}>{cfg?.name || 'New setup'}</h1></div>
             <div className="ag-l2">
@@ -95,15 +95,15 @@ export function BuildPage() {
         </div>
         {/* Settings opens once the setup exists: until then Tasks is the one tab in the Tab order and the arrows have nowhere to go */}
         <div className="tabs inline ag-tabs" role="tablist">
-          <button type="button" role="tab" aria-selected tabIndex={0} className="on">{TASKS_IC}Tasks</button>
-          <button type="button" role="tab" aria-selected={false} tabIndex={-1} disabled>{SETTINGS_IC}Settings</button>
+          <button type="button" role="tab" aria-selected tabIndex={0} className="on">{TASKS_IC}任务</button>
+          <button type="button" role="tab" aria-selected={false} tabIndex={-1} disabled>{SETTINGS_IC}设置</button>
         </div>
       </header>
       <div className="tk-split has-side show-d">
         <div className="tk-l">
-          <div className="tk-bar"><button type="button" className="btn tk-newb on" disabled>{PLUS}New task</button><span className="grow" /></div>
+          <div className="tk-bar"><button type="button" className="btn tk-newb on" disabled>{PLUS}新建任务</button><span className="grow" /></div>
           {/* as the setup's own page draws it before its first task, so the hand-off changes nothing */}
-          <div className="tk-list"><div className="tk-empty">No tasks yet.</div></div>
+          <div className="tk-list"><div className="tk-empty">暂无任务。</div></div>
         </div>
         <div className="tk-d">
           <NewTaskHead onBack={() => router.push('/studio')} />
@@ -120,7 +120,7 @@ export function BuildPage() {
                   {b.phase === 'failed' ? (
                     <div className="bd-fail" role="alert">
                       <span>{b.error}</span>
-                      <button type="button" className="btn small primary" onClick={() => setRetry(true)}>Try again</button>
+                      <button type="button" className="btn small primary" onClick={() => setRetry(true)}>重试</button>
                     </div>
                   ) : b.asm ? <Assembly s={b.id ? { ...b.asm, savedAt: null, plugins: {} } : b.asm} /> : (
                     <div className="bd-line"><WorkingIndicator start={b.at} label={b.step ? STEP_LINE[b.step] : 'Setting up your harness'} /></div>

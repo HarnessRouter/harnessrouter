@@ -188,9 +188,9 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
 
   return (
     <>
-      <div className="lib-form"><button type="button" className="btn primary" disabled={loading} onClick={() => { setMade(null); setStep2(false); setOpen({ tool: null }); }}>{PLUS}Add MCP</button></div>
+      <div className="lib-form"><button type="button" className="btn primary" disabled={loading} onClick={() => { setMade(null); setStep2(false); setOpen({ tool: null }); }}>{PLUS}添加 MCP</button></div>
       {failed ? <ReadFailed what="tools" retry={retry || (() => void reload())} /> : null}
-      {loading ? (failed ? null : <div className="rows"><Skel label="Loading your tools"><SkRows n={4} /></Skel></div>)
+      {loading ? (failed ? null : <div className="rows"><Skel label="正在加载工具"><SkRows n={4} /></Skel></div>)
         : tools.length ? (
           <div className="rows">
             {tools.map((x) => (
@@ -200,17 +200,17 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
                   <span>
                     <b>{x.name}</b>
                     <small className="sub2 mono"><UrlBreaks url={x.url} /></small>
-                    <small className="lib-used">Used by {x.by.map((b, i) => (
+                    <small className="lib-used">使用方 {x.by.map((b, i) => (
                       <span key={b.id + i}>{i ? ', ' : ''}<Link className="link-q inl" href={setupHref(b.id)}>{b.name}</Link>{b.on ? '' : ' (off)'}</span>
                     ))}</small>
                   </span>
                 </span>
-                <span className="lib-act"><button type="button" className="btn small line" onClick={() => setOpen({ tool: x })}>Edit</button></span>
+                <span className="lib-act"><button type="button" className="btn small line" onClick={() => setOpen({ tool: x })}>编辑</button></span>
               </div>
             ))}
           </div>
         ) : (
-          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'mcp') }} /><span>No MCP servers yet.</span></div>
+          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'mcp') }} /><span>暂无 MCP 服务器。</span></div>
         )}
 
       {open?.tool && setups ? (

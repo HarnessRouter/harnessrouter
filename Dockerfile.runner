@@ -1,0 +1,120 @@
+# HarnessRouter runner — the half that executes turns.
+#
+# This is the split image: the agent CLIs, their system dependencies and the runner process. It
+# holds no gateway code, no console and no provider keys. The gateway (Dockerfile.gateway) calls it
+# over the compose network; the two share ONE data volume, because the runner keeps its tools,
+# workspaces and environment layers there.
+#
+# AGENT CLIS ARE INSTALLED ON FIRST RUN, NOT BAKED IN. That is a licensing requirement, not a size
+# optimisation: Claude Code ships under Anthropic's own terms ("SEE LICENSE IN README.md") and
+# hermes-agent declares no license at all, so neither may be redistributed inside a public image.
+# They land in the data volume, so the cost is paid once per volume rather than once per start.
+#
+# Choose backends at RUN time:
+#
+#   HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp   # the default
+#   HR_BACKENDS=opencode                                                    # lean
+#
+# WITH_BROWSER is a build arg because Chromium and its system libraries genuinely belong in the
+# image layer. It belongs to this image, not the gateway: a browser a harness drives to verify its
+# own output runs in the session, which is here.
+
+FROM python:3.12-slim
+
+ARG WITH_BROWSER=0
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HARNESS_WORKSPACE=/data/workspaces \
+    HR_DATA_DIR=/data \
+    HR_ROLE=runner
+
+# officecli keeps an edited document open in a resident process and flushes it to disk some seconds
+# after that process goes idle. A task that writes a document and then ENDS races that timer: the
+# last file it touched is collected before the flush, and the user downloads a workbook whose
+# content silently is not there — `validate` still passes, because the in-memory document is fine.
+# Observed exactly that way: a spreadsheet whose every cell went into a sheet the saved file did not
+# contain. Flushing on every command costs some speed and removes the race entirely, which is the
+# right trade for a document a person is going to open.
+ENV OFFICECLI_RESIDENT_FLUSH=each
+
+# tmux is here for openhands and nothing else: openhands-tools declares `libtmux`, the python
+# client, and libtmux drives the real `tmux` binary — upstream's own image apt-installs it. Without
+# it the agent-server dies on import (`ModuleNotFoundError` / a tmux that is not there), which is a
+# failure at START, not at use. The locale above matters to it too: libtmux's format parsing needs
+# a UTF-8 locale, which LANG=C.UTF-8 already gives.
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        curl ca-certificates git bash tini tmux \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node is needed for the npm-based agent CLIs. 22, not 20: pi's engine floor is >=22.19, and node
+# 20 has been end-of-life since April 2026 anyway — the other CLIs (claude >=18, codex >=20) run
+# unchanged on 22.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# Optional: browser automation for harnesses that verify their own output.
+RUN set -eux; \
+    if [ "$WITH_BROWSER" = "1" ]; then \
+      pip install --no-cache-dir playwright && playwright install --with-deps chromium; \
+    fi
+
+WORKDIR /app
+
+COPY runner/requirements.txt /app/runner/requirements.txt
+RUN pip install --no-cache-dir -r /app/runner/requirements.txt
+
+# The skills' runtime dependencies, installed where a skill's scripts actually execute: the runner.
+# The gateway serves the skill FILES (it owns the catalogue and the harness config); the packages
+# those files import must exist in this image, so the same script is run here with its dependency
+# half on. The copied catalogue is harmless and is not served from this image.
+ARG WITH_BUILTIN_SKILLS=1
+ARG HR_SKILLS_REPO=https://github.com/HarnessRouter/skills.git
+ARG HR_SKILLS_REF=main
+COPY docker/install-skills.sh /tmp/install-skills.sh
+RUN chmod +x /tmp/install-skills.sh \
+    && WITH_BUILTIN_SKILLS="$WITH_BUILTIN_SKILLS" HR_SKILLS_REPO="$HR_SKILLS_REPO" \
+       HR_SKILLS_REF="$HR_SKILLS_REF" HR_SKILLS_DIR=/opt/harnessrouter/skills \
+       /tmp/install-skills.sh \
+    && rm -f /tmp/install-skills.sh
+
+COPY runner/ /app/runner/
+COPY docker/entrypoint.sh /app/entrypoint.sh
+# Apache-2.0 asks that these travel with a copy, and NOTICE is what says what this image carries.
+COPY LICENSE NOTICE /app/
+# The hash-locked dependency trees the first-boot installer fills vibe's, fast-agent's and dcode's
+# venvs from (pip --require-hashes): part of this reviewed image, never fetched at boot.
+COPY docker/locks/ /app/locks/
+RUN chmod +x /app/entrypoint.sh \
+    && chmod -R a+rX /opt/harnessrouter/skills
+
+# `agent` is the PRODUCT's user, and it exists here even though this container runs as root: the
+# split images share one data volume, and the gateway creates its databases as this uid. Both
+# images must agree on 10001 or the volume's files belong to nobody.
+#
+# The runner itself is root because every agent CLI runs as its own per-session uid, which owns its
+# session directory and nothing else (the write-wall; see docker/entrypoint.sh). The CLIs refuse to
+# run as root anyway (they gate their own permission bypass on it), and they never do.
+#
+# Everything under /app is root's: a product user that can write it is root at the next start
+# (reported privately, GHSA-mm72-wr37-26pv). Compiled here because `agent` cannot write __pycache__.
+RUN useradd -m -u 10001 agent \
+    && rm -rf /home/agent/.npm /root/.npm \
+    && mkdir -p /data \
+    && chown -R root:root /app \
+    && chmod -R go-w,a+rX /app \
+    && python -m compileall -q /app/runner \
+    && chown -R agent:agent /data /home/agent
+
+EXPOSE 8081
+VOLUME ["/data"]
+
+# The runner is an internal service: compose publishes only the console's port. HR_ROLE=runner
+# binds 0.0.0.0 so the gateway container can reach it; set HR_RUNNER_BIND=127.0.0.1 to keep it on
+# this container's loopback when nothing else has to call it.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s \
+  CMD curl -fsS http://127.0.0.1:8081/healthz >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]

@@ -24,8 +24,8 @@ export interface Tower {
 
 /** the four layers of a tower, bottom first, with the names the Agent stack panel prints */
 export const LAYERS = [
-  { key: 'b-runtime', name: 'Agent harness', z: 0 }, { key: 'model', name: 'Model', z: 1 }, { key: 'task', name: 'Instructions', z: 2 },
-  { key: 'backend', name: 'HarnessRouter', z: 3, h: 2.25 },
+  { key: 'b-runtime', name: '智能体运行环境', z: 0 }, { key: 'model', name: '模型', z: 1 }, { key: 'task', name: '指令', z: 2 },
+  { key: 'backend', name: '智能体网关', z: 3, h: 2.25 },
 ] as const;
 type Bk = [string, number, number, number, number, number, number];
 const BK: Bk[] = [['b-sandbox', 0, 0, 6, 4, 0, 1], ['b-orch', 0, 4, 6, 6, 0, 1],
@@ -37,7 +37,7 @@ const FAM: Record<string, string> = { 'b-runtime': 'harness', model: 'model', ta
 const ZTOP = 5.25, PART_STACK = 3;
 
 const esc = (s: string) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
-const subName = (k: string) => (SUBS.find((x) => x[0] === k) || [0, 'HarnessRouter'])[1] as string;
+const subName = (k: string) => (SUBS.find((x) => x[0] === k) || [0, '智能体网关'])[1] as string;
 const cardFs = (t: string, W: number, u: number) => (W - 0.7) * u / (String(t).length * 0.57);
 /** A name too long for its brick is cut at a hyphen or dot and ends with an ellipsis. */
 function cardCut(t: string, n: number): string {
@@ -103,14 +103,14 @@ function agentModel(K: ReturnType<typeof Iso>, o: Tower, opts: Opts) {
         const say = ({ empty: 'add-on, off', built: 'included', run: 'running a task now', next: 'included' } as Record<string, string>)[s4];
         const dkk = k === 'b-fill' ? 'b-sessions' : k, dkb = drops[dkk] != null, dlb = dkb ? drops[dkk] : 0;
         if (dkb) out.push(ripple(bx0, by0, bx1, by1, z0, dlb));
-        out.push('<g class="bk f-backend' + (infra ? ' infra' : '') + ' ' + s4 + (dkb ? ' drop' : '') + '" data-tw="backend" style="--z:' + (infra ? 3 : 4) + (dkb ? ';animation-delay:' + dlb + 'ms' : '') + '"><title>' + (k === 'b-fill' ? 'HarnessRouter' : subName(k) + ', run by HarnessRouter') + ': ' + say + '</title>' + bi + '</g>');
+        out.push('<g class="bk f-backend' + (infra ? ' infra' : '') + ' ' + s4 + (dkb ? ' drop' : '') + '" data-tw="backend" style="--z:' + (infra ? 3 : 4) + (dkb ? ';animation-delay:' + dlb + 'ms' : '') + '"><title>' + (k === 'b-fill' ? '智能体网关' : subName(k) + ', run by HarnessRouter') + ': ' + say + '</title>' + bi + '</g>');
       });
       return;
     }
     let inner = K.box(x0, y0, z0, x1, y1, z1);
     if (!covered) for (let xi = 1; xi < W; xi += 2) for (let yi = 1; yi < D; yi += 2) inner += K.stud(ox + xi, oy + yi, z1, 2);
     if (opts.text && (!opts.only || opts.only.includes(L.key))) {
-      let lab: string = L.key === 'b-runtime' ? (o.harness || 'Harness') : L.key === 'model' ? (o.model || 'Model') : L.name;
+      let lab: string = L.key === 'b-runtime' ? (o.harness || 'Harness') : L.key === 'model' ? (o.model || '模型') : L.name;
       const fs = opts.big ? Math.min(Math.max(cardFs(lab, W, u), 6.3), K.zH * u * lh * 0.62) : Math.min(0.39 * u, (W - 0.35) * u / (lab.length * 0.58), K.zH * u * lh * 0.62);
       const ty = (K.zH * u * lh * 0.5 + fs * 0.36).toFixed(1), a0 = K.P(x0, y1, z1);
       if (opts.big && cardFs(lab, W, u) < 6.3) lab = cardCut(lab, Math.floor((W - 0.7) * u / (0.57 * 6.3)));

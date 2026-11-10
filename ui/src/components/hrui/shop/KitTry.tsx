@@ -43,7 +43,7 @@ const ktSec = (ms: number) => (Math.max(0, ms) / 1000).toFixed(1) + ' s';
 /** A step's words, as the design writes them: a bold name and a muted detail. */
 function RowText({ r, k }: { r: FRow; k: DKind }) {
   if (k === 'tool') return <><b>{r.label}</b> <span className="muted mono">{preview(r.param || '')}</span></>;
-  if (k === 'step') return <><b>Thinking</b> <span className="muted">{preview(r.text || '')}</span></>;
+  if (k === 'step') return <><b>思考中</b> <span className="muted">{preview(r.text || '')}</span></>;
   if (k === 'done' || k === 'error') return <><b>{k === 'done' ? 'Completed' : 'Failed'}</b> <span className="muted">{preview(r.text || '')}</span></>;
   return <>{cutWords(r.text || '', 240)}</>;
 }
@@ -211,7 +211,7 @@ export function KitTryPage({ kitId }: { kitId: string }) {
       <div className="scroll"><div className="list-wrap">
         <p className="sub" role={loadErr ? 'alert' : undefined}>
           {loadErr ? 'This kit could not be read just now. Reload the page to try again.' : 'This kit is not in the Shop.'}{' '}
-          <Link className="link-q inl" href="/shop">Back to the Shop</Link>
+          <Link className="link-q inl" href="/shop">返回 Agent 中心</Link>
         </p>
       </div></div>
     );
@@ -220,7 +220,7 @@ export function KitTryPage({ kitId }: { kitId: string }) {
     // the kit page, drawn while it loads: back link, the kit's identity, then the trace and the app
     return (
       <div className="scroll"><div className="list-wrap">
-        <Skel label="Loading the kit">
+        <Skel label="正在加载模板">
           <SkLine w={64} h={12} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 18 }}>
             <SkLine w={36} h={36} r={10} /><div style={{ flex: 1 }}><SkLine w="36%" h={22} r={7} /><SkLine w="52%" h={11} style={{ marginTop: 9 }} /></div>
@@ -244,8 +244,8 @@ export function KitTryPage({ kitId }: { kitId: string }) {
     : ended && tookMs ? <span className="kt-st">{ok ? 'Done in ' : st === 'cancelled' ? 'Cancelled after ' : 'Failed after '}{ktSec(tookMs)}</span> : null;
   const next = (
     <div className={'kt-next' + (nextIn ? ' fresh' : '')}>
-      <b>Make it yours</b>
-      <button type="button" className="btn primary" disabled={busy} onClick={() => void launchToUsers()}>Launch to your users</button>
+      <b>创建自己的副本</b>
+      <button type="button" className="btn primary" disabled={busy} onClick={() => void launchToUsers()}>向用户发布</button>
     </div>
   );
   const taskHref = run.card && kit.harnessId
@@ -257,17 +257,17 @@ export function KitTryPage({ kitId }: { kitId: string }) {
     trace = (
       <div className="kt-idle">
         <span className="kt-tower" aria-hidden="true"><Iso svg={isoSvg(kitTower(kit, rt), 7, false)} /></span>
-        <p><b>Try it in the app.</b> Every step it takes shows up here, as it happens.</p>
+        <p><b>在应用中试用。</b> 每个执行步骤都会实时显示在这里。</p>
       </div>
     );
   } else if (run.failed && !run.rows) {
-    trace = <p className="fine" role="alert">The trace could not be read just now.{' '}<button type="button" className="link-q inl" onClick={run.retry}>Try again</button></p>;
+    trace = <p className="fine" role="alert">暂时无法读取执行记录。{' '}<button type="button" className="link-q inl" onClick={run.retry}>重试</button></p>;
   } else {
     trace = (
       <TraceView sid={run.card?.session_id || ''} rows={run.rows} failed={run.failed} running={isRun} overlayHost={playEl} enterFrom={prevN || undefined}
         foot={run.failed ? (
           // a read after the rows on screen failed: they may not be the latest
-          <p className="fine" role="alert">The trace could not be read just now.{' '}<button type="button" className="link-q inl" onClick={run.retry}>Try again</button></p>
+          <p className="fine" role="alert">暂时无法读取执行记录。{' '}<button type="button" className="link-q inl" onClick={run.retry}>重试</button></p>
         ) : null} />
     );
   }
@@ -280,14 +280,14 @@ export function KitTryPage({ kitId }: { kitId: string }) {
     live = isRun ? (
       <>
         <span className="dot run" />
-        {lr && lk ? <><span className={`badge b-${lk}`}>{ROLE[lk]}</span><span className="kt-live-t"><RowText r={lr} k={lk} /></span></> : <span className="kt-live-t">Working</span>}
-        <span className="kt-live-go">Trace</span>
+        {lr && lk ? <><span className={`badge b-${lk}`}>{ROLE[lk]}</span><span className="kt-live-t"><RowText r={lr} k={lk} /></span></> : <span className="kt-live-t">执行中</span>}
+        <span className="kt-live-go">执行记录</span>
       </>
     ) : (
       <>
         {ok ? <span className="kt-live-ok" aria-hidden="true">{TICK}</span> : <span className="dot bad" />}
-        <span className="kt-live-t">{ok ? 'Done in ' : st === 'cancelled' ? 'Cancelled after ' : 'Failed after '}{ktSec(tookMs)} · {rows.length} steps</span>
-        <span className="kt-live-go">See the trace</span>
+        <span className="kt-live-t">{ok ? 'Done in ' : st === 'cancelled' ? 'Cancelled after ' : 'Failed after '}{ktSec(tookMs)} · {rows.length} 步骤</span>
+        <span className="kt-live-go">查看执行记录</span>
       </>
     );
   }
@@ -300,23 +300,23 @@ export function KitTryPage({ kitId }: { kitId: string }) {
     frameIn = (
       <div className="kt-idle">
         <KitIc kit={kit} as="span" />
-        <p><b>Try {kit.title} here.</b></p>
-        <button type="button" className="btn primary" onClick={() => setSheet('try')}>Try it</button>
+        <p><b>试用 {kit.title} 。</b></p>
+        <button type="button" className="btn primary" onClick={() => setSheet('try')}>试用</button>
       </div>
     );
   } else if (app === 'tab') {
     frameIn = (
       <div className="kt-idle">
         <KitIc kit={kit} as="span" />
-        <p><b>{kit.title} opens in its own tab.</b></p>
-        <a className="btn primary" href={appHref(kit)} target="_blank" rel="noopener">Open {kit.title}</a>
+        <p><b>{kit.title} 将在新标签页打开。</b></p>
+        <a className="btn primary" href={appHref(kit)} target="_blank" rel="noopener">打开 {kit.title}</a>
       </div>
     );
   } else if (app === 'error') {
     frameIn = (
       <div className="kt-idle">
-        <p><b>{kit.title} did not open.</b></p>
-        <button type="button" className="btn" disabled={busy} onClick={() => void retryOpen()}>Try again</button>
+        <p><b>{kit.title} 未能打开。</b></p>
+        <button type="button" className="btn" disabled={busy} onClick={() => void retryOpen()}>重试</button>
       </div>
     );
   } else {
@@ -327,7 +327,7 @@ export function KitTryPage({ kitId }: { kitId: string }) {
     // `done` is the design's mark for showing the next step on the app tab; it stays on
     <div className="kt done" data-tab={tab}>
       <header className="kt-h">
-        <Link className="kt-back" href="/shop">‹ Shop</Link>
+        <Link className="kt-back" href="/shop">‹ Agent 中心</Link>
         <div className="kt-id">
           <KitIc kit={kit} as="span" />
           <div>
@@ -336,19 +336,19 @@ export function KitTryPage({ kitId }: { kitId: string }) {
           </div>
         </div>
         <div className="kt-act">
-          <button type="button" className="btn" onClick={() => void launchToUsers()}>Launch to your users</button>
+          <button type="button" className="btn" onClick={() => void launchToUsers()}>向用户发布</button>
         </div>
       </header>
       <div className="kt-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, KT_TABS, tab, setTab)}>
-        <button type="button" role="tab" aria-selected={tab === 'app'} tabIndex={tab === 'app' ? 0 : -1} className={tab === 'app' ? 'on' : ''} onClick={() => setTab('app')}>App</button>
+        <button type="button" role="tab" aria-selected={tab === 'app'} tabIndex={tab === 'app' ? 0 : -1} className={tab === 'app' ? 'on' : ''} onClick={() => setTab('app')}>应用</button>
         <button type="button" role="tab" aria-selected={tab === 'play'} tabIndex={tab === 'play' ? 0 : -1} className={tab === 'play' ? 'on' : ''} onClick={() => setTab('play')}>
-          Trace{following && rows.length ? <> <span className="count">{rows.length}</span></> : null}
+          执行记录{following && rows.length ? <> <span className="count">{rows.length}</span></> : null}
         </button>
       </div>
       <div className="kt-body">
-        <section className="kt-play kt-play-trv" aria-label="Trace" ref={setPlayEl}>
+        <section className="kt-play kt-play-trv" aria-label="执行记录" ref={setPlayEl}>
           <div className="kt-ph">
-            <span><b>Trace</b>{taskHref ? <small className="kt-proto"><Link className="link-q inl" href={taskHref}>Open the task</Link></small> : null}</span>
+            <span><b>执行记录</b>{taskHref ? <small className="kt-proto"><Link className="link-q inl" href={taskHref}>打开任务</Link></small> : null}</span>
             {status}
           </div>
           <div className="kt-pb" ref={pb}>{trace}</div>
@@ -356,8 +356,8 @@ export function KitTryPage({ kitId }: { kitId: string }) {
         </section>
         <section className="kt-app" aria-label={`${kit.title} app`}>
           <div className="kt-bar">
-            <a className="kt-url" href={appHref(kit)} target="_blank" rel="noopener" title="Open in a new tab">{LOCK}<span className="kt-path">{appPath(kit)}</span></a>
-            {kit.launched && kit.database ? <button type="button" className="link-q" onClick={() => setSheet('reconnect')}>Change database</button> : null}
+            <a className="kt-url" href={appHref(kit)} target="_blank" rel="noopener" title="在新标签页打开">{LOCK}<span className="kt-path">{appPath(kit)}</span></a>
+            {kit.launched && kit.database ? <button type="button" className="link-q" onClick={() => setSheet('reconnect')}>切换数据库</button> : null}
           </div>
           {following ? <button type="button" className="kt-live" aria-label="Open the trace" onClick={() => setTab('play')}>{live}</button> : null}
           <div className={'kt-frame' + (app === 'open' ? '' : ' kt-off')}>{frameIn}</div>

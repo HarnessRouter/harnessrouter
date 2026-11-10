@@ -120,7 +120,7 @@ export function SheetTop({ id, title, sub, onClose }: { id: string; title: React
         <h3 id={id}>{title}</h3>
         {sub ? <p className="sub">{sub}</p> : null}
       </div>
-      <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>{X}</button>
+      <button type="button" className="icon-btn" aria-label="关闭" onClick={onClose}>{X}</button>
     </div>
   );
 }

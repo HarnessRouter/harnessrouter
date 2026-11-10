@@ -198,16 +198,16 @@ export function KeysPage() {
       <div className="list-wrap lw-n">
         <div className="list-top ph">
           <div>
-            <h1>API Keys</h1>
+            <h1>API 密钥</h1>
           </div>
           <PagePic kind="keys" />
         </div>
 
         <div className="keybox">
-          <h4>Create an API key</h4>
+          <h4>创建 API 密钥</h4>
           {fresh ? (
             <div className="reveal">
-              <b>{fresh.name ? `${fresh.name} has a new secret. ` : ''}Shown once. Paste it only into your coding agent’s secure prompt, never into chat or code.</b>
+              <b>{fresh.name ? `${fresh.name} has a new secret. ` : ''}密钥仅显示一次，请通过编程智能体的安全输入框提交。</b>
               {/* ph-no-capture: the secret stays out of session replay */}
               <code id="keySrc" className="ph-no-capture" ref={secretRef}>{fresh.secret}</code>
               <button type="button" className={`btn small ${copied ? 'kb-done' : 'primary'}`} onClick={copyKey}>{copied ? 'Copied' : 'Copy key'}</button>
@@ -215,15 +215,15 @@ export function KeysPage() {
           ) : (
             <>
               <div className="keyrow">
-                <label className="sr" htmlFor={`${id}-name`}>Key name</label>
-                <input id={`${id}-name`} ref={nameRef} className={`keyname${why ? ' bad' : ''}`} placeholder="Key name, e.g. production"
+                <label className="sr" htmlFor={`${id}-name`}>密钥名称</label>
+                <input id={`${id}-name`} ref={nameRef} className={`keyname${why ? ' bad' : ''}`} placeholder="密钥名称，例如生产环境"
                   autoComplete="off" spellCheck={false} aria-invalid={why ? true : undefined} aria-describedby={why ? `${id}-why` : undefined} value={name}
                   onChange={(e) => { setName(e.target.value); setWhy(''); }}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void create(); } }} />
                 {isDefaultWs ? null : (
                   <div className="seg" role="radiogroup" aria-label="What the key reaches" id="keyReach">
-                    <button type="button" role="radio" aria-checked={!everywhere} className={everywhere ? '' : 'on'} onClick={() => setEverywhere(false)}>This workspace only</button>
-                    <button type="button" role="radio" aria-checked={everywhere} className={everywhere ? 'on' : ''} onClick={() => setEverywhere(true)}>Every workspace</button>
+                    <button type="button" role="radio" aria-checked={!everywhere} className={everywhere ? '' : 'on'} onClick={() => setEverywhere(false)}>仅限当前工作区</button>
+                    <button type="button" role="radio" aria-checked={everywhere} className={everywhere ? 'on' : ''} onClick={() => setEverywhere(true)}>所有工作区</button>
                   </div>
                 )}
                 <button type="button" className="btn primary" disabled={k.busy || !org} onClick={() => void create()}>{k.busy ? 'Creating' : 'Create'}</button>
@@ -233,21 +233,21 @@ export function KeysPage() {
           )}
         </div>
 
-        <div className="rows-head keys-g" style={{ marginTop: 26 }}><span>Name</span><span className="r">Created</span><span className="r">Last used</span><span /></div>
+        <div className="rows-head keys-g" style={{ marginTop: 26 }}><span>名称</span><span className="r">创建时间</span><span className="r">最近使用</span><span /></div>
         <div className="rows">
           {/* the key step's own read (its name check runs on it) failing is said here too */}
           {err || k.error ? (
-            <div className="empty-list ld-fail" role="alert">Your keys could not be read just now.{' '}
-              <button type="button" className="link-q inl" onClick={() => { if (err) void reload(); if (k.error) k.retry(); }}>Try again</button></div>
+            <div className="empty-list ld-fail" role="alert">暂时无法读取密钥。{' '}
+              <button type="button" className="link-q inl" onClick={() => { if (err) void reload(); if (k.error) k.retry(); }}>重试</button></div>
           ) : null}
-          {keys === null ? <Skel label="Loading your keys"><SkRows n={3} cols={2} lead={false} /></Skel> : null}
-          {keys !== null && !err && !rows.length ? <div className="empty-list">No keys yet.</div> : null}
+          {keys === null ? <Skel label="正在加载密钥"><SkRows n={3} cols={2} lead={false} /></Skel> : null}
+          {keys !== null && !err && !rows.length ? <div className="empty-list">暂无密钥。</div> : null}
           {rows.map(({ k: x, created, used, sub }) => (
             <div key={x.id} className="row keys-g">
               <span className="t"><b>{x.name || 'default'}</b>{sub ? <small className="sub2 mono">{sub}</small> : null}</span>
               <span className="r" title={created ? new Date(created).toLocaleString() : undefined}>{created ? ago(created) : ''}</span>
               <span className="r" title={used ? new Date(used).toLocaleString() : undefined}>{used ? ago(used) : 'Never'}</span>
-              <span className="r"><button type="button" className="link-q" aria-label={`Manage ${x.name || 'default'}`} onClick={() => openManage(x)}>Manage</button></span>
+              <span className="r"><button type="button" className="link-q" aria-label={`Manage ${x.name || 'default'}`} onClick={() => openManage(x)}>管理</button></span>
             </div>
           ))}
         </div>
@@ -258,33 +258,33 @@ export function KeysPage() {
           <SheetTop id="kmh" title={managing.name || 'default'} onClose={closeManage}
             sub={<>{[keyMask(managing.tail), mg.all ? 'Reaches every workspace' : `Reaches ${current.name || 'this workspace'} only`].filter(Boolean).join(' · ')}</>} />
           <div className="set-f">
-            <label htmlFor="kmName">Name</label>
+            <label htmlFor="kmName">名称</label>
             <div className="keyrow">
               <input id="kmName" ref={renameRef} className={`keyname${renameWhy ? ' bad' : ''}`} autoComplete="off" spellCheck={false} value={rename}
                 aria-invalid={renameWhy ? true : undefined} aria-describedby={renameWhy ? 'kmWhy' : undefined}
                 onChange={(e) => { setRename(e.target.value); setRenameWhy(''); }}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveName(managing); } }} />
-              <button type="button" className="btn" disabled={busy || rename.trim() === (managing.name || '')} onClick={() => void saveName(managing)}>Save name</button>
+              <button type="button" className="btn" disabled={busy || rename.trim() === (managing.name || '')} onClick={() => void saveName(managing)}>保存名称</button>
             </div>
             {renameWhy ? <p className="kb-why" id="kmWhy" role="alert">{renameWhy}</p> : null}
-            <p className="set-help">Only the name changes. The secret and what it reaches stay as they are.</p>
+            <p className="set-help">仅修改名称，保留密钥内容和访问范围。</p>
           </div>
           <div className="set-f">
-            <label id="kmRot">Secret</label>
-            <p className="set-help">Rotating makes a new secret, shown once, and stops this one at once. Anything still using it stops working.</p>
-            <div className="sheet-actions"><button type="button" className="btn" aria-describedby="kmRot" disabled={busy} onClick={() => void rotate(managing)}>Rotate secret</button></div>
+            <label id="kmRot">密钥内容</label>
+            <p className="set-help">轮换将生成仅显示一次的新密钥，旧密钥立即失效，仍使用旧密钥的调用会失败。</p>
+            <div className="sheet-actions"><button type="button" className="btn" aria-describedby="kmRot" disabled={busy} onClick={() => void rotate(managing)}>轮换密钥</button></div>
           </div>
-          <p className="set-help">Created {mg.created ? ago(mg.created) : 'at an unknown time'} · {mg.used ? `last used ${ago(mg.used)}` : 'never used'}</p>
+          <p className="set-help">创建时间 {mg.created ? ago(mg.created) : 'at an unknown time'} · {mg.used ? `last used ${ago(mg.used)}` : 'never used'}</p>
           <div className="del-act">
-            <button type="button" className="btn del-go" disabled={busy} onClick={() => { const x = managing; setManaging(null); setRefused(''); setRevoking(x); }}>Revoke key</button>
+            <button type="button" className="btn del-go" disabled={busy} onClick={() => { const x = managing; setManaging(null); setRefused(''); setRevoking(x); }}>撤销密钥</button>
           </div>
         </Sheet>
       ) : null}
 
       {revoking && rv ? (
-        <ConfirmSheet id="rv" title="Revoke key" confirmLabel="Revoke key" busy={busy} focusConfirm refused={refused}
+        <ConfirmSheet id="rv" title="撤销密钥" confirmLabel="撤销密钥" busy={busy} focusConfirm refused={refused}
           onClose={() => { setRevoking(null); setRefused(''); }} onConfirm={() => void revoke(revoking)}
-          body={<><b>{revoking.name || 'default'}</b>{keyMask(revoking.tail) ? <> <span className="mono">{keyMask(revoking.tail)}</span></> : null} stops working right away{rv.all ? ' in every workspace' : ''}.{rv.used && Date.now() - rv.used < DAY_MS ? <> <b>It was used {ago(rv.used)}.</b></> : null} This can’t be undone.</>} />
+          body={<><b>{revoking.name || 'default'}</b>{keyMask(revoking.tail) ? <> <span className="mono">{keyMask(revoking.tail)}</span></> : null} 立即失效{rv.all ? ' in every workspace' : ''}.{rv.used && Date.now() - rv.used < DAY_MS ? <> <b>最近使用于 {ago(rv.used)}.</b></> : null} 此操作无法撤销。</>} />
       ) : null}
     </div>
   );

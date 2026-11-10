@@ -215,21 +215,21 @@ export default function SetupPage() {
   if (failed && !row) {
     return (
       <div className="scroll"><div className="list-wrap">
-        <p className="sub" role="alert">This setup could not be loaded just now. <button type="button" className="link-q inl" onClick={reload}>Try again</button></p>
+        <p className="sub" role="alert">暂时无法加载此配置。 <button type="button" className="link-q inl" onClick={reload}>重试</button></p>
       </div></div>
     );
   }
   if (missing) {
     return (
       <div className="scroll"><div className="list-wrap">
-        <p className="sub">This setup is not in this workspace. <a className="link-q inl" href="/studio">Back to Harness Studio</a></p>
+        <p className="sub">此配置不在当前工作区中。 <a className="link-q inl" href="/studio">返回工作台</a></p>
       </div></div>
     );
   }
   if (!row) {
     return (
       <div className="tk-page">
-        <Skel label="Loading the setup" className="hrui-skel-contents">
+        <Skel label="正在加载配置" className="hrui-skel-contents">
           {/* the setup's bar while it loads: the same bar (setup/parts AgentHead), its tabs' place held at the right end */}
           <header className="ag-bar ag-rt" aria-hidden="true">
             <div className="ag-lft"><SkLine w={32} h={32} r={16} /><div style={{ display: 'grid', gap: 6 }}><SkLine w={180} h={20} /><SkLine w={240} h={10} /></div></div>
@@ -308,15 +308,15 @@ export default function SetupPage() {
         <div className="tk-d">
           {!slot ? (
             list.ready ? (list.failed && !list.all.length ? (
-              <div className="tk-none" role="alert">The tasks could not be read just now.{' '}
-                <button type="button" className="link-q inl" onClick={list.refresh}>Try again</button></div>
+              <div className="tk-none" role="alert">暂时无法读取任务。{' '}
+                <button type="button" className="link-q inl" onClick={list.refresh}>重试</button></div>
             ) : rec.failed ? (
-              <div className="tk-none" role="alert">This setup’s recorded first task could not be read just now.{' '}
-                <button type="button" className="link-q inl" onClick={rec.retry}>Try again</button></div>
+              <div className="tk-none" role="alert">暂时无法读取此配置的首个录制任务。{' '}
+                <button type="button" className="link-q inl" onClick={rec.retry}>重试</button></div>
             ) : (
-              <div className="tk-none"><b>No tasks match.</b></div>
+              <div className="tk-none"><b>没有匹配的任务。</b></div>
             )) : (
-              <Skel label="Opening the task"><div className="thread"><SkThread /></div></Skel>
+              <Skel label="正在打开任务"><div className="thread"><SkThread /></div></Skel>
             )
           ) : (
             <>
@@ -329,8 +329,8 @@ export default function SetupPage() {
                 <RecordedHead title={recShown.request} running={recRunning} onBack={() => setPicked(false)} />
               ) : <NewTaskHead onBack={() => setPicked(false)} />}
               {linkFailed ? (
-                <div className="tk-none" role="alert">This task could not be read just now.{' '}
-                  <button type="button" className="link-q inl" onClick={linked.retry}>Try again</button></div>
+                <div className="tk-none" role="alert">暂时无法读取此任务。{' '}
+                  <button type="button" className="link-q inl" onClick={linked.retry}>重试</button></div>
               ) : null}
               <div className="convo" hidden={linkFailed}>
                 <Playground r={row} onRan={() => { setNudge((n) => n + 1); reload(); }}

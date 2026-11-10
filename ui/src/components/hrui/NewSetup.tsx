@@ -236,7 +236,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   };
   const autoRow = (on: boolean, choose: () => void) => (!ql ? (
     <button type="button" className={`nw-opt dd-o${on ? ' on' : ''}`} role="option" aria-selected={on} onClick={choose}>
-      <span className="chk">{on ? CHECK : null}</span><b>Auto</b><small>picked for the job</small>
+      <span className="chk">{on ? CHECK : null}</span><b>自动</b><small>根据任务自动选择</small>
     </button>
   ) : null);
   const list = pick && pos ? (
@@ -257,8 +257,8 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
               </button>
             );
           })}
-          {hs.length ? null : <p className="dd-none">No harness matches.</p>}
-          <p className="dd-foot">{LOCK}Fixed once saved</p>
+          {hs.length ? null : <p className="dd-none">没有匹配的智能体。</p>}
+          <p className="dd-foot">{LOCK}保存后固定</p>
         </>
       ) : (
         <>
@@ -268,7 +268,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
             return (
               <button key={x} type="button" className={`nw-opt dd-o${on ? ' on' : ''}`} role="option" aria-selected={on} onClick={() => chooseM(x)}>
                 <span className="chk">{on ? CHECK : null}</span><b className="mono">{x}</b>
-                {x === def ? <small>default</small> : kp ? <small>your {kp} key</small> : null}
+                {x === def ? <small>默认</small> : kp ? <small>你的 {kp} 密钥</small> : null}
               </button>
             );
           })}
@@ -281,42 +281,42 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   // loading is drawn as the line that lands (Skel), never a sentence about loading
   const sk = (label: string) => <><SkLine w="58%" h={12} style={{ marginTop: 4 }} /><span className="sr">{label}</span></>;
   const msg: [string, React.ReactNode] = err ? ['bad', err]
-    : basesRead.failed || catalogRead.failed ? ['bad', <>The agent harnesses could not be read just now.{' '}
-      <button type="button" className="link-q inl" onClick={() => { basesRead.retry(); catalogRead.retry(); }}>Try again</button></>]
-    : bases && !offered.length ? ['bad', <>No agent harness is available on this instance.</>]
+    : basesRead.failed || catalogRead.failed ? ['bad', <>暂时无法读取智能体运行环境。{' '}
+      <button type="button" className="link-q inl" onClick={() => { basesRead.retry(); catalogRead.retry(); }}>重试</button></>]
+    : bases && !offered.length ? ['bad', <>当前实例暂无可用智能体运行环境。</>]
     // nothing runs without a model key: the builder and the setup both run on one of yours
-    : catalog && bases && (noneRuns || (hAuto && !anyRuns)) ? ['warn', <>Connect a model key to set up an agent harness. <a className="link-q inl" href="/byok">Connect a key</a></>]
-    : catalog && h && !hAuto && !hRuns ? ['warn', <>None of your keys runs a model on {hName} yet. <a className="link-q inl" href="/byok">Add a key</a> or choose another harness.</>]
-    : code ? ['warn', <><b>Changing code in your project?</b> Your coding agent does that.</>]
+    : catalog && bases && (noneRuns || (hAuto && !anyRuns)) ? ['warn', <>请连接模型密钥以配置智能体。 <a className="link-q inl" href="/byok">连接密钥</a></>]
+    : catalog && h && !hAuto && !hRuns ? ['warn', <>None of your keys runs a model on {hName} 。 <a className="link-q inl" href="/byok">添加密钥</a> 或选择其他智能体运行环境。</>]
+    : code ? ['warn', <><b>需要修改项目代码？</b> 交给你的编程智能体完成。</>]
     : demo != null && bases && dp && !dp.base ? ['warn', <>{`${baseName(DEMOS[demo].base, bases)} is not available to you, so Auto picks the harness.`}</>]
     : !bases || !catalog ? ['', sk('Loading')]
     : ['', null];
-  const pickH = hAuto ? <span>Auto</span> : <>{h ? logo(h) : null}<span>{hName}</span></>;
-  const pickM = mAuto ? <span>Auto</span> : <span className="mono">{m}</span>;
+  const pickH = hAuto ? <span>自动</span> : <>{h ? logo(h) : null}<span>{hName}</span></>;
+  const pickM = mAuto ? <span>自动</span> : <span className="mono">{m}</span>;
   return (
     // Escape closes an open list first, then the sheet
     <Sheet onClose={() => { if (pick) closePick(); else close(); }} labelledBy="nwh"
       className={`nw-sheet nw-q${code ? ' code-ask' : ''}`} initialFocus="dialog">
       <div className="sheet-top">
-        <div><h3 id="nwh">Set up an agent harness</h3></div>
-        <button type="button" className="icon-btn" aria-label="Close" onClick={close}>{X}</button>
+        <div><h3 id="nwh">配置智能体运行环境</h3></div>
+        <button type="button" className="icon-btn" aria-label="关闭" onClick={close}>{X}</button>
       </div>
       <div className="nw-build">
         <span className="nw-art" id="nwArt" dangerouslySetInnerHTML={{ __html: art }} />
         <div className="nw-picks" id="nwPicks">
           <button ref={btnH} type="button" className={`nw-pk${pick === 'h' ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={pick === 'h'}
             disabled={busy} onClick={() => toggle('h')}>
-            <span>Agent harness</span><b>{pickH}</b>{CHEV}
+            <span>智能体运行环境</span><b>{pickH}</b>{CHEV}
           </button>
           <button ref={btnM} type="button" className={`nw-pk${pick === 'm' ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={pick === 'm'}
             disabled={busy} onClick={() => toggle('m')}>
-            <span>Model</span><b>{pickM}</b>{CHEV}
+            <span>模型</span><b>{pickM}</b>{CHEV}
           </button>
           {list}
         </div>
       </div>
       <>
-          <label className="nw-l" htmlFor="nwJob">What should it do for your users?</label>
+          <label className="nw-l" htmlFor="nwJob">你希望它为用户完成什么？</label>
           <div className="nw-ask">
             <div className="nw-field">
               <textarea ref={ta} id="nwJob" className="nw-in" rows={3} placeholder=" " aria-describedby="nwCost"
@@ -325,20 +325,20 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
                 onChange={(e) => { setJob(e.target.value); if (err) setErr(''); }}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
               <div className="nw-ph" aria-hidden="true">
-                {NW_SAMPLES.map((t, i) => <span key={i} className="hx-exl" style={{ '--i': i } as CSSProperties}>e.g. {t}</span>)}
+                {NW_SAMPLES.map((t, i) => <span key={i} className="hx-exl" style={{ '--i': i } as CSSProperties}>例如 {t}</span>)}
               </div>
             </div>
             <div className="nw-ask-bar">
               <span aria-hidden="true" />
-              <button type="button" className="send" id={demoNow != null ? 'nwBuild' : 'nwSend'} aria-label="Save setup"
+              <button type="button" className="send" id={demoNow != null ? 'nwBuild' : 'nwSend'} aria-label="保存配置"
                 aria-busy={busy || undefined} disabled={!job.trim() || busy || !ready} onClick={() => void send()}>{UP}</button>
             </div>
           </div>
           <div className={`nw-cost nw-msg ${msg[0]}`} id="nwCost" role="status">{msg[1]}</div>
-          <div className="au-or nw-or" role="separator"><span>OR</span></div>
+          <div className="au-or nw-or" role="separator"><span>或</span></div>
           <div className="nw-alt">
-            <span><b>Building in your own codebase?</b></span>
-            <button type="button" className="link-q inl" disabled={busy} onClick={() => setHand(true)}>Use your coding agent ›</button>
+            <span><b>正在自己的代码库中构建？</b></span>
+            <button type="button" className="link-q inl" disabled={busy} onClick={() => setHand(true)}>使用编程智能体 ›</button>
           </div>
       </>
     </Sheet>

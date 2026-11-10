@@ -393,21 +393,21 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
 
   const bar = searching || f.q ? (
     <div className="tk-bar">
-      <label className="search tk-sq">{SEARCH}<span className="sr">Search tasks</span>
-        <input ref={qRef} id="q" type="search" placeholder="Search tasks" value={f.q} autoComplete="off" spellCheck={false}
+      <label className="search tk-sq">{SEARCH}<span className="sr">搜索任务</span>
+        <input ref={qRef} id="q" type="search" placeholder="搜索任务" value={f.q} autoComplete="off" spellCheck={false}
           onChange={(e) => setF({ ...f, q: e.target.value })}
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); openSearch(false); } }} />
       </label>
-      <button type="button" className="icon-btn tk-ib" aria-label="Close search" title="Close search" onClick={() => openSearch(false)}>{X}</button>
+      <button type="button" className="icon-btn tk-ib" aria-label="关闭搜索" title="关闭搜索" onClick={() => openSearch(false)}>{X}</button>
     </div>
   ) : (
     <div className="tk-bar">
-      <button type="button" className={`btn tk-newb${isNew ? ' on' : ''}`} aria-pressed={isNew} onClick={onNew}>{PLUS}New task</button>
+      <button type="button" className={`btn tk-newb${isNew ? ' on' : ''}`} aria-pressed={isNew} onClick={onNew}>{PLUS}新建任务</button>
       <span className="grow" />
-      <button ref={searchBtn} type="button" className="icon-btn tk-ib" aria-label="Search tasks" title="Search tasks" onClick={() => openSearch(true)}>{SEARCH}</button>
+      <button ref={searchBtn} type="button" className="icon-btn tk-ib" aria-label="搜索任务" title="搜索任务" onClick={() => openSearch(true)}>{SEARCH}</button>
       <span className="flt-w">
         <button ref={fltBtn} type="button" className={`icon-btn tk-ib${on ? ' on' : ''}`} aria-haspopup="menu" aria-expanded={pop}
-          aria-label={`Filter tasks${failedN && complete ? `, ${failedN} failed` : ''}`} title="Filter" onClick={() => setPop(!pop)}>
+          aria-label={`Filter tasks${failedN && complete ? `, ${failedN} failed` : ''}`} title="筛选" onClick={() => setPop(!pop)}>
           {FILTER}{failedN && f.view !== 'failed' ? <i className="flt-dot" aria-hidden="true" /> : null}
         </button>
         {pop ? (
@@ -434,8 +434,8 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
   // one quiet line on top when what the list shows may be behind: a read again failed, or live
   // updates are down (a list that was never read says so at its end instead)
   const behind = list.failed ? null
-    : list.stale ? <div className="tk-empty" role="status">Could not refresh.<button type="button" className="link-q inl" onClick={list.refresh}>Try again</button></div>
-      : list.paused ? <div className="tk-empty" role="status">Live updates paused. This list may be out of date.<button type="button" className="link-q inl" onClick={list.reconnect}>Try again</button></div>
+    : list.stale ? <div className="tk-empty" role="status">无法刷新。<button type="button" className="link-q inl" onClick={list.refresh}>重试</button></div>
+      : list.paused ? <div className="tk-empty" role="status">实时更新已暂停，列表可能不是最新状态。<button type="button" className="link-q inl" onClick={list.reconnect}>重试</button></div>
         : null;
   return (
     <div className="tk-l">
@@ -443,19 +443,19 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
       {on ? (
         <div className="tk-fsum">
           <span>{[viewName(f.view), f.range !== 'all' ? `Last ${rangeName(f.range)}` : ''].filter(Boolean).join(' · ')}</span>
-          <button type="button" className="link-q" onClick={() => setF({ ...NO_FILTER, q: f.q })}>Clear</button>
+          <button type="button" className="link-q" onClick={() => setF({ ...NO_FILTER, q: f.q })}>清除</button>
         </div>
       ) : null}
       <div ref={listRef} className="tk-list" id="tkList" role="list" aria-label={`Tasks of ${setupName}`}>
         {behind}
-        {loading ? <Skel label="Loading the tasks"><SkRows n={6} lead={false} /></Skel> : null}
+        {loading ? <Skel label="正在加载任务"><SkRows n={6} lead={false} /></Skel> : null}
         {pend.map((p) => {
           const sel = p.sid ? p.sid === current : !current && newOpen;
           return (
             <div key={p.tempId} className="tk-rw" role="listitem">
               <button type="button" className={`tk-r${sel ? ' on' : ''}`} aria-current={sel ? 'true' : undefined} onClick={() => { if (p.sid) onOpen(p.sid, null); }}>
                 <span className="dot run" aria-hidden="true" />
-                <span className="tk-rt"><b>{p.title || 'New task'}</b><small>Just now<span className="sr"> · Running</span></small></span>
+                <span className="tk-rt"><b>{p.title || 'New task'}</b><small>刚刚<span className="sr"> · 运行中</span></small></span>
               </button>
             </div>
           );
@@ -472,14 +472,14 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
                 <span className={`dot${DOT[st] || ''}`} aria-hidden="true" />
                 <span className="tk-rt"><b>{title}</b>
                   <small>{made ? ago(made) : ''}
-                    {st === 'running' ? <span className="sr"> · Running</span> : null}
+                    {st === 'running' ? <span className="sr"> · 运行中</span> : null}
                     {word ? (st === 'failed' ? <span className="tk-fr"> · {word}</span> : <> · {word}</>) : null}
                   </small>
                 </span>
               </button>
               {canDel ? (
                 // the sheet gives focus back to what opened it: this button, focused on a click too
-                <button type="button" className="tk-mb tk-rdel" aria-label={`Delete task ${title}`} title="Delete task"
+                <button type="button" className="tk-mb tk-rdel" aria-label={`Delete task ${title}`} title="删除任务"
                   onClick={(e) => { e.currentTarget.focus(); setDel(c); }}>{TRASH}</button>
               ) : null}
             </div>
@@ -490,26 +490,26 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
             <button type="button" className={`tk-r${rec.on ? ' on' : ''}`} aria-current={rec.on ? 'true' : undefined} onClick={rec.onOpen}>
               {/* blue while it plays, as a live run's dot is while it runs */}
               <span className={`dot${rec.running ? ' run' : ' ok'}`} aria-hidden="true" />
-              <span className="tk-rt"><b>{rec.title}</b><small>Recorded{rec.at ? ` · ${ago(rec.at)}` : ''}{rec.running ? <span className="sr"> · Running</span> : null}</small></span>
+              <span className="tk-rt"><b>{rec.title}</b><small>已录制{rec.at ? ` · ${ago(rec.at)}` : ''}{rec.running ? <span className="sr"> · 运行中</span> : null}</small></span>
             </button>
           </div>
         ) : null}
         {recordedRetry && list.ready && atEnd ? (
-          <div className="tk-empty" role="alert">The recorded first task could not be read.
-            <button type="button" className="link-q inl" onClick={recordedRetry}>Try again</button></div>
+          <div className="tk-empty" role="alert">无法读取首个录制任务。
+            <button type="button" className="link-q inl" onClick={recordedRetry}>重试</button></div>
         ) : null}
         {shown.length > listed.length ? (
           <button type="button" className="tk-more" onClick={() => setShownN((n) => n + PER)}>
-            Show more · {(shown.length - listed.length).toLocaleString('en-US')} left
+            显示更多 · {(shown.length - listed.length).toLocaleString('en-US')} 剩余
           </button>
         ) : list.more && !complete ? (list.reading
-          ? <Skel label="Reading older tasks"><SkRows n={2} lead={false} /></Skel>
-          : <button type="button" className="tk-more" onClick={list.older}>Show older tasks</button>
+          ? <Skel label="正在读取更早任务"><SkRows n={2} lead={false} /></Skel>
+          : <button type="button" className="tk-more" onClick={list.older}>显示更早的任务</button>
         ) : null}
         {list.failed ? (
           <div className="tk-empty" role="alert">{list.all.length ? 'Older tasks could not be read.' : 'Tasks could not be read.'}
-            <button type="button" className="link-q inl" onClick={list.refresh}>Try again</button></div>
-        ) : none ? <div className="tk-empty">No tasks yet.</div>
+            <button type="button" className="link-q inl" onClick={list.refresh}>重试</button></div>
+        ) : none ? <div className="tk-empty">暂无任务。</div>
           : empty ? (
             <div className="tk-empty">{f.range !== 'all' ? `No tasks match in the last ${rangeName(f.range)}.` : 'No tasks match.'}
               {next ? <button type="button" className="link-q inl" onClick={() => setF({ ...f, range: next[0] })}>{next[0] === 'all' ? 'Show any time' : `Try ${next[1]}`}</button> : null}

@@ -34,6 +34,39 @@ def _wire(monkeypatch, statuses):
     return calls
 
 
+@pytest.mark.parametrize("current,stored,expected", [
+    ({"id": "env-current"}, "env-old", "env-current"),
+    (None, "env-stored", "env-stored"),
+])
+def test_environment_hint_reaches_both_hydrate_probe_and_relay(monkeypatch, current, stored, expected):
+    seen = []
+
+    async def vertex(sid):
+        return {"ws_sha": "abc123", "environment": stored, "brain_room": "room"}
+
+    async def sandbox(path, sid, method, content, params):
+        seen.append(dict(params))
+        return _R(200)  # no skipped flag: exercise the full relay too
+
+    async def relay(sid, params):
+        seen.append(dict(params))
+        return _R(200)
+
+    async def reapply(sid):
+        return 0
+
+    monkeypatch.setattr(gw, "_vertex_get", vertex)
+    monkeypatch.setattr(gw, "_sandbox", sandbox)
+    monkeypatch.setattr(gw, "_hydrate_relay", relay)
+    monkeypatch.setattr(gw, "_reapply_app_writes", reapply)
+    monkeypatch.setattr(gw, "COLLAB_URL", "http://collab")
+    rec = {"environment": current} if current else {}
+    asyncio.run(gw._hydrate("hsessx", rec))
+    assert rec["hydrated"]
+    assert len(seen) == 2
+    assert all(p["environment"] == expected and p["room"] == "room" for p in seen)
+
+
 def test_a_failed_restore_is_tried_once_more(monkeypatch):
     calls = _wire(monkeypatch, [500, 200])
     rec = {}

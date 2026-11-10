@@ -114,18 +114,18 @@ export function EnvsTab({ data, setups, reloadSetups }: {
     } finally { setBusy(''); }
   }
 
-  const newBtn = <button type="button" className="btn primary" onClick={() => setCreating(true)}>{PLUS}New environment</button>;
+  const newBtn = <button type="button" className="btn primary" onClick={() => setCreating(true)}>{PLUS}新建环境</button>;
 
   return (
     <>
       <div className="lib-form">{newBtn}</div>
       {data.failed ? <ReadFailed what="environments" retry={data.retry} /> : null}
-      {envs === null ? (data.failed ? null : <div className="rows"><Skel label="Loading your environments"><SkRows n={4} cols={2} /></Skel></div>)
+      {envs === null ? (data.failed ? null : <div className="rows"><Skel label="正在加载环境"><SkRows n={4} cols={2} /></Skel></div>)
         : envs.length ? (
           // one grid for the head and every row (envs.css), so each column starts at the same place in all of them
           <div className="eo-plate">
             <div className="rows-head eo-head" aria-hidden="true">
-              <span>Environment</span><span className="eo-c-files">Files</span><span className="eo-c-pk">Packages</span><span>State</span><span />
+              <span>环境</span><span className="eo-c-files">文件</span><span className="eo-c-pk">依赖包</span><span>状态</span><span />
             </div>
             <div className="rows">
               {envs.map((e) => {
@@ -144,8 +144,8 @@ export function EnvsTab({ data, setups, reloadSetups }: {
                     <span className="eo-c-pk mono">{pkgLine(e)}</span>
                     <span className="eo-c-st"><span className={`pill ${v.tone}`}>{v.tone === 'run' ? <span className="dot run" aria-hidden="true" /> : null}{v.label}</span>{sub ? <small>{sub}</small> : null}</span>
                     <span className="lib-act">
-                      <button type="button" className="btn small line" disabled={busy === e.id} onClick={() => open(e.id)}>Open</button>
-                      <button type="button" className="link-q danger" disabled={!!busy} onClick={() => void askRemove(e)}>Remove</button>
+                      <button type="button" className="btn small line" disabled={busy === e.id} onClick={() => open(e.id)}>打开</button>
+                      <button type="button" className="link-q danger" disabled={!!busy} onClick={() => void askRemove(e)}>移除</button>
                     </span>
                   </div>
                 );
@@ -153,7 +153,7 @@ export function EnvsTab({ data, setups, reloadSetups }: {
             </div>
           </div>
         ) : (
-          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'tool') }} /><span>No environments yet.</span></div>
+          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'tool') }} /><span>暂无环境。</span></div>
         )}
 
       {creating ? (
@@ -268,14 +268,14 @@ export function NewEnvSheet({ taken, onClose, onCreated }: {
   const busy = !!step;
   return (
     <Sheet onClose={onClose} labelledBy="eonh" className="small-sheet eo-new eo-full" busy={busy}>
-      <SheetTop id="eonh" title="New environment" onClose={onClose} />
+      <SheetTop id="eonh" title="新建环境" onClose={onClose} />
       <div className="set-f">
-        <label htmlFor="eonName">Name</label>
+        <label htmlFor="eonName">名称</label>
         <input id="eonName" className={`set-in${err?.field === 'name' ? ' bad' : ''}`} placeholder="docs-repo" value={name} disabled={busy}
           aria-invalid={err?.field === 'name' || undefined} onChange={(ev) => { setName(ev.target.value); if (err?.field === 'name') setErr(null); }} onKeyDown={enter} />
       </div>
       <div className="set-f">
-        <span className="eo-l" id="eonSrcL">Start from</span>
+        <span className="eo-l" id="eonSrcL">起始模板</span>
         <div className="seg eo-src" role="radiogroup" aria-labelledby="eonSrcL">
           {SRC.map(([k, label]) => (
             <button key={k} type="button" role="radio" aria-checked={src === k} className={src === k ? 'on' : ''} disabled={busy}
@@ -285,10 +285,10 @@ export function NewEnvSheet({ taken, onClose, onCreated }: {
       </div>
       {src === 'git' ? (
         <div className="eo-two">
-          <div className="set-f"><label htmlFor="eonUrl">Repository address</label>
+          <div className="set-f"><label htmlFor="eonUrl">仓库地址</label>
             <input id="eonUrl" className={`set-in mono${err?.field === 'url' ? ' bad' : ''}`} value={url} placeholder="https://github.com/your-org/project" spellCheck={false} disabled={busy}
               onChange={(ev) => { setUrl(ev.target.value); if (err?.field === 'url') setErr(null); }} onKeyDown={enter} /></div>
-          <div className="set-f"><label htmlFor="eonRef">Branch or tag <span className="muted">optional</span></label>
+          <div className="set-f"><label htmlFor="eonRef">分支或标签 <span className="muted">可选</span></label>
             <input id="eonRef" className="set-in mono" value={ref} placeholder="main" spellCheck={false} disabled={busy} onChange={(ev) => setRef(ev.target.value)} onKeyDown={enter} /></div>
         </div>
       ) : null}
@@ -309,10 +309,10 @@ export function NewEnvSheet({ taken, onClose, onCreated }: {
       ) : null}
 
       <details className="eo-more">
-        <summary>Description and how it is run <span className="muted">optional</span></summary>
-        <div className="set-f"><label htmlFor="eonDesc">Description</label>
-          <input id="eonDesc" className="set-in" value={description} placeholder="What the project does" disabled={busy} onChange={(ev) => setDescription(ev.target.value)} /></div>
-        <div className="set-f"><label htmlFor="eonEntry">How it is run</label>
+        <summary>描述与运行方式 <span className="muted">可选</span></summary>
+        <div className="set-f"><label htmlFor="eonDesc">描述</label>
+          <input id="eonDesc" className="set-in" value={description} placeholder="项目功能描述" disabled={busy} onChange={(ev) => setDescription(ev.target.value)} /></div>
+        <div className="set-f"><label htmlFor="eonEntry">运行方式</label>
           <input id="eonEntry" className="set-in mono" value={entry} placeholder="python3 run.py --episode <id>" spellCheck={false} disabled={busy} onChange={(ev) => setEntry(ev.target.value)} /></div>
       </details>
 
@@ -320,7 +320,7 @@ export function NewEnvSheet({ taken, onClose, onCreated }: {
 
       <div className="sheet-actions eo-new-act">
         <span className="eo-state" role="status" aria-live="polite">{step}</span>
-        <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+        <button type="button" className="btn" disabled={busy} onClick={onClose}>取消</button>
         <button type="button" className="btn primary" disabled={busy} onClick={() => void create()}>{busy ? 'Creating…' : 'Create environment'}</button>
       </div>
     </Sheet>

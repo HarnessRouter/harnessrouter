@@ -192,17 +192,17 @@ function Detail({ r, turn, at, full, loadingFull, fullFailed, onFullRetry, onClo
   return (
     <div className="trv-detail" role="dialog" aria-label={`${ROLE[k]}: ${rowName(x, k)}`}>
       <div className="dr-top"><span className={`badge b-${k}`}>{ROLE[k]}</span><b>{rowName(x, k)}</b>
-        <button ref={closeRef} type="button" className="icon-btn" aria-label="Close" onClick={onClose}>{X}</button>
+        <button ref={closeRef} type="button" className="icon-btn" aria-label="关闭" onClick={onClose}>{X}</button>
       </div>
       <div className="dr-sub mono">{sub}</div>
-      {loadingFull ? <Skel label="Reading the full content"><SkLine w="90%" h={11} /><SkLine w="70%" h={11} style={{ marginTop: 8 }} /></Skel> : null}
+      {loadingFull ? <Skel label="正在读取完整内容"><SkLine w="90%" h={11} /><SkLine w="70%" h={11} style={{ marginTop: 8 }} /></Skel> : null}
       {fullFailed ? (
-        <p className="fine" role="alert">The rest of this step could not be read.{' '}
-          <button type="button" className="link-q inl" onClick={onFullRetry}>Try again</button></p>
+        <p className="fine" role="alert">无法读取此步骤的其余内容。{' '}
+          <button type="button" className="link-q inl" onClick={onFullRetry}>重试</button></p>
       ) : null}
-      {k === 'user' ? <><div className="dr-h">Input</div><div className="prose dr-p"><Md text={x.text || ''} /></div></> : null}
-      {k === 'agent' ? <><div className="dr-h">Content</div><div className="prose dr-p"><Md text={x.text || ''} /></div></> : null}
-      {k === 'step' ? <><div className="dr-h">Content</div><p className="dr-p trv-think">{x.text}</p></> : null}
+      {k === 'user' ? <><div className="dr-h">输入</div><div className="prose dr-p"><Md text={x.text || ''} /></div></> : null}
+      {k === 'agent' ? <><div className="dr-h">内容</div><div className="prose dr-p"><Md text={x.text || ''} /></div></> : null}
+      {k === 'step' ? <><div className="dr-h">内容</div><p className="dr-p trv-think">{x.text}</p></> : null}
       {k === 'done' || k === 'error' ? <><div className="dr-h">{k === 'error' ? 'Error' : 'Result'}</div><div className="prose dr-p"><Md text={x.text || ''} /></div></> : null}
       {k === 'tool' ? (x.tools || []).map((t, j) => {
         const res = t.result != null ? String(t.result) : null;
@@ -210,17 +210,17 @@ function Detail({ r, turn, at, full, loadingFull, fullFailed, onFullRetry, onClo
         return (
           <div key={j}>
             {(x.tools || []).length > 1 ? <div className="trv-tsep">{t.name}</div> : null}
-            <div className="dr-h">Tool use</div>
+            <div className="dr-h">工具调用</div>
             <pre className="json">{JSON.stringify(t.input || {}, null, 2)}</pre>
-            {clip != null ? <><div className="dr-h">Tool result</div><pre className={`json${t.is_error ? ' trv-err' : ''}`}>{prettyJson(clip) ?? clip}</pre></> : null}
+            {clip != null ? <><div className="dr-h">工具结果</div><pre className={`json${t.is_error ? ' trv-err' : ''}`}>{prettyJson(clip) ?? clip}</pre></> : null}
           </div>
         );
       }) : null}
       {k !== 'user' && tok ? (
-        <><div className="dr-h">Tokens</div>
+        <><div className="dr-h">词元</div>
           <dl className="cost">
-            {tok.in != null ? <div><dt>Input</dt><dd>{tok.in.toLocaleString('en-US')}</dd></div> : null}
-            {tok.out != null ? <div><dt>Output</dt><dd>{tok.out.toLocaleString('en-US')}</dd></div> : null}
+            {tok.in != null ? <div><dt>输入</dt><dd>{tok.in.toLocaleString('en-US')}</dd></div> : null}
+            {tok.out != null ? <div><dt>输出</dt><dd>{tok.out.toLocaleString('en-US')}</dd></div> : null}
           </dl></>
       ) : null}
     </div>
@@ -323,7 +323,7 @@ export function TraceView({ sid, rows, failed, onRetry, running, head, foot, ope
   const tok = turns.map(turnTokens);
   // Try again after a failed read: the caller's, else the setup's own read of this trace (useTrace)
   const again = onRetry || (failed && traceReads.has(sid) ? () => traceReads.get(sid)?.() : null);
-  const retry = again ? <button type="button" className="link-q inl" onClick={again}>Try again</button> : null;
+  const retry = again ? <button type="button" className="link-q inl" onClick={again}>重试</button> : null;
   let prevIn = 0;
   const detail = selRow ? (
     <Detail r={selRow} turn={where.get(selRow.i)?.turn || 1} at={where.get(selRow.i)?.at || 0} onClose={close} closeRef={closeRef}
@@ -341,14 +341,14 @@ export function TraceView({ sid, rows, failed, onRetry, running, head, foot, ope
     <div ref={root} className={`trv${detail && !narrow ? ' with-detail' : ''}`}>
       <div className="trv-main">
         <div className="trv-head">
-          {rows ? <span className="chip">{tot.events} event{tot.events === 1 ? '' : 's'}</span> : null}
-          {tot.tin || tot.tout ? <span className="chip mono">in {ktok(tot.tin)} · out {ktok(tot.tout)}</span> : null}
+          {rows ? <span className="chip">{tot.events} 事件{tot.events === 1 ? '' : 's'}</span> : null}
+          {tot.tin || tot.tout ? <span className="chip mono">输入 {ktok(tot.tin)} · 输出 {ktok(tot.tout)}</span> : null}
           {head}
         </div>
-        {rows && failed ? <p className="fine" role="status">Could not refresh the trace.{retry ? <>{' '}{retry}</> : null}</p> : null}
+        {rows && failed ? <p className="fine" role="status">无法刷新执行记录。{retry ? <>{' '}{retry}</> : null}</p> : null}
         {rows && rows.length ? <Strip rows={rows} onJump={jump} /> : null}
-        {!rows ? (failed ? <p className="fine" role="alert">The trace could not be read.{retry ? <>{' '}{retry}</> : null}</p> : <Skel label="Loading the trace"><SkRows n={6} lead={false} cols={1} /></Skel>) : null}
-        {rows && !rows.length && !running ? (empty || <p className="fine">No events recorded.</p>) : null}
+        {!rows ? (failed ? <p className="fine" role="alert">无法读取执行记录。{retry ? <>{' '}{retry}</> : null}</p> : <Skel label="正在加载执行记录"><SkRows n={6} lead={false} cols={1} /></Skel>) : null}
+        {rows && !rows.length && !running ? (empty || <p className="fine">暂无事件记录。</p>) : null}
         {turns.map((t, ti) => {
           const { t0, t1 } = turnSpan(t);
           const prevEnd = ti > 0 ? turnSpan(turns[ti - 1]).t1 : null;
@@ -358,12 +358,12 @@ export function TraceView({ sid, rows, failed, onRetry, running, head, foot, ope
           if (tt) prevIn = tt.tin;
           return (
             <div key={ti} className="trv-turn">
-              {ti > 0 && t0 != null && prevEnd != null ? <div className="idle trv-idle">Idle · {idle(Math.max(0, t0 - prevEnd) * 1000)}</div> : null}
+              {ti > 0 && t0 != null && prevEnd != null ? <div className="idle trv-idle">空闲 · {idle(Math.max(0, t0 - prevEnd) * 1000)}</div> : null}
               {turns.length > 1 ? (
-                <div className="turn-h">Turn {ti + 1}{t0 != null ? ` · ${startedAt(t0)}` : ''}{t0 != null && t1 != null ? ` · ${sec((t1 - t0) * 1000)}` : ''}{tt ? ` · in ${ktok(tt.tin)} · out ${ktok(tt.tout)}` : ''}</div>
+                <div className="turn-h">轮次 {ti + 1}{t0 != null ? ` · ${startedAt(t0)}` : ''}{t0 != null && t1 != null ? ` · ${sec((t1 - t0) * 1000)}` : ''}{tt ? ` · in ${ktok(tt.tin)} · out ${ktok(tt.tout)}` : ''}</div>
               ) : null}
               {turns.length > 1 && grew && tt ? (
-                <div className="ctx-hint">This turn sent the earlier conversation again: input grew from {ktok(from)} to {ktok(tt.tin)} tokens. Start a new task for unrelated work.</div>
+                <div className="ctx-hint">此轮重新发送了历史对话，输入词元数增加，自 {ktok(from)} 到 {ktok(tt.tin)} 词元。无关工作请新建任务。</div>
               ) : null}
               <ol className="ev-list trv-list">
                 {t.map((r) => {
@@ -391,7 +391,7 @@ export function TraceView({ sid, rows, failed, onRetry, running, head, foot, ope
             </div>
           );
         })}
-        {running ? <div className="trv-wait"><span className="dot run" />Working</div> : null}
+        {running ? <div className="trv-wait"><span className="dot run" />执行中</div> : null}
         {foot}
       </div>
       {detail && !narrow ? <aside className="trv-side">{detail}</aside> : null}

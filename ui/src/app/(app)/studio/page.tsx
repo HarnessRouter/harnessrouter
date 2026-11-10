@@ -55,7 +55,7 @@ function Card({ r }: { r: SetupRow }) {
   return (
     <Link className="card" href={setupHref(r.h.id)} data-agent={r.h.id}>
       <div className="card-tower">
-        {r.running ? <span className="card-run"><span className="dot run" />Running</span> : null}
+        {r.running ? <span className="card-run"><span className="dot run" />运行中</span> : null}
         <Iso svg={isoSvg(r.tower, 13, 'card')} />
       </div>
       <div className="card-body">
@@ -65,9 +65,9 @@ function Card({ r }: { r: SetupRow }) {
         </div>
         <div className="card-conn">{line ?? <SkLine w={110} h={11} />}</div>
         <dl className="card-stats">
-          <div><dt>Tasks · 24 h</dt><dd>{count(r)}</dd></div>
-          <div><dt>Success</dt><dd>{pct(r)}</dd></div>
-          <div><dt>P95 · 24 h</dt><dd>{p95(r)}</dd></div>
+          <div><dt>任务 · 24 小时</dt><dd>{count(r)}</dd></div>
+          <div><dt>成功率</dt><dd>{pct(r)}</dd></div>
+          <div><dt>P95 · 24 小时</dt><dd>{p95(r)}</dd></div>
         </dl>
       </div>
     </Link>
@@ -111,7 +111,7 @@ export default function StudioPage() {
       <div className="list-wrap">
         <div className="list-top">
           <div>
-            <button type="button" className="ws-switch" aria-haspopup="menu" aria-label="Switch workspace" onClick={openWs}>
+            <button type="button" className="ws-switch" aria-haspopup="menu" aria-label="切换工作区" onClick={openWs}>
               <WsBadge name={current.name} size={34} /><h1>{current.name}</h1><span className="ws-chev">{CHEV}</span>
             </button>
             <p className="sub meta"><span className="meta-in">{meta.map((m) => <span key={m} className="meta-i">{m}</span>)}</span></p>
@@ -119,42 +119,42 @@ export default function StudioPage() {
           <div className="top-actions">
             <div className="seg vm-seg" role="group" aria-label="View">
               <button type="button" className={vm === 'cards' ? 'on' : ''} aria-pressed={vm === 'cards'} onClick={() => pick('cards')}>
-                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect x="9" y="2" width="5" height="5" rx="1.2" /><rect x="2" y="9" width="5" height="5" rx="1.2" /><rect x="9" y="9" width="5" height="5" rx="1.2" /></svg>Cards
+                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect x="9" y="2" width="5" height="5" rx="1.2" /><rect x="2" y="9" width="5" height="5" rx="1.2" /><rect x="9" y="9" width="5" height="5" rx="1.2" /></svg>卡片
               </button>
               <button type="button" className={vm === 'list' ? 'on' : ''} aria-pressed={vm === 'list'} onClick={() => pick('list')}>
-                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>List
+                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>列表
               </button>
             </div>
-            <button type="button" className={`btn primary${own || rows === null || error ? '' : ' pulse'}`} onClick={newSetup}>{PLUS}New setup</button>
+            <button type="button" className={`btn primary${own || rows === null || error ? '' : ' pulse'}`} onClick={newSetup}>{PLUS}新建配置</button>
           </div>
         </div>
 
-        {error ? <p className="sub" role="alert">Your setups could not be read just now. {error}</p> : null}
+        {error ? <p className="sub" role="alert">暂时无法读取配置。 {error}</p> : null}
         {paused && !error && rows !== null ? (
           <p className="sub live-off" role="status">
-            Live updates paused. This list may be out of date.{' '}
-            <button type="button" className="link-q inl" onClick={reconnect}>Try again</button>
+            实时更新已暂停，列表可能不是最新状态。{' '}
+            <button type="button" className="link-q inl" onClick={reconnect}>重试</button>
           </p>
         ) : null}
 
         {vm === 'cards' ? (
           <div className="cards">
-            {rows === null ? <Skel label="Loading your setups" className="hrui-skel-contents"><SkCards n={3} /></Skel> : null}
+            {rows === null ? <Skel label="正在加载配置" className="hrui-skel-contents"><SkCards n={3} /></Skel> : null}
             {list.map((r) => <Card key={r.h.id} r={r} />)}
             <button type="button" className={`card new-card${own || rows === null || error ? '' : ' hi'}`} onClick={newSetup}>
               <div className="card-tower" aria-hidden="true"><Iso svg={isoSvg(ghostTower(), 13, false)} /></div>
-              <div className="nc-b">{PLUS}<span>New setup</span></div>
+              <div className="nc-b">{PLUS}<span>新建配置</span></div>
             </button>
           </div>
         ) : (
           <>
-            <div className="rows-head agents-g"><span>Name</span><span>Health</span><span className="r">Tasks · 24 h</span><span className="r">Success</span><span className="r">P95 · 24 h</span><span className="r">Last active</span></div>
+            <div className="rows-head agents-g"><span>名称</span><span>健康状态</span><span className="r">任务 · 24 小时</span><span className="r">成功率</span><span className="r">P95 · 24 小时</span><span className="r">最近活跃</span></div>
             <div className="rows">
               {list.map((r) => (
                 <Link key={r.h.id} className="row agents-g" href={setupHref(r.h.id)} data-agent={r.h.id}>
                   <span className="t with-mini">
                     <Iso className="mini-iso" svg={isoSvg(r.tower, 5, false)} />
-                    <span><b>{r.h.name}</b>{r.running ? <span className="dot run ag-run" role="img" aria-label="Running" title="Running" /> : null}<small className="sub2 ag-sub"><Logo base={r.h.base} />{r.baseName} · {r.h.defaultModel || 'harness default'}</small></span>
+                    <span><b>{r.h.name}</b>{r.running ? <span className="dot run ag-run" role="img" aria-label="运行中" title="运行中" /> : null}<small className="sub2 ag-sub"><Logo base={r.h.base} />{r.baseName} · {r.h.defaultModel || 'harness default'}</small></span>
                   </span>
                   <span><HealthPill r={r} /></span>
                   <span className="r">{count(r)}</span>
@@ -163,8 +163,8 @@ export default function StudioPage() {
                   <span className="r">{r.tasksKnown && r.lastAny ? ago(r.lastAny) : '—'}</span>
                 </Link>
               ))}
-              {rows === null ? <Skel label="Loading your setups"><SkRows n={4} cols={4} /></Skel> : null}
-              {rows !== null && !list.length && !error ? <div className="empty-list">No setups yet.</div> : null}
+              {rows === null ? <Skel label="正在加载配置"><SkRows n={4} cols={4} /></Skel> : null}
+              {rows !== null && !list.length && !error ? <div className="empty-list">暂无配置。</div> : null}
             </div>
           </>
         )}

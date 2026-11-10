@@ -366,6 +366,8 @@ Uploads copy harness configuration, not provider keys, sessions, or generated fi
 
 The Gateway and Runner listen on loopback inside the container. Sessions use separate workspaces and operating-system users, not separate containers. The Console is the entry point for both UI and API.
 
+Running the Gateway and Runner as two containers on one data volume is also supported; see [Two containers instead of one](docs/self-hosting-guide.md#two-containers-instead-of-one).
+
 See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and backups](docs/self-hosting-guide.md#restarts-upgrades-and-backups), and [public deployment with TLS](docs/self-hosting-guide.md#putting-it-on-a-public-url).
 
 <a id="unified-harness-protocol"></a>

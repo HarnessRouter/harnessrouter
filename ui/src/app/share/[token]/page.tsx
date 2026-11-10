@@ -86,9 +86,9 @@ export default function SharePage() {
     return (
       <main style={{ marginLeft: 0, height: '100vh', overflowY: 'auto' }}>
         <div className="page" style={{ maxWidth: 720 }}>
-          <div className="page-header" role="alert"><div><h1>This shared Task could not be loaded just now</h1>
-            <p>Try again in a moment.</p>
-            <button type="button" className="hr-btn" onClick={() => { setMetaTry((n) => n + 1); setTurnsTry((n) => n + 1); }}>Try again</button></div></div>
+          <div className="page-header" role="alert"><div><h1>暂时无法加载分享的任务</h1>
+            <p>请稍后重试。</p>
+            <button type="button" className="hr-btn" onClick={() => { setMetaTry((n) => n + 1); setTurnsTry((n) => n + 1); }}>重试</button></div></div>
         </div>
       </main>
     );
@@ -98,8 +98,8 @@ export default function SharePage() {
     return (
       <main style={{ marginLeft: 0, height: '100vh', overflowY: 'auto' }}>
         <div className="page" style={{ maxWidth: 720 }}>
-          <div className="page-header"><div><h1>This shared Task is unavailable</h1>
-            <p>The link may have been revoked by its owner, or it never existed.</p></div></div>
+          <div className="page-header"><div><h1>分享的任务不可用</h1>
+            <p>链接可能已被撤销或不存在。</p></div></div>
         </div>
       </main>
     );
@@ -112,12 +112,12 @@ export default function SharePage() {
       <div className="page share-page" style={{ maxWidth: 860 }}>
         <div className="page-header">
           <div>
-            <p className="share-brand"><img src="/brand/hr-mark-duo-light.svg" alt="" width={20} height={20} /> Shared from <strong>HarnessRouter</strong></p>
+            <p className="share-brand"><img src="/hexa-mark.svg" alt="" width={20} height={20} /> 分享自 <strong>智能体网关</strong></p>
             <h1 style={{ fontSize: 24 }}>{meta?.title || 'Shared Task'}</h1>
             <div className="share-meta">
               {meta?.harness_name && <span className="share-tag"><iconify-icon icon="tabler:route"></iconify-icon>{meta.harness_name}</span>}
               {meta?.model && <span className="share-tag"><iconify-icon icon="tabler:box"></iconify-icon>{meta.model}</span>}
-              {!!meta?.event_count && <span className="share-tag"><iconify-icon icon="tabler:list-tree"></iconify-icon>{meta.event_count} events</span>}
+              {!!meta?.event_count && <span className="share-tag"><iconify-icon icon="tabler:list-tree"></iconify-icon>{meta.event_count} 事件</span>}
               {!!meta?.elapsed && <span className="share-tag"><iconify-icon icon="tabler:clock"></iconify-icon>{fmtDur(meta.elapsed)}</span>}
               {!meta && <span className="sk" style={{ display: 'inline-block', width: 220, height: 22, borderRadius: 999 }} />}
             </div>
@@ -127,8 +127,8 @@ export default function SharePage() {
         <div className="share-conv">
           {turns === null && !turnsFailed && <span className="sk" style={{ display: 'block', height: 120, borderRadius: 10 }} />}
           {turnsFailed ? (
-            <div className="session-empty" role="alert">This conversation could not be loaded just now.{' '}
-              <button type="button" className="hr-btn" onClick={() => setTurnsTry((n) => n + 1)}>Try again</button></div>
+            <div className="session-empty" role="alert">暂时无法加载对话。{' '}
+              <button type="button" className="hr-btn" onClick={() => setTurnsTry((n) => n + 1)}>重试</button></div>
           ) : null}
           {turns?.map((t) => (
             <div key={t.id} className="share-turn">
@@ -140,10 +140,10 @@ export default function SharePage() {
               )}
             </div>
           ))}
-          {turns && turns.length === 0 && <div className="session-empty">No conversation content.</div>}
+          {turns && turns.length === 0 && <div className="session-empty">暂无对话内容。</div>}
         </div>
 
-        <div className="section-header" style={{ marginTop: 26 }}><h2>Artifacts</h2>
+        <div className="section-header" style={{ marginTop: 26 }}><h2>生成文件</h2>
           <span>{files ? `${files.length} file${files.length === 1 ? '' : 's'}` : ''}</span></div>
         {/* Same cards as the chat panel's outputs, except clicking opens the file in a new tab
             (there is no preview side panel on the public page). */}
@@ -155,19 +155,19 @@ export default function SharePage() {
               <span className="wbx-filecard-ic"><FileTypeIcon name={f.path} size={32} /></span>
               <span className="wbx-filecard-meta">
                 <span className="wbx-filecard-name">{f.path}</span>
-                <span className="wbx-filecard-sub">{(f.path.split('.').pop() || 'file').toUpperCase()} · output{f.bytes != null ? ` · ${fmtBytes(f.bytes)}` : ''}</span>
+                <span className="wbx-filecard-sub">{(f.path.split('.').pop() || 'file').toUpperCase()} · 输出{f.bytes != null ? ` · ${fmtBytes(f.bytes)}` : ''}</span>
               </span>
               <a className="wbx-filecard-dl" href={fileUrl(f.path)} download={f.path.split('/').pop()} target="_blank" rel="noreferrer"
-                title="Download" onClick={(e) => e.stopPropagation()}>
+                title="下载" onClick={(e) => e.stopPropagation()}>
                 <iconify-icon icon="tabler:download"></iconify-icon></a>
-              <span className="wbx-filecard-open">Open</span>
+              <span className="wbx-filecard-open">打开</span>
             </div>
           ))}
-          {filesFailed && <p style={{ color: 'var(--muted)', fontSize: 13 }} role="alert">The artifacts could not be loaded just now.</p>}
-          {files && files.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 13 }}>No artifacts in this Task.</p>}
+          {filesFailed && <p style={{ color: 'var(--muted)', fontSize: 13 }} role="alert">暂时无法加载生成文件。</p>}
+          {files && files.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 13 }}>此任务暂无生成文件。</p>}
         </div>
         <p style={{ color: 'var(--faint)', fontSize: 12, marginTop: 14 }}>
-          Shared read-only. The owner can revoke this link at any time.
+          分享内容为只读，所有者可随时撤销链接。
         </p>
       </div>
     </main>

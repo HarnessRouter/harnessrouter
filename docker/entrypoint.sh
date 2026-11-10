@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Start the three processes and keep them honest.
+# Start this image's processes and keep them honest: the console, the gateway and the runner in
+# the all-in-one image; one half of that pair in the split images (see HR_ROLE below).
 #
 # If any one of them dies the container exits, rather than limping along serving a UI whose
 # backend is gone — a half-dead container that still passes a TCP check is worse than one
@@ -36,6 +37,22 @@ AS_PRODUCT="env HOME=/home/agent setpriv --reuid=$PRODUCT --regid=$PRODUCT --ini
 DATA_DIR="${HR_DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
 
+# Which half of the product this container is.
+#
+#   all      the published all-in-one image: everything below, in one container.
+#   gateway  Dockerfile.gateway: the console, the gateway and the data volume.
+#   runner   Dockerfile.runner: the agent CLIs and the runner that executes turns.
+#
+# The two split images share ONE data volume: the runner keeps its tools and workspaces there,
+# the gateway its databases, blobs and secret store, and the internal key they both sign with is
+# a file on it (see the HARNESS_INTERNAL_KEY block below). Nothing else is shared over that
+# boundary — in particular the gateway's provider keys are not in the runner's environment.
+ROLE="${HR_ROLE:-all}"
+case "$ROLE" in
+  all|gateway|runner) ;;
+  *) echo "[harnessrouter] ERROR: HR_ROLE must be all, gateway or runner (got '$ROLE')" >&2; exit 2 ;;
+esac
+
 # A directory root keeps on the volume. A link or a file in its place was put there by the product,
 # on this image or an older one, and is removed rather than followed. Only ever called before the
 # product's first process starts, so nothing can change it between the check and the use.
@@ -51,6 +68,7 @@ root_file() {
   fi
 }
 
+if [ "$ROLE" != "gateway" ]; then
 # Session workspaces live on the volume so a restart doesn't discard work in flight. Created HERE
 # rather than in the image: /data is a volume mount, and Docker only seeds a volume from the image
 # when the volume is empty — so an image-time mkdir is invisible on every existing install.
@@ -63,6 +81,7 @@ root_dir "$HARNESS_WORKSPACE"
 export HR_WS_MARKER_DIR="${HR_WS_MARKER_DIR:-$DATA_DIR/ws-markers}"
 root_dir "$HR_WS_MARKER_DIR"
 chmod 700 "$HR_WS_MARKER_DIR"
+fi
 
 # The write-wall, in file modes. Idempotent and non-recursive, so it costs nothing on a volume
 # that already has it and repairs one that predates it. Session directories themselves are owned
@@ -72,7 +91,8 @@ chmod 700 "$HR_WS_MARKER_DIR"
 # the environments, the workspaces, all of which root acts on). Sessions can pass through and no more.
 chown "root:$PRODUCT" "$DATA_DIR"
 chmod 1771 "$DATA_DIR"
-chmod 751 "$HARNESS_WORKSPACE"                    # traversable by sessions, neither listable nor writable
+[ "$ROLE" = "gateway" ] || chmod 751 "$HARNESS_WORKSPACE"   # traversable by sessions, neither listable nor writable
+if [ "$ROLE" != "gateway" ]; then
 # Environments (runner/environments.py): project layers built once and read by the sessions that
 # name one. Root's, each environment readable by its own group and writable by none: that ownership
 # is the read-only guarantee, so nothing here is handed to $PRODUCT. Both directories are
@@ -99,12 +119,16 @@ if [ -n "$HR_ENVIRONMENT" ]; then
 fi
 PROFILE
 chmod 644 /etc/profile.d/hr-environment.sh
+fi
+if [ "$ROLE" != "runner" ]; then
 # These are the product's, in a directory it can write, so a name here can be a link to anything, or
 # a second name for a file of root's: chown and chmod would follow the one and reach the other. Only
 # a real file with one name, and only a real directory, is handed over.
 find "$DATA_DIR" -maxdepth 1 -type f -links 1 \( -name '*.db' -o -name '*.db-*' -o -name selfhost-auth.json \) \
   -exec chown "$PRODUCT:$PRODUCT" {} + -exec chmod 600 {} +
 find "$DATA_DIR" -maxdepth 1 -type d \( -name blobs -o -name secrets \) -exec chown "$PRODUCT:$PRODUCT" {} + -exec chmod 700 {} +
+fi
+if [ "$ROLE" != "gateway" ]; then
 # Shared scratch stays USABLE. Sessions get their own TMPDIR inside their workspace (see turn()
 # in the runner), but a machine's scratch directories are a convention that tools hardcode, and a
 # tool that cannot write /tmp does not fall back: LibreOffice puts its UNO pipe there and dies with
@@ -121,6 +145,7 @@ find "$DATA_DIR" -maxdepth 1 -type d \( -name blobs -o -name secrets \) -exec ch
 for d in /tmp /var/tmp /dev/shm; do
   if [ -d "$d" ]; then chown root:root "$d"; chmod 1733 "$d"; fi
 done
+fi
 
 # Our own processes must run on the image's interpreter, never on whatever a backend puts on
 # PATH. Hermes installs into its own venv and that venv's bin joins PATH below so the runner can
@@ -157,10 +182,28 @@ export HR_BROKER_IMAGES="${HR_BROKER_IMAGES:-1}"
 # for an instant rollback to `codex exec`; CODEX_APPSERVER_SANDBOX is the sandbox enum.
 export HARNESS_CODEX_APPSERVER="${HARNESS_CODEX_APPSERVER:-1}"
 
-# The gateway signs its own internal calls. Generated per container if not supplied, so a
-# default install has no shared secret and nothing to leak; it never leaves this process tree.
+# The gateway signs its own internal calls, and the runner refuses callers without that key.
+# In the all-in-one image it is generated per container, so a default install has no shared secret
+# and nothing to leak; it never leaves this process tree. The split images cannot do that — their
+# two processes are in two containers — so they share the key through the data volume the two
+# already share, written once by whichever starts first (link(2) is the atomic claim) and read by
+# the other. HARNESS_INTERNAL_KEY set by the operator wins over the file either way, and
+# HR_INTERNAL_KEY_FILE moves the file off the volume.
 if [ -z "${HARNESS_INTERNAL_KEY:-}" ]; then
-  export HARNESS_INTERNAL_KEY="$("$PY" -I -c 'import secrets; print(secrets.token_hex(32))')"
+  if [ "$ROLE" = "all" ]; then
+    export HARNESS_INTERNAL_KEY="$("$PY" -I -c 'import secrets; print(secrets.token_hex(32))')"
+  else
+    HR_INTERNAL_KEY_FILE="${HR_INTERNAL_KEY_FILE:-$DATA_DIR/internal-key}"
+    if [ ! -s "$HR_INTERNAL_KEY_FILE" ]; then
+      _ik_tmp="$HR_INTERNAL_KEY_FILE.$$"
+      ( umask 077; "$PY" -I -c 'import secrets; print(secrets.token_hex(32))' > "$_ik_tmp" )
+      ln "$_ik_tmp" "$HR_INTERNAL_KEY_FILE" 2>/dev/null || true
+      rm -f "$_ik_tmp"
+    fi
+    HARNESS_INTERNAL_KEY="$(cat "$HR_INTERNAL_KEY_FILE")"
+    [ -n "$HARNESS_INTERNAL_KEY" ] || { echo "[harnessrouter] ERROR: $HR_INTERNAL_KEY_FILE is empty" >&2; exit 1; }
+    export HARNESS_INTERNAL_KEY
+  fi
 fi
 
 # The console reaches the gateway over loopback; it is the only process that can, since only
@@ -168,12 +211,14 @@ fi
 export HARNESS_GATEWAY_URL="${HARNESS_GATEWAY_URL:-http://127.0.0.1:8080}"
 export NEXT_PUBLIC_HR_EDITION=selfhost
 
+# The Claude Code release this image was verified with; see install_backends.
+export CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.280}"
+
+if [ "$ROLE" != "runner" ]; then
 # ── console login ─────────────────────────────────────────────────────────────
 # The console can create harnesses, read every transcript, and run an agent with your provider
 # key, so an instance anyone can reach needs a gate. Defaults exist so the first run works; they
 # are also published in the README, which makes them a placeholder rather than a secret.
-# The Claude Code release this image was verified with; see install_backends.
-export CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.280}"
 export HR_AUTH_USER="${HR_AUTH_USER:-harnessrouter}"
 export HR_AUTH_PASSWORD="${HR_AUTH_PASSWORD:-harnessrouter}"
 export HR_AUTH_STORE="${HR_AUTH_STORE:-/data/selfhost-auth.json}"
@@ -270,6 +315,7 @@ export PORT="${PORT:-3000}"
 # Measured on the test box 2026-08-16: LISTEN 172.18.0.5:3000, published 127.0.0.1:3000 -> the
 # bridge ip. Binding every interface is the only answer that survives a second network.
 export HOSTNAME=0.0.0.0
+fi
 
 # ── agent CLIs: installed here, not shipped in the image ──────────────────────
 # Claude Code is distributed under Anthropic's own terms and hermes-agent declares no license,
@@ -291,15 +337,18 @@ seal_tools() {
   find "$TOOLS" -xdev \( ! -user root -o ! -group root \) -exec chown -h root:root {} +
   find "$TOOLS" -xdev ! -type l \( -perm /022 -o ! -perm -444 -o \( -type d ! -perm -111 \) \) -exec chmod go-w,a+rX {} +
 }
+if [ "$ROLE" != "gateway" ]; then
 seal_tools
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
+fi
 # The four added in this batch are in the DEFAULT set rather than opt-in, for the reason
 # agentzero's PR settled: the console lists every base in the catalog, so a base the operator
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
 # trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
 # and an operator who wants them out sets HR_BACKENDS.
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
+# export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -1854,14 +1903,17 @@ PYEOF
   fi
 }
 
+if [ "$ROLE" != "gateway" ]; then
 install_backends
 seal_tools    # nothing else is running yet: the runner and the gateway start below
 if wanted hermes; then verify_hermes_bedrock; fi
+fi
 
 pids=()
 cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup TERM INT EXIT
 
+if [ "$ROLE" != "gateway" ]; then
 avail=""; missing=""
 # Derived from HR_BACKENDS, not a second hardcoded list. The literal list here missed opencode and
 # reported "backends available: none" on an instance that had it installed and working.
@@ -1873,17 +1925,29 @@ echo "[harnessrouter] data=$DATA_DIR  backends available:${avail:- none}"
 if [ -n "$missing" ]; then
   echo "[harnessrouter] WARN: requested but not installed:$missing — those backends cannot run"
 fi
+fi
 
-# runner (loopback only). Root, for the per-session uid switch; HR_SESSION_UIDS=1 is the
-# declaration the runner fails closed without. The console's credentials and the secret-store key
-# are the product's and are not in its environment at all.
+if [ "$ROLE" != "gateway" ]; then
+# runner. Root, for the per-session uid switch; HR_SESSION_UIDS=1 is the declaration the runner
+# fails closed without. The console's credentials and the secret-store key are the product's and
+# are not in its environment at all.
+#
+# The split images cannot use loopback for this: the gateway is in another container. There the
+# runner binds the network interface and only the compose network reaches it; the internal key
+# (above) is what refuses every caller that is not the gateway.
+RUNNER_HOST="${HR_RUNNER_BIND:-$([ "$ROLE" = "runner" ] && echo 0.0.0.0 || echo 127.0.0.1)}"
 ( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
-    HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host 127.0.0.1 --port 8081 --log-level warning ) &
+    HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host "$RUNNER_HOST" --port 8081 --log-level warning ) &
 pids+=($!)
+fi
 
-# gateway (loopback only), as the product. umask 077: what it creates on the volume (databases,
-# blobs, the secret store) is its alone.
-( cd /app/gateway && export HR_SECRET_KEY="$GATEWAY_SECRET_KEY" && exec $AS_PRODUCT sh -c 'umask 077; exec "$0" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning' "$PY" ) &
+if [ "$ROLE" != "runner" ]; then
+# gateway, as the product. umask 077: what it creates on the volume (databases, blobs, the secret
+# store) is its alone. In the all-in-one image it is loopback-only; split, the runner container has
+# to reach it (the model broker and the MCP servers are on it), so it listens on the compose
+# network and only the console's port stays published.
+GATEWAY_HOST="${HR_GATEWAY_BIND:-$([ "$ROLE" = "gateway" ] && echo 0.0.0.0 || echo 127.0.0.1)}"
+( cd /app/gateway && export HR_SECRET_KEY="$GATEWAY_SECRET_KEY" && exec $AS_PRODUCT sh -c 'umask 077; exec "$0" -m uvicorn app:app --host "$1" --port 8080 --log-level warning' "$PY" "$GATEWAY_HOST" ) &
 pids+=($!)
 
 # Wait for the gateway before the UI starts serving, so a first page load never races a
@@ -1906,8 +1970,12 @@ done
   cd /app/ui
   restarts=0
   while :; do
+    # The console is in this container whichever way the image is deployed, so it always reaches
+    # the gateway on loopback. In the split deployment HARNESS_GATEWAY_URL names the address the
+    # RUNNER can reach (http://gateway:8080), which is not the console's.
     HR_SESSION_KEY="$(hr_session_key)" \
     HR_AUTH_USER="$(hr_stored_user)" \
+    HARNESS_GATEWAY_URL="http://127.0.0.1:8080" \
       $AS_PRODUCT sh -c 'umask 077; exec node server.js'
     status=$?
     # A clean exit is the credential change asking for a restart. Anything else is a real
@@ -1924,6 +1992,7 @@ done
 pids+=($!)
 
 echo "[harnessrouter] ready on :$PORT"
+fi
 
 # Exit as soon as ANY child exits, carrying its status out to the restart policy.
 wait -n "${pids[@]}"

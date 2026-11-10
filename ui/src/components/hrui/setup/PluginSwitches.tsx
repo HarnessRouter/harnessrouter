@@ -162,9 +162,9 @@ export function PluginSwitches({ input, setup, q, busy, failed, lost, onSet, onP
   const fixOf = (x: Line) => {
     const f = x.fix;
     if (!f) return null;
-    if (f.k === 'reconnect') return <button type="button" className="link-q inl" disabled={plug.busy === f.r.key} onClick={() => plug.connect(f.r)}>Reconnect</button>;
-    if (f.k === 'addons') return <Link className="link-q inl" href="/extensions">Open Add-ons</Link>;
-    return <button type="button" className="link-q inl" onClick={() => onManagePackage(f.name)}>Manage</button>;
+    if (f.k === 'reconnect') return <button type="button" className="link-q inl" disabled={plug.busy === f.r.key} onClick={() => plug.connect(f.r)}>重新连接</button>;
+    if (f.k === 'addons') return <Link className="link-q inl" href="/extensions">打开扩展</Link>;
+    return <button type="button" className="link-q inl" onClick={() => onManagePackage(f.name)}>管理</button>;
   };
 
   const row = (x: Line) => {
@@ -195,8 +195,8 @@ export function PluginSwitches({ input, setup, q, busy, failed, lost, onSet, onP
     <>
       {failed ? (
         <div className="empty-list ld-fail" role="alert">
-          Your plugins could not be loaded just now.{' '}
-          <button type="button" className="link-q inl" onClick={failed.retry}>Try again</button>
+          暂时无法加载插件。{' '}
+          <button type="button" className="link-q inl" onClick={failed.retry}>重试</button>
         </div>
       ) : null}
       {shown.length || lost ? (
@@ -205,18 +205,18 @@ export function PluginSwitches({ input, setup, q, busy, failed, lost, onSet, onP
           {lost && !ql ? (
             <div className="cap-row off">
               <Logo name={UNREAD_NAME} on={false} size="cap" />
-              <span className="grow"><b>{UNREAD_NAME}</b><small className="warn">They could not be read just now.</small>
-                <span className="pl-sw-fix"><button type="button" className="link-q inl" onClick={lost.retry}>Try again</button></span></span>
+              <span className="grow"><b>{UNREAD_NAME}</b><small className="warn">暂时无法读取。</small>
+                <span className="pl-sw-fix"><button type="button" className="link-q inl" onClick={lost.retry}>重试</button></span></span>
             </div>
           ) : null}
         </div>
       ) : null}
-      {loading ? <Skel label="Loading your plugins"><SkRows n={3} /></Skel> : null}
-      {ql && !shown.length ? <p className="set-help cap-none">Nothing matches.</p> : null}
+      {loading ? <Skel label="正在加载插件"><SkRows n={3} /></Skel> : null}
+      {ql && !shown.length ? <p className="set-help cap-none">没有匹配项。</p> : null}
       {empty && !ql ? (
-        <p className="pl-sw-foot">No plugins are connected in this workspace yet.{canConnect ? <> <button type="button" className="link-q inl" onClick={connect}>Connect a plugin</button></> : null}</p>
+        <p className="pl-sw-foot">当前工作区尚未连接插件。{canConnect ? <> <button type="button" className="link-q inl" onClick={connect}>连接插件</button></> : null}</p>
       ) : canConnect && !ql ? (
-        <p className="pl-sw-foot"><button type="button" className="link-q inl" onClick={connect}>Connect another plugin</button></p>
+        <p className="pl-sw-foot"><button type="button" className="link-q inl" onClick={connect}>连接其他插件</button></p>
       ) : null}
       {plug.sheet}
     </>

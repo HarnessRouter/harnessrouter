@@ -320,8 +320,8 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
       onAnswer={(answer, shown) => { void conv.send(shown, [], { input: [{ type: 'input_response', input_request_id: asking.id, answer }] }); }} />
   ) : null;
   const composer = (ph: string) => (recorded && !offerFork ? (
-    <div className="readonly"><span>Recorded task</span>
-      {onFollowUp ? <button type="button" className="btn small" onClick={onFollowUp}>Follow up</button> : null}
+    <div className="readonly"><span>录制任务</span>
+      {onFollowUp ? <button type="button" className="btn small" onClick={onFollowUp}>继续对话</button> : null}
     </div>
   ) : (
     <>{answerCard}<AgentComposer value={input} onChange={setInput} onSend={send} onStop={playing ? undefined : () => conv.stop()}
@@ -367,7 +367,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     const end = m.status === 'done' ? (took != null && took >= 0 ? `Done in ${sec(took)}` : 'Done') : '';
     const rid = turnIds[t] || '';
     const bits: React.ReactNode[] = [];
-    if (rec0) bits.push(<span key="rec" className="replay-tag">Recorded</span>);
+    if (rec0) bits.push(<span key="rec" className="replay-tag">已录制</span>);
     if (note) bits.push(<span key="m">{r.baseName} · <span className="mono">{note}</span></span>);
     if (end) bits.push(<span key="e">{end}</span>);
     // its actions, after the words, once it has finished: the reply itself as Markdown (the one most
@@ -377,14 +377,14 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     const asMd = m.status !== 'running' ? replyMarkdown(m.blocks, m.files.filter((f) => !isInternalOutput(f.filename))) : '';
     if (asMd) {
       acts.push(<button key="md" type="button" className="icon-btn xs" aria-label="Copy reply"
-        title="Copy this reply as Markdown" onClick={() => void copyReply(asMd)}>{COPY}</button>);
+        title="复制为 Markdown" onClick={() => void copyReply(asMd)}>{COPY}</button>);
     }
     if (rid) {
-      acts.push(<button key="r" type="button" className="icon-btn xs" aria-label="Copy response ID"
-        title="Copy response ID" onClick={() => void copyRid(rid)}>{HASH}</button>);
+      acts.push(<button key="r" type="button" className="icon-btn xs" aria-label="复制响应 ID"
+        title="复制响应 ID" onClick={() => void copyRid(rid)}>{HASH}</button>);
       if (!rec0 && m.status !== 'running') {
         acts.push(<button key="c" type="button" className="icon-btn xs" aria-label="Copy a request that continues this conversation"
-          title="Copy a request that continues from here" onClick={() => void copyNext(t, rid)}>{CODE}</button>);
+          title="复制继续对话的请求" onClick={() => void copyNext(t, rid)}>{CODE}</button>);
       }
     }
     return (
@@ -404,18 +404,18 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
       ) : opening && conv.loadFailed ? (
         // the task's record could not be read: said, with Try again; nothing is drawn as if it were empty
         <div className="thread-inner pg-opening">
-          <div className="empty-list ld-fail" role="alert">This task could not be read just now.{' '}
-            <button type="button" className="link-q inl" onClick={conv.reload}>Try again</button></div>
+          <div className="empty-list ld-fail" role="alert">暂时无法读取此任务。{' '}
+            <button type="button" className="link-q inl" onClick={conv.reload}>重试</button></div>
         </div>
       ) : opening ? (
-        <Skel label="Opening the task" className="thread-inner pg-opening"><SkThread /></Skel>
+        <Skel label="正在打开任务" className="thread-inner pg-opening"><SkThread /></Skel>
       ) : (
         <AgentConversation mode="pane" running={conv.busy} mark={mark} motion={motion} followKey={asked}
           composer={composer(conv.msgs.length ? 'Follow up…' : `Send ${r.h.name} a task to test…`)}>
           <div className="thread-inner" id="threadInner">
             {top}
             <AgentTurns msgs={conv.msgs} base={r.h.base} md={md}
-              userLabel={example ? (t: number) => (t === 0 ? <span className="from">Example task from your app</span> : null) : undefined}
+              userLabel={example ? (t: number) => (t === 0 ? <span className="从">应用示例任务</span> : null) : undefined}
               files={(m) => (m.status === 'running' ? null : <FileCards files={m.files || []} active={previewKey} onOpen={(k) => onPreview(filesOf(conv.msgs), k)} zipName={taskTitle || r.h.name} />)}
               actions={foot} />
             {next ? <NextBar id={r.h.id} name={r.h.name} /> : null}
@@ -485,7 +485,7 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
   // first request stays held until the save has ended
   const top = live?.phase === 'failed' ? (
     <>{card}<div className="bd-fail" role="alert"><span>{live.error}</span>
-      <button type="button" className="btn small primary" onClick={() => retryBuild(live.key)}>Try again</button></div></>
+      <button type="button" className="btn small primary" onClick={() => retryBuild(live.key)}>重试</button></div></>
   ) : card;
   const catalog = useModelCatalogRead();   // the server's model list: the picker offers nothing else
   const cat = catalog.value;
@@ -568,30 +568,30 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
     <div className="pg-opts in-bar" ref={optsRef}>
       <button ref={pkRef} type="button" className={`nw-pk${pop === 'model' ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={pop === 'model'}
         title={cantRun ? `${model} cannot run right now. Choose another model.` : forWhat} aria-label={`${forWhat}: ${nameOf(model)}${cantRun ? ', cannot run right now' : ''}`}
-        onClick={() => setPop(pop === 'model' ? null : 'model')}><b className={model ? 'mono' : undefined}>{nameOf(model)}</b>{cantRun ? <small className="warn">can’t run now</small> : null}{CHEV}</button>
+        onClick={() => setPop(pop === 'model' ? null : 'model')}><b className={model ? 'mono' : undefined}>{nameOf(model)}</b>{cantRun ? <small className="warn">当前无法运行</small> : null}{CHEV}</button>
       {declared.length
         ? <button ref={hdRef} type="button" className={`nw-pk${pop === 'headers' ? ' on' : ''}`} aria-haspopup="dialog" aria-expanded={pop === 'headers'}
-            title="Header values for this test" onClick={() => setPop(pop === 'headers' ? null : 'headers')}><span>Headers</span><b>{nset} of {declared.length}</b>{CHEV}</button>
+            title="此次测试的请求头" onClick={() => setPop(pop === 'headers' ? null : 'headers')}><span>请求头</span><b>{nset} / {declared.length}</b>{CHEV}</button>
         : null}
     </div>
   );
   const headersPop = pop === 'headers' && pos ? (
-    <div ref={popRef} className="nw-pop pg-pop pl-dd pl-fly pg-hdr pg-hdr-fly" role="dialog" aria-label="Header values for this test" style={pos}>
-      <p className="nw-popn">For this test only. Not saved.</p>
+    <div ref={popRef} className="nw-pop pg-pop pl-dd pl-fly pg-hdr pg-hdr-fly" role="dialog" aria-label="此次测试的请求头" style={pos}>
+      <p className="nw-popn">仅用于此次测试，不会保存。</p>
       {declared.map((h) => (
         <label key={h} className="pg-hf"><span className="mono">{h}</span>
-          <input className="set-in" placeholder="Value" value={hv[h] || ''} autoComplete="off" spellCheck={false} onChange={(e) => setHv({ ...hv, [h]: e.target.value })} />
+          <input className="set-in" placeholder="值" value={hv[h] || ''} autoComplete="off" spellCheck={false} onChange={(e) => setHv({ ...hv, [h]: e.target.value })} />
         </label>
       ))}
-      <div className="pg-hdr-f"><button type="button" className="btn small" onClick={() => { setPop(null); hdRef.current?.focus(); }}>Done</button></div>
+      <div className="pg-hdr-f"><button type="button" className="btn small" onClick={() => { setPop(null); hdRef.current?.focus(); }}>完成</button></div>
     </div>
   ) : null;
   const modelPop = pop === 'model' && pos ? (
     <div ref={popRef} className="nw-pop pg-pop pl-dd pl-fly pg-mpop" role="listbox" aria-label={forWhat} style={pos}>
       {models === null && catalog.failed ? (
-        <div className="dd-empty" role="alert">The models could not be read just now. <button type="button" className="link-q inl" onClick={catalog.retry}>Try again</button></div>
+        <div className="dd-empty" role="alert">暂时无法读取模型。 <button type="button" className="link-q inl" onClick={catalog.retry}>重试</button></div>
       ) : models === null ? (
-        <Skel label="Reading the models"><div className="pg-msk">{[60, 72, 54, 66].map((w, i) => <SkLine key={i} w={`${w}%`} h={12} style={{ margin: '10px 8px' }} />)}</div></Skel>
+        <Skel label="正在读取模型"><div className="pg-msk">{[60, 72, 54, 66].map((w, i) => <SkLine key={i} w={`${w}%`} h={12} style={{ margin: '10px 8px' }} />)}</div></Skel>
       ) : (
         <>
           <div className="dd-s"><input className="dd-q" autoFocus placeholder={`Search ${models.filter(Boolean).length} models on ${r.baseName}`} autoComplete="off" spellCheck={false} aria-label="Search models"
@@ -602,7 +602,7 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
               <button key={m} type="button" className={`nw-opt dd-o${m === model ? ' sel' : ''}${no ? ' pg-no' : ''}`} role="option" aria-selected={m === model} aria-disabled={no || undefined}
                 title={no ? `Codex runs ${m} only in a task no other model has used. Start a new task for it.` : undefined} onClick={() => choose(m)}>
                 <span className="chk">{m === model ? CHECK : null}</span><b className={m ? 'mono' : undefined}>{nameOf(m)}</b>
-                {no ? <small>new task only</small> : m && m === defaultModel ? <small>default</small> : m && keyOf(m) ? <small>your {keyOf(m)} key</small> : null}
+                {no ? <small>仅限新任务</small> : m && m === defaultModel ? <small>默认</small> : m && keyOf(m) ? <small>你的 {keyOf(m)} 密钥</small> : null}
               </button>
             );
           }) : <div className="dd-empty">{models.filter(Boolean).length ? 'No model matches.' : `No model of ${r.baseName} can run right now.`}</div>}

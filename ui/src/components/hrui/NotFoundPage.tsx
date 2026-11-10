@@ -21,8 +21,8 @@ export function NotFoundPage() {
       <AuthFrame n={3}>
         <h1>{HEAD}</h1>
         <p className="au-sub">{LINE}</p>
-        <Link className="btn primary au-wide" href="/start">Back to Start</Link>
-        <p className="au-switch"><Link className="link-q inl" href="/login">Sign in</Link></p>
+        <Link className="btn primary au-wide" href="/studio">返回工作台</Link>
+        <p className="au-switch"><Link className="link-q inl" href="/login">登录</Link></p>
       </AuthFrame>
     );
   }
@@ -34,7 +34,7 @@ export function NotFoundPage() {
             <div className="list-top"><div><h1>{HEAD}</h1></div></div>
             <div className="empty-list es">
               <span>{LINE}</span>
-              <Link className="btn primary" href="/start">Back to Start</Link>
+              <Link className="btn primary" href="/studio">返回工作台</Link>
             </div>
           </div>
         </div>

@@ -29,7 +29,7 @@ function KitCard({ k }: { k: Kit }) {
       {parts.length ? <Pieces parts={parts} /> : null}
       <div className="kc-act">
         <span />
-        <Link className="btn small kc-launch" href={`/shop/${encodeURIComponent(k.id)}`}>Try it</Link>
+        <Link className="btn small kc-launch" href={`/shop/${encodeURIComponent(k.id)}`}>试用</Link>
       </div>
     </article>
   );
@@ -94,26 +94,26 @@ export function ShopPage() {
       <div className="list-wrap">
         <div className="list-top">
           <div>
-            <h1>Shop</h1>
+            <h1>Agent 中心</h1>
           </div>
         </div>
         <div className="kc-q">
-          <input id="shopQ" className="dd-q" type="search" placeholder="Search the Shop" value={q} autoComplete="off" spellCheck={false}
-            aria-label="Search the Shop" onChange={(e) => setQ(e.target.value)} />
+          <input id="shopQ" className="dd-q" type="search" placeholder="搜索 Agent 中心" value={q} autoComplete="off" spellCheck={false}
+            aria-label="搜索 Agent 中心" onChange={(e) => setQ(e.target.value)} />
         </div>
 
-        <div className="hb-sec"><h2>Starter kits</h2></div>
+        <div className="hb-sec"><h2>入门模板</h2></div>
         {kitsErr ? (
-          <p className="kc-nomatch" role="alert">The starter kits could not be read just now.{' '}
-            <button type="button" className="link-q inl" onClick={loadKits}>Try again</button></p>
+          <p className="kc-nomatch" role="alert">暂时无法读取入门模板。{' '}
+            <button type="button" className="link-q inl" onClick={loadKits}>重试</button></p>
         ) : null}
-        {kits !== null && !allKits.length ? <div className="empty-list">No starter kits are available right now.</div> : null}
+        {kits !== null && !allKits.length ? <div className="empty-list">暂无可用入门模板。</div> : null}
         {kits === null && !kitsErr ? (
-          <div className="kgrid"><Skel label="Loading the starter kits" className="hrui-skel-contents"><SkKitCards n={3} /></Skel></div>
+          <div className="kgrid"><Skel label="正在加载入门模板" className="hrui-skel-contents"><SkKitCards n={3} /></Skel></div>
         ) : shownKits.length ? (
           <div className="kgrid">{shownKits.map((k) => <KitCard key={k.id} k={k} />)}</div>
         ) : null}
-        <p className="kc-nomatch" hidden={!nothing}>Nothing in the Shop matches that.</p>
+        <p className="kc-nomatch" hidden={!nothing}>Agent 中心没有匹配项。</p>
       </div>
     </div>
   );

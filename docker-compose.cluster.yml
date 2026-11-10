@@ -1,0 +1,81 @@
+# Set HARNESS_INTERNAL_KEY in .env before starting this deployment.
+# docker compose -f docker-compose.cluster.yml up -d --build
+services:
+  runner-1: &runner
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+      args:
+        HR_SKILLS_REF: ${HR_SKILLS_REF:-main}
+        WITH_BROWSER: ${WITH_BROWSER:-0}
+        # Local test on Windows: the skills catalogue's officecli install crashes
+        # (core dump in a .NET CultureInfo probe) inside the Linux VM. Built-in
+        # skills stay off for this build; restore to 1 on a Linux host.
+        WITH_BUILTIN_SKILLS: ${WITH_BUILTIN_SKILLS:-0}
+    image: harnessrouter/runner:latest
+    env_file: ${HR_ENV_FILE:-.env}
+    environment:
+      HR_ROLE: runner
+      HARNESS_INTERNAL_KEY: ${HARNESS_INTERNAL_KEY:?Set HARNESS_INTERNAL_KEY in .env}
+      HARNESS_GATEWAY_URL: http://gateway:8080
+    volumes:
+      - runner-1-data:/data
+    expose: ["8081"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+
+  runner-2:
+    <<: *runner
+    volumes:
+      - runner-2-data:/data
+
+  session-router:
+    build: ./session-router
+    image: harnessrouter/session-router:latest
+    environment:
+      HR_RUNNERS: runner-1=http://runner-1:8081,runner-2=http://runner-2:8081
+      HR_ROUTER_KEY: ${HARNESS_INTERNAL_KEY:?Set HARNESS_INTERNAL_KEY in .env}
+    volumes:
+      - router-data:/data
+    expose: ["8090"]
+    depends_on:
+      runner-1:
+        condition: service_healthy
+      runner-2:
+        condition: service_healthy
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+      args:
+        HR_SKILLS_REF: ${HR_SKILLS_REF:-main}
+        HR_KITS_REF: ${HR_KITS_REF:-main}
+        WITH_DOC_PREVIEW: ${WITH_DOC_PREVIEW:-1}
+        WITH_MEDIA: ${WITH_MEDIA:-1}
+    image: harnessrouter/gateway:latest
+    env_file: ${HR_ENV_FILE:-.env}
+    environment:
+      HR_ROLE: gateway
+      HARNESS_INTERNAL_KEY: ${HARNESS_INTERNAL_KEY:?Set HARNESS_INTERNAL_KEY in .env}
+      POOL_MGMT_ENDPOINT: http://session-router:8090
+      HARNESS_GATEWAY_URL: http://gateway:8080
+    volumes:
+      - gateway-data:/data
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      session-router:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  gateway-data:
+  router-data:
+  runner-1-data:
+  runner-2-data:

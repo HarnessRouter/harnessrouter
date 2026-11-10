@@ -290,7 +290,7 @@ export function PlugSheet({ p, onClose, onChanged, onDone }: {
   const enter = (e: React.KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } };
   const field = (f: Field) => (
     <div key={f.name} className="set-f">
-      <label htmlFor={`pc-${f.name}`}>{f.label}{f.required ? null : <span className="muted">optional</span>}</label>
+      <label htmlFor={`pc-${f.name}`}>{f.label}{f.required ? null : <span className="muted">可选</span>}</label>
       {f.kind === 'mode' ? (
         <select id={`pc-${f.name}`} className="set-in" value={form[f.name] || 'delegated'} disabled={!!busy}
           onChange={(e) => setForm({ ...form, [f.name]: e.target.value })}>
@@ -312,11 +312,11 @@ export function PlugSheet({ p, onClose, onChanged, onDone }: {
       {/* Microsoft 365 as each person: who is signed in here, and this person's own sign-in */}
       {signIn && !replacing ? (
         <div className="set-f pl-signin">
-          <span className="mcp-to-l">Microsoft sign-in</span>
+          <span className="mcp-to-l">Microsoft 登录</span>
           {facts.map(([k, l]) => <p key={k} className="set-help">{l}: <b>{shownValue(cur.config[k])}</b></p>)}
           {myAccount ? (
             <div className="set-row">
-              <span>Signed in as <b>{accountName(myAccount) || 'you'}</b>. Agents working for you read what you may read.</span>
+              <span>当前登录账户 <b>{accountName(myAccount) || 'you'}</b>。智能体将使用你的读取权限。</span>
               <button type="button" className="link-q" disabled={!!busy} onClick={() => void signOut()}>{busy === 'signout' ? 'Signing out…' : 'Sign out'}</button>
             </div>
           ) : (
@@ -325,7 +325,7 @@ export function PlugSheet({ p, onClose, onChanged, onDone }: {
               <button type="button" className="btn small primary" disabled={!!busy} onClick={() => void microsoft()}>{busy === 'signin' ? 'Opening Microsoft…' : 'Sign in with Microsoft'}</button>
             </div>
           )}
-          {others.length ? <p className="set-help">Also signed in here: {others.join(', ')}.</p> : null}
+          {others.length ? <p className="set-help">此处还登录了 {others.join(', ')}.</p> : null}
         </div>
       ) : null}
       {needsAuth(cur) && !signIn && !replacing && cur.attention ? <p className="set-help pl-warn">{cur.attention}</p> : null}
@@ -338,19 +338,19 @@ export function PlugSheet({ p, onClose, onChanged, onDone }: {
       ) : null}
       {/* a stored credential is kept unless a new one is asked for; one that is missing has none to keep */}
       {added && takesCredential && !replacing ? (
-        <p className="set-help"><button type="button" className="link-q inl" disabled={!!busy} onClick={() => { setReplacing(true); setSay(''); }}>Use a different credential</button></p>
+        <p className="set-help"><button type="button" className="link-q inl" disabled={!!busy} onClick={() => { setReplacing(true); setSay(''); }}>使用其他凭据</button></p>
       ) : added && takesCredential && (isOn(cur) || signIn) ? (
-        <p className="set-help"><button type="button" className="link-q inl" disabled={!!busy} onClick={() => { setReplacing(false); setForm(initForm(cur)); setSay(''); }}>Keep the current credential</button></p>
+        <p className="set-help"><button type="button" className="link-q inl" disabled={!!busy} onClick={() => { setReplacing(false); setForm(initForm(cur)); setSay(''); }}>保留当前凭据</button></p>
       ) : null}
 
       {/* the browser's sites: where an agent may go, and where never */}
       {added && cur.type === 'browser' ? (
         <>
-          <div className="set-f"><label htmlFor="pc-allow">Only these sites <span className="muted">optional</span></label>
+          <div className="set-f"><label htmlFor="pc-allow">仅允许这些网站 <span className="muted">可选</span></label>
             <input id="pc-allow" className="set-in mono" value={allow} spellCheck={false} placeholder="example.com, docs.example.org" disabled={!!busy}
               onChange={(e) => setAllow(e.target.value)} onKeyDown={enter} />
-            <p className="set-help">Left empty, any public site.</p></div>
-          <div className="set-f"><label htmlFor="pc-deny">Never these sites <span className="muted">optional</span></label>
+            <p className="set-help">留空则允许所有公共网站。</p></div>
+          <div className="set-f"><label htmlFor="pc-deny">禁止这些网站 <span className="muted">可选</span></label>
             <input id="pc-deny" className="set-in mono" value={deny} spellCheck={false} placeholder="ads.example.com" disabled={!!busy}
               onChange={(e) => setDeny(e.target.value)} onKeyDown={enter} /></div>
         </>
@@ -362,7 +362,7 @@ export function PlugSheet({ p, onClose, onChanged, onDone }: {
       ) : null}
 
       {tools === null ? (
-        <Skel label="Reading its tools" className="mcp-tools">
+        <Skel label="正在读取工具" className="mcp-tools">
           {[58, 72, 50].map((w, i) => <div key={i} className="mcp-tool"><SkLine w={`${w * 0.5}%`} h={12} /><SkLine w={`${w}%`} h={10} style={{ marginTop: 6 }} /></div>)}
         </Skel>
       ) : tools.length ? (
@@ -376,24 +376,24 @@ export function PlugSheet({ p, onClose, onChanged, onDone }: {
 
       {asking ? (
         <div className="mcp-ask" role="alertdialog" aria-labelledby="pcAskT">
-          <span id="pcAskT">Remove <b>{label}</b> from this workspace? Its stored credential is deleted, and setups that include it lose its tools from their next task. Nothing at {label} changes.</span>
+          <span id="pcAskT">移除 <b>{label}</b> from this workspace? Its stored credential is deleted, and setups that include it lose its tools from their next task. Nothing at {label} 发生变化。</span>
           <span className="mcp-ask-b">
-            <button type="button" className="btn small" disabled={!!busy} onClick={() => setAsking(false)}>Keep</button>
+            <button type="button" className="btn small" disabled={!!busy} onClick={() => setAsking(false)}>保留</button>
             <button type="button" className="btn small del-go" disabled={!!busy} onClick={() => void remove()} autoFocus>{busy === 'remove' ? 'Removing…' : 'Remove'}</button>
           </span>
         </div>
       ) : null}
 
       <div className="sheet-actions mcp-act">
-        {added && !asking ? <button type="button" className="link-q danger mcp-rm" disabled={!!busy} onClick={() => { setSay(''); setAsking(true); }}>Remove</button> : null}
+        {added && !asking ? <button type="button" className="link-q danger mcp-rm" disabled={!!busy} onClick={() => { setSay(''); setAsking(true); }}>移除</button> : null}
         <span className={`set-help mcp-say${say ? ' bad' : ''}`} role="status">{say}</span>
         {changed ? (
           <>
-            <button type="button" className="btn" disabled={!!busy} onClick={onClose}>Cancel</button>
+            <button type="button" className="btn" disabled={!!busy} onClick={onClose}>取消</button>
             <button type="button" className="btn primary" disabled={!!busy || !complete || asking} onClick={() => void submit()}>
               {busy === 'save' ? (added && !replacing ? 'Saving…' : 'Connecting…') : added && !replacing ? 'Save' : 'Connect'}</button>
           </>
-        ) : <button type="button" className="btn primary" disabled={!!busy} onClick={onClose}>Done</button>}
+        ) : <button type="button" className="btn primary" disabled={!!busy} onClick={onClose}>完成</button>}
       </div>
     </Sheet>
   );

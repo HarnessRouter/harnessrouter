@@ -41,14 +41,14 @@ export default function AgentsPage() {
         <div>
           <h1 className="hr-doc-title">AGENTS.md</h1>
           <p className="hr-doc-sub">Drop this into your coding agent (Codex, Claude Code, Cursor, or another). It has the
-            agent get the HarnessRouter Skill, through its plugin manager or by loading the Skill files directly, and follow
+            agent get the 智能体网关 Skill, through its plugin manager or by loading the Skill files directly, and follow
             it: the Skill carries the whole integration. The agent builds the feature into your product: your app&apos;s UI
-            and server routes at build time, a configured HarnessRouter agent for the end-user tasks at runtime, then tests
-            the whole thing through your app. <Link href="/start">Start</Link> walks you through it with your coding agent.</p>
+            and server routes at build time, a configured 智能体网关 agent for the end-user tasks at runtime, then tests
+            the whole thing through your app. <Link href="/start">开始</Link> 引导你与编程智能体完成配置。</p>
         </div>
         <div className="hr-doc-actions">
           <button className="hr-btn" onClick={copy}>{copied ? 'Copied ✓' : 'Copy'}</button>
-          <button className="hr-btn primary" onClick={download}>Download AGENTS.md</button>
+          <button className="hr-btn primary" onClick={download}>下载 AGENTS.md</button>
         </div>
       </div>
       <div className="hr-doc">

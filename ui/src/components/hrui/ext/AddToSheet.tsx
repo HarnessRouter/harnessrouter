@@ -59,7 +59,7 @@ export function AddToSheet({ item, targets, initial, onAdd, onBack, onDone }: {
     <Sheet onClose={close} labelledBy="ath" className="small-sheet mcp-x" busy={busy} initialFocus={firstRef}>
       <SheetTop id="ath" title={`Add ${item} to setups`} onClose={close} />
       <div className="set-f mcp-to">
-        <span className="mcp-to-l" id="atL">Setups</span>
+        <span className="mcp-to-l" id="atL">配置</span>
         {targets.length ? (
           <div className="pick-list at-list" role="group" aria-labelledby="atL">
             {targets.map((t) => {
@@ -77,12 +77,12 @@ export function AddToSheet({ item, targets, initial, onAdd, onBack, onDone }: {
               );
             })}
           </div>
-        ) : <p className="set-help">No setups yet. Make one in Harness Studio first.</p>}
+        ) : <p className="set-help">暂无配置，请先在工作台创建。</p>}
       </div>
       <div className="sheet-actions mcp-act">
         {added.length
-          ? <button type="button" className="btn" disabled={busy} onClick={() => onDone(added)}>Done</button>
-          : <button type="button" className="btn" disabled={busy} onClick={onBack}>Back</button>}
+          ? <button type="button" className="btn" disabled={busy} onClick={() => onDone(added)}>完成</button>
+          : <button type="button" className="btn" disabled={busy} onClick={onBack}>返回</button>}
         <span className={`set-help mcp-say${say ? ' bad' : ''}`} role="status">{say}</span>
         <button type="button" className="btn primary" disabled={busy || !left.length} onClick={() => void add()}>
           {added.length ? 'Try again' : left.length > 1 ? `Add to ${left.length} setups` : 'Add'}
