@@ -11,6 +11,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("cip", os.path.join(here, "check-install-pins.py"))
 cip = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cip)
+REAL_ROOT_RUNS, REAL_ROOT_RUN_PINS = list(cip.ROOT_RUNS), list(cip.ROOT_RUN_PINS)
 
 
 def caught(src: str) -> list[str]:
@@ -82,6 +83,7 @@ ROOT_BAD = {
     "in an if": """  if "$TOOLS/bin/x" --version; then :; fi""",
     "root's tar": """  tar -xzf "$oc_tmp/opencode.tar.gz" --no-same-owner -C "$oc_tmp" || return 1""",
     "root's tar, old style": """  mkdir "$km_tmp/x" && tar xzf "$km_tmp/kimi.tar.gz" -C "$km_tmp/x" """,
+    "playwright install-deps": """  "$TOOLS/systemone-venv/bin/playwright" install-deps chromium >/dev/null 2>&1 || return 1""",
 }
 ROOT_GOOD = {
     "iu, a venv's python": """  iu "$TOOLS/venv/bin/python" -c 'import boto3' || return 1""",
@@ -102,6 +104,7 @@ ROOT_GOOD = {
     "the image's python making a venv": """  "$PY" -I -m venv "$TOOLS/venv\"""",
     "iu tar": """  iu tar -xzf - --no-same-owner -C "$ut_dir" "$@" < "$ut_archive"; ut_rc=$?""",
     "tar listing": """  tar -tzf "$x" | head -1""",
+    "apt, the image's": """  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${CHROMIUM_LIBS[@]}" 2>&1)"; then""",
 }
 for name, src in ROOT_BAD.items():
     assert root_runs(src), f"root run not caught: {name}: {src}"
@@ -120,13 +123,17 @@ with contextlib.redirect_stdout(io.StringIO()) as out:
 assert "ROOT_RUNS entry matches nothing" in out.getvalue()
 
 # What a ROOT_RUNS entry runs is pinned too: a lock whose entry for it changes fails until the pin does.
+# Both lists are empty now (the last entry, playwright install-deps, went with the apt list), so the
+# mechanism is exercised with a pin made from a committed lock's entry; it has to keep failing for the
+# day an entry comes back.
 import tempfile
-real_pins = list(cip.ROOT_RUN_PINS)
-rel, want, hashes = real_pins[0]
+assert REAL_ROOT_RUNS == [] and REAL_ROOT_RUN_PINS == [], "root runs something an install brought; the lists only shrink"
+rel = "docker/locks/systemone.lock.txt"
 with open(os.path.join(cip.ROOT, rel), encoding="utf-8") as f:
     lock = f.read()
-name = want.split("==")[0]
-assert cip.lock_entry(lock, name) == (want, hashes), "the committed lock is not what ROOT_RUN_PINS pins"
+name = "playwright"
+want, hashes = cip.lock_entry(lock, name) or (None, None)
+assert want and hashes, f"{rel} has no hashed entry for {name} to make the test pin from"
 one = sorted(hashes)[0]
 TAMPERED = {
     "a hash replaced": lock.replace(one, "0" * 64),
@@ -143,10 +150,20 @@ with tempfile.TemporaryDirectory() as td:
             f.write(text)
         cip.ROOT_RUN_PINS = [(path, want, hashes)]
         assert cip.root_run_pins(), f"a changed lock passed: {label}"
-cip.ROOT_RUN_PINS = real_pins
-assert not cip.root_run_pins(), cip.root_run_pins()
+    path = os.path.join(td, "lock.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(lock)
+    cip.ROOT_RUN_PINS = [(path, want, hashes)]
+    assert not cip.root_run_pins(), cip.root_run_pins()
+# the two lists go together: pins with no step, and a step with no pin, both fail
 cip.ROOT_RUNS = []
 assert any("no ROOT_RUNS entry" in r for r in cip.root_run_pins()), "pins outlived their exception"
+cip.ROOT_RUNS = [("docker/entrypoint.sh", "x", "y")]
+cip.ROOT_RUN_PINS = []
+assert any("nothing in ROOT_RUN_PINS" in r for r in cip.root_run_pins()), "a root run with no pin passed"
+cip.ROOT_RUNS, cip.ROOT_RUN_PINS = [], []
+assert not cip.root_run_pins()
 
 print(f"install-pin check: {len(BAD)} unpinned forms caught, {len(GOOD)} pinned forms passed; "
-      f"{len(ROOT_BAD)} root runs caught, {len(ROOT_GOOD)} uses passed; {len(TAMPERED)} changed locks caught")
+      f"{len(ROOT_BAD)} root runs caught, {len(ROOT_GOOD)} uses passed; {len(TAMPERED)} changed locks caught; "
+      "ROOT_RUNS and ROOT_RUN_PINS are empty")
