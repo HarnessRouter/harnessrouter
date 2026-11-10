@@ -4423,7 +4423,7 @@ PROMPT_PRELOAD_CJS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "p
 PROMPT_ARGV_SO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_argv.so")
 PROMPT_ARG = "{hr:prompt}"   # the launchers' placeholder for the file's text
 PROMPT_DIR = ".hr-prompt"    # in the session's tmp/
-_IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x400, 0x8000
+_IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_OPEN, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x20, 0x400, 0x8000
 _IN_NONBLOCK, _IN_CLOEXEC = 0o4000, 0o2000000
 
 
@@ -4553,16 +4553,45 @@ def _prompt_folder_drop(cwd: str, uid: int | None, made_tmp: bool) -> None:
                 os.rmdir(os.path.join(cwd, "tmp"))
 
 
+def _cli_holds(name: str) -> bool:
+    """Whether a process that was handed this prompt file (its name in the process's command line or environment)
+    holds it open now: the CLI's own open, read from /proc as the runner (root). Any other reader (a scan of the
+    session's files, a checkpoint of its tree) was handed nothing, and its read must not take the file from the CLI:
+    on 0.41.9's release candidate a scan of the session volume read goose's prompt file first, the file went, and
+    goose then answered "Instruction file not found"."""
+    nb, tail = name.encode(), f"/{PROMPT_DIR}/{name}"
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                handed = nb in f.read()
+            if not handed:
+                with open(f"/proc/{pid}/environ", "rb") as f:
+                    handed = nb in f.read()
+            if not handed:
+                continue
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                with contextlib.suppress(OSError):
+                    if os.readlink(f"/proc/{pid}/fd/{fd}").endswith(tail):
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 def _prompt_watch(held: dict) -> None:
     """For a CLI handed its prompt file by path: remove the file as soon as the CLI has read it, at the first
-    close that follows a read (inotify, on the file the descriptor names, so no path is looked up again).
-    Linux only; elsewhere, or when the CLI never reads it, the file goes when the turn ends (_prompt_discard)."""
+    close that follows the CLI's own read (inotify, on the file the descriptor names, so no path is looked up
+    again). An open counts as the CLI's only when a process handed the file holds it at that moment (_cli_holds);
+    a read by anything else leaves it where it is. Linux only; elsewhere, when the CLI never reads it, or when its
+    read was over before it could be seen, the file goes when the turn ends (_prompt_discard)."""
     if _LIBC is None or held.get("fd") is None:
         return
     ifd = _LIBC.inotify_init1(_IN_NONBLOCK | _IN_CLOEXEC)
     if ifd < 0:
         return
-    mask = _IN_ACCESS | _IN_CLOSE_NOWRITE | _IN_DELETE_SELF
+    mask = _IN_OPEN | _IN_ACCESS | _IN_CLOSE_NOWRITE | _IN_DELETE_SELF
     if _LIBC.inotify_add_watch(ifd, f"/proc/self/fd/{held['fd']}".encode(), mask) < 0:
         os.close(ifd)
         return
@@ -4571,7 +4600,7 @@ def _prompt_watch(held: dict) -> None:
     cwd, made_tmp = held["cwd"], held.get("made_tmp", False)
 
     def run() -> None:
-        seen_read = False
+        seen_read = cli = False
         try:
             while not stop.is_set():
                 if not select.select([ifd], [], [], 0.25)[0]:
@@ -4584,7 +4613,9 @@ def _prompt_watch(held: dict) -> None:
                 while off + 16 <= len(buf):
                     _wd, ev, _cookie, size = struct.unpack_from("iIII", buf, off)
                     off += 16 + size
-                    seen_read = seen_read or bool(ev & _IN_ACCESS)
+                    if ev & _IN_OPEN and not cli:
+                        cli = _cli_holds(name)
+                    seen_read = seen_read or bool(cli and ev & _IN_ACCESS)
                     done = done or bool((seen_read and ev & _IN_CLOSE_NOWRITE) or ev & (_IN_DELETE_SELF | _IN_IGNORED))
                 if done:
                     with _fs_as(uid), contextlib.suppress(OSError):
