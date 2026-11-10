@@ -19,9 +19,9 @@ import { hasSchema } from './caps';
 import { Ghost } from './CardArt';
 import { canDraw, coverGraphOf, coverState, drawnCover, isGraph, keepCover, picKindOf, type Drawn } from './cover';
 import { MemoryArt } from './MemoryArt';
-import { engineOf, msOf, PLUS, SEARCH, shownName, speaksUse, useProviders, X } from './parts';
+import { engineOf, msOf, PLUS, SEARCH, shownName, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
-import { ChooseServiceSheet, ConnectSheet, NewMemorySheet, UseInSheet } from './sheets';
+import { ChooseServiceSheet, ConnectSheet, NewMemorySheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
 
@@ -33,7 +33,7 @@ const idle = () => new Promise<void>((r) => {
   if (w.requestIdleCallback) w.requestIdleCallback(() => r(), { timeout: 600 }); else setTimeout(r, 40);
 });
 
-type Open = { k: 'new'; picked?: string } | { k: 'choose'; then?: 'new' } | { k: 'connect'; id: string } | { k: 'use'; m: Memory } | null;
+type Open = { k: 'new'; picked?: string } | { k: 'choose'; then?: 'new' } | { k: 'connect'; id: string } | null;
 type Sort = 'recent' | 'name';
 const enc = encodeURIComponent;
 // Cards or a list, as on Studio, and remembered the same way (for this person, in this browser)
@@ -44,11 +44,12 @@ const LIST_IC = <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stro
 /** Chips past this many are counted, not named. */
 const CHIPS = 2;
 
-/** Who uses a memory, as chips: the first few by name, the rest as a count. Null where the service doesn't say. */
+/** Who uses a memory, as chips: the first few by name, the rest as a count. Nothing where nobody does, or where the
+ *  service doesn't say: a memory is given to an agent from its own Settings, never from here (Richard 11-09: "Used in is
+ *  sloppy, put it in a Setting tab"). */
 function UsedBy({ m }: { m: Memory }) {
-  if (!Array.isArray(m.used_by)) return null;
-  const u = m.used_by;
-  if (!u.length) return <span className="mm-ub none">Not used yet</span>;
+  const u = Array.isArray(m.used_by) ? m.used_by : [];
+  if (!u.length) return null;
   return (
     <span className="mm-ub" title={`Used by ${u.map((x) => x.name).join(', ')}`}>
       <span className="mm-ub-k">Used by</span>
@@ -210,9 +211,6 @@ export function MemoriesPage() {
       ) : null}
     </div>
   ) : null;
-  /** Use in, on a memory nothing uses yet and this person may give: beside the card, never inside its link. */
-  const useIn = (m: Memory) => (speaksUse(m) && !m.parent_id && !m.used_by?.length && m.privileges?.includes('write')
-    ? <button type="button" className="btn small mm-usein" onClick={() => setOpen({ k: 'use', m })}>Use in…</button> : null);
 
   let body: React.ReactNode;
   if (failed) {
@@ -263,7 +261,6 @@ export function MemoriesPage() {
                   </span>
                   <span className="mm-rd">{m.description || 'No description yet.'}</span>
                 </Link>
-                {useIn(m)}
               </div>
             );
           })}
@@ -286,7 +283,6 @@ export function MemoriesPage() {
                   <UsedBy m={m} />
                 </span>
               </Link>
-              {useIn(m)}
             </div>
           );
         })}
@@ -318,9 +314,6 @@ export function MemoriesPage() {
       {open?.k === 'choose' && providers ? (
         <ChooseServiceSheet providers={providers} onClose={() => setOpen(null)}
           onConnected={async (id) => { const then = open.then; await reloadProviders(); setOpen(then === 'new' || !L.length ? { k: 'new', picked: id } : null); toast(`${vendorName(id)} connected.`); }} />
-      ) : null}
-      {open?.k === 'use' ? (
-        <UseInSheet m={open.m} onClose={() => setOpen(null)} onDone={(setup) => { setOpen(null); toast(`${setup} remembers in ${open.m.name} now.`); read(); }} />
       ) : null}
     </div>
   );

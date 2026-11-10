@@ -25,9 +25,6 @@ jest.mock('./graph/coverShot', () => ({ drawCover: (...a: unknown[]) => drawCove
 
 import { harnessFetch } from '@/lib/hfetch';
 import { MemoriesPage } from './MemoriesPage';
-import { toast } from '../toast';
-import { listCustom } from '@/lib/harness';
-import { memoryNowLine, replaceAsk } from './sheets';
 import { coverGraphOf, coverSig, DRAW_VERSION } from './cover';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -365,11 +362,16 @@ describe('the cards', () => {
     expect(cards.map((c) => c.querySelector('.mm-ct b')?.textContent)).toEqual(['Busy', 'Older', 'Idle']);
     expect(Array.from(cards[0].querySelectorAll('.mm-uc')).map((c) => c.textContent)).toEqual(['Photo cut', 'Support bot', '+1']);
     expect(cards[0].querySelector('.mm-cp')?.textContent).toMatch(/^Mem0 · Used .+ ago$/);
-    expect(cards[2].querySelector('.mm-ub')?.textContent).toBe('Not used yet');
+    // one nobody uses says nothing of it: no "Not used yet", and no "Use in…" (Richard 11-09: "Used in is sloppy, put
+    // it in a Setting tab"); it is given to an agent from its own Settings
+    expect(cards[2].querySelector('.mm-ub')).toBeNull();
     expect(cards[2].querySelector('.mm-cp')?.textContent).toBe('Mem0');
-    // Use in sits beside the card nothing uses, never inside its link
-    const use = Array.from(page().querySelectorAll('.mm-cardw')).map((w) => !!w.querySelector(':scope > .mm-usein'));
-    expect(use).toEqual([false, false, true]);
+    expect(page().textContent).not.toContain('Not used yet');
+    expect(button('Use in…')).toBeUndefined();
+    expect(page().querySelector('.mm-usein')).toBeNull();
+    // a card is the memory's link, and nothing else is in its wrapper
+    expect(cards.map((c) => c.getAttribute('href'))).toEqual(['/memories/b', '/memories/a', '/memories/c']);
+    expect(Array.from(page().querySelectorAll('.mm-cardw')).map((w) => w.children.length)).toEqual([1, 1, 1]);
     // by name, a click away
     const sel = page().querySelector('.mm-sort select') as HTMLSelectElement;
     await act(async () => { sel.value = 'name'; sel.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -396,58 +398,26 @@ describe('the cards', () => {
     expect(page().textContent).toContain('No memory matches that.');
   });
 
-  test('Use in gives a memory to a setup, which then remembers there', async () => {
-    const s = backend({
-      'GET /v1/memories/providers': { data: [CAPS.mem0] },
-      'GET /v1/memories': { data: [memory({ id: 'c', name: 'Idle', provider: 'mem0', engine: 'mem0', used_by: [] })] },
-      'PUT /v1/harnesses/chrn_a/memory': { id: 'chrn_a', memory: { id: 'c', name: 'Idle', engine: 'mem0', scope: 'shared', reason: '' } },
-    });
-    await open();
-    await press('Use in…');
-    await press('Use here');
-    expect(s.sent('PUT', '/v1/harnesses/chrn_a/memory')[0].body).toEqual({ memory: { id: 'c' } });
-    expect(toast).toHaveBeenCalledWith('Photo cut remembers in Idle now.');
-  });
-
-  test('what Use in asks before it replaces: the memory by its name, or its own where it is named after the setup', () => {
-    const own = (name: string) => ({ k: 'own' as const, id: 'hmem_x', name });
-    expect(replaceAsk({ name: 'Busy', has: own('Busy') }, 'Idle')).toEqual({ title: 'Replace its own memory in Busy?',
-      body: 'Busy remembers in its own memory now. From its next task it remembers in Idle instead. Its own memory is kept, with everything in it.' });
-    expect(replaceAsk({ name: 'Busy', has: own('Support notes') }, 'Idle').title).toBe('Replace Support notes in Busy?');
-    expect(replaceAsk({ name: 'Old', has: { k: 'count', n: 2 } }, 'Idle').body).toBe('Old uses 2 memories now. From its next task it remembers in Idle instead. They are kept, with everything in them.');
-    expect(memoryNowLine(own('Busy'), 'c', 'Busy')).toBe('Remembers in its own memory');
-  });
-
-  test('Use in lists the setups in use first, each with the memory it has now; replacing one asks first (C6)', async () => {
-    (listCustom as jest.Mock).mockResolvedValueOnce([
-      { id: 'chrn_old', name: 'Old idle', createdAt: 1, memory: null, memory_reason: 'Turned off.' },
-      { id: 'chrn_busy', name: 'Busy', createdAt: 2, memory: { id: 'hmem_x', name: 'Support notes', engine: 'mem0', scope: 'per_user', reason: '' } },
-      { id: 'chrn_new', name: 'Newest', createdAt: 3 },
-      { id: 'chrn_here', name: 'Already here', createdAt: 0, memory: { id: 'c', name: 'Idle', engine: 'mem0', scope: 'shared', reason: '' } },
-    ]);
-    const s = backend({
-      'GET /v1/memories/providers': { data: [CAPS.mem0] },
-      'GET /v1/memories': { data: [memory({ id: 'c', name: 'Idle', provider: 'mem0', engine: 'mem0', used_by: [] })] },
-      'GET /v1/traces': { sessions: [{ session_id: 's1', harness_id: 'chrn_busy', status: 'completed', finished_at: 1762600000 }] },
-      'PUT /v1/harnesses/chrn_busy/memory': { id: 'chrn_busy', memory: { id: 'c', name: 'Idle', engine: 'mem0', scope: 'shared', reason: '' } },
-    });
-    await open();
-    await press('Use in…');
-    const rows = Array.from(page().querySelectorAll('.mm-use-row')).map((r) => [r.querySelector('b')?.textContent, r.querySelector('.mm-use-n small')?.textContent || '', r.querySelector('button')?.textContent || r.querySelector('.mm-use-here')?.textContent]);
-    expect(rows).toEqual([
-      ['Busy', 'Remembers in Support notes', 'Use here'],
-      ['Newest', '', 'Use here'],
-      ['Old idle', 'No memory', 'Use here'],
-      ['Already here', '', 'Remembers here'],
-    ]);
-    // one that has a memory of its own asks before it is replaced, in the console's own dialog
-    await press_(page().querySelectorAll<HTMLElement>('.mm-use-row button')[0]);
-    expect(page().querySelector('#mmUseRh')?.textContent).toBe('Replace Support notes in Busy?');
-    expect(page().querySelector('#mmUseRp')?.textContent).toBe('Busy remembers in Support notes now. From its next task it remembers in Idle instead. Support notes is kept, with everything in it.');
-    expect(s.sent('PUT', '/v1/harnesses/chrn_busy/memory')).toHaveLength(0);
-    await press('Replace');
-    expect(s.sent('PUT', '/v1/harnesses/chrn_busy/memory')[0].body).toEqual({ memory: { id: 'c' } });
-    expect(toast).toHaveBeenCalledWith('Busy remembers in Idle now.');
+  test('the list: a row nobody uses says nothing of it, and no row offers Use in', async () => {
+    window.localStorage.setItem('hr.memories.view', 'list');
+    try {
+      backend({
+        'GET /v1/memories/providers': { data: [CAPS.mem0] },
+        'GET /v1/memories': { data: [
+          memory({ id: 'a', name: 'Used', provider: 'mem0', engine: 'mem0', used_by: [{ harness_id: 'chrn_a', name: 'Photo cut' }] }),
+          memory({ id: 'c', name: 'Idle', provider: 'mem0', engine: 'mem0', used_by: [] }),
+        ] },
+      });
+      await open();
+      const rows = Array.from(page().querySelectorAll<HTMLAnchorElement>('.mm-rows .mm-row'));
+      // by name, where none says when it was used: Idle, then Used
+      expect(rows.map((r) => r.getAttribute('href'))).toEqual(['/memories/c', '/memories/a']);
+      expect(rows[0].querySelector('.mm-ub')).toBeNull();
+      expect(Array.from(rows[1].querySelectorAll('.mm-uc')).map((c) => c.textContent)).toEqual(['Photo cut']);
+      expect(page().textContent).not.toContain('Not used yet');
+      expect(button('Use in…')).toBeUndefined();
+      expect(Array.from(page().querySelectorAll('.mm-roww')).map((w) => w.children.length)).toEqual([1, 1]);
+    } finally { window.localStorage.removeItem('hr.memories.view'); }
   });
 
   test('the header is the view and New memory, and nothing else: no More', async () => {
