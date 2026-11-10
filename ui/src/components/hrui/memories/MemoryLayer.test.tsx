@@ -113,12 +113,12 @@ test('On is full use: a read and write grant to the setup’s principal, the sam
   expect(s.sent('PUT', `/v1/harnesses/${H}/memories`)).toHaveLength(0);
   expect(toast).not.toHaveBeenCalled();
 });
-test('On where there is no default makes that memory the default, without keeping finished tasks there', async () => {
+test('On where there is no default makes that memory where it writes, keeping finished tasks there (the same whichever switch came first)', async () => {
   const s = backend({ data: [], observe: true });
   await draw();
   await press(sw('Support'));
   expect(s.sent('POST', '/v1/memories/m2/grants')[0].body).toEqual({ principal: `member:${H}`, privileges: ['read', 'write'] });
-  expect(s.sent('PUT', `/v1/harnesses/${H}/memories`).map((c) => c.body)).toEqual([{ default_memory_id: 'm2', observe: false }]);
+  expect(s.sent('PUT', `/v1/harnesses/${H}/memories`).map((c) => c.body)).toEqual([{ default_memory_id: 'm2', observe: true }]);
 });
 test('turning one off takes away the grant on that memory', async () => {
   const s = backend({ data: [held('m1', 'Brand kits', false)] });

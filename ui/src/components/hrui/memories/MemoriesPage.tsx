@@ -85,6 +85,19 @@ export function MemoriesPage() {
     listMemories({ counts: false, sort: 'recent' }).then(setList).catch(() => setFailed(true));
   }, []);
   useEffect(() => { read(); }, [read]);
+  // Back on the page (another tab or window shown again): read the list again, so an agent's memory made meanwhile
+  // is there without a reload. Quietly: a read that fails keeps what is shown. At most once in five seconds.
+  useEffect(() => {
+    let last = Date.now();
+    const again = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - last < 5000) return;
+      last = Date.now();
+      listMemories({ counts: false, sort: 'recent' }).then(setList).catch(() => { /* keep what is shown */ });
+    };
+    window.addEventListener('focus', again);
+    document.addEventListener('visibilitychange', again);
+    return () => { window.removeEventListener('focus', again); document.removeEventListener('visibilitychange', again); };
+  }, []);
   // a setup's Settings sends a person here to make a memory
   useEffect(() => { if (new URLSearchParams(window.location.search).get('new') === '1') setOpen({ k: 'new' }); }, []);
 

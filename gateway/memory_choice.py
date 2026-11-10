@@ -187,6 +187,13 @@ def _clear(scores: dict[str, float]) -> str:
     return best
 
 
+def named_clearly(text: str) -> str:
+    """The one nature a text names clearly (the rule a hint decides by), or ''. The person's own words when they set
+    up an agent are read this way first, so the same request always gets the same memory, whatever words the
+    builder model then chose for its name and instructions."""
+    return _clear(_score_text(text or ""))
+
+
 def _tool_names(*groups) -> list[str]:
     out = []
     for g in groups:

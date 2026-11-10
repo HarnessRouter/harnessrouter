@@ -24545,7 +24545,7 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
         await _harness_create_as(p, HarnessBody(name=name, base=cfg["base"], default_model=cfg["model"],
                                                 system_prompt=cfg["instructions"], environment=env,
                                                 skills=skills or None, mcp_servers=servers or None,
-                                                memory="auto", memory_hint=cfg.get("memoryHint") or None), hid=hid)
+                                                memory="auto", memory_hint=_setup_build_hint(cfg) or None), hid=hid)
     if any(x["id"] == setup_compose.MEDIA_ID for x in cfg["plugins"]):
         try:
             await _hosted_media_attach(org, hid, await _harness_in_reach(p, hid), dict(_SETUP_MEDIA_DECL))
@@ -24570,13 +24570,23 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
     return {"name": name, "attached": attached}
 
 
+def _setup_build_hint(cfg: dict) -> str:
+    """The hint a built setup's memory is chosen from. The person's own goal, as typed, when it names what the agent
+    should remember clearly (memory_choice.named_clearly): then the same request always gets the same memory. The
+    builder model's own words for it otherwise. The builder writes the agent's name and instructions afresh each
+    time, and "Personal relationship notes" chose a shared Graphiti memory where "Personal relationship updates", for
+    the same request, chose one kept apart per person (2026-11-10)."""
+    goal = str(cfg.get("goal") or "")[:1000]
+    return goal if memory_choice.named_clearly(goal) else str(cfg.get("memoryHint") or "")[:1000]
+
+
 async def _setup_build_memory(p: dict, cfg: dict) -> dict:
     """The memory the agent a build saves will get, and why: {engine, scope, reason}, chosen the way the save chooses
     it (memory_choice over the engines connected in the person's workspace and answering, from the same words: its
     name, instructions, the goal's hint, its servers and skills), so the card says it while the setup is saved. Nothing
     is made here; the save provisions it (_harness_create_as, memory "auto")."""
     words = {"name": str(cfg.get("name") or ""), "instructions": str(cfg.get("instructions") or ""),
-             "hint": str(cfg.get("memoryHint") or "")[:1000],
+             "hint": _setup_build_hint(cfg),
              "tools": [str(x.get("name") or "") for x in cfg.get("mcpServers") or [] if isinstance(x, dict)],
              "skills": [str(x.get("name") or "") for x in cfg.get("skills") or [] if isinstance(x, dict)]}
     running, failing = await _memory_engines_state(str(p["org"]), _memory_ws_of(p))
@@ -24618,9 +24628,9 @@ async def setup_build_start(body: SetupBuildBody, request: Request) -> dict:
              "skill_text": lambda iid: _setup_build_skill_text(ctx, iid),
              "find": lambda q: asyncio.sleep(0, result=[]),
              "conn": lambda: _setup_build_wires(org), "client": _client(),
-             "save": lambda cfg, hid: _setup_build_save(p, cfg, hid, ctx),
+             "save": lambda cfg, hid: _setup_build_save(p, {**cfg, "goal": body.job}, hid, ctx),
              "exists": lambda hid: _setup_build_exists(org, hid),
-             "propose": lambda cfg: _setup_build_memory(p, cfg)}
+             "propose": lambda cfg: _setup_build_memory(p, {**cfg, "goal": body.job})}
     try:
         return await setup_builder.start(org, who, body.key, body.job, body.base, body.model, bases=bases, run_parts=parts)
     except setup_builder.BadKey:
