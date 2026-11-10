@@ -191,7 +191,7 @@ it('a removed key leaves no route behind, chat or image, and models switched off
   doc.image_model_map = { 'img-1': 'or' };
   await open();
   await click('Remove', rowOf('openrouter'));
-  expect(text()).toContain('No setup uses it right now.');
+  expect(text()).toContain('No harness uses it right now.');
   await act(async () => { (document.querySelector('.del-go') as HTMLButtonElement).click(); });
   await flush();
   const put = lastPut() as { integrations: { name: string }[]; model_map: Record<string, string>; image_model_map: Record<string, string> };

@@ -75,7 +75,7 @@ it('before the prompt is copied it reads the list once (what was there), and not
   expect(connected()).toBe(true);
 });
 
-it('finds the saved setup on the list, and it is connected once a task has ended on it; then nothing more is read', async () => {
+it('finds the saved harness on the list, and it is connected once a task has ended on it; then nothing more is read', async () => {
   await openAndCopy();
   await agentSaves();
   expect(body()).toContain('chrn_new');
@@ -95,7 +95,7 @@ it('finds the saved setup on the list, and it is connected once a task has ended
   expect(tasks.mock.calls.length).toBe(taskReads);
 });
 
-it('a setup that was there before the guide opened is never the one saved, and its tasks are not read', async () => {
+it('a harness that was there before the guide opened is never the one saved, and its tasks are not read', async () => {
   await openAndCopy();
   await passTime(POLL_MS * 2);
   expect(tasks).not.toHaveBeenCalled();

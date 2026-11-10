@@ -99,10 +99,10 @@ export interface BuildInput extends Chosen {
 }
 
 /** Said where the setup would be, with Try again (BuildPage), when the server gives no reason */
-export const NOT_BUILT = 'Your setup couldn’t be built just now.';
-export const NOT_SAVED = 'Your setup couldn’t be saved just now.';
+export const NOT_BUILT = 'Your harness couldn’t be built just now.';
+export const NOT_SAVED = 'Your harness couldn’t be saved just now.';
 /** The setup exists but the rest of its save (its plugins, its recorded first run) did not answer */
-export const NOT_FINISHED = 'Your setup couldn’t be finished just now.';
+export const NOT_FINISHED = 'Your harness couldn’t be finished just now.';
 
 const builds = new Map<string, Build>();
 /** the builds whose work is going on in this page */
@@ -356,7 +356,7 @@ async function run(key: string) {
   const lost = c0.plugins.filter((p) => failed.includes(p.id)).map((p) => p.name);
   const needTypes = c0.connectionsNeeded.map((p) => p.id);
   const name = buildOf(id)?.asm?.cfg.name || c0.name;
-  if (lost.length) toast(`${listOf(lost)} ${lost.length > 1 ? 'weren’t' : 'wasn’t'} added. Add ${lost.length > 1 ? 'them' : 'it'} in the setup’s Settings.`);
+  if (lost.length) toast(`${listOf(lost)} ${lost.length > 1 ? 'weren’t' : 'wasn’t'} added. Add ${lost.length > 1 ? 'them' : 'it'} in the harness’s Settings.`);
   else if (needTypes.length) toast(`Connect ${listOf(c0.connectionsNeeded.map((p) => p.name))} in Add-ons so ${name} can use ${needTypes.length > 1 ? 'them' : 'it'}.`);
 }
 
@@ -460,7 +460,7 @@ async function savedByServer(key: string, r: BuildRecord): Promise<void> {
     asm: cfg ? { cfg, savedAt, plugins: r.attached, done: true } : null }));
   if (!cfg) return;
   const lost = cfg.plugins.filter((p) => r.attached[p.id] === 'off').map((p) => p.name);
-  if (lost.length) toast(`${listOf(lost)} ${lost.length > 1 ? 'weren’t' : 'wasn’t'} added. Add ${lost.length > 1 ? 'them' : 'it'} in the setup’s Settings.`);
+  if (lost.length) toast(`${listOf(lost)} ${lost.length > 1 ? 'weren’t' : 'wasn’t'} added. Add ${lost.length > 1 ? 'them' : 'it'} in the harness’s Settings.`);
   else if (cfg.connectionsNeeded.length) {
     toast(`Connect ${listOf(cfg.connectionsNeeded.map((p) => p.name))} in Add-ons so ${cfg.name} can use ${cfg.connectionsNeeded.length > 1 ? 'them' : 'it'}.`);
   }

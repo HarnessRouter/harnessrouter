@@ -92,7 +92,7 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('the first test New setup handed over ends in the Next bar once its answer has finished', async () => {
+test('the first test New harness handed over ends in the Next bar once its answer has finished', async () => {
   mockBuild.b = BUILD();
   await open({ key: 'n0', first: FIRST });
   expect(bar()).toBeNull();                                   // nothing has run yet
@@ -119,7 +119,7 @@ test('an unchanged demo’s recorded run, played when its request was sent, ends
   expect(bar()).not.toBeNull();
 });
 
-test('the setup’s recorded first task opened from its row ends in it', async () => {
+test('the harness’s recorded first task opened from its row ends in it', async () => {
   mockConv.msgs = done(RUN.request);
   await open({ key: 'rec', recorded: RUN });
   expect(bar()).not.toBeNull();

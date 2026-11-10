@@ -44,7 +44,7 @@ function everywhere(h: CustomHarness, binding: PlugBinding | null | undefined = 
   };
 }
 
-describe('a setup with one workspace plugin and nothing else added, Hermes’s built-ins on', () => {
+describe('a harness with one workspace plugin and nothing else added, Hermes’s built-ins on', () => {
   const e = everywhere(setup({ mcpServers: servers(PLUGS) }), { plugs: ['github'] }, { github: 'GitHub' });
   test('the tabs list everything, built-ins included: Plugins 1, Skills 3, Tools 7', () => {
     expect(e.tabs).toEqual({ plugin: 1, skill: 3, tool: 7 });
@@ -61,7 +61,7 @@ describe('a setup with one workspace plugin and nothing else added, Hermes’s b
   });
 });
 
-describe('a setup with only built-ins', () => {
+describe('a harness with only built-ins', () => {
   const e = everywhere(setup());
   test('its tabs still list the built-ins', () => {
     expect(e.tabs).toEqual({ plugin: 0, skill: 3, tool: 7 });
@@ -89,7 +89,7 @@ describe('what a person added counts in the picture, the same in every place', (
     expect(setupSkills(h, BASE, 'added').map((x) => [x.name, x.on])).toEqual([['brand', false]]);
     expect(recordNames(setupPlugins(h, null, 'added'))).toEqual(['kit']);
   });
-  test('a built-in turned on by the setup is still a built-in: listed, never in the picture', () => {
+  test('a built-in turned on by the harness is still a built-in: listed, never in the picture', () => {
     const h = setup({ skills: [{ id: 'skl_x', name: 'plan', enabled: true }] as CustomHarness['skills'] });
     expect(setupSkills(h, BASE, 'added')).toEqual([]);
     expect(everywhere(h).stack.skill).toBe(0);
@@ -115,7 +115,7 @@ describe('the lists', () => {
     expect(setupSkills(h, { ...BASE, takesSkills: false }, 'all')).toEqual([]);
     expect(setupSkills(h, { ...BASE, takesSkills: false }, 'added')).toEqual([]);
   });
-  test('tools, all: built-ins on unless turned off, then the setup’s own MCP servers; the plugins binding is not a tool', () => {
+  test('tools, all: built-ins on unless turned off, then the harness’s own MCP servers; the plugins binding is not a tool', () => {
     const h = setup({ disabledTools: ['web_search'], mcpServers: servers(MEDIA, PLUGS, DOCS, { id: 'mcp_2', name: 'Old', url: 'https://old.example/mcp', enabled: false }) });
     expect(countOn(setupTools(h, BASE, 'all'))).toBe(8);
     expect(setupTools(h, BASE, 'added').map((x) => [x.name, x.on, x.kind === 'mcp' && x.index])).toEqual([['media', true, 0], ['Docs', true, 1], ['Old', false, 2]]);

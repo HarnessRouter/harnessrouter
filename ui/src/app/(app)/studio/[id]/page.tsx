@@ -178,7 +178,7 @@ export default function SetupPage() {
   // a task of another setup, or one that is gone, lets go of the address; a read that failed says so
   // in the task's place, with Try again
   const linked = useLinkedTask(id, testSid, list, !!testSid && mine.current.has(testSid), () => {
-    toast('That task is not in this setup.');
+    toast('That task is not in this harness.');
     newTest();
   });
   // Connect your app: the design's sheet, over whichever tab is open
@@ -224,21 +224,21 @@ export default function SetupPage() {
   if (failed && !row) {
     return (
       <div className="scroll"><div className="list-wrap">
-        <p className="sub" role="alert">This setup could not be loaded just now. <button type="button" className="link-q inl" onClick={reload}>Try again</button></p>
+        <p className="sub" role="alert">This harness could not be loaded just now. <button type="button" className="link-q inl" onClick={reload}>Try again</button></p>
       </div></div>
     );
   }
   if (missing) {
     return (
       <div className="scroll"><div className="list-wrap">
-        <p className="sub">This setup is not in this workspace. <a className="link-q inl" href="/studio">Back to Harness Studio</a></p>
+        <p className="sub">This harness is not in this workspace. <a className="link-q inl" href="/studio">Back to Harness Studio</a></p>
       </div></div>
     );
   }
   if (!row) {
     return (
       <div className="tk-page">
-        <Skel label="Loading the setup" className="hrui-skel-contents">
+        <Skel label="Loading the harness" className="hrui-skel-contents">
           {/* the setup's bar while it loads: the same bar (setup/parts AgentHead), its tabs' place held at the right end */}
           <header className="ag-bar ag-rt" aria-hidden="true">
             <div className="ag-lft"><SkLine w={32} h={32} r={16} /><div style={{ display: 'grid', gap: 6 }}><SkLine w={180} h={20} /><SkLine w={240} h={10} /></div></div>
@@ -320,7 +320,7 @@ export default function SetupPage() {
               <div className="tk-none" role="alert">The tasks could not be read just now.{' '}
                 <button type="button" className="link-q inl" onClick={list.refresh}>Try again</button></div>
             ) : rec.failed ? (
-              <div className="tk-none" role="alert">This setup’s recorded first task could not be read just now.{' '}
+              <div className="tk-none" role="alert">This harness’s recorded first task could not be read just now.{' '}
                 <button type="button" className="link-q inl" onClick={rec.retry}>Try again</button></div>
             ) : (
               <div className="tk-none"><b>No tasks match.</b></div>

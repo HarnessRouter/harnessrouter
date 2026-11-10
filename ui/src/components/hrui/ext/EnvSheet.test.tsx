@@ -402,7 +402,7 @@ describe('mediaOf', () => {
 });
 
 describe('details', () => {
-  it('lists the setups that use it, each a link, and asks in the sheet before deleting', async () => {
+  it('lists the harnesses that use it, each a link, and asks in the sheet before deleting', async () => {
     const onDelete = jest.fn(async () => true);
     await act(async () => { root.render(<EnvSheet id="henv_1" tab="details" onClose={jest.fn()} onChanged={jest.fn()} onDelete={onDelete} />); });
     await flush();

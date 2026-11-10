@@ -96,7 +96,7 @@ export function pageArt(kind: 'keys' | 'ext', play: boolean): string {
     // a setup on HarnessRouter; a plugin, a skill, a tool and an environment snap on, in tab order
     const zt = pz + 1.2;
     const part = (i: number, fam: string, x: number, y: number) => '<g class="pa-p pa-p' + i + '"><g class="bk built f-' + fam + '">' + K.box(x, y, zt, x + 0.85, y + 0.85, zt + 0.55) + K.stud(x + 0.425, y + 0.425, zt + 0.55, 1) + '</g></g>';
-    g = plate(0) + '<g class="bk built">' + K.box(0, 0, pz, 2.2, 2.2, zt) + '</g>' + label(0, 2.2, (pz + zt) / 2, 'Your setup') +
+    g = plate(0) + '<g class="bk built">' + K.box(0, 0, pz, 2.2, 2.2, zt) + '</g>' + label(0, 2.2, (pz + zt) / 2, 'Your harness') +
       part(0, 'plugin', 0.15, 0.15) + part(1, 'skill', 1.2, 0.15) + part(2, 'mcp', 0.15, 1.2) + part(3, 'tool', 1.2, 1.2);
     K.P(0, 0, zt + 1.6);
   }

@@ -48,12 +48,12 @@ export function DeleteSetupSheet({ h, onClose, onDeleted }: { h: CustomHarness; 
     if (!ok || busy) return;
     setBusy(true);
     try { onDeleted(deletedToast(name, await deleteCustom(h.id))); }
-    catch (e) { setBusy(false); toast(plain(e, 'The setup could not be deleted. Try again.')); }
+    catch (e) { setBusy(false); toast(plain(e, 'The harness could not be deleted. Try again.')); }
   }
   return (
     <Sheet onClose={onClose} labelledBy="dlh" describedBy="dlp" className="small-sheet del-sheet" alert busy={busy} initialFocus={inRef}>
       <SheetTop id="dlh" title="Delete harness" onClose={onClose} />
-      <p className="del-p" id="dlp"><b>{name || 'This setup'}</b> stops working at once, and tasks sent to its Harness ID are refused. Its past tasks stay readable. It is removed for good after 30 days.{memLine ? ` ${memLine}` : ''}</p>
+      <p className="del-p" id="dlp"><b>{name || 'This harness'}</b> stops working at once, and tasks sent to its Harness ID are refused. Its past tasks stay readable. It is removed for good after 30 days.{memLine ? ` ${memLine}` : ''}</p>
       <label className="del-l nm" htmlFor="delConfirm">Type <b>{want}</b> to confirm.</label>
       <input id="delConfirm" ref={inRef} className="set-in" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
         value={v} onChange={(e) => setV(e.target.value)}
@@ -176,7 +176,7 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
 
   async function save() {
     const nm = name.trim();
-    if (!nm) { toast('Give the setup a name.'); return; }
+    if (!nm) { toast('Give the harness a name.'); return; }
     setBusy(true);
     try {
       // the copy gets its own files: a skill or package shared by handle would go when the original drops it
@@ -222,7 +222,7 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
         {notes.length ? <p className="set-help">{notes.join(' ')}</p> : null}</div>
       <div className="sheet-actions">
         <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-        <button type="button" className="btn primary" disabled={busy || !name.trim() || cantRun} onClick={() => void save()}>Save setup</button>
+        <button type="button" className="btn primary" disabled={busy || !name.trim() || cantRun} onClick={() => void save()}>Save harness</button>
       </div>
     </Sheet>
   );

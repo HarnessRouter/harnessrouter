@@ -16,7 +16,7 @@ const cfg = { name: 'Product images', instructions: 'i', exampleTask: 'e', base:
   skills: [{ id: 'img', name: 'Image generation' }], plugins: [{ id: 'browser', name: 'Browser' }, { id: 'github', name: 'GitHub' }], connectionsNeeded: [] };
 
 describe('the Agent stack follows the save', () => {
-  test('nothing has landed before the setup is created', () => {
+  test('nothing has landed before the harness is created', () => {
     expect(landedParts(null)).toEqual({ skill: 0, plugin: 0 });
     expect(landedParts(build({ asm: { cfg, savedAt: null, plugins: {}, done: false } }))).toEqual({ skill: 0, plugin: 0 });
   });
@@ -63,15 +63,15 @@ describe('the save card', () => {
     expect(a.cfg.plugins.map((x) => x.name)).toEqual(['GitHub']);
     expect(Object.values(a.plugins).every((x) => x === 'on')).toBe(true);
   });
-  test('once the setup is saved, names the skills and tools its record says a person added', () => {
+  test('once the harness is saved, names the skills and tools its record says a person added', () => {
     const r = rowOf(h, 'Hermes', [], false, { plugs: [] });
     expect(withRecord({ cfg, savedAt: null, plugins: {}, done: false }, r).added).toBeUndefined();
     expect(withRecord({ cfg, savedAt: 1, plugins: {}, done: false }, r).added?.skills.map((x) => x.name)).toEqual(['brand']);
   });
 });
 
-describe('the hand-off from New setup to the setup’s page', () => {
-  test('the page a setup was just made on hands it over by its id, in memory; any other id has none', () => {
+describe('the hand-off from New harness to the harness’s page', () => {
+  test('the page a harness was just made on hands it over by its id, in memory; any other id has none', () => {
     const hh = { id: 'chrn_seed', name: 'Product images', base: 'hermes', createdAt: 1 } as unknown as CustomHarness;
     seedSetup('chrn_seed', { h: hh });
     expect(seededSetup('chrn_seed')).toEqual({ h: hh });

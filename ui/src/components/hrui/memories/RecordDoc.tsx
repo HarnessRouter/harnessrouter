@@ -291,16 +291,16 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
       <div className={`mm-live mm-body${sentence ? ' mm-sentence' : ''}`}>
         {edReady ? null : body ? <div className="mm-ed-wait"><ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown></div> : null}
         <div className="mm-ed-box" hidden={!edReady}>
-          <DocEditor doc={live.doc} provider={live} currentUser={me} readOnly={!writable} placeholder={writable ? 'Write it down. Setups read all of it.' : ''} onReady={() => setEdReady(true)} />
+          <DocEditor doc={live.doc} provider={live} currentUser={me} readOnly={!writable} placeholder={writable ? 'Write it down. Harnesses read all of it.' : ''} onReady={() => setEdReady(true)} />
         </div>
       </div>
     ) : state?.denied ? <p className="mm-err" role="alert">{state.denied}</p> : <div className={`mm-body${sentence ? ' mm-sentence' : ''}`}>{body ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown> : null}</div>
   ) : open ? (
     editing ? (
-      <textarea ref={bodyEl} className={`mm-bodyed${sentence ? ' mm-sentence' : ''}`} aria-label="Text" autoFocus value={body} placeholder="Write it down. Setups read all of it."
+      <textarea ref={bodyEl} className={`mm-bodyed${sentence ? ' mm-sentence' : ''}`} aria-label="Text" autoFocus value={body} placeholder="Write it down. Harnesses read all of it."
         onFocus={(e) => { const n = e.currentTarget.value.length; e.currentTarget.setSelectionRange(n, n); }} onChange={(e) => setBody(e.target.value)} onBlur={saveBody} />
     ) : (
-      <div className={`mm-body mm-bodyro${sentence ? ' mm-sentence' : ''}`} role="textbox" aria-label="Text" tabIndex={0} data-ph="Write it down. Setups read all of it."
+      <div className={`mm-body mm-bodyro${sentence ? ' mm-sentence' : ''}`} role="textbox" aria-label="Text" tabIndex={0} data-ph="Write it down. Harnesses read all of it."
         onFocus={() => setEditing(true)} onClick={() => setEditing(true)}>
         {body ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown> : null}
       </div>
@@ -455,7 +455,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
       </div>
       {confirm === 'forget' ? (
         <ConfirmSheet id="mmFg" title={`Forget ${short(record) || 'this record'}?`} confirmLabel="Forget" busy={busy} refused={refused || undefined}
-          body={history ? 'Setups stop seeing it, and its history is kept.' : 'Setups stop seeing it.'} onClose={() => setConfirm('')} onConfirm={() => void forget()} />
+          body={history ? 'Harnesses stop seeing it, and its history is kept.' : 'Harnesses stop seeing it.'} onClose={() => setConfirm('')} onConfirm={() => void forget()} />
       ) : null}
     </>
   );

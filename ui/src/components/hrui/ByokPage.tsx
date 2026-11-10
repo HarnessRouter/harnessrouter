@@ -454,7 +454,7 @@ export function ByokPage() {
           onClose={() => setRemoving(null)} onConfirm={() => void remove(removing)}
           body={<>{rm === null ? rmAfter
             : rm.length ? <><b>{listNames(rm)}</b> {rm.length === 1 ? 'uses' : 'use'} it. {rmAfter}</>
-              : `No setup uses it right now. ${rmAfter}`}Usage so far stays billed by {provName(removing.provider)}.</>} />
+              : `No harness uses it right now. ${rmAfter}`}Usage so far stays billed by {provName(removing.provider)}.</>} />
       ) : null}
     </div>
   );

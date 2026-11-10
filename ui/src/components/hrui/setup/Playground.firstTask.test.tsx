@@ -102,7 +102,7 @@ test('the request the build wrote waits in the box under the save card, and noth
   mockBuild.b = BUILD({});
   await open(H({ defaultModel: 'gpt-5.4' }), { key: 'n0', first: FIRST });
   expect(box()).toBe(FIRST.input);
-  expect(el.querySelector('.bs-save')?.textContent).toContain('Setup saved.');
+  expect(el.querySelector('.bs-save')?.textContent).toContain('Harness saved.');
   expect(mockConv.send).not.toHaveBeenCalled();
   expect(run().disabled).toBe(false);
   await act(async () => { run().click(); });
@@ -115,14 +115,14 @@ test('the request the build wrote waits in the box under the save card, and noth
 test('while the save goes on, its request is held under the card', async () => {
   mockBuild.b = BUILD({ phase: 'saving', asm: { cfg: CFG, savedAt: null, plugins: {}, done: false } });
   await open(H({ defaultModel: 'gpt-5.4' }), { key: 'n0', first: FIRST });
-  expect(el.querySelector('.bs-save')?.textContent).toContain('Saving your setup');
+  expect(el.querySelector('.bs-save')?.textContent).toContain('Saving your harness');
   expect(run().disabled).toBe(true);
 });
 
 test('the rest of a save that did not answer is said under the card, with Try again', async () => {
-  mockBuild.b = BUILD({ phase: 'failed', error: 'Your setup couldn’t be finished just now.' });
+  mockBuild.b = BUILD({ phase: 'failed', error: 'Your harness couldn’t be finished just now.' });
   await open(H({ defaultModel: 'gpt-5.4' }), { key: 'n0', first: FIRST });
-  expect(el.querySelector('.bd-fail')?.textContent).toContain('Your setup couldn’t be finished just now.');
+  expect(el.querySelector('.bd-fail')?.textContent).toContain('Your harness couldn’t be finished just now.');
   const again = Array.from(el.querySelectorAll('.bd-fail button')).find((b) => b.textContent === 'Try again') as HTMLButtonElement;
   act(() => { again.click(); });
   expect(retryBuild).toHaveBeenCalledWith('bk1');

@@ -164,10 +164,10 @@ describe('a branch the server would not make', () => {
     expect(lastText()).not.toContain('session');
   });
   test('any other refusal of a branch keeps the server’s sentence, and an ordinary message is never read as a branch', async () => {
-    refuse(429, 'one_at_a_time', 'One task at a time on this setup. Try again when it ends.');
+    refuse(429, 'one_at_a_time', 'One task at a time on this harness. Try again when it ends.');
     await render(<Conv sid={null} />);
     await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
-    expect(lastText()).toContain('One task at a time on this setup.');
+    expect(lastText()).toContain('One task at a time on this harness.');
     refuse(409, 'branch_unavailable', 'A server sentence.');
     await act(async () => { await api.send('Hello'); });
     expect(lastText()).toContain('A server sentence.');
@@ -259,7 +259,7 @@ describe('a turn’s end, from its record, never on a timer', () => {
     expect(mockChat.load).not.toHaveBeenCalled();
   });
 
-  test('the setup’s feed coming up again: one read, and an ended turn settles from it', async () => {
+  test('the harness’s feed coming up again: one read, and an ended turn settles from it', async () => {
     const sid = await openRunning();
     mockChat.load.mockResolvedValue(record([turn({ assistant: 'All done' })]));
     await act(async () => { mockChat.bus[0].onState?.('down'); mockChat.bus[0].onState?.('up'); });
@@ -300,7 +300,7 @@ describe('a turn’s end, from its record, never on a timer', () => {
     expect(textOf(lastA(sid))).toBe('Finished');
   });
 
-  test('the end frame after the setup’s feed already ended the turn reads nothing', async () => {
+  test('the end frame after the harness’s feed already ended the turn reads nothing', async () => {
     const sid = await openRunning();
     await act(async () => { mockChat.bus[0].onMsg({ session_id: sid, response_id: 'r1', event: { type: 'response.completed', response: {} } }); });
     expect(C.getConvState(sid).busy).toBe(false);
@@ -422,7 +422,7 @@ describe('a send whose own stream ends before the turn does', () => {
   });
 });
 
-describe('one live feed per setup in a tab', () => {
+describe('one live feed per harness in a tab', () => {
   test('two surfaces listening share one connection; each delta lands once; both hear the edges', async () => {
     const sid = sidNew();
     C.setConvState(sid, { msgs: [{ role: 'user', text: 'go' }, { role: 'assistant', blocks: [], files: [], status: 'running' }], busy: true, loaded: true });

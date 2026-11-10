@@ -50,7 +50,7 @@ it('reads as the page opens, then every POLL_MS; an older finished task is not h
   expect(run.card).toBeNull();
 });
 
-it('no setup yet: nothing is read', async () => {
+it('no harness yet: nothing is read', async () => {
   await open(null);
   await passTime(POLL_MS * 3);
   expect(tasks).not.toHaveBeenCalled();

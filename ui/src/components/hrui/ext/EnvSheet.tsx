@@ -299,8 +299,8 @@ export function EnvSheet({ id, tab: firstTab = 'files', notice = '', taken = [],
             <div className="mcp-ask eo-ask" role="alertdialog" aria-labelledby="eoAskD">
               <span id="eoAskD">Delete <b>{env.name}</b>?{' '}
                 {users?.length
-                  ? <>{users.slice(0, 3).map((u) => u.name).join(', ')}{users.length > 3 ? ` and ${users.length - 3} more` : ''} {users.length === 1 ? 'uses' : 'use'} it; it comes off {users.length === 1 ? 'that setup' : 'them'}, and from the next task {users.length === 1 ? 'its tasks start' : 'their tasks start'} with no files.</>
-                  : 'No setup uses it.'}{' '}Its files and every version go. This can’t be undone.</span>
+                  ? <>{users.slice(0, 3).map((u) => u.name).join(', ')}{users.length > 3 ? ` and ${users.length - 3} more` : ''} {users.length === 1 ? 'uses' : 'use'} it; it comes off {users.length === 1 ? 'that harness' : 'them'}, and from the next task {users.length === 1 ? 'its tasks start' : 'their tasks start'} with no files.</>
+                  : 'No harness uses it.'}{' '}Its files and every version go. This can’t be undone.</span>
               <span className="mcp-ask-b">
                 <button type="button" className="btn small" disabled={busy === 'delete'} onClick={() => setAsk('')}>Keep</button>
                 <button type="button" className="btn small del-go" disabled={busy === 'delete'} onClick={() => void remove()} autoFocus>
@@ -906,10 +906,10 @@ function DetailsPane({ env, form, setForm, users }: {
       <div className="set-f"><span className="eo-l">Where tasks find it</span>
         <div className="set-ro"><code>{env.mount}</code></div></div>
       <div className="set-f"><span className="eo-l">Used by</span>
-        {users === null ? <Skel label="Reading the setups that use it"><SkLine w="50%" /></Skel>
+        {users === null ? <Skel label="Reading the harnesses that use it"><SkLine w="50%" /></Skel>
           : users.length ? (
-            <ul className="eo-users">{users.map((u) => <li key={u.id}><Link className="link-q inl" href={setupHref(u.id)}>{u.name || 'Untitled setup'}</Link></li>)}</ul>
-          ) : <p className="set-help">No setup uses it yet.</p>}
+            <ul className="eo-users">{users.map((u) => <li key={u.id}><Link className="link-q inl" href={setupHref(u.id)}>{u.name || 'Untitled harness'}</Link></li>)}</ul>
+          ) : <p className="set-help">No harness uses it yet.</p>}
       </div>
     </div>
   );
