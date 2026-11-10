@@ -764,6 +764,8 @@ def _clean_parts(parts):
     for p in parts or []:
         if isinstance(p, dict) and isinstance(p.get("text"), str):
             p = {**p, "text": clean_text(p["text"])}
+        if isinstance(p, dict) and isinstance(p.get("name"), str):
+            p = {**p, "name": clean_text(p["name"])}       # who said it: a person's own string, cleaned like their words
         out.append(p)
     return out
 
