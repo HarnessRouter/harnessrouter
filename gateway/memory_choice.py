@@ -115,6 +115,34 @@ _WORDS: dict[str, list[tuple[str, float]]] = {
     ],
 }
 
+# What says an agent works with what earlier tasks left behind. Then "memory would add nothing" is never its reason,
+# whatever verbs its instructions use: on 11-10 "Keep a log of my running" got no memory, because the instructions the
+# builder wrote said "extract" and "summarize" on the way to "correct an earlier entry" and "use the running history".
+# A wrong "none" is an agent that forgets; a wrong engine is one that remembers in another shape. Phrases only, so
+# "extract a timeline from the given document" or "log in" says nothing here.
+_KEEPS = [re.compile(rf"\b(?:{p})\b") for p in (
+    r"(?:earlier|previous|past|prior|last|older) (?:\w+ ){0,2}(?:entr(?:y|ies)|runs?|weeks?|months?|days?|sessions?|conversations?"
+    r"|chats?|requests?|tasks?|visits?|orders?|messages?|results?|records?|answers?|workouts?|meals?|lessons?)",
+    r"(?:running|training|order|purchase|conversation|chat|medical|reading|workout|work|task|their|his|her|your|my) histor(?:y|ies)",
+    r"histor(?:y|ies) of (?:their|his|her|your|my|each|every|the user)",
+    r"over (?:time|the (?:weeks|months|years|days))", r"from (?:week|day|month|session) to (?:week|day|month|session)",
+    r"(?:week|month|day)[- ]over[- ](?:week|month|day)",
+    r"keep(?:s|ing)? (?:a |an |the )?(?:running )?(?:log|record|track|history|journal|diary|tally|timeline)",
+    r"(?:a|my|their|your|the|running|training|daily|weekly) log(?:s|book)?", r"log(?:s|ging)? (?:each|every|their|your|my)",
+    r"record(?:s|ing)? (?:each|every|individual|their|your|my)", r"journal\w*", r"diar(?:y|ies)",
+    r"remember\w*", r"next time", r"last time", r"follow[- ]?ups? (?:on|with|later)",
+    r"(?:their|your|my|his|her) progress", r"across (?:sessions|tasks|conversations|chats|days|weeks|visits)",
+)]
+# "needs no memory" says the opposite of keeping
+_NO_KEEPING = re.compile(r"\b(?:no|without|doesn't need|does not need|never needs?) (?:any )?(?:memory|history|context)\b")
+
+
+def keeps_anything(*texts: str) -> bool:
+    """Whether these words say the agent works with what earlier tasks left behind (_KEEPS)."""
+    t = _NO_KEEPING.sub(" ", " ".join(_norm(x) for x in texts if x))
+    return any(p.search(t) for p in _KEEPS)
+
+
 # A tool, plugin or skill by its name: what an agent connects says what it does.
 _TOOLS = {
     "github": HINDSIGHT, "gitlab": HINDSIGHT, "linear": HINDSIGHT, "jira": HINDSIGHT, "sentry": HINDSIGHT,
@@ -243,6 +271,10 @@ def choose(*, running=None, failing=None, **agent) -> Choice:
     the reason says so. With none running there is no memory, and the reason says how to start them. `failing`
     ({engine: why}) names the engines that answer but whose writes are failing, so the reason says that instead."""
     fits, sc = scores(**agent)
+    if fits == NONE and keeps_anything(*(str(agent.get(k) or "") for k in ("name", "description", "hint", "instructions"))):
+        # it works with what earlier tasks left: never "memory would add nothing". The nature that fits next keeps it,
+        # or, when nothing else was said, the one an agent that says nothing gets (as for_memory does)
+        fits = _best({**sc, NONE: 0.0})
     if fits == NONE:
         return Choice(None, SHARED, REASON[NONE], NONE)
     return _among(fits, sc, running, failing)
