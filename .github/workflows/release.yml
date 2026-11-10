@@ -209,9 +209,10 @@ jobs:
           # A fresh volume installs every default base before it prints this line. Five minutes was
           # enough for twenty bases and no longer is: from the four added in #448 on, amd64 was still
           # installing when the wait ended, and the gate then blamed the first base it checked
-          # ("claude did not install"), three candidates running. Twelve minutes, and a timeout says
-          # so rather than naming a base.
-          for i in $(seq 1 144); do
+          # ("claude did not install"), three candidates running. Fifteen minutes, and a timeout says
+          # so rather than naming a base: 0.41.6's amd64 smoke step took 11m53s with twelve, and each
+          # base installing as its own uid (#623) adds about 3%.
+          for i in $(seq 1 180); do
             # grep reads the whole log (no -q): -q exits at the first match, docker logs is then cut off
             # writing the lines after it, and pipefail fails the pipeline although the line was there
             # (0.38.6's amd64 gate, a second start up in ten seconds, failed exactly so).
@@ -220,7 +221,7 @@ jobs:
           done
           docker logs smoke 2>&1 | tail -30
           LINE=$(docker logs smoke 2>&1 | grep "backends available" | tail -1 || true)
-          [ -n "$LINE" ] || { echo "::error::the installs did not finish within 12 minutes on ${{ matrix.arch }}"; exit 1; }
+          [ -n "$LINE" ] || { echo "::error::the installs did not finish within 15 minutes on ${{ matrix.arch }}"; exit 1; }
           echo "$LINE"
           # EVERY default base, read from the entrypoint rather than listed here: this checked five
           # of thirty, and an installer that fails is one WARN line and a base that quietly leaves

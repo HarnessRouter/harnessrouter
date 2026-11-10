@@ -109,16 +109,19 @@ def test_minimax_sqlite_binding_is_the_locks_version():
     assert lock("minimax")["packages"]["node_modules/better-sqlite3"]["version"] == pin
 
 
-def test_no_npm_base_installs_with_npm_g_directly():
-    """The global install is the override path only (npm_unlocked); a base calling npm_g itself
-    would install unlocked even at the default pin."""
-    calls = [line.strip() for line in SRC.splitlines()
-             if re.search(r"\bnpm_g\s", line) and not line.strip().startswith(("#", "npm_g()"))]
-    assert calls == ['npm_g "$@"']
+def test_no_npm_install_is_global():
+    """An override goes where the lock goes, $TOOLS/npm/<name>, by the base's install uid. A global
+    install wrote $TOOLS/bin and $TOOLS/lib, which every base shares, so it could only run as root,
+    and so did every install script of the override's tree (#623, step 3)."""
+    code = "\n".join(l for l in SRC.splitlines() if not l.lstrip().startswith("#"))
+    assert not re.search(r"\bnpm\s+(?:install|i)\s+(?:[^\n]*\s)?(?:-g|--global)\b", code)
+    assert "npm_g" not in code
+    assert re.findall(r"\bnpm install\b[^\n]*", code) == ['npm install --no-audit --no-fund "$@" ) || { iu_drop "$nu_dir"; return 1; }']
+    assert '( cd "$nu_dir" && iu npm install' in code
 
 
 def test_npm_ci_runs_no_install_scripts():
-    assert '( cd "$nl_dir" && npm ci --ignore-scripts --no-audit --no-fund )' in SRC
+    assert '( cd "$nl_dir" && iu npm ci --ignore-scripts --no-audit --no-fund )' in SRC
     # The scripts that do run are named, one call each.
     assert re.findall(r"install_npm \w+ \"\$\w+\" (@[^\s;]+)", SRC) == ["@anthropic-ai/claude-code"]
 

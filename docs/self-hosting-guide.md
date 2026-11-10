@@ -100,6 +100,15 @@ What that buys you, inside one container serving many sessions:
   correct itself, instead of silently disappearing outside the collected workspace.
 - An agent process carries none of the product's secrets in its environment.
 
+The agent CLIs are installed the same way. On the first start, root downloads each one and checks
+it against a version and a digest written into the image. Anything that runs a downloaded package's
+own code runs as a separate user for that agent alone: npm or pip filling its folder, an install
+script, the checks that it works. When the install finishes, nothing of that user is left running,
+and the folder belongs to root again. One step still runs as root: the system libraries for the
+System One agent's browser, which Playwright installs with apt. An install can reach the network,
+as it must to download, so on a cloud VM block the metadata address as
+[Running on a cloud VM](#running-on-a-cloud-vm) shows; that covers the agents too.
+
 No extra privilege is granted to get there: no `--privileged`, no `--cap-add`, no custom seccomp
 profile. Docker's default capability set already includes what a root process needs to switch to
 another user, and that is all that is used.
@@ -1369,7 +1378,7 @@ you do not need `HR_AUTH_DISABLED=1` to integrate your backend.
 
 ## Running on a cloud VM
 
-An agent runs real shell commands, and every process on a cloud VM can reach the provider's metadata address, `169.254.169.254`, by default. If the VM has an instance role or a managed identity, an agent or anything that reaches it, such as a prompt injection, can ask that address for the role's credentials. Nothing inside the container can stop this, so block it on the host:
+An agent runs real shell commands, and every process on a cloud VM can reach the provider's metadata address, `169.254.169.254`, by default. If the VM has an instance role or a managed identity, an agent or anything that reaches it, such as a prompt injection or a package an agent's install downloads, can ask that address for the role's credentials. Nothing inside the container can stop this, so block it on the host:
 
 ```bash
 sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP

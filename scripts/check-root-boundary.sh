@@ -10,6 +10,21 @@ n=$(find /app /data/agent-tools -xdev ! -user root ! -path '/app/ui/.next/cache*
 n=$(find /app /data/agent-tools -xdev -perm /022 ! -type l ! -path '/app/ui/.next/cache*' 2>/dev/null | wc -l)
 [ "$n" = 0 ] || fail "$n paths under /app or the tools can be written by a group or by anyone"
 [ "$(stat -c %u:%a /data)" = "0:1771" ] || fail "/data is $(stat -c %U:%a /data), not root's with the sticky bit"
+# A base's install uid (19001 and up, docker/entrypoint.sh install_as_uid) leaves nothing behind: no process and no HOME.
+n=$(cat /proc/[0-9]*/status 2>/dev/null | awk '/^Uid:/ && $2 >= 19001 && $2 < 19100' | wc -l)
+[ "$n" = 0 ] || fail "$n processes of an install uid are still running"
+n=$(find /tmp -maxdepth 1 -name 'hr-install.*' 2>/dev/null | wc -l)
+[ "$n" = 0 ] || fail "$n install homes are left in /tmp"
+# Nor a file or directory anywhere an install uid could write: every mounted file system but proc and sys
+# (/tmp, /var/tmp, /dev/shm, /run/lock, the message queues), and the tools on the volume.
+iu_files() {
+  awk '$3 !~ /^(proc|sysfs|cgroup2?|devpts|securityfs|debugfs|tracefs|bpf|pstore|configfs|fusectl|binfmt_misc|autofs|hugetlbfs|nsfs)$/ && $2 !~ "^/data(/|$)" {print $2}' /proc/mounts \
+    | { cat; echo /data/agent-tools; } | while read -r m; do
+      find "$m" -xdev \( -uid +19000 -uid -19100 -o -gid +19000 -gid -19100 \) -print 2>/dev/null
+    done
+}
+n=$(iu_files | wc -l)
+[ "$n" = 0 ] || fail "$n paths of an install uid are left, for example $(iu_files | head -1)"
 [ "$(stat -c %u:%a /data/workspaces)" = "0:751" ] || fail "/data/workspaces is $(stat -c %U:%a /data/workspaces)"
 
 home_of() { tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | sed -n 's/^HOME=//p'; }
