@@ -76,25 +76,25 @@ test('a sentence is built and saved by the server: followed by long poll, its ex
   expect(create).not.toHaveBeenCalled();
 });
 
-test('a build the server refuses is said where the setup would be, in its words, and nothing is saved', async () => {
-  start.mockRejectedValue(new BuildRefused('Connect a model key first: the setup is built with one of your models.'));
+test('a build the server refuses is said where the harness would be, in its words, and nothing is saved', async () => {
+  start.mockRejectedValue(new BuildRefused('Connect a model key first: the harness is built with one of your models.'));
   const b = startBuild(AUTO_IN);
   resumeBuild(b.key);
   const end = await settle(b.key);
-  expect(end).toMatchObject({ phase: 'failed', error: 'Connect a model key first: the setup is built with one of your models.', id: '' });
+  expect(end).toMatchObject({ phase: 'failed', error: 'Connect a model key first: the harness is built with one of your models.', id: '' });
   expect(create).not.toHaveBeenCalled();
 });
 
 test('a build that failed on the server says its reason; one with none says it could not be built', async () => {
   start.mockResolvedValue(building('reading'));
-  read.mockResolvedValueOnce({ ...saved, status: 'failed', setupId: '', config: null, reason: 'Building the setup took too long. Nothing was saved. Try again.' });
+  read.mockResolvedValueOnce({ ...saved, status: 'failed', setupId: '', config: null, reason: 'Building the harness took too long. Nothing was saved. Try again.' });
   const b = startBuild(AUTO_IN);
   resumeBuild(b.key);
-  expect(await settle(b.key)).toMatchObject({ phase: 'failed', error: 'Building the setup took too long. Nothing was saved. Try again.' });
+  expect(await settle(b.key)).toMatchObject({ phase: 'failed', error: 'Building the harness took too long. Nothing was saved. Try again.' });
   start.mockResolvedValue({ ...saved, status: 'failed', setupId: '', config: null, reason: '' });
   const c = startBuild(AUTO_IN);
   resumeBuild(c.key);
-  expect(await settle(c.key)).toMatchObject({ phase: 'failed', error: 'Your setup couldn’t be built just now.' });
+  expect(await settle(c.key)).toMatchObject({ phase: 'failed', error: 'Your harness couldn’t be built just now.' });
 });
 
 test('a build the server has no record of (it restarted) is asked for again under the same key', async () => {
@@ -122,7 +122,7 @@ test('an unchanged demo on its recording’s pair is preset from the template an
   expect(takeFirstTest('chrn_demo')).toMatchObject({ input: RUN.request, send: false, setup: true });
 });
 
-test('a demo on another model than its recording’s, or whose recording ran on what this edition cannot add, is built like any setup', async () => {
+test('a demo on another model than its recording’s, or whose recording ran on what this edition cannot add, is built like any harness', async () => {
   rec.mockResolvedValue(RUN);
   start.mockResolvedValue(saved);
   const b = startBuild({ ...DEMO_IN, model: 'glm-5.3' });
@@ -141,7 +141,7 @@ test('recordings that cannot be read are said, and nothing is built or saved in 
   rec.mockRejectedValue(new Error('Loading chunk 412 failed.'));
   const b = startBuild(DEMO_IN);
   resumeBuild(b.key);
-  expect(await settle(b.key)).toMatchObject({ phase: 'failed', error: 'Your setup couldn’t be built just now.' });
+  expect(await settle(b.key)).toMatchObject({ phase: 'failed', error: 'Your harness couldn’t be built just now.' });
   expect(start).not.toHaveBeenCalled();
   expect(create).not.toHaveBeenCalled();
 });

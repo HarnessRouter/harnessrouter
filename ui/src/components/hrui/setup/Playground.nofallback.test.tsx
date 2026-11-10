@@ -97,16 +97,16 @@ test('a file alone is sent with no words: nothing is put in the person\'s mouth'
   expect((mockConv.send.mock.calls[0][1] as { name: string }[])[0].name).toBe('shelf.png');
 });
 
-test('a setup with no model of its own sends none: the pill says its default, and no model is filled in', async () => {
+test('a harness with no model of its own sends none: the pill says its default, and no model is filled in', async () => {
   await open(H({ defaultModel: '' }));
-  expect(pill().textContent).toContain('Setup default (gpt-5.4)');
+  expect(pill().textContent).toContain('Harness default (gpt-5.4)');
   expect(mockConv.target?.model).toBe('');
 });
 
-test('a setup with no model, before the catalog has landed, still sends none (never a model guessed here)', async () => {
+test('a harness with no model, before the catalog has landed, still sends none (never a model guessed here)', async () => {
   mockCat.read = { value: null, failed: false, retry: jest.fn() };
   await open(H({ defaultModel: '' }));
-  expect(pill().textContent).toContain('Setup default');
+  expect(pill().textContent).toContain('Harness default');
   expect(mockConv.target?.model).toBe('');
 });
 
@@ -128,7 +128,7 @@ test('a past task whose model cannot run now keeps it and says so; it is never s
   expect(mockConv.target?.model).toBe('kimi-k3');
 });
 
-test('a setup whose own model cannot run now keeps it and says so on the pill, never swapped', async () => {
+test('a harness whose own model cannot run now keeps it and says so on the pill, never swapped', async () => {
   mockCat.read = { value: CAT(['glm-5.3']), failed: false, retry: jest.fn() };
   await open(H({ defaultModel: 'glm-5.3' }));
   expect(mockConv.target?.model).toBe('glm-5.3');

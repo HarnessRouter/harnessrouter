@@ -377,7 +377,7 @@ export function PlugSheet({ p, onClose, onChanged, onDone }: {
 
       {asking ? (
         <div className="mcp-ask" role="alertdialog" aria-labelledby="pcAskT">
-          <span id="pcAskT">Remove <b>{label}</b> from this workspace? Its stored credential is deleted, and setups that include it lose its tools from their next task. Nothing at {label} changes.</span>
+          <span id="pcAskT">Remove <b>{label}</b> from this workspace? Its stored credential is deleted, and harnesses that include it lose its tools from their next task. Nothing at {label} changes.</span>
           <span className="mcp-ask-b">
             <button type="button" className="btn small" disabled={!!busy} onClick={() => setAsking(false)}>Keep</button>
             <button type="button" className="btn small del-go" disabled={!!busy} onClick={() => void remove()} autoFocus>{busy === 'remove' ? 'Removing…' : 'Remove'}</button>

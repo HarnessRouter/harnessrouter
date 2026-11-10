@@ -128,7 +128,7 @@ test('a finished trace draws nothing live; a running one only its Working line',
   expect(document.body.querySelectorAll('.dot.run').length).toBe(1);
 });
 
-test("a setup page's host takes a narrow trace's step detail, never the whole window", async () => {
+test("a harness page's host takes a narrow trace's step detail, never the whole window", async () => {
   // the setup page's right column (studio/[id] .tk-trv-host); jsdom lays nothing out, so the trace is narrow
   const host = document.createElement('div');
   host.className = 'tk-trv-host';
@@ -144,7 +144,7 @@ test("a setup page's host takes a narrow trace's step detail, never the whole wi
   expect(document.body.querySelector('.trv-over-fixed .trv-detail')).not.toBeNull();
 });
 
-describe("a setup's trace, read on push", () => {
+describe("a harness's trace, read on push", () => {
   const ROWS = rowsOf();
   function Live({ sid = 'hsess1', live }: { sid?: string; live: boolean }) {
     const t = useTrace(sid, live);
@@ -185,7 +185,7 @@ describe("a setup's trace, read on push", () => {
     expect(body()).not.toContain('could not be read');
   });
 
-  test("while it runs, each of its events on the setup's feed reads it again, at most once a second", async () => {
+  test("while it runs, each of its events on the harness's feed reads it again, at most once a second", async () => {
     await act(async () => { root.render(<Live live />); });
     await flush();
     expect(bus.harness).toBe('chrn_1');
@@ -200,7 +200,7 @@ describe("a setup's trace, read on push", () => {
     expect(events).toHaveBeenCalledTimes(2);
   });
 
-  test("each reconnect of the setup's feed reads it once; its first connect does not", async () => {
+  test("each reconnect of the harness's feed reads it once; its first connect does not", async () => {
     await act(async () => { root.render(<Live live />); });
     await flush();
     await act(async () => { bus.state?.('up'); });
@@ -217,7 +217,7 @@ describe("a setup's trace, read on push", () => {
     expect(bus.on).toBeNull();
   });
 
-  test('its end on the setup’s feed reads it, and the task’s end on its card reads it once more', async () => {
+  test('its end on the harness’s feed reads it, and the task’s end on its card reads it once more', async () => {
     await act(async () => { root.render(<Live live />); });
     await flush();
     await act(async () => { bus.on?.(msg('hsess2', 'response.completed')); });

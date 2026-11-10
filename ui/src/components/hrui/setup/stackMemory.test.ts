@@ -63,7 +63,7 @@ test('what Settings reads now overrides the list, down to none', () => {
   expect(isoSvg(now, 24, true)).not.toContain('data-tw="memory"');
   expect(now.st.memory).toBe('empty');
 });
-test('a setup’s row carries the count the list read, and only that', () => {
+test('a harness’s row carries the count the list read, and only that', () => {
   const h = (memories?: { count: number }) => ({ id: 'h', name: 'x', base: 'claude-code', baseLabel: 'x', defaultModel: 'm', systemPrompt: '', mcpServers: [{ id: 'mcp.memories', name: 'memories', url: 'http://x/v1/mcp/memories', enabled: true }], skills: [], plugins: [], ...(memories ? { memories } : {}) });
   const row = (m?: { count: number }) => rowOf(h(m) as never, 'x', [], false, undefined, null, Date.now());
   expect(row({ count: 2 }).tower.parts.memory).toBe(2);

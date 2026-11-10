@@ -263,7 +263,7 @@ export function MemoriesPage() {
         <div className="mm-art big"><Ghost /></div>
         <h2>No memories yet</h2>
         {found ? <p className="mm-found" role="status">{found}</p> : null}
-        <p>A memory is where your agents keep what should outlast one task: who your customers are, the rules they follow, what happened last time. A new setup gets one of its own.</p>
+        <p>A memory is where your agents keep what should outlast one task: who your customers are, the rules they follow, what happened last time. A new harness gets one of its own.</p>
         <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
       </div>
     );

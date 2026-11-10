@@ -413,7 +413,7 @@ describe('the cards', () => {
     expect(Array.from(page().querySelectorAll('.mm-card .mm-ct b')).map((b) => b.textContent)).toEqual(['Busy', 'Idle', 'Older']);
   });
 
-  test('search narrows by name, description, engine or the setups that use it', async () => {
+  test('search narrows by name, description, engine or the harnesses that use it', async () => {
     backend({
       'GET /v1/memories/providers': { data: [CAPS.mem0, CAPS.graphiti] },
       'GET /v1/memories': { data: [

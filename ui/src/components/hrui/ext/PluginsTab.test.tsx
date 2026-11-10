@@ -91,7 +91,7 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => { root.unmount(); }); });
 
-test('what is connected or waiting is a row with the setups that include it; the rest are tiles', async () => {
+test('what is connected or waiting is a row with the harnesses that include it; the rest are tiles', async () => {
   serve([
     P('browser', { status: 'connected', config: { allow_domains: ['example.com'], deny_domains: [] } }),
     P('github', { status: 'connected', config: { repo: 'acme/app' }, secrets_set: ['token'] }),
@@ -108,7 +108,7 @@ test('what is connected or waiting is a row with the setups that include it; the
   expect(row('GitHub').textContent).toContain('acme/app');
   expect(row('GitHub').textContent).toContain('Used by Mail helper');
   expect(row('Browser').textContent).toContain('Only example.com');
-  expect(row('Browser').textContent).toContain('Not used by any setup');
+  expect(row('Browser').textContent).toContain('Not used by any harness');
   expect(row('Microsoft 365').querySelector('.pl-warn')?.textContent).toBe('Sign in with Microsoft so the agent can act as you.');
   expect(button('Reconnect', row('Microsoft 365'))).toBeTruthy();
   // one turned off says so: Connect turns it back on as it was
@@ -250,7 +250,7 @@ test('a sign-in Microsoft did not finish is said, and nothing is sent', async ()
   expect(signInReturn('?tab=envs')).toBeNull();
 });
 
-test('Disconnect says which setups lose it, then turns it off with its settings kept', async () => {
+test('Disconnect says which harnesses lose it, then turns it off with its settings kept', async () => {
   serve([P('github', { status: 'connected', config: { repo: 'acme/app' }, secrets_set: ['token'] })]);
   await open();
   await click(button('Disconnect', row('GitHub')));

@@ -61,7 +61,7 @@ export const KEPT_WITH_IT = 'kept with the agent for 30 days';
 
 /** The toast once the setup is deleted, from what the service says it did with the memory. */
 export function deletedToast(setup: string, out: SetupDeleted | null | undefined): string {
-  const name = setup.trim() || 'The setup';
+  const name = setup.trim() || 'The harness';
   if (out?.memory_deleted) return `${name} deleted, and its memory with it.`;
   const kept = out?.memory_kept;
   if (kept === KEPT_WITH_IT) return `${name} deleted. Its memory is kept with it for 30 days, then deleted.`;

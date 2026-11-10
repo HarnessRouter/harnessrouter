@@ -153,7 +153,7 @@ export function PluginsTab({ data, workspace }: { data: PluginsData; workspace: 
           onClose={() => setOff(null)} onConfirm={() => void disconnect(off)}
           body={offUsers && offUsers.length
             ? <><b>{offUsers.slice(0, 3).join(', ')}{offUsers.length > 3 ? ` and ${offUsers.length - 3} more` : ''}</b> {offUsers.length === 1 ? 'uses' : 'use'} it. Their tasks lose access to {off.name} until you connect it again.</>
-            : offUsers ? `No setup uses it. Its settings are kept, so connecting it again is one click.`
+            : offUsers ? `No harness uses it. Its settings are kept, so connecting it again is one click.`
               : `Tasks lose access to ${off.name} until you connect it again.`} />
       ) : null}
     </>

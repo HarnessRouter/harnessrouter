@@ -25,7 +25,7 @@ const mockList = {
 };
 jest.mock('@/components/hrui/setups', () => ({
   useSetup: () => ({
-    row: { h: { id: 'h1', name: 'My setup', source: '', createdAt: 1 }, binding: null },
+    row: { h: { id: 'h1', name: 'My harness', source: '', createdAt: 1 }, binding: null },
     cards: [], missing: false, failed: false, reload: () => {},
   }),
 }));

@@ -18,7 +18,7 @@ import { readSettled } from '@/lib/settle';
 import { partIcon } from '../bricks';
 import { toast } from '../toast';
 import { ConfirmSheet, Sheet, SheetTop } from '../Sheet';
-import { usedText, plural, PLUS, ReadFailed } from './shared';
+import { usedText, plural, harnesses, PLUS, ReadFailed } from './shared';
 import { Skel, SkRows } from '../Skel';
 import { EnvSheet, type EnvTab, type EnvUser } from './EnvSheet';
 import { MANAGERS, sayFail, statusView } from './envModel';
@@ -105,11 +105,11 @@ export function EnvsTab({ data, setups, reloadSetups }: {
       await deleteEnvironment(e.id);
       setDel(null);
       if (opened?.id === e.id) close();
-      toast(`Environment removed${users.length ? `. ${plural(users.length, 'setup')} updated.` : '.'}`);
+      toast(`Environment removed${users.length ? `. ${harnesses(users.length)} updated.` : '.'}`);
       await Promise.all([reload(), reloadSetups()]);
       return true;
     } catch (err) {
-      toast(sayFail(err, 'The environment could not be removed.', { 409: 'It cannot be removed while a build runs or a setup still uses it. Try again in a moment.' }));
+      toast(sayFail(err, 'The environment could not be removed.', { 409: 'It cannot be removed while a build runs or a harness still uses it. Try again in a moment.' }));
       return false;
     } finally { setBusy(''); }
   }
@@ -172,7 +172,7 @@ export function EnvsTab({ data, setups, reloadSetups }: {
           onClose={() => setDel(null)} onConfirm={() => void remove(del.e, del.users)}
           body={del.users.length
             ? <><b>{del.users.slice(0, 3).map((u) => u.name).join(', ')}{del.users.length > 3 ? ` and ${del.users.length - 3} more` : ''}</b> {del.users.length === 1 ? 'uses' : 'use'} it. From the next task, {del.users.length === 1 ? 'its tasks start' : 'their tasks start'} with no files. This can’t be undone.</>
-            : 'No setup uses it. This can’t be undone.'} />
+            : 'No harness uses it. This can’t be undone.'} />
       ) : null}
     </>
   );

@@ -561,7 +561,7 @@ export async function listCustom(signal?: AbortSignal): Promise<CustomHarness[]>
   const qs = q.toString();
   // an answer without the list is a failed read, never "no setups"
   const d = await gw<{ harnesses?: CustomHarness[] }>('GET', `/v1/harnesses${qs ? `?${qs}` : ''}`, undefined, signal);
-  if (!d || !Array.isArray(d.harnesses)) throw new Error('Your setups could not be read just now.');
+  if (!d || !Array.isArray(d.harnesses)) throw new Error('Your harnesses could not be read just now.');
   return d.harnesses;
 }
 

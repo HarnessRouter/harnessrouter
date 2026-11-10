@@ -129,7 +129,7 @@ describe('kept current on push', () => {
     expect(reads()).toBe(0);
   });
 
-  test('a start of a task of this setup reads now, then at 1 s and 2 s while it is not listed', async () => {
+  test('a start of a task of this harness reads now, then at 1 s and 2 s while it is not listed', async () => {
     await shown([card('s1')]);
     await act(async () => { feed.opts?.onFrame(frame('s_new', 'harness.turn.started')); });
     await flush();
@@ -151,7 +151,7 @@ describe('kept current on push', () => {
     expect(reads()).toBe(2);
   });
 
-  test("another setup's task reads nothing", async () => {
+  test("another harness's task reads nothing", async () => {
     await shown([card('s1')]);
     await act(async () => { feed.opts?.onFrame(frame('s_other', 'harness.turn.started', 'chrn_2')); });
     await later(3000);
@@ -178,7 +178,7 @@ describe('kept current on push', () => {
     expect(reads()).toBe(1);
   });
 
-  test("the setup's own feed still reads on its starts and ends", async () => {
+  test("the harness's own feed still reads on its starts and ends", async () => {
     await shown([card('s1')]);
     await act(async () => { busCb?.(); });
     await later(500);
@@ -249,7 +249,7 @@ describe('a task opened by its link', () => {
     expect(list.byId.has('s_old')).toBe(true);
   });
 
-  test("only a task that is gone (404) or another setup's lets go", async () => {
+  test("only a task that is gone (404) or another harness's lets go", async () => {
     const onGone = jest.fn();
     route(() => bad(404));
     await act(async () => { root.render(<Linked sid="s_gone" onGone={onGone} />); });

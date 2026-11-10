@@ -68,7 +68,7 @@ export function AddPluginSheet({ workspace, setup, binding, busy, focus, onSet, 
     const on = binding.plugs.includes(plugRef(r.p));
     const lapsed = needsAuth(r.p);
     const just = fresh.includes(r.p.type);
-    const small = lapsed ? accountOf(r).text : just ? 'Just connected. Include it in this setup?' : accountOf(r).text;
+    const small = lapsed ? accountOf(r).text : just ? 'Just connected. Include it in this harness?' : accountOf(r).text;
     return (
       <div key={r.key} className={`cap-row${just ? ' pl-fresh' : ''}`} data-plug={r.p.type}>
         <Logo mark={r.mark} name={r.name} size="cap" />

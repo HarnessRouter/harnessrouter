@@ -109,7 +109,7 @@ it('a write that does not take leaves the switch where it was; one that throws s
   expect(toast).toHaveBeenCalledWith('InsForge was not changed. Try again.');
 });
 
-it('what the setup includes that the workspace no longer serves is listed, warned, and can be left out', async () => {
+it('what the harness includes that the workspace no longer serves is listed, warned, and can be left out', async () => {
   await draw({ binding: ['browser', 'microsoft365', 'gone'] });
   expect(rowOf('Microsoft 365').querySelector('small.warn')?.textContent).toBe('Turned off in this workspace');
   expect(rowOf('gone').querySelector('small.warn')?.textContent).toBe('Not connected in this workspace');
@@ -132,7 +132,7 @@ it('nothing connected says so, with Connect a plugin; a catalog that could not b
   expect(retry).toHaveBeenCalled();
 });
 
-it('a package installed on the setup is a row with Manage; the search narrows the rows', async () => {
+it('a package installed on the harness is a row with Manage; the search narrows the rows', async () => {
   await draw({ packages: [{ name: 'brand-kit', on: true, desc: 'Brand voice', left: 0 }, { name: 'half', on: true, desc: '', left: 2 }] });
   expect(rowOf('brand-kit').querySelector('small')?.textContent).toBe('Brand voice');
   expect(rowOf('half').querySelector('small.warn')?.textContent).toBe('2 parts not loaded');

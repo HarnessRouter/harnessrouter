@@ -172,7 +172,7 @@ export function KitTryPage({ kitId }: { kitId: string }) {
   async function openHand(hid: string) {
     if (!kit) return;
     const h = await getCustom(hid).catch(() => null);
-    if (!h) { toast('The kit’s setup could not be read. Try again in a moment.'); return; }
+    if (!h) { toast('The kit’s harness could not be read. Try again in a moment.'); return; }
     const rt = runtimeOf(kit, bases);
     setHand(rowOf(h, rt?.label || h.baseLabel || h.base, [], false));
   }

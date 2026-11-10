@@ -64,6 +64,24 @@ PIPE = ["cline"]
 BY_PATH = ["grok", "goose", "vibe", "opensquilla", "qwen"]
 
 
+def _cli_reads(path, hold: float = 0.6) -> str:
+    """The CLI's read: a process handed the file's path on its command line opens it, reads it, and holds it a
+    moment, as a CLI does while it starts (the watcher knows the CLI's open by that: server._cli_holds)."""
+    out = subprocess.run([sys.executable, "-c", "import sys, time\nf = open(sys.argv[1])\nd = f.read()\n"
+                          f"time.sleep({hold})\nf.close()\nsys.stdout.write(d)", str(path)],
+                         capture_output=True, text=True, timeout=30)
+    return out.stdout
+
+
+def _foreign_read(path, hold: float = 0.6) -> str:
+    """A read by something the file was never handed to (a scan of the session's files, a checkpoint): the path
+    comes on stdin, so it is in neither its command line nor its environment."""
+    out = subprocess.run([sys.executable, "-c", "import sys, time\np = sys.stdin.read().strip()\nf = open(p)\n"
+                          f"d = f.read()\ntime.sleep({hold})\nf.close()\nsys.stdout.write(d)"],
+                         input=str(path), capture_output=True, text=True, timeout=30)
+    return out.stdout
+
+
 def _folder_is_private(d: str) -> None:
     folder = pathlib.Path(d, "tmp", server.PROMPT_DIR)
     assert folder.is_dir() and not folder.is_symlink() and stat.S_IMODE(folder.stat().st_mode) == 0o700
@@ -139,7 +157,7 @@ def test_the_prompt_goes_by_file(backend):
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
     _folder_is_private(d)
     assert held.get("stdin") is False and str(p) == held["path"] and held.get("fd") is None
-    assert p.read_text() == MARK                                      # the CLI's read
+    assert _cli_reads(p) == MARK                                      # the CLI's read
     if server._LIBC is not None:
         for _ in range(40):
             if not p.exists():
@@ -504,8 +522,7 @@ def test_a_file_read_by_its_path_goes_once_the_cli_has_read_it(tmp_path):
         pass                                         # an open and close without a read leaves it
     time.sleep(0.6)
     assert pathlib.Path(path).exists()
-    with open(path) as fh:
-        assert fh.read() == MARK                     # read and closed: gone
+    assert _cli_reads(path) == MARK                  # read by the CLI and closed: gone
     for _ in range(40):
         if not pathlib.Path(path).exists():
             break
@@ -612,3 +629,29 @@ def test_the_node_launcher_names_the_file_and_never_its_text_on_its_command_line
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert MARK not in out.stdout and server.PROMPT_ARG in out.stdout
+
+
+@pytest.mark.skipif(server._LIBC is None, reason="inotify is Linux's")
+def test_a_read_by_anything_but_the_cli_leaves_the_file_for_the_cli(tmp_path):
+    """On 0.41.9's release candidate a scan of the session volume read goose's prompt file before goose did, the
+    file went at that read, and goose answered "Instruction file not found". A read by a process the file was
+    never handed to (the runner's own, a scan, a checkpoint) leaves it; the CLI's own read still takes it."""
+    import time
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        path = server._prompt_handover(str(tmp_path), MARK)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    assert _foreign_read(path) == MARK               # another process, handed nothing
+    with open(path) as fh:
+        assert fh.read() == MARK                     # this process, handed nothing either
+    time.sleep(0.8)
+    assert pathlib.Path(path).exists(), "taken away by a read that wasn't the CLI's"
+    assert _cli_reads(path) == MARK                  # the CLI's own read
+    for _ in range(40):
+        if not pathlib.Path(path).exists():
+            break
+        time.sleep(0.05)
+    assert not pathlib.Path(path).exists(), "the CLI read it, closed it, and it is still there"
+    server._prompt_discard(held)

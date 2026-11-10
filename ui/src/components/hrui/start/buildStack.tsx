@@ -80,5 +80,5 @@ export function useBuildStack<R extends SetupRow | null>(r: R, b: Build | null):
   }, [b, savedAt, landed.skill, landed.plugin]);
   if (!r || !b || !b.asm) return { r, now: null, drops: null };
   const row = (landed.skill || landed.plugin ? { ...r, tower: withLanded(r.tower, landed) } : r) as R;
-  return { r: row, now: b.phase === 'saving' ? <><b>Saving</b> · your setup</> : null, drops };
+  return { r: row, now: b.phase === 'saving' ? <><b>Saving</b> · your harness</> : null, drops };
 }

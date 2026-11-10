@@ -64,7 +64,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
 describe('keySlug', () => {
-  it('is the setup’s name as a key name', () => {
+  it('is the harness’s name as a key name', () => {
     expect(keySlug('Photo edit')).toBe('photo-edit');
     expect(keySlug('  Support replies!! (v2) ')).toBe('support-replies-v2');
     expect(keySlug('Café · Menu')).toBe('café-menu');
@@ -72,7 +72,7 @@ describe('keySlug', () => {
     expect(keySlug('!!!')).toBe('');
   });
   it('stays short and never ends in a hyphen', () => {
-    const s = keySlug('A very long setup name that goes on and on past forty characters');
+    const s = keySlug('A very long harness name that goes on and on past forty characters');
     expect(s.length).toBeLessThanOrEqual(40);
     expect(s).not.toMatch(/-$/);
   });

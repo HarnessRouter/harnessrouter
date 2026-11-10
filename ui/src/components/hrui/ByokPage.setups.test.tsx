@@ -37,7 +37,7 @@ async function mount() {
 beforeEach(() => { jest.clearAllMocks(); });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('workspaces that could not be listed: failed, and no setups read without naming a workspace', async () => {
+test('workspaces that could not be listed: failed, and no harnesses read without naming a workspace', async () => {
   (useWorkspace as jest.Mock).mockReturnValue({ workspaces: [], defaultId: '', loading: false });
   await mount();
   expect(seen).toBe('failed');
@@ -45,14 +45,14 @@ test('workspaces that could not be listed: failed, and no setups read without na
   expect(harnessFetch).not.toHaveBeenCalled();
 });
 
-test('every workspace\'s setups, read by workspace', async () => {
+test('every workspace\'s harnesses, read by workspace', async () => {
   (useWorkspace as jest.Mock).mockReturnValue({ workspaces: [{ id: 'ws.def' }, { id: 'ws.pm' }], defaultId: 'ws.def', loading: false });
   (harnessFetch as jest.Mock).mockImplementation(async (url: string) => json({ harnesses: [{ name: url.includes('ws.pm') ? 'Photo' : 'Main', defaultModel: 'gpt-5' }] }));
   await mount();
   expect(seen).toEqual([{ name: 'Main', model: 'gpt-5' }, { name: 'Photo', model: 'gpt-5' }]);
 });
 
-test('a workspace whose read answers something other than its setups is a failed read, not "none"', async () => {
+test('a workspace whose read answers something other than its harnesses is a failed read, not "none"', async () => {
   (useWorkspace as jest.Mock).mockReturnValue({ workspaces: [{ id: 'ws.def' }], defaultId: 'ws.def', loading: false });
   (harnessFetch as jest.Mock).mockResolvedValue(json({ detail: 'ok' }));
   await mount();

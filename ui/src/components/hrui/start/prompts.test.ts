@@ -12,7 +12,7 @@ const OWN_APP: [string, string][] = [
   ['Start in your codebase', handPrompt()],
   ['Migrate an existing agent', setupPrompt()],
   ['Connect your app', promptText(A)],
-  ['Connect your app, for a setup that remembers each person', promptText({ ...A, perUser: true })],
+  ['Connect your app, for a harness that remembers each person', promptText({ ...A, perUser: true })],
 ];
 // a kit's own setup: the one launching the kit made in the workspace
 const K: SetupRef = { id: 'chrn_kit0123456789', name: 'Super Mario', harness: 'System One', model: 'jev-1.13', instr: '' };
@@ -44,7 +44,7 @@ describe.each(PROMPTS)('%s asks for the key the one way', (_name, text) => {
   });
   it('asks for it in a secure prompt, in the design’s words, and replaces a key already set', () => {
     expect(text).toContain('Open a secure secret prompt and ask me for my HarnessRouter API key. Store it as HR_API_KEY in my backend environment');
-    expect(text).toContain('replacing the existing value if there is one (any key of this workspace works for every setup in it).');
+    expect(text).toContain('replacing the existing value if there is one (any key of this workspace works for every harness in it).');
     expect(text).toContain('Never ask me to paste it into this chat. Never print, log or commit it, and never send it to the browser.');
   });
   it('carries no key and no stand-in for one', () => {
@@ -59,7 +59,7 @@ describe.each(PROMPTS)('%s asks for the key the one way', (_name, text) => {
 });
 
 // Richard, 10-18: every setup gets the one prompt, an app that already calls another setup included
-it('Connect your app reuses a client the backend already has, with this setup’s own Harness ID', () => {
+it('Connect your app reuses a client the backend already has, with this harness’s own Harness ID', () => {
   const text = promptText(A);
   expect(text).toContain('If my backend already has a HarnessRouter client, reuse it for this feature.');
   expect(text).not.toMatch(/already calls HarnessRouter for/);
@@ -86,19 +86,19 @@ it('every block that adds the integration ends its steps by checking it with a r
   for (const [, t] of KIT_TEXTS) expect(t).toContain('Verify: run one task in the app on my host and confirm a result comes back.');
 });
 
-it('a setup that remembers each person says every task names its user, from the app’s own sign in, or memory is off', () => {
+it('a harness that remembers each person says every task names its user, from the app’s own sign in, or memory is off', () => {
   const t = promptText({ ...A, perUser: true });
   expect(t).toContain(HOW_IT_REMEMBERS);
-  expect(t).toContain('4. Call this setup from my backend as How it connects says below, with my user’s id on every request as How it remembers says.');
+  expect(t).toContain('4. Call this harness from my backend as How it connects says below, with my user’s id on every request as How it remembers says.');
   expect(HOW_IT_REMEMBERS).toContain('my backend sets user to my signed-in user’s own id from my app’s own authentication');
   expect(HOW_IT_REMEMBERS).toContain('A task sent without user runs with its memory off');
   // one that keeps no one apart says nothing of it
   expect(promptText(A)).not.toContain('How it remembers');
 });
 
-it('a setup with no instructions says nothing about what it does', () => {
+it('a harness with no instructions says nothing about what it does', () => {
   expect(promptText({ ...A, instr: '' })).not.toContain('What it does');
-  expect(promptText(A)).toContain('What it does (already set in the setup, for context only): ' + A.instr);
+  expect(promptText(A)).toContain('What it does (already set in the harness, for context only): ' + A.instr);
 });
 
 it('no coding agent is opened with the prompt: the agents are names and marks only', () => {
@@ -122,7 +122,7 @@ describe.each(OWN_APP)('%s says how the app connects', (_name, text) => {
   });
 });
 
-it('a setup the prompt knows is named by its Harness ID', () => {
+it('a harness the prompt knows is named by its Harness ID', () => {
   expect(promptText(A)).toContain('metadata.harness_id is "' + A.id + '"');
 });
 
@@ -137,7 +137,7 @@ it('a kit app, as HarnessRouter serves it, connects through the console with no 
 
 // Richard, 10-18: every block shown for a setup names it, a kit's setup included (launching a kit
 // makes one), and says each request carries that Harness ID, never another setup's.
-describe('every block shown for a setup names it', () => {
+describe('every block shown for a harness names it', () => {
   it.each([
     ['Connect your app', promptText(A), A],
     ...KIT_TEXTS.map(([n, t]) => [n, t, K] as [string, string, SetupRef]),
@@ -147,37 +147,37 @@ describe('every block shown for a setup names it', () => {
   it.each([
     ['Connect your app', promptText(A), A],
     ...KIT_TEXTS.map(([n, t]) => [n, t, K] as [string, string, SetupRef]),
-  ])('%s names it in the setup block', (_n, text, s) => {
+  ])('%s names it in the harness block', (_n, text, s) => {
     expect(text).toContain('Harness ID: ' + s.id + '\nAgent harness: ' + s.harness + '\nModel: ' + s.model);
   });
-  it.each(OWN_APP)('%s: each request carries the setup\u2019s own Harness ID, never another setup\u2019s', (_n, text) => {
-    expect(text).toMatch(/metadata\.harness_id is .+ on every request the feature sends, never another setup\u2019s\./);
+  it.each(OWN_APP)('%s: each request carries the harness\u2019s own Harness ID, never another harness\u2019s', (_n, text) => {
+    expect(text).toMatch(/metadata\.harness_id is .+ on every request the feature sends, never another harness\u2019s\./);
   });
-  it('a setup with no model of its own says nothing about one', () => {
+  it('a harness with no model of its own says nothing about one', () => {
     expect(promptText({ ...A, model: '' })).not.toContain('Model:');
     expect(starterPrompt({ ...K, model: '' }, 'kits/mario')).not.toContain('Model:');
   });
 });
 
-describe.each(KIT_TEXTS)('%s: the kit\u2019s own setup', (_n, text) => {
+describe.each(KIT_TEXTS)('%s: the kit\u2019s own harness', (_n, text) => {
   it('is the one the app is already connected to, and every change keeps calling it', () => {
     expect(text).toContain('The app is already connected to Harness ID ' + K.id + '.');
     expect(text).toContain('metadata.harness_id on every request to POST /api/harness/v1/responses');
-    expect(text).toContain('Every change must keep calling this setup');
-    expect(text).toContain('never write another setup\u2019s Harness ID into the app');
+    expect(text).toContain('Every change must keep calling this harness');
+    expect(text).toContain('never write another harness\u2019s Harness ID into the app');
   });
   it('says the id is found, not configured', () => {
     expect(text).toContain('The id is not written in the app\u2019s code or in any config file');
   });
-  it('says an image the person builds has a setup of its own', () => {
-    expect(text).toContain('launching the kit there makes a setup there with a Harness ID of its own');
+  it('says an image the person builds has a harness of its own', () => {
+    expect(text).toContain('launching the kit there makes a harness there with a Harness ID of its own');
   });
 });
 
-it('a kit whose app also calls other setups says which', () => {
+it('a kit whose app also calls other harnesses says which', () => {
   const by = Object.fromEntries(KIT_TEXTS.map(([n, t]) => [n, t]));
-  expect(by['Make the sheets kit yours']).toContain('an agent column runs the other setup its column names');
-  expect(by['Make the harness-bot kit yours']).toContain('each teammate is a setup of its own');
+  expect(by['Make the sheets kit yours']).toContain('an agent column runs the other harness its column names');
+  expect(by['Make the harness-bot kit yours']).toContain('each teammate is a harness of its own');
   expect(by['Make the mario kit yours']).not.toContain('One exception');
   expect(by['Make the mario kit yours']).toContain('kit id "mario"');
 });
@@ -195,12 +195,12 @@ describe.each(KIT_TEXTS)('%s: the backend path', (_n, text) => {
     expect(cloud).toContain('Open a secure secret prompt');
     expect(cloud).toContain('Never print, log or commit it, and never send it to the browser.');
   });
-  it('the browser talks only to the backend, which calls the API with this setup', () => {
+  it('the browser talks only to the backend, which calls the API with this harness', () => {
     expect(cloud).toContain('so the browser talks only to my backend');
     expect(cloud).toContain(API_BASE + '/v1/responses');
     expect(cloud).toContain('Authorization: Bearer <key>');
   });
-  it('comes before the image path, which makes its own setup, and the default is said after both', () => {
+  it('comes before the image path, which makes its own harness, and the default is said after both', () => {
     expect(text.indexOf('Backend path (recommended)')).toBeLessThan(text.indexOf('Image path:'));
     expect(text.indexOf('Image path:')).toBeLessThan(text.indexOf('(the default)'));
     expect(text.slice(text.indexOf('Image path:'), text.indexOf('(the default)'))).toContain('a Harness ID of its own');
@@ -215,11 +215,11 @@ describe.each(KIT_TEXTS)('%s: the backend path', (_n, text) => {
 it('the backend path says what in each kit app changes', () => {
   const by = Object.fromEntries(KIT_TEXTS.map(([n, t]) => [n, t]));
   expect(by['Make the mario kit yours']).toContain('kits/mario/app, configureKit is called in src/lib/game.js');
-  expect(by['Make the mario kit yours']).toContain('kitHarness() looks the setup up with GET {base}/harnesses');
+  expect(by['Make the mario kit yours']).toContain('kitHarness() looks the harness up with GET {base}/harnesses');
   expect(by['Make the mario kit yours']).toContain('it sets metadata.harness_id to "' + K.id + '", whatever the browser sent');
   expect(by['Make the mario kit yours']).toContain(API_BASE + '/v1/harnesses/' + K.id);
   expect(by['Make the dashboard kit yours']).toContain('configureKit is called in src/lib/dash.js');
-  expect(by['Make the sheets kit yours']).toContain('leaving out any other setup whose kit is "sheets"');
+  expect(by['Make the sheets kit yours']).toContain('leaving out any other harness whose kit is "sheets"');
   expect(by['Make the harness-bot kit yours']).toContain('configureKit is called in src/App.jsx');
   const slides = starterPrompt(K, 'kits/slides', 'Slides');
   expect(slides).toContain('const API = "/api/harness/v1" in kits/slides/app/src/lib/sl.js');
