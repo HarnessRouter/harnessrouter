@@ -180,13 +180,24 @@ def test_in_owner_trust_an_entra_connection_is_still_brokered(monkeypatch):
     assert keyed["api_key"] == "az-key" and keyed["base_url"] == "https://res.openai.azure.com/openai/v1"
 
 
-def test_the_broker_presents_the_token_as_the_bearer_and_a_key_as_the_api_key_header():
+def test_the_broker_presents_the_token_as_the_bearer_and_a_key_as_the_api_key_header(monkeypatch):
+    """The broker and the memory relay set the credential in one place (_with_credential): an Entra
+    connection's token as the Bearer, an Azure key as api-key, each alone."""
     import os
+
+    async def token(conn):
+        return "entra-token"
+    monkeypatch.setattr(gw, "_entra_token", token)
+    for provider in ("azure", "azure-foundry"):
+        h = asyncio.run(gw._with_credential({"Authorization": "Bearer turn", "x-api-key": "turn"},
+                                            {"provider": provider, "auth": "entra", "client_secret": "s"}))
+        assert h == {"authorization": "Bearer entra-token"}
+        h = asyncio.run(gw._with_credential({}, {"provider": provider, "api_key": "az-key"}))
+        assert h == {"api-key": "az-key"}
     src = open(os.path.join(os.path.dirname(__file__), "..", "app.py")).read()
-    i = src.index("async def llm_broker(")
-    body = src[i:src.index("body = _strip_unsupported(", i)]
-    assert 'if _entra_conn(conn):\n            headers["authorization"] = f"Bearer {await _entra_token(conn)}"' in body
-    assert 'else:\n            headers["api-key"] = key' in body
+    for fn in ("async def llm_broker(", "async def _memory_relay("):
+        i = src.index(fn)
+        assert "await _with_credential(_relay_out_headers(request.headers), conn)" in src[i:src.index("_strip_unsupported(", i)]
 
 
 def _save(monkeypatch, integrations, stored=()):

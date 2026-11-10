@@ -98,7 +98,10 @@ def test_a_full_url_connections_call_lands_exactly_on_the_stored_url(monkeypatch
     assert status == 200, seen
     assert len(seen) == 1
     assert seen[0]["path"] == "/deployments/team-a/invoke"
-    assert seen[0]["headers"]["authorization"] == "Bearer real-key-SENTINEL"
+    if fmt == "anthropic":   # the key in the header the format reads (test_broker_credential_header)
+        assert seen[0]["headers"]["x-api-key"] == "real-key-SENTINEL" and "authorization" not in seen[0]["headers"]
+    else:
+        assert seen[0]["headers"]["authorization"] == "Bearer real-key-SENTINEL"
 
 
 def test_the_clients_query_joins_the_stored_urls_own(monkeypatch, upstream):
@@ -137,7 +140,10 @@ def test_a_connection_without_a_full_url_is_unchanged(monkeypatch, upstream, fmt
     status, seen = _broker(monkeypatch, _custom(upstream, fmt, False), method, path, {"model": "m"})
     assert status == 200
     assert seen[-1]["path"] == lands
-    assert seen[-1]["headers"]["authorization"] == "Bearer real-key-SENTINEL"
+    if fmt == "anthropic":
+        assert seen[-1]["headers"]["x-api-key"] == "real-key-SENTINEL" and "authorization" not in seen[-1]["headers"]
+    else:
+        assert seen[-1]["headers"]["authorization"] == "Bearer real-key-SENTINEL"
 
 
 def test_full_url_is_the_custom_providers_alone(monkeypatch, upstream):
