@@ -199,9 +199,11 @@ def test_no_cli_takes_the_prompt_on_its_command_line_any_more():
     for backend in ("kimi", "jcode"):
         cmd, env, held, d = _env_of(backend)
         assert not any(MARK in a for a in cmd) and server.PROMPT_ARG in cmd, (backend, cmd)
-        assert env["HR_PROMPT_FILE"] == held["path"] and handed.text(held) == MARK, backend
+        assert env["HR_PROMPT_FILE"] == held["path"]
         assert pathlib.Path(held["path"]).parent == pathlib.Path(d, "tmp", server.PROMPT_DIR)
+        # looked at before it's read: reading it is what lets the runner take the file, and then its empty folder, away
         _folder_is_private(d)
+        assert handed.text(held) == MARK, backend
         server._prompt_discard(held)
         assert not os.path.exists(env["HR_PROMPT_FILE"]), "the file goes with the turn"
 
