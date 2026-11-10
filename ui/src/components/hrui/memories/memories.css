@@ -628,7 +628,7 @@
 #hrui .mm-conn.mm-rail{align-items:center;gap:28px;padding:12px 0 0;border-left:1px solid var(--line);box-sizing:border-box;
   background-image:linear-gradient(var(--line),var(--line));background-repeat:no-repeat;background-position:0 55px;background-size:100% 1px}
 #hrui .mm-rail-tog{width:32px;height:32px;flex:none}
-#hrui .mm-rail-l{writing-mode:vertical-rl;transform:rotate(180deg);font-size:12px;color:var(--muted)}
+#hrui .mm-rail-l{writing-mode:vertical-rl;font-size:12px;color:var(--muted)}
 #hrui .mgv .sp-explore-bar .mgv-fold{flex:none;background:var(--bg);color:var(--muted)}
 /* with the fold chevron in its bar, the search gives up a little room before the depth wraps under it */
 #hrui .mgv .sp-explore-bar:has(>.mgv-fold) .sbar{min-width:112px;flex-basis:112px}
