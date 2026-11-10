@@ -6628,6 +6628,7 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "key_hint": "AIza…",
     },
     "llmtr": {
+        # claude-fable-5-2 is left out until a real call answers on LLMTR, for the reason Bedrock's says
         "label": "LLMTR",
         "base_url": "https://llmtr.com/v1",
         "fields": [],
@@ -8127,7 +8128,7 @@ _BEDROCK_CLAUDE = {
     "opus-5.5": "us.anthropic.claude-opus-5-5", "sonnet-5.5": "us.anthropic.claude-sonnet-5-5",
     "haiku-5.5": "us.anthropic.claude-haiku-5-5",
     "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "fable-5": "us.anthropic.claude-fable-5",
-    "fable-5.1": "us.anthropic.claude-fable-5-1", "fable-5.2": "us.anthropic.claude-fable-5-2",
+    "fable-5.1": "us.anthropic.claude-fable-5-1",
 }
 _ANTHROPIC_CLAUDE = {
     "opus-4.8": "claude-opus-4-8", "opus-4.7": "claude-opus-4-7", "opus-4.6": "claude-opus-4-6",
@@ -8168,10 +8169,11 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-haiku-4.5":  "claude-haiku-4-5-20251001",
     },
     "bedrock": {
+        # claude-fable-5-2 is left out until a real call answers on Bedrock: none could be made on 2026-11-10 (no
+        # Bedrock connection on the test instance or the hosted platform), and an id nobody called is not offered
         "claude-opus-5.5":   "us.anthropic.claude-opus-5-5",
         "claude-opus-5":     "us.anthropic.claude-opus-5",
         "claude-fable-5":    "us.anthropic.claude-fable-5",
-        "claude-fable-5-2":   "us.anthropic.claude-fable-5-2",
         "claude-fable-5-1":   "us.anthropic.claude-fable-5-1",
         "claude-opus-4.8":   "us.anthropic.claude-opus-4-8",
         "claude-sonnet-5.5": "us.anthropic.claude-sonnet-5-5",
@@ -8370,7 +8372,6 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-opus-5.5":    "anthropic/claude-opus-5.5",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
-        "claude-fable-5-2":    "anthropic/claude-fable-5.2",
         "claude-fable-5-1":    "anthropic/claude-fable-5.1",
         "claude-opus-4.8":    "anthropic/claude-opus-4.8",
         "claude-sonnet-5.5":  "anthropic/claude-sonnet-5.5",
