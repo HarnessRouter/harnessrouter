@@ -20,14 +20,19 @@ def body(user=None, meta_user=None):
     return SimpleNamespace(user=user, metadata=({"user": meta_user} if meta_user is not None else {}))
 
 
-def test_the_speaker_is_the_person_the_task_is_for_then_whoever_the_request_names_then_the_console_person():
-    assert gw._task_speaker({"user": "u-17"}, body("other"), KEY) == "u-17"
-    assert gw._task_speaker({}, body("u-18"), KEY) == "u-18"
-    assert gw._task_speaker({}, body(None, "u-19"), KEY) == "u-19"
-    assert gw._task_speaker({}, body(), CONSOLE) == "ada@example.com"
-    # a key's own call names nobody: the memory says "you", never the key's own identity
-    assert gw._task_speaker({}, body(), KEY) == ""
-    assert gw._task_speaker({}, body(), {**CONSOLE, "calibration": {"inner": "h"}}) == ""
+def test_a_person_is_named_in_their_own_memory_and_a_member_in_a_shared_one():
+    assert gw._task_speaker({"user": "u-17"}, body("other"), KEY) == "u-17"          # per person: their own memory
+    assert gw._task_speaker({}, body(), CONSOLE) == "ada@example.com"                 # a console member, by sign-in
+    assert gw._task_speaker({}, body("someone-else"), CONSOLE) == "ada@example.com"   # still the member speaking
+
+
+def test_an_apps_end_user_is_never_named_in_a_memory_others_share():
+    """CAT 22:42Z: end user A's id would otherwise land in the facts end user B of the same app recalls."""
+    assert gw._task_speaker({}, body("alice@customer.example"), KEY) == ""
+    assert gw._task_speaker({}, body(None, "alice@customer.example"), KEY) == ""
+    # nothing names anyone: "you"
+    assert gw._task_speaker({}, body(), KEY) == "you"
+    assert gw._task_speaker({}, body(), {**CONSOLE, "calibration": {"inner": "h"}}) == "you"
 
 
 class _Answer:
@@ -36,6 +41,31 @@ class _Answer:
     def json(self):
         return {"episode": {"uuid": "e1", "name": "episode-1", "content": "", "created_at": "2026-11-10T00:00:00Z"},
                 "nodes": [], "edges": []}
+
+
+def _graphiti_line(name):
+    sent = []
+    g = memory_graphiti.Graphiti("http://graphiti.test", "k", "o")
+
+    async def no_extraction(mid):
+        return {}
+
+    async def call(method, path, body=None, **kw):
+        sent.append(body)
+        return _Answer()
+    g._extraction, g._call = no_extraction, call
+    part = {"type": "text", "role": "user", "text": "My order hasn't arrived.", **({"name": name} if name else {})}
+    asyncio.run(g.observe("hmem_x", [{"content": [part]}], {"kind": "member", "id": "h"}))
+    return sent[0]["content"]
+
+
+def test_a_shared_graphiti_memory_written_for_an_apps_end_user_carries_no_id():
+    speaker = gw._task_speaker({}, body("alice@customer.example"), KEY)
+    line = _graphiti_line(speaker)
+    assert line == "user: My order hasn't arrived." and "alice" not in line
+    assert _graphiti_line(gw._task_speaker({}, body(), CONSOLE)) == "ada@example.com: My order hasn't arrived."
+    assert _graphiti_line(gw._task_speaker({"user": "alice@customer.example"}, body("alice@customer.example"), KEY)) \
+        == "alice@customer.example: My order hasn't arrived."                       # her own memory
 
 
 def test_graphiti_is_told_each_line_under_the_speakers_name():

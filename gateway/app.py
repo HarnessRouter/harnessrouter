@@ -22428,17 +22428,19 @@ _NO_END_USER = "no end user named"
 
 def _task_speaker(task_person: dict | None, body, principal: dict) -> str:
     """Who is speaking in a task, as its memory names them (Richard 11-10: by the name they sign in with, never
-    "user"): the person the task is for, else the `user` the request names, else the person calling from the console.
-    "" when nothing names anyone (a key's own call): the memory then says "you"."""
+    "user"). In a person's own memory, that person. In a memory others share, only a member calling from the console:
+    members already see each other there. An end user an app names (`user`) is never named in a shared memory (CAT
+    22:42Z, under Richard's rule that memory never crosses into other people's data): their id, often an address,
+    would land in what the app's other end users recall. "" for that one (the line keeps "user"); "you" when nothing
+    names anyone."""
     if (task_person or {}).get("user"):
-        return str(task_person["user"])
+        return str(task_person["user"])[:256]               # their own memory
+    if principal.get("via") != "api_key" and not principal.get("calibration") and principal.get("member"):
+        return str(principal["member"]).strip()[:256]       # a member, by the name they sign in with
     meta = getattr(body, "metadata", None) or {}
-    named = str(getattr(body, "user", None) or "").strip() or (meta.get("user").strip() if isinstance(meta.get("user"), str) else "")
-    if named:
-        return named[:256]
-    if principal.get("via") != "api_key" and not principal.get("calibration"):
-        return str(principal.get("member") or "").strip()[:256]
-    return ""
+    if str(getattr(body, "user", None) or "").strip() or (isinstance(meta.get("user"), str) and meta["user"].strip()):
+        return ""                                           # an app's end user, in a shared memory: "user"
+    return "you"
 
 
 async def _task_person(org: str, hid: str, hv: dict | None, body, principal: dict) -> dict:
@@ -22562,7 +22564,7 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
                 # what the person said under their own name (_task_speaker), so an engine that writes "who: what" draws
                 # them, and never a "user" beside the name they give
                 "content": [{"type": "text", "role": role, "text": text, **({"name": name} if name else {})}
-                            for role, name, text in (("user", speaker or "you", str(rec.get("user_text") or "")),
+                            for role, name, text in (("user", speaker, str(rec.get("user_text") or "")),
                                                      ("assistant", "", answer)) if text.strip()],
                 "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
                 memory_plane.writer_of(hid, agent=True))

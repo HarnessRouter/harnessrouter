@@ -193,7 +193,7 @@ def test_a_finished_turn_is_observed_into_the_default_memory(client, world):
                                      "No: refunds are allowed within 30 days."))
     eps = client.get(f"/v1/memories/{world['notes']}/records?type=episode", headers=ADA).json()["data"]
     assert len(eps) == 1 and eps[0]["content"] == [
-        {"type": "text", "text": "Can I get a refund after 40 days?", "role": "user", "name": "you"},
+        {"type": "text", "text": "Can I get a refund after 40 days?", "role": "user"},
         {"type": "text", "text": "No: refunds are allowed within 30 days.", "role": "assistant"}]
     assert eps[0]["written_by"] == {"kind": "member", "id": hid, "type": "agent"} and eps[0]["attributes"]["session_id"] == "sess_x"
     # recording conversations is a setting of the harness, and off means off
