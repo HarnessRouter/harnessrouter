@@ -1389,8 +1389,13 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # appends its own resource (/chat/completions, /responses, /v1/messages) to the base it is given,
     # so the address can be used as it is only where every base's model calls pass, the broker
     # (_conn_request_url). Handed over, the key went to the stored URL with a resource appended.
+    #
+    # And a custom connection in the Anthropic Messages format, whose key goes in x-api-key alone
+    # (_with_credential). Handed over, it reached the endpoint from the runner's relay in x-api-key AND
+    # as a Bearer, the shape the relay keeps for an aggregator's Messages surface, which reads a Bearer;
+    # the relay cannot tell the two apart, and the broker can.
     if (SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn)
-            and not _conn_full_url(conn)):
+            and not _conn_full_url(conn) and not _conn_custom_messages(conn)):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -4433,6 +4438,48 @@ _RELAY_OURS = frozenset({"x-internal-key", "cookie", "proxy-authorization", "for
                          "cf-connecting-ip", "true-client-ip", "x-client-ip"})
 
 
+# The headers a provider reads a key from. The caller's are never forwarded (_BROKER_HOP), and the
+# connection's own key goes in exactly one of them (_with_credential).
+_CREDENTIAL_HEADERS = ("authorization", "api-key", "x-api-key", "x-goog-api-key")
+
+
+def _conn_custom_messages(conn: dict) -> bool:
+    """Whether a connection is a custom one declared in the Anthropic Messages format. Read under the vendor's
+    own name, which a turn's connection carries as `_vendor` beside the runner's name for it."""
+    vendor = str(conn.get("_vendor") or conn.get("provider") or "").strip().lower()
+    return vendor == "custom" and str(conn.get("api_format") or "").strip().lower() == "anthropic"
+
+
+def _conn_reads_x_api_key(conn: dict) -> bool:
+    """Whether a connection's API reads its key from x-api-key, as Anthropic's Messages API does: Anthropic's
+    own connection, and a custom one declared in the Anthropic format."""
+    provider = str(conn.get("provider") or "").strip().lower()
+    vendor = str(conn.get("_vendor") or provider).strip().lower()
+    return "anthropic" in (provider, vendor) or _conn_custom_messages(conn)
+
+
+async def _with_credential(headers: dict, conn: dict) -> dict:
+    """The connection's stored credential on an outbound request, in the one header its API reads and in no
+    other: an Azure resource's api-key (or a Microsoft Entra token as a Bearer), x-api-key for an Anthropic
+    Messages API, a Bearer for everything else. Any credential header already present goes first, so a key
+    never travels in two headers, and the caller's credential (a turn's, as Bearer and x-api-key both) never
+    travels at all. The broker and the memory relay both send through here."""
+    for name in [k for k in headers if k.lower() in _CREDENTIAL_HEADERS]:
+        del headers[name]
+    key = str(conn.get("api_key") or "")
+    provider = str(conn.get("provider") or "").strip().lower()
+    if provider in ("azure", "azure-foundry"):
+        if _entra_conn(conn):
+            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
+        else:
+            headers["api-key"] = key
+    elif _conn_reads_x_api_key(conn):
+        headers["x-api-key"] = key
+    else:
+        headers["authorization"] = f"Bearer {key}"
+    return headers
+
+
 def _relay_out_headers(incoming) -> dict:
     """The caller's headers that may go on to a provider: never the hop or auth names (the connection's own
     credential replaces them), never ours, never one carrying this process's own secret."""
@@ -5277,17 +5324,7 @@ async def _memory_relay(tok: str, path: str, request: Request):
     base = _provider_base_url(provider, str(conn.get("base_url") or ""))
     if not base:
         raise HTTPException(502, "that key has no address")
-    headers = _relay_out_headers(request.headers)
-    key = str(conn.get("api_key") or "")
-    if provider in ("azure", "azure-foundry"):
-        if _entra_conn(conn):
-            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
-        else:
-            headers["api-key"] = key
-    elif provider == "anthropic":
-        headers["x-api-key"] = key
-    else:
-        headers["authorization"] = f"Bearer {key}"
+    headers = await _with_credential(_relay_out_headers(request.headers), conn)
     body = _strip_unsupported(memory_relay.with_model(raw, pid), provider=provider, byok=True, path=suffix, keep_thinking=False)
     url = _conn_request_url(conn, base, suffix)
     if url is None:
@@ -5362,19 +5399,8 @@ async def llm_broker(path: str, request: Request):
         # a stored full URL may carry its own query (an api-version); the client's joins it
         url = f"{url}{'&' if _conn_full_url(conn) and '?' in url else '?'}{request.url.query}"
 
-    headers = _relay_out_headers(request.headers)
-    key = str(conn.get("api_key") or "")
+    headers = await _with_credential(_relay_out_headers(request.headers), conn)
     provider = str(conn.get("provider") or "")
-    # Present the real credential the way THIS provider expects it.
-    if provider in ("azure", "azure-foundry"):
-        if _entra_conn(conn):
-            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
-        else:
-            headers["api-key"] = key
-    elif provider == "anthropic":
-        headers["x-api-key"] = key
-    else:
-        headers["authorization"] = f"Bearer {key}"
     # The connection's own headers (a gateway's project or auth header), after the credential: none of
     # them may name the credential's header, so none can replace it.
     _with_conn_headers(headers, conn)
