@@ -304,7 +304,10 @@ class Graphiti(mp.Provider):
         extraction = await self._extraction(mid)
         records = []
         for e in episodes:
-            text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
+            # each line under who said it: the person by name where the part names them, so the graph's node for them is
+            # them (Richard 11-10: never a node called "user" beside one called by the name they gave), else the role
+            text = "\n".join(f"{p.get('name') or p.get('role')}: {p['text']}" if p.get("name") or p.get("role") else str(p["text"])
+                             for p in e.get("content") or [] if p.get("text"))
             session = str((e.get("attributes") or {}).get("session_id") or "")
             r = await self._call("POST", "/episodes", body={
                 "group_id": mid, "content": text,

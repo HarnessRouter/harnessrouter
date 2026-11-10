@@ -403,7 +403,8 @@ class Hindsight(mp.Provider):
         for e in episodes:
             rid = PREFIX + uuid.uuid4().hex
             ids.append(rid)
-            text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
+            text = "\n".join(f"{p.get('name') or p.get('role')}: {p['text']}" if p.get("name") or p.get("role") else str(p["text"])
+                             for p in e.get("content") or [] if p.get("text"))
             items.append({"content": text, "document_id": rid, "tags": ["t:episode"], "strategy": TURN, **_stamp(e), "metadata": {
                 "hr_type": "episode", "hr_writer": json.dumps({"kind": "provider", "id": self.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}, separators=(",", ":")),
                 "hr_parts": json.dumps(e.get("content") or [], separators=(",", ":")),

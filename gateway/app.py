@@ -10627,7 +10627,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         trace_ctx: dict | None = None,
                         extra_env: dict | None = None,
                         extra_secret: list[str] | None = None,
-                        task_memory: str = "", task_person: dict | None = None) -> tuple[str, list[dict], dict]:
+                        task_memory: str = "", task_person: dict | None = None, speaker: str = "") -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -11170,7 +11170,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # Not awaited: the turn isn't complete until this returns, and some vendors extract with a model
         # before they answer. Measured on real turns: 5.5 s on Graphiti and 7.2 s on ReMe after the last words.
         _t = asyncio.create_task(_memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator),
-                                                   resp_id=translator.resp_id))
+                                                   resp_id=translator.resp_id, speaker=speaker))
         _inflight.add(_t)
         _t.add_done_callback(_inflight.discard)
     elif harness_id and "memories" in rec:
@@ -12038,6 +12038,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     task_memory = await _task_memory_for_turn(org, harness_id, body)
     # Who it is for, when its agent keeps each person's memory apart (memory_plane.end_user_node).
     task_person = await _task_person(org, harness_id, hv, body, principal)
+    # who is speaking, as the memory names them: never "user" (Richard 11-10)
+    speaker = _task_speaker(task_person, body, principal)
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -12406,7 +12408,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
                         trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
-                        task_person=task_person)
+                        task_person=task_person, speaker=speaker)
                     end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
@@ -12462,7 +12464,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
                             trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
-                        task_person=task_person)
+                        task_person=task_person, speaker=speaker)
                         end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
@@ -12524,7 +12526,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
                 trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
-                        task_person=task_person)
+                        task_person=task_person, speaker=speaker)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
@@ -22424,6 +22426,23 @@ async def _memories_known_at_start(seam, text: str, sid: str) -> tuple[str, int]
 _NO_END_USER = "no end user named"
 
 
+def _task_speaker(task_person: dict | None, body, principal: dict) -> str:
+    """Who is speaking in a task, as its memory names them (Richard 11-10: by the name they sign in with, never
+    "user"). In a person's own memory, that person. In a memory others share, only a member calling from the console:
+    members already see each other there. An end user an app names (`user`) is never named in a shared memory (CAT
+    22:42Z, under Richard's rule that memory never crosses into other people's data): their id, often an address,
+    would land in what the app's other end users recall. "" for that one (the line keeps "user"); "you" when nothing
+    names anyone."""
+    if (task_person or {}).get("user"):
+        return str(task_person["user"])[:256]               # their own memory
+    if principal.get("via") != "api_key" and not principal.get("calibration") and principal.get("member"):
+        return str(principal["member"]).strip()[:256]       # a member, by the name they sign in with
+    meta = getattr(body, "metadata", None) or {}
+    if str(getattr(body, "user", None) or "").strip() or (isinstance(meta.get("user"), str) and meta["user"].strip()):
+        return ""                                           # an app's end user, in a shared memory: "user"
+    return "you"
+
+
 async def _task_person(org: str, hid: str, hv: dict | None, body, principal: dict) -> dict:
     """Who this task is for, when its agent keeps each person's memory apart: {} for any other agent, else
     {"user": ...} or {"skipped": why}. The Responses API's `user`, then `metadata.user`, then a person calling from
@@ -22509,7 +22528,8 @@ def _translator_answer(tr) -> str:
 _memory_corrected: set[str] = set()
 
 
-async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str, resp_id: str = "") -> None:
+async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str, resp_id: str = "",
+                            speaker: str = "") -> None:
     """After a completed turn: what was asked and what was answered, sent as one episode to the
     memory the harness writes by default (in a person's task, that person's own). No model runs here; what the
     provider derives from it, and when, is the provider's. Best-effort: a memory that cannot take the episode never
@@ -22541,8 +22561,11 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             # the turn saw no note at all, so nothing told it to wait. Settled below, whatever happens.
             await _memories_note(org, sid, resp_id, kept, [], pending=True, at=mid)
             out = await memory_plane.observe(prov, mid, [{
-                "content": [{"type": "text", "role": role, "text": text}
-                            for role, text in (("user", str(rec.get("user_text") or "")), ("assistant", answer)) if text.strip()],
+                # what the person said under their own name (_task_speaker), so an engine that writes "who: what" draws
+                # them, and never a "user" beside the name they give
+                "content": [{"type": "text", "role": role, "text": text, **({"name": name} if name else {})}
+                            for role, name, text in (("user", speaker, str(rec.get("user_text") or "")),
+                                                     ("assistant", "", answer)) if text.strip()],
                 "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
                 memory_plane.writer_of(hid, agent=True))
         except memory_plane.MemoryError as e:

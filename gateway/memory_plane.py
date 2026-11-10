@@ -568,7 +568,9 @@ async def out(org: str, memory: dict, principals: list[str], privs: list[str] | 
             # drawing it shows, so the console makes another only when the drawing changes
             "cover_at": _ms_or_none(memory.get("cover_at")), "cover_sig": str(memory.get("cover_sig") or "") or None,
             # who a person's memory is for: the operator's to see (they may delete it), never the agent's
-            **({"end_user": str(memory["end_user"])} if memory.get("end_user") and "delete" in privs else {})}
+            **({"end_user": str(memory["end_user"])} if memory.get("end_user") and "delete" in privs else {}),
+            # the caller's own (Richard 11-10): a person's memory for the person asking, which their console opens first
+            **({"yours": True} if memory.get("end_user") and f"member:{memory['end_user']}" in principals else {})}
 
 
 def _ms_or_none(v) -> int | None:
@@ -688,9 +690,14 @@ async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
         return hit[1], hit[2]
     principal, mid = end_user_principal(pid, user), end_user_mid(pid, user)
     node = await _load(org, mid)
+    # named after the person (Richard 11-10): one named by a hash read as an empty stranger to the person it was for
+    named = user[:_NAME_MAX]
+    if node is not None and str(node.get("name") or "") == end_user_hash(user):
+        await GRAPH.upsert("Memory", mid, {"name": named}, raise_on_fail=True)
+        node = {**node, "name": named}
     if node is None:
         node = await _make(org, str(parent.get("created_by") or ""), str(parent.get("workspace") or ""),
-                           end_user_hash(user), _PERSON_DESC, parent, True, str(parent.get("provider") or ""), mid=mid,
+                           named, _PERSON_DESC, parent, True, str(parent.get("provider") or ""), mid=mid,
                            extra={"end_user": user[:_NAME_MAX * 4], "end_user_hash": end_user_hash(user), "end_user_of": pid})
     if not any(str(g.get("principal") or "") == principal and str(g.get("deleted") or "0") != "1"
                and set(json.loads(g.get("privileges") or "[]")) >= {"read", "write"}
@@ -764,6 +771,8 @@ def _clean_parts(parts):
     for p in parts or []:
         if isinstance(p, dict) and isinstance(p.get("text"), str):
             p = {**p, "text": clean_text(p["text"])}
+        if isinstance(p, dict) and isinstance(p.get("name"), str):
+            p = {**p, "name": clean_text(p["name"])}       # who said it: a person's own string, cleaned like their words
         out.append(p)
     return out
 
