@@ -66,7 +66,9 @@ async def _who(request: Request) -> tuple[str, str, str, list[str]]:
     request.state.hr_caller = p
     # The workspace a memory belongs to is decided exactly as a plug's is, so a memory finds the provider
     # its own workspace connected, and a key held to a workspace can't name another to spend its vendor account.
-    return org, str(p.get("member") or ""), _workspace_of(request, p), principals_of(p)
+    # The caller acts in that workspace alone: it reaches that workspace's memories and no other's (mp.acting_in).
+    ws = _workspace_of(request, p)
+    return org, str(p.get("member") or ""), ws, mp.placed(principals_of(p), ws)
 
 
 def _writer(request: Request) -> dict:

@@ -303,7 +303,7 @@ def test_a_task_from_an_api_key_that_names_nobody_runs_without_memory_and_says_s
     asked = len(stub.calls)
     run(gw._memories_observe(ORG, hid, sid, hv, {"user_text": "Remember me.", "model": "m"}, "Sure."))
     assert len(stub.calls) == asked
-    section, _ = run(gw.memory_tools.doc_section(gw.memory_local.Local(ORG, hid, run(gw._harness_memories(hid, ORG, hv, sid=sid)))))
+    section, _ = run(gw.memory_tools.doc_section(gw.memory_local.Local(ORG, hid, run(gw._harness_memories(hid, ORG, hv, sid=sid)), workspace=hv.get("workspace"))))
     assert section == ""
     # and the turn's record says the same
     run(gw._resp_put("resp_skip1", {"id": "resp_skip1", "status": "completed", "output": [], "_input": [{"content": "hi"}]},
@@ -773,7 +773,7 @@ def test_a_memory_made_for_an_agent_is_taken_back_when_a_later_step_fails(client
     assert h["memory"] is None and h["memory_reason"].startswith("The memory couldn't be made just now")
     assert _live_memories() == before, "the memory made for it is gone again"
     v = run(gw._harness_vertex(h["id"]))
-    assert not v.get("memory_default") and not run(gw.memory_plane.granted(ORG, f"member:{h['id']}"))
+    assert not v.get("memory_default") and not run(gw.memory_plane.granted(ORG, f"member:{h['id']}", v.get("workspace")))
 
 
 # ── an agent's own memory: kept with it for its 30 days, then gone with it ──────────────────
@@ -961,6 +961,50 @@ def test_a_failed_read_of_the_grants_deletes_no_memory(client, monkeypatch):
     fail["label"] = None
     assert x["id"] in _sweep()["removed"]["harnesses"]
     assert _live_memories(org) == before, "the other agent holds it"
+
+
+def test_a_failed_read_of_the_memory_at_its_delete_deletes_nothing(client, monkeypatch, capsys):
+    """The sweep deletes an agent's memory as its deleter, in the memory's own workspace, read from the strict read it
+    decided on, never from a second read. A read of the memory that fails at its delete deletes nothing: the agent
+    waits for the next sweep, and the log says why."""
+    hdr = _org_of_its_own(client, "memory-unread")
+    org = hdr["x-harness-org"]
+    x = _agent(client, name="Front desk", prompt="Help each customer with returns.", headers=hdr).json()
+    mid = x["memory"]["id"]
+    before = _live_memories(org)
+    assert mid in before
+    assert client.delete(f"/v1/harnesses/{x['id']}", headers=hdr).status_code == 200
+    _past_its_30_days(x["id"])
+    g = gw.BACKING.graph
+    real = g.get
+
+    async def get(vid, label=None):
+        if vid == mid:
+            raise sqlite3.OperationalError("disk I/O error")
+        return await real(vid, label)
+    monkeypatch.setattr(g, "get", get)
+    out = _sweep()
+    assert x["id"] not in out["removed"]["harnesses"] and out["left"]["harnesses"] == gw._MEMORY_UNCHECKED
+    assert _live_memories(org) == before
+    assert f"[memories] {x['id']}: {mid} was not deleted with it, a read couldn't answer: OperationalError" in capsys.readouterr().out
+    monkeypatch.setattr(g, "get", real)
+    assert x["id"] in _sweep()["removed"]["harnesses"]
+    assert mid not in _live_memories(org)
+
+
+def test_an_agent_in_another_workspace_takes_its_memory_with_it(client):
+    """The sweep's delete acts in the memory's own workspace: an agent made in a workspace other than the default
+    still takes the memory made for it when it is removed for good."""
+    hdr = _org_of_its_own(client, "ops-agent")
+    ops = {**hdr, "x-harness-workspace": "ops"}
+    assert client.put("/v1/plugs/mem0", headers=ops, json={"secrets": {"api_key": KEY}}).json()["status"] == "connected"
+    x = _agent(client, name="On call", prompt="Help each customer with outages.", headers=ops).json()
+    mid = x["memory"]["id"]
+    assert run(gw.memory_plane._load(hdr["x-harness-org"], mid))["workspace"] == "ops"
+    assert client.delete(f"/v1/harnesses/{x['id']}", headers=ops).status_code == 200
+    _past_its_30_days(x["id"])
+    assert x["id"] in _sweep()["removed"]["harnesses"]
+    assert mid not in _live_memories(hdr["x-harness-org"])
 
 
 def test_a_failed_read_of_what_is_below_a_memory_deletes_no_memory(client, monkeypatch):

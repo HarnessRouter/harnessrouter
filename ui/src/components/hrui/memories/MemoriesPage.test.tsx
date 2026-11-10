@@ -500,9 +500,11 @@ describe('a card shows its picture', () => {
   });
 
   test('a memory with no graph shows its brick from the agent stack, and reads nothing for it', async () => {
+    // Hindsight: labels a person sets, which relate to nothing
+    const labelsOnly = { ...CAPS.hindsight, schema: { mode: 'labels', builtin: { types: [{ name: 'fact', description: 'f' }], relations: [] } } } as Provider;
     const s = backend({
-      'GET /v1/memories/providers': { data: [factsOnly] },
-      'GET /v1/memories': { data: [memory({ id: 'hmem_2', name: 'Brand facts', provider: 'mem0', builtin: factsOnly.schema!.builtin })] },
+      'GET /v1/memories/providers': { data: [labelsOnly] },
+      'GET /v1/memories': { data: [memory({ id: 'hmem_2', name: 'Brand facts', provider: 'hindsight', builtin: labelsOnly.schema!.builtin })] },
     });
     await open();
     const art = card('Brand facts').querySelector('.mm-art') as Element;
@@ -584,6 +586,47 @@ describe('a cover still missing is made once the page has settled', () => {
     const src = (n: string) => (Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n))?.querySelector('img') as HTMLImageElement | null)?.getAttribute('src');
     expect(src('Writable')).toMatch(/^blob:drawn\//);
     expect(src('Read only')).toMatch(/^blob:drawn\//);
+  });
+
+  // Mem0 on the test instance (Richard 11-10): five kinds on its Schema tab, a brick on its card
+  const card = (n: string) => Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n)) as Element;
+  const factsOnly = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'f' }], relations: [] } } } as Provider;
+  const at = (id: string, rid: string) => ({ memory_id: id, record_id: rid });
+  const holds = (id: string, kinds: [string, string][], refs: [string, string][]) => ({
+    nodes: kinds.map(([rid, type]) => ({ record: record({ id: rid, memory_id: id, type }), memory: { id, name: 'x' } })),
+    edges: refs.map(([a, b]) => ({ from: at(id, a), to: at(id, b), rel: 'about', available: true })), truncated: false, degraded: [],
+  });
+  test('where nobody sets types, the cover is what the memory holds, as its Schema tab draws it, and a memory of one kind keeps its brick', async () => {
+    window.localStorage.clear();
+    const used = 1762700000000;
+    const s = backend({
+      'GET /v1/memories/providers': { data: [factsOnly] },
+      'GET /v1/memories': { data: [
+        memory({ id: 'hmem_c', name: 'Company', provider: 'mem0', builtin: factsOnly.schema!.builtin, last_used_at: used }),
+        memory({ id: 'hmem_f', name: 'Brand facts', provider: 'mem0', builtin: factsOnly.schema!.builtin, last_used_at: used }),
+      ] },
+      'POST /v1/memories/hmem_c/graph': holds('hmem_c', [['acme', 'entity'], ['f1', 'fact'], ['n1', 'note'], ['p1', 'procedure']], [['f1', 'acme'], ['n1', 'acme']]),
+      'POST /v1/memories/hmem_f/graph': holds('hmem_f', [['f1', 'fact'], ['f2', 'fact']], []),
+      'PUT /v1/memories/hmem_c/cover': { object: 'memory.cover', cover_at: used + 1, cover_sig: 'x' },
+    });
+    await open();
+    // until it is read, the quiet shape: never a brick that turns into a picture
+    expect(card('Company').querySelector('.mm-cv-wait')).not.toBeNull();
+    await settle();
+    await act(async () => { await new Promise((r) => setTimeout(r, 200)); }); await flush();
+    expect(drawCover).toHaveBeenCalledTimes(1);
+    const g = drawCover.mock.calls[0][0] as { vertex_types: { label: string }[] };
+    expect(g.vertex_types.map((v) => v.label)).toEqual(['entity', 'fact', 'note', 'procedure']);
+    expect(s.sent('PUT', '/v1/memories/hmem_c/cover')[0].headers['x-cover-sig']).toMatch(new RegExp(`^c${DRAW_VERSION}h_[0-9a-z]+$`));
+    expect(card('Company').querySelector('img')?.getAttribute('src')).toMatch(/^blob:drawn\//);
+    expect(card('Brand facts').querySelector('.mm-brick .f-memory')).not.toBeNull();
+    // the next visit reads neither again: the facts-only one wasn't used since it was looked at
+    root.unmount(); el.remove(); el = document.createElement('div'); el.id = 'hrui'; document.body.appendChild(el); root = createRoot(el);
+    const before = s.calls.length;
+    await open();
+    expect(card('Brand facts').querySelector('.mm-brick .f-memory')).not.toBeNull();
+    await settle();
+    expect(s.calls.slice(before).filter((c) => c.path.includes('hmem_f/graph'))).toEqual([]);
   });
 
   test('a cover drawn before the drawing changed is made again in the same pass: from the list where it is what the provider makes, with one read where nothing says what it was, never one with a person’s own types', async () => {

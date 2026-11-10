@@ -59,6 +59,9 @@ FILES = None
 # Where a memory's cover is kept (the picture its card shows, made by the console from its schema): app.py binds the
 # instance's own file store, the one its other files are kept in, `await COVERS.get(key) / put(key, data) / delete(key)`.
 COVERS = None
+# Which workspace a member acts in, when it acts in only one: app.py binds `await PLACE_OF(org, principal) -> str | None`,
+# an agent's harness's workspace, None for a person (who acts in whichever workspace they open) or anyone unknown.
+PLACE_OF = None
 COVER_MAX = 512 * 1024
 COVER_TYPES = ("image/png", "image/webp")
 # The most pixels a cover may have, checked from its header before any pixel is read: a few hundred KB of PNG can say
@@ -143,6 +146,42 @@ class MemoryError(Exception):
     def __init__(self, status: int, code: str, message: str, param: str | None = None):
         super().__init__(message)
         self.status, self.code, self.message, self.param = status, code, message, param
+
+
+# ── a memory's workspace: where it is reached from ─────────────────────────────────────────────
+# A memory belongs to the workspace it was made in and is reached only from there (Richard, 2026-11-10): listed, read,
+# written, recalled and shared only by someone acting in that workspace, and used only by that workspace's agents.
+# Every access check's principals carry the one workspace the caller acts in, `in:<workspace>` (acting_in), which no
+# grant can name (_PRINCIPAL). Principals that carry no workspace, or two, reach nothing: a path that forgot to say
+# where it acts fails closed instead of reaching every workspace. What was made before workspaces carries none and is
+# the Default Workspace's, as everywhere else.
+DEFAULT_PLACE = "default"
+_IN = "in:"
+
+
+def place(workspace) -> str:
+    """A workspace as memories compare it: none, and the organization's Default Workspace by its other name, are one."""
+    ws = str(workspace or "").strip()
+    return DEFAULT_PLACE if not ws or ws.endswith("__hr_default") else ws
+
+
+def place_of(memory: dict) -> str:
+    return place((memory or {}).get("workspace"))
+
+
+def acting_in(workspace) -> str:
+    return _IN + place(workspace)
+
+
+def where(principals) -> str | None:
+    """The one workspace these principals act in, or None when they name none or more than one."""
+    found = {str(x)[len(_IN):] for x in principals or [] if str(x).startswith(_IN)}
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def placed(principals, workspace) -> list[str]:
+    """These principals, acting in this workspace and no other."""
+    return [x for x in principals or [] if not str(x).startswith(_IN)] + [acting_in(workspace)]
 
 
 def _not_found() -> MemoryError:
@@ -461,7 +500,9 @@ def grants_changed(org: str = "") -> None:
 async def effective(org: str, memory: dict, principals: list[str]) -> list[str]:
     """The privileges these principals hold on the memory: every grant on it and on the ancestors
     the cutoff-aware chain reaches. The creator of a node holds all four on it, an implicit grant
-    that flows down like any other."""
+    that flows down like any other. Nothing, from any workspace but the memory's own (acting_in)."""
+    if where(principals) != place_of(memory):
+        return []
     chain = await _chain(org, memory)
     ids = {str(m["id"]) for m in chain}
     privs: set[str] = set()
@@ -1337,13 +1378,18 @@ async def grants(org: str, mid: str, principals: list[str]) -> list[dict]:
 
 async def grant(org: str, mid: str, principals: list[str], principal: str, privileges: list,
                 by: str) -> dict:
-    await need(org, mid, principals, "delete")
+    m, _ = await need(org, mid, principals, "delete")
     principal = str(principal or "").strip()
     privs = [p for p in PRIVILEGES if p in (privileges or [])]
     if not _PRINCIPAL.fullmatch(principal):
         raise MemoryError(422, "memory_invalid", "A principal is `<kind>:<id>`: a member (a person or an agent) or a group.", "principal")
     if not privs:
         raise MemoryError(422, "memory_invalid", "Name at least one of read, write, create, delete.", "privileges")
+    group = principal.startswith("group:")
+    there = place(principal.split(":", 1)[1]) if group else (await PLACE_OF(org, principal) if PLACE_OF else None)
+    if there is not None and place(there) != place_of(m):
+        raise MemoryError(422, "memory_other_workspace", ("That's another workspace." if group else "That agent is in another "
+                          "workspace.") + " A memory is used only in the workspace it belongs to.", "principal")
     return await _put_grant(org, mid, principal, privs, by)
 
 
@@ -1384,35 +1430,39 @@ async def given(org: str, principals: list[str]) -> list[dict]:
     return [o for *_, o in sorted(res, key=lambda x: x[:3])]
 
 
-async def granted(org: str, principal: str) -> list[tuple[dict, list[str]]]:
+async def granted(org: str, principal: str, workspace) -> list[tuple[dict, list[str]]]:
     """Every memory this principal holds a grant ON (not merely below one), with what it may do
     there, highest in the tree first. It is where a member was let in: the same answer for a person
-    and for an agent, and the only source of what an agent's harness shows as its memories."""
+    and for an agent, and the only source of what an agent's harness shows as its memories. Only the memories of
+    the workspace it acts in: a grant on another workspace's memory gives nothing (acting_in)."""
     res = []
     for g in await _org_grants(org):
         if str(g.get("principal") or "") != str(principal) or str(g.get("deleted") or "0") == "1":
             continue
         m = await _load(org, str(g.get("memory_id") or ""))
         if m:
-            res.append((len(await _chain(org, m)), str(m.get("name") or "").casefold(), m, await effective(org, m, [principal])))
+            res.append((len(await _chain(org, m)), str(m.get("name") or "").casefold(), m,
+                        await effective(org, m, [principal, acting_in(workspace)])))
     return [(m, privs) for _, _, m, privs in sorted(res, key=lambda x: (x[0], x[1], str(x[2]["id"]))) if privs]
 
 
-async def grant_counts(org: str) -> dict[str, int]:
-    """How many memories each principal holds a grant on: what `granted` says of one, for a list of many. One read
-    of the organization's grants and one of its memories, however long the list is. A grant left on a memory
-    since deleted, or one taken away, doesn't count, and neither does whether a server entry happens to exist."""
+async def grant_counts(org: str) -> dict[tuple[str, str], int]:
+    """How many memories each principal holds a grant on, in each workspace: {(principal, place): n}, what `granted`
+    says of one, for a list of many (an agent's count is the one in its own workspace). One read of the organization's
+    grants and one of its memories, however long the list is. A grant left on a memory since deleted, or one taken
+    away, doesn't count, and neither does whether a server entry happens to exist."""
     grants = await GRAPH.find("MemoryGrant", {"org": org})
     if not grants:
         return {}
-    live = {str(m.get("id") or "") for m in await GRAPH.find("Memory", {"org": org}) if str(m.get("deleted") or "0") != "1"}
-    held: dict[str, set[str]] = {}
+    live = {str(m.get("id") or ""): place_of(m) for m in await GRAPH.find("Memory", {"org": org})
+            if str(m.get("deleted") or "0") != "1"}
+    held: dict[tuple[str, str], set[str]] = {}
     for g in grants:
         mid = str(g.get("memory_id") or "")
         if str(g.get("deleted") or "0") == "1" or mid not in live:
             continue
         if any(p in PRIVILEGES for p in json.loads(g.get("privileges") or "[]")):
-            held.setdefault(str(g.get("principal") or ""), set()).add(mid)
+            held.setdefault((str(g.get("principal") or ""), live[mid]), set()).add(mid)
     return {who: len(mids) for who, mids in held.items()}
 
 
