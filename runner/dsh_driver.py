@@ -35,8 +35,29 @@ def _emit(method: str, payload) -> None:
     sys.stdout.flush()
 
 
+# A harness's disabled tools, as the stock sdk profile's rows (deepseek-harness-runtime 0.1.2rc1, each
+# package's own registrations). A row named here registers that tool and nothing else, so switching
+# the row off withholds exactly the tool.
+TOOL_ROWS = {"bash": "tool-bash", "str_replace_editor": "tool-str-replace-editor", "todo_write": "tool-todo",
+             "skill": "tool-skill", "subagent": "tool-subagent", "subagent_fork": "tool-subagent-fork",
+             "workflow": "tool-workflow"}
+# Rows that register more than one tool: off only when every tool they register is off, since the row
+# is the only switch and taking it out for one tool would withhold the others too. tool-fs also
+# registers read_image, which is not one of the harness's switches, so it stays on in practice: read,
+# write and edit are asked off in the agent doc instead (runner/server.py, _TOOLS_OFF_BY_REQUEST).
+TOOL_ROW_GROUPS = {"tool-fs-search": ("glob", "grep"), "tool-fs": ("read", "write", "edit", "read_image")}
+
+
+def _rows_off(tools_off) -> list[str]:
+    """The stock rows to switch off for these disabled tools, in a stable order."""
+    off = {str(t) for t in (tools_off or ())}
+    rows = [row for tool, row in TOOL_ROWS.items() if tool in off]
+    rows += [row for row, tools in TOOL_ROW_GROUPS.items() if set(tools) <= off]
+    return sorted(rows)
+
+
 def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = None,
-                   relay_base: str = "", model: str = "", cwd: str = "") -> str:
+                   relay_base: str = "", model: str = "", cwd: str = "", tools_off=()) -> str:
     """Our overlay on the runtime's stock `sdk` profile, in the loader's own patch grammar: a row
     named by id is merged, `disabled: true` stops one, and `insert` appends new rows.
 
@@ -69,7 +90,11 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
     # search, fetch, both default true), merged into the stock `tool-web` row; web_fetch (plain HTTP) stays, and a
     # setup's own search plug is how an agent searches.
     entries.append({"id": "web-search-deepseek", "disabled": True})
-    entries.append({"id": "tool-web", "config": {"search": False}})
+    # web_fetch has the same row's own switch, `fetch`, so a disabled web_fetch is withheld alone.
+    web = {"search": False, **({"fetch": False} if "web_fetch" in set(tools_off or ()) else {})}
+    entries.append({"id": "tool-web", "config": web})
+    # A disabled tool whose row registers nothing else: the row off, so the tool is not offered.
+    entries += [{"id": row, "disabled": True} for row in _rows_off(tools_off)]
     cjs = home / ".dsh" / "hr_dsh_server.mjs"
     inserted: list = [{"id": "hr-sdk-jsonrpc-server", "name": str(cjs),
                        "inject": ["sdkAppStartup", "loader"],
@@ -196,7 +221,8 @@ def main() -> int:
     kwargs = dict(provider=("hr" if llm else "deepseek-official"), model=job["model"],
                   cwd=cwd, dsh_home=str(home / ".dsh"),
                   patches=(_compose_patch(home, job.get("mcp_servers") or [], llm=llm,
-                                          relay_base=relay_base, model=job["model"], cwd=cwd),),
+                                          relay_base=relay_base, model=job["model"], cwd=cwd,
+                                          tools_off=job.get("tools_off") or ()),),
                   # A runtime whose plugin tree failed stays alive with a mute stdout; without a
                   # bound the initialize request waits forever and the turn reads as a hang.
                   request_timeout_seconds=180.0)

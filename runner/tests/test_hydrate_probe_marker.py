@@ -6,7 +6,7 @@ under /tmp/hr-ws alone — and the marker outlives the workspace: delete the fol
 volume by hand and `docker stop`/`start` the runner, or call DELETE /workspace (which removed
 the folder but, unlike the reaper, left the marker), and the next probe still said "held".
 The gateway then skipped the restore and the turn ran on an empty workspace: the CLI found no
-session to resume and the conversation started over (seen by richard-epsilla on #194).
+session to resume and the conversation started over (#194).
 """
 import hashlib
 import io

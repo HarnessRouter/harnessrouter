@@ -31,3 +31,30 @@ def test_an_existing_directory_it_cannot_write_to_falls_back_to_the_tmpdir(tmp_p
         os.close(fd); os.unlink(p)
     finally:
         locked.chmod(0o755)
+
+
+def test_a_directory_someone_else_could_change_is_not_used(tmp_path):
+    # the default is in /var/tmp, where anyone may make the directory before the runner does
+    shared = tmp_path / "open"
+    shared.mkdir()
+    shared.chmod(0o777)
+    assert rn._spool_dir(str(shared)) is None
+    shared.chmod(0o775)
+    assert rn._spool_dir(str(shared)) is None
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    assert rn._spool_dir(str(link)) is None
+    assert rn._spool_dir(str(real)) == str(real)
+    fresh = tmp_path / "made"
+    assert rn._spool_dir(str(fresh)) == str(fresh)
+    assert fresh.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="needs root to make a directory another uid owns")
+def test_a_directory_another_uid_owns_is_not_used(tmp_path):
+    theirs = tmp_path / "harness-spool"
+    theirs.mkdir(mode=0o700)
+    os.chown(theirs, 19001, 19001)
+    assert rn._spool_dir(str(theirs)) is None

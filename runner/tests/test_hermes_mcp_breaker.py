@@ -74,13 +74,21 @@ def test_a_result_that_does_not_compile_is_not_written(tmp_path):
     assert r.returncode == 3 and "NOT applied" in r.stdout and f.read_text() == "x = 1\n"
 
 
-def test_the_entrypoint_applies_it_on_every_start_and_can_never_stop_the_start():
+def test_the_entrypoint_applies_it_with_every_hermes_install_and_it_can_never_fail_the_install():
+    """Applied when hermes is installed, not at every start (#623: a start runs nothing it installed). The patch file's digest
+    is part of hermes's stamp, so a volume installed before this patch existed, or before it changed, reinstalls and gets it."""
     sh = (ROOT / "docker" / "entrypoint.sh").read_text()
-    assert "if wanted hermes; then verify_hermes_mcp; verify_hermes_breaker; fi" in sh
-    body = sh[sh.index("verify_hermes_breaker() {"):]
+    body = sh[sh.index("hermes_breaker() {"):]
     body = body[:body.index("\n}\n")]
-    assert "/app/runner/patches/hermes_mcp_breaker.py" in body and body.rstrip().endswith("return 0")
+    assert '"$HERMES_BREAKER"' in body and body.rstrip().endswith("return 0")
     assert "|| true" in body                       # the patch's own exit status is read from its words, not trusted to `set -e`
+    assert "HERMES_BREAKER=/app/runner/patches/hermes_mcp_breaker.py" in sh
+    install = sh[sh.index("install_hermes() {"):]
+    install = install[:install.index("\n}\n")]
+    assert install.rstrip().endswith("hermes_breaker")
+    assert 'breaker:$(file_sha "$HERMES_BREAKER")' in sh[sh.index("if wanted hermes && ! current hermes"):]
+    start = sh[sh.index("\ninstall_backends\n"):]
+    assert "hermes_breaker" not in start and "hermes_mcp_breaker.py" not in start
 
 
 @pytest.mark.skipif(not os.environ.get("HR_HERMES_MCP_TOOL"), reason="the hermes source is not at hand")

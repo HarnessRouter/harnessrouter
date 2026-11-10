@@ -29,6 +29,8 @@ from server import (Auth, BACKENDS, CHECKPOINT_EXCLUDE, _KIMI_TOOLS,  # noqa: E4
                     _kimi_mcp_unavailable, _HERMES_RELAY, _drop_top_level_field,
                     _agent_doc_path, _build_kimi, _failure_reason, _kimi_eof, _kimi_has_session,
                     _kimi_home, _kimi_to_claude, _normalize_openai_chat_body, _resume_lost)
+import handed  # noqa: E402
+import server  # noqa: E402
 
 SID = "session_ce4ef4a0-1606-430e-89fd-f228abfda9e7"
 
@@ -36,8 +38,8 @@ SID = "session_ce4ef4a0-1606-430e-89fd-f228abfda9e7"
 def _argv(d=None, **kw):
     d = d or tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_kimi("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
-                      "kimi-k3", "do it", d, env, **kw)
+    cmd = handed.build(_build_kimi, "openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
+                       "kimi-k3", "do it", d, env, **kw)
     return cmd, d, env
 
 
@@ -124,7 +126,9 @@ def test_the_failure_reason_drops_the_cli_s_notes_to_a_person_at_its_terminal():
 # ── the command and its environment ──────────────────────────────────────────────
 def test_the_model_is_defined_from_the_environment_and_nothing_is_written_with_a_key():
     cmd, d, env = _argv()
-    assert cmd[:5] == ["kimi", "-p", "do it", "--output-format", "stream-json"]
+    # -p's text is set in the CLI's own process by the preload (prompt_preload.cjs); the command line holds the placeholder
+    assert cmd[:5] == ["kimi", "-p", server.PROMPT_ARG, "--output-format", "stream-json"]
+    assert handed.by_folder(d)[-1] == "do it" and f"--require {server.PROMPT_PRELOAD_CJS}" in env["NODE_OPTIONS"]
     assert env["KIMI_MODEL_NAME"] == "kimi-k3" and env["KIMI_MODEL_PROVIDER_TYPE"] == "openai"
     assert env["KIMI_CODE_HOME"] == str(_kimi_home(pathlib.Path(d)))
     assert env["KIMI_DISABLE_TELEMETRY"] == "1" and env["KIMI_CODE_NO_AUTO_UPDATE"] == "1"

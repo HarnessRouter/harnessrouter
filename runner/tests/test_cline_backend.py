@@ -11,21 +11,28 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (Auth, BACKENDS, _agent_doc_path, _build_cline, _cline_eof,  # noqa: E402
                     _cline_to_claude)
+
+
+def _handed(d) -> list[str]:
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _argv(prompt="do the thing", **kw):
     d = tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_cline("openai-api", Auth(api_key="", base_url="https://relay.example/v1"),
+    cmd = handed.build(_build_cline, "openai-api", Auth(api_key="", base_url="https://relay.example/v1"),
                        "gpt-5.4", prompt, d, env, **kw)
     return cmd, d, env
 
 
 def test_argv_is_headless_json_with_auto_approve():
     cmd, d, env = _argv()
-    assert cmd[0] == "cline" and cmd[1] == "do the thing"
+    assert cmd[0] == "cline" and "do the thing" not in cmd
+    assert _handed(d) == ["do the thing"]          # on stdin, from a file of the session's own
     assert "--json" in cmd and "--auto-approve" in cmd
     assert "-P" in cmd and "openai-compatible" in cmd
     assert "-z" not in cmd, "the background hub daemon must never be part of a turn"
@@ -51,13 +58,12 @@ def test_home_is_redirected_and_settings_land_inside_the_workspace():
         "updatedAt missing: cline will silently discard the whole provider entry"
 
 
-def test_a_whitespace_free_prompt_gets_a_trailing_newline():
-    """A single-token prompt is parsed as a SUBCOMMAND ('Unknown command or unquoted prompt: hi')
-    and `--` does not rescue it. A trailing newline does — verified on 3.0.60 both ways."""
-    cmd, _, _ = _argv(prompt="hi")
-    assert cmd[1] == "hi\n"
-    cmd2, _, _ = _argv(prompt="hi there")
-    assert cmd2[1] == "hi there"
+def test_a_whitespace_free_prompt_is_never_a_positional_argument():
+    """A single-token prompt given as an argument is parsed as a SUBCOMMAND ('Unknown command or unquoted
+    prompt: hi'), and `--` does not rescue it. Read on stdin it is only ever the prompt, as it was written."""
+    cmd, d, _ = _argv(prompt="hi")
+    assert "hi" not in cmd and "hi\n" not in cmd
+    assert _handed(d) == ["hi"]
 
 
 def test_resume_is_deliberately_not_wired():
@@ -161,3 +167,56 @@ def test_a_crash_before_run_result_still_yields_a_result():
     out = _cline_eof(state, 1)
     assert out and out[0]["is_error"] is True
     assert "exited 1" in out[0]["result"] or state.get("_cl_error", "") in out[0]["result"]
+
+
+# ── disabled tools: disabledTools in global-settings.json ─────────────────────────────────────
+# Measured on 0.40.0 with every catalog tool off: six of seven still in the request and nothing
+# asked (the seventh, editor, was sent as apply_patch). 3.0.60 filters each tool list it builds by
+# this setting, except a teammate's, which is started with the full tool set.
+from server import _CLINE_TEAM_TOOLS, _cline_disabled_tools  # noqa: E402
+
+
+def _global(env):
+    p = pathlib.Path(env["HOME"]) / ".cline" / "data" / "settings" / "global-settings.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def test_disabled_tools_land_in_global_settings_beside_providers():
+    _, _, env = _argv(tools_disabled=["run_commands", "read_files (reads files)"])
+    off = _global(env)["disabledTools"]
+    assert {"run_commands", "read_files"} <= set(off)
+    assert "read_files (reads files)" not in off
+
+
+def test_editor_off_withholds_the_patch_tool_too():
+    """gpt-5.4's route edits through apply_patch: the request carried apply_patch and no editor."""
+    assert {"editor", "apply_patch"} <= set(_cline_disabled_tools(["editor"]))
+    assert "apply_patch" not in _cline_disabled_tools(["run_commands"])
+
+
+def test_any_tool_off_closes_the_teammate_door():
+    """A teammate gets the full tool set whatever is off, so the team tools go with any switched-off
+    tool, Subagent included."""
+    for one in (["ask_question"], ["spawn_agent"]):
+        assert set(_CLINE_TEAM_TOOLS) <= set(_cline_disabled_tools(one))
+    assert "team_spawn_teammate" in _CLINE_TEAM_TOOLS and len(_CLINE_TEAM_TOOLS) == 18
+
+
+def test_nothing_off_writes_nothing_and_clears_an_earlier_list():
+    """HOME is checkpointed, so a list from an earlier turn must not outlive the harness's; the
+    rest of what cline keeps in the file stays."""
+    d = tempfile.mkdtemp()
+    env: dict = {}
+    _build_cline("openai-api", Auth(api_key="", base_url="https://r.example/v1"), "gpt-5.4", "go", d, env)
+    assert _global(env) is None
+    _build_cline("openai-api", Auth(api_key="", base_url="https://r.example/v1"), "gpt-5.4", "go", d, env,
+                 tools_disabled=["run_commands"])
+    p = pathlib.Path(env["HOME"]) / ".cline" / "data" / "settings" / "global-settings.json"
+    p.write_text(json.dumps({**json.loads(p.read_text()), "telemetryOptOut": True}))
+    _build_cline("openai-api", Auth(api_key="", base_url="https://r.example/v1"), "gpt-5.4", "go", d, env)
+    assert _global(env) == {"telemetryOptOut": True}
+
+
+def test_disabled_tools_never_reach_the_command_line():
+    cmd, _, _ = _argv(tools_disabled=["run_commands"])
+    assert "run_commands" not in " ".join(cmd) and "--auto-approve" in cmd

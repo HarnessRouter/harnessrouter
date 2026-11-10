@@ -6,10 +6,12 @@ stopReason="error" on the assistant message, so the synthesized result event is 
 status can truthfully come from.
 """
 import json
+import pytest
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import _build_pi, _pi_models_json, _pi_to_claude, Auth  # noqa: E402
 
 
@@ -156,7 +158,7 @@ def test_no_deltas_still_emits_full_text():
 def _cmdline(tmp_path, provider="anthropic", base_url=None, model="claude-sonnet-4-6", **kw):
     env = {"HOME": str(tmp_path / "home")}
     auth = Auth(api_key="k-test", base_url=base_url)
-    return _build_pi(provider, auth, model, "do it", str(tmp_path), env,
+    return handed.build(_build_pi, provider, auth, model, "do it", str(tmp_path), env,
                      **kw), env
 
 
@@ -172,7 +174,8 @@ def test_a_direct_anthropic_key_goes_through_the_relay_not_the_environment(tmp_p
     assert hr["baseUrl"].startswith("http://127.0.0.1:") and not hr["baseUrl"].endswith("/v1")   # pi appends /v1/messages
     assert server._HERMES_RELAY["routes"][hr["apiKey"]][:2] == ("https://api.anthropic.com/v1", "k-test")
     assert "--approve" in cmd and "--no-extensions" in cmd
-    assert cmd[-1] == "do it"
+    assert "do it" not in cmd       # read on stdin, from a file of the session's own
+    assert handed.by_folder(tmp_path) == ["do it"]
 
 
 def test_build_tokenrouter_claude_family_uses_anthropic_messages(tmp_path):
@@ -203,6 +206,34 @@ def test_build_openai_api_other_family_uses_completions(tmp_path):
              model="deepseek-v4-pro")
     mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
     assert mj["providers"]["hr"]["api"] == "openai-completions"
+
+
+def test_custom_responses_format_overrides_pi_model_family(tmp_path):
+    env = {"HOME": str(tmp_path / "home")}
+    _build_pi("openai-api", Auth(api_key="k-test", base_url="https://agg.example/v1",
+                                  api_format="responses"), "vendor-model", "do it",
+              str(tmp_path), env)
+    mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
+    assert mj["providers"]["hr"]["api"] == "openai-responses"
+    assert mj["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:")
+
+
+@pytest.mark.parametrize("build,cfg_path", [("pi", ".pi/agent/models.json"), ("omp", ".omp/agent/models.yml")])
+def test_a_responses_connection_rides_the_same_relay_route_as_an_openai_one(tmp_path, build, cfg_path):
+    """The format changes the client's API and nothing else: the same upstream, joined exactly, with the
+    key behind the loopback relay and never in the config the CLI reads."""
+    from server import _HERMES_RELAY, _build_omp
+    builder = _build_pi if build == "pi" else _build_omp
+    routes = {}
+    for fmt in ("openai", "responses"):
+        home = tmp_path / fmt
+        builder("openai-api", Auth(api_key="sk-SENTINEL", base_url="https://agg.example/v3/", api_format=fmt),
+                "vendor-model", "do it", str(home), {"HOME": str(home)})
+        text = (home / cfg_path).read_text()
+        assert "sk-SENTINEL" not in text
+        token = next(t for t in _HERMES_RELAY["routes"] if t in text)
+        routes[fmt] = _HERMES_RELAY["routes"][token][:2]
+    assert routes["openai"] == routes["responses"] == ("https://agg.example/v3", "sk-SENTINEL")
 
 
 def test_build_resume_and_disabled_tools(tmp_path):

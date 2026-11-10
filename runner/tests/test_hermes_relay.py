@@ -572,7 +572,7 @@ def test_the_turn_hands_the_trace_context_to_the_cli(monkeypatch, tmp_path):
     launched = []
     started = threading.Event()
 
-    def _fake(*args):
+    def _fake(*args, **kwargs):
         launched.append(args)
         started.set()
     monkeypatch.setattr(rs, "_run_hermes_bg", _fake)
@@ -591,7 +591,7 @@ def test_a_turn_with_no_trace_context_gives_the_cli_none(monkeypatch, tmp_path):
     launched = []
     started = threading.Event()
 
-    def _fake(*args):
+    def _fake(*args, **kwargs):
         launched.append(args)
         started.set()
     monkeypatch.setattr(rs, "_run_hermes_bg", _fake)

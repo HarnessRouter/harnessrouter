@@ -5,6 +5,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (_same_model,   # noqa: E402
     _agent_doc_path,
     _build_omp,
@@ -34,14 +35,15 @@ def test_omp_argv_native_provider():
     d = tempfile.mkdtemp()
     env = {"HOME": d}
     auth = Auth(api_key="sk-ant-test")
-    cmd = _build_omp("anthropic", auth, "claude-sonnet-4.6", "hello world", d, env)
+    cmd = handed.build(_build_omp, "anthropic", auth, "claude-sonnet-4.6", "hello world", d, env)
 
     assert cmd[:3] == ["omp", "-p", "--mode"]
     assert cmd[3] == "json"
     assert "--model" in cmd and "hr/claude-sonnet-4.6" in cmd     # the custom provider: the key rides the relay (#615)
     assert "--auto-approve" in cmd
     assert "--no-extensions" in cmd
-    assert cmd[-1] == "hello world"
+    assert "hello world" not in cmd       # read on stdin, from a file of the session's own
+    assert handed.by_folder(d) == ["hello world"]
     assert "ANTHROPIC_API_KEY" not in env and "sk-ant-test" not in json.dumps(env)
     yml = (pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text()
     assert "sk-ant-test" not in yml
@@ -68,6 +70,18 @@ def test_an_openai_shape_turn_rides_the_loopback_relay_and_a_custom_endpoint_kee
     from server import _HERMES_RELAY
     assert cfg2["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:") and "sk-test" not in json.dumps(cfg2)
     assert _HERMES_RELAY["routes"][cfg2["providers"]["hr"]["apiKey"]][:2] == ("https://relay.example/v1", "sk-test")
+
+
+def test_custom_responses_format_overrides_omp_model_family():
+    d = tempfile.mkdtemp()
+    _build_omp(
+        "openai-api",
+        Auth(api_key="test-key", base_url="https://relay.example/v1", api_format="responses"),
+        "vendor-model-without-family-prefix", "do work", d, {"HOME": d},
+    )
+    cfg = json.loads((pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text())
+    assert cfg["providers"]["hr"]["api"] == "openai-responses"
+    assert cfg["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:")
 
 
 def test_the_served_model_rides_the_result_and_a_substitution_fails_the_turn():
