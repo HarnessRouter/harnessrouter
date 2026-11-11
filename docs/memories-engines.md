@@ -70,6 +70,36 @@ A schema is only worth having where something reads it. So what you can set foll
 
 **Mem0 and ReMe read none.** Mem0 keeps free text, and in ReMe the folders, frontmatter and links are the structure. Setting a schema on either is refused, because it would look like it was doing something.
 
+## What deleting leaves behind
+
+Deleting a memory removes it from HarnessRouter and from its engine's store, so nothing recalls or shows it again. Two of the engines also keep copies of their own that deleting doesn't reach yet; a coming release clears them with the memory. Until then, this is where they are and how to clear them. The commands use the container names `up.sh` gives (they start with `harnessrouter-memories`, or with your `HR_MEMORIES_NAME`).
+
+| Engine | What stays after a memory is deleted | Where |
+|---|---|---|
+| Mem0 | A history log of every fact it added, changed or deleted, with the words; the last ten messages of each memory's conversations; the names and topics it linked to the facts | `history.db` on the `mem0-history` volume; the `memories_entities` table in Postgres |
+| ReMe | The conversation each record was drawn from; a request that failed is written to its log, conversation included | `session/dialog/` on the `reme` volume; the container's log |
+| Graphiti | Nothing: the memory's file goes, with its log | |
+| Hindsight | Nothing: the memory's documents, facts, entities and model requests go | |
+
+Mem0's history of deleted facts, the messages it keeps for its next extraction, and the names of memories that hold no facts any more:
+
+```sh
+docker exec harnessrouter-memories-mem0-1 python -c "import sqlite3; c = sqlite3.connect('/app/history/history.db'); h = c.execute(\"DELETE FROM history WHERE memory_id IN (SELECT memory_id FROM history WHERE event = 'DELETE')\").rowcount; m = c.execute('DELETE FROM messages').rowcount; c.commit(); c.execute('VACUUM'); print(h, 'history rows and', m, 'messages removed')"
+docker exec -u postgres harnessrouter-memories-postgres-1 psql -d postgres -c "DELETE FROM memories_entities e WHERE NOT EXISTS (SELECT 1 FROM memories m WHERE m.payload->>'user_id' = e.payload->>'user_id')" -c "VACUUM"
+```
+
+The history of facts that still exist stays, since a record's earlier versions are read from it. The next extraction of each memory starts without its earlier messages.
+
+ReMe's conversations of memories that no longer exist:
+
+```sh
+docker exec harnessrouter-memories-reme-1 sh -c 'cd /data && for f in session/dialog/*.jsonl; do [ -e "$f" ] || continue; m=$(basename "$f" | cut -d_ -f1-2); [ -d "digest/$m" ] || rm -f "$f"; done'
+```
+
+ReMe's log goes when its container is recreated: `./up.sh --down`, then `./up.sh`.
+
+Erasing one record, rather than deleting the memory, can leave its words in what it was drawn from (a Graphiti conversation, a Hindsight document); the console says so when it does. Postgres takes deleted rows out of its files at its next vacuum. Copies in your backups, and what was sent to your model provider, are outside all of this. The Mem0 Platform keeps a deleted memory's history on its side, under Mem0's terms.
+
 ## Worth knowing
 
 - **Forgetting a fact closes the conversation that taught it.** Its words are in that conversation too. What else the conversation taught stays.
