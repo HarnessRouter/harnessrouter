@@ -188,7 +188,7 @@ export NEXT_PUBLIC_HR_EDITION=selfhost
 # key, so an instance anyone can reach needs a gate. Defaults exist so the first run works; they
 # are also published in the README, which makes them a placeholder rather than a secret.
 # The Claude Code release this image was verified with; see install_backends.
-export CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.280}"
+export CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.311}"
 export HR_AUTH_USER="${HR_AUTH_USER:-harnessrouter}"
 export HR_AUTH_PASSWORD="${HR_AUTH_PASSWORD:-harnessrouter}"
 export HR_AUTH_STORE="${HR_AUTH_STORE:-/data/selfhost-auth.json}"
@@ -1976,7 +1976,7 @@ install_backends() {
   mkdir -p "$TOOLS"
   # The npm bases' $TOOLS/bin/<cmd> is a link npm_link_bins makes (or, for an override, the one npm -g
   # makes); install_base checks the executable either way.
-  # Claude Code: a model can require a minimum CLI (Claude Opus 5.5 needs 2.1.280; the API refuses
+  # Claude Code: a model can require a minimum CLI (Claude Opus 5.5 needs 2.1.280, Claude Fable 5.2 2.1.290; the API refuses
   # older ones), and a volume that installed the CLI once, months ago, would otherwise never learn it.
   if wanted claude && ! current claude "$(npm_ident claude "$CLAUDE_SPEC")"; then
     echo "[harnessrouter] installing Claude Code $CLAUDE_CODE_VERSION (Anthropic's terms apply)…"
