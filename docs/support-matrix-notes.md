@@ -5516,3 +5516,19 @@ The native app-server adapter is documented in [roder.md](roder.md). Its determi
 process suite covers the released binary's Responses and JSON-RPC contracts. Live provider
 columns, custom-harness measurement, the family tour, browser/environment columns, and
 benchmarks have not been measured. No other harness's verified results apply to Roder.
+
+### Claude Code 2.1.311 (0.41.12)
+
+Claude Code 2.1.280 refused Claude Fable 5.2 ("version 2.1.290 or newer is required"), so the image moves to
+2.1.311, npm's stable release. Read off the new CLI with `scripts/tools-off-check.py --only claude-code` on a
+side instance, against the stand-in model:
+
+- Every tool the catalog can switch off is withheld from the request when it is off (Bash, Read, Edit, Write,
+  and Agent for the catalog's Task). Grep and Glob are tools only while Bash is off; with Bash on, the CLI
+  searches through Bash.
+- New tools: ListAgents, ReportFindings, ScheduleWakeup, Workflow and DeferredToolPlaceholder in the request,
+  and CronCreate, CronDelete, CronList, DesignSync, EnterWorktree, ExitWorktree, Monitor, PushNotification,
+  SendMessage, TaskStop, WebFetch and WebSearch named as tools loaded on demand. The runner now always denies
+  ListAgents, SendMessage, ScheduleWakeup, the Cron tools, PushNotification and DesignSync (other sessions, a
+  later turn, a Claude account), denies Workflow with subagents and Monitor with Bash.
+- The CLI's own auto memory is still on by default, and still off when the platform's memory is attached.
