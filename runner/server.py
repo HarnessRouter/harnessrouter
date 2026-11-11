@@ -3006,7 +3006,9 @@ def _claude_thinking_env(model: str) -> dict:
 
 # Claude Code 2.1.280's built-in tools, by the names its permission rules take, read off the pinned
 # release's own tool definitions. The gateway's catalog offers switches only from these (or from an
-# id in _CLAUDE_TOOL_RENAMES), which gateway/tests/test_catalog_tool_names.py holds.
+# id in _CLAUDE_TOOL_RENAMES), which gateway/tests/test_catalog_tool_names.py holds. 2.1.311 still takes
+# every switch the catalog offers (tools-off-check: each switched-off tool withheld); the tools it added
+# are in _CLAUDE_TOOL_ALSO and _CLAUDE_ALWAYS_DENY below.
 CLAUDE_TOOLS = ("Agent", "AskUserQuestion", "Bash", "Edit", "EnterPlanMode", "ExitPlanMode", "Glob", "Grep",
                 "LSP", "NotebookEdit", "Read", "Skill", "TaskCreate", "TaskGet", "TaskList", "TaskStop",
                 "TaskUpdate", "TodoWrite", "ToolSearch", "WebFetch", "WebSearch", "Write")
@@ -3014,6 +3016,19 @@ CLAUDE_TOOLS = ("Agent", "AskUserQuestion", "Bash", "Edit", "EnterPlanMode", "Ex
 # tool before it became Agent: harnesses store the catalog's id, so the id stays, and the deny list is
 # written with the current name rather than relying on the CLI's own table of old names.
 _CLAUDE_TOOL_RENAMES = {"Task": "Agent"}
+# A switch also withholds the tool that does the same thing another way: Workflow runs subagents as Agent does,
+# and Monitor runs a shell command as Bash does. Claude Code 2.1.311 drops Monitor itself when Bash is denied
+# (measured), but nothing promises a later release keeps that, so the deny list says it.
+_CLAUDE_TOOL_ALSO = {"Agent": ("Workflow",), "Bash": ("Monitor",)}
+# Claude Code 2.1.311's tools that reach past this one turn, read off the request it sends with nothing
+# switched off (scripts/tools-off-check.py, 0.41.12). Denied on every turn, as _KILO_ALWAYS_DENY is:
+# - ListAgents and SendMessage find and message other Claude Code sessions on the same machine, and on a
+#   self-hosted box another person's turn can be one of them;
+# - ScheduleWakeup and CronCreate/CronDelete/CronList promise a later turn: every turn here is one process the
+#   gateway starts, nothing resumes a session unasked, so the agent would say it will come back and never would;
+# - PushNotification and DesignSync act on a Claude account's devices and designs, which a turn here has none of.
+_CLAUDE_ALWAYS_DENY = ("ListAgents", "SendMessage", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList",
+                       "PushNotification", "DesignSync")
 
 
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
@@ -3140,8 +3155,9 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     # Reconciled on EVERY turn, not only when something is off: HOME is checkpointed, so a deny list an
     # earlier turn wrote stayed in the file after the harness switched the tool back on, and the tool
     # stayed withheld. Anything else the file holds is left as it is.
-    names = list(dict.fromkeys(_CLAUDE_TOOL_RENAMES.get(n, n) for n in
-                               (t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip())))
+    off = [_CLAUDE_TOOL_RENAMES.get(n, n) for n in
+           (t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip())]
+    names = list(dict.fromkeys([*off, *(a for n in off for a in _CLAUDE_TOOL_ALSO.get(n, ())), *_CLAUDE_ALWAYS_DENY]))
     settings_path = cfg_dir / "settings.json"
     try:
         current = json.loads(settings_path.read_text()) if settings_path.exists() else {}

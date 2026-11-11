@@ -25,5 +25,5 @@ def test_the_clis_own_question_tool_is_denied(tmp_path):
                            disallowed_tools=["Bash", "AskUserQuestion"])
     assert cmd[:2] == ["claude", "-p"] and "--mcp-config" in cmd
     settings = json.loads((tmp_path / "home" / ".claude" / "settings.json").read_text())
-    assert settings["permissions"]["deny"] == ["Bash", "AskUserQuestion"]
+    assert settings["permissions"]["deny"] == ["Bash", "AskUserQuestion", "Monitor", *rs._CLAUDE_ALWAYS_DENY]
     assert "--disallowedTools" not in cmd          # the deny list is the enforcement, not the flag
