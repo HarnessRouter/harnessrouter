@@ -296,6 +296,24 @@ jobs:
           # Root never runs what the product user can change, read off the running container.
           docker exec --privileged -i smoke sh < scripts/check-root-boundary.sh \
             || { echo "::error::root runs something the product user can change on ${{ matrix.arch }}"; exit 1; }
+          # The runner starts with no secret in its environment (docker/entrypoint.sh). Names only are read,
+          # and only a count is printed.
+          docker exec --privileged smoke python3 -I -c '
+          import glob, re
+          pat = re.compile(r"^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$|_KEY$|_PASS(WORD)?$|_PWD$|_CREDENTIALS?$|_DSN$", re.I)
+          seen = bad = 0
+          for d in glob.glob("/proc/[0-9]*"):
+              try:
+                  if b"uvicorn\0server:app" not in open(d + "/cmdline", "rb").read():
+                      continue
+                  names = [kv.split(b"=", 1)[0].decode() for kv in open(d + "/environ", "rb").read().split(b"\0") if kv]
+              except OSError:
+                  continue
+              seen += 1
+              bad += sum(1 for n in names if pat.search(n))
+          print(f"runner processes: {seen}, secret-shaped names in their environment: {bad}")
+          raise SystemExit(0 if seen and not bad else 1)
+          ' || { echo "::error::the runner holds a secret in its environment on ${{ matrix.arch }}"; exit 1; }
           # Nothing left to read in a session: a canary in every credential, one turn per base, and each
           # looked for in the session's processes and files, on the volume and in what a client reads. One
           # architecture is enough: where a credential goes doesn't depend on the CPU.

@@ -146,7 +146,7 @@ if _SESSION_UIDS:
     # _fs_as changes a thread's filesystem uid and gid. Supplementary groups stay the process's, and root's hold
     # group 0, so inside that scope a link the session planted still reached whatever group 0 could write. Root
     # needs none of them (its capabilities decide outside the scope), and every session process is given its own
-    # list (_as_session).
+    # list (_in_session, through setpriv).
     os.setgroups([])
     _secured = environments.secure_store()   # environments from before per-environment groups
     if _secured:
@@ -158,8 +158,38 @@ if _SESSION_UIDS:
 # bedrock or vertex turn reaches its provider through the relay, see _bedrock_relay_route).
 _SECRET_ENV = re.compile(r"^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$"
                          r"|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD"
-                         r"|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$", re.I)
-_INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
+                         r"|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$"
+                         # and the shapes an operator's own names take: FOO_KEY, DB_PASS, SMTP_PWD,
+                         # X_CREDENTIALS, SENTRY_DSN (docker/entrypoint.sh holds the same list)
+                         r"|_KEY$|_PASS(WORD)?$|_PWD$|_CREDENTIALS?$|_DSN$", re.I)
+# A value that carries a password in a URL (DATABASE_URL=postgres://user:pass@host/db) is a secret
+# whatever its name. A proxy's is kept: an agent behind an authenticating proxy needs it to reach
+# anything, and the operator put it there for exactly that.
+_URL_CREDENTIAL = re.compile(r"://[^/@\s:]*:[^/@\s]*@")
+_PROXY_ENV = re.compile(r"^(HTTP|HTTPS|ALL|FTP|NO)_PROXY$", re.I)
+
+
+def _secret_env(name: str, value: str) -> bool:
+    return bool(_SECRET_ENV.search(name)) or (bool(_URL_CREDENTIAL.search(value or "")) and not _PROXY_ENV.match(name))
+def _read_internal_key() -> str:
+    """The internal key the gateway signs its calls with. The image's entrypoint hands it over in a
+    root-only file (HR_INTERNAL_KEY_FILE) and starts the runner with no secret in its environment.
+    A file that was named and cannot be read stops the runner, rather than leaving its routes
+    without a key."""
+    path = os.environ.get("HR_INTERNAL_KEY_FILE", "")
+    if not path:
+        return os.environ.get("HARNESS_INTERNAL_KEY", "")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            key = fh.read().strip()
+    except OSError as e:
+        raise RuntimeError(f"HR_INTERNAL_KEY_FILE names {path}, which cannot be read: {e.strerror}") from None
+    if not key:
+        raise RuntimeError(f"HR_INTERNAL_KEY_FILE names {path}, which is empty")
+    return key
+
+
+_INTERNAL_KEY = _read_internal_key()
 _uid_lock = threading.Lock()
 
 # How long an untouched session workspace is kept. Sessions are resumable from their checkpoint,
@@ -253,16 +283,33 @@ def _session_uid(ws: str) -> int | None:
     return uid if _SESSION_UID_BASE <= uid < _SESSION_UID_BASE + _SESSION_UID_SPAN else None
 
 
-def _as_session(ws: str, env: dict | None = None) -> dict:
-    """Popen/run keyword arguments that make a child act as this session. Empty when the wall is
-    off, so every spawn site reads the same with or without it. A turn's agent process (the sites
-    that pass the turn's env) also joins the group of the one environment the turn names, which is
-    what lets it read that environment and no other (runner/environments.py)."""
+_SETPRIV = shutil.which("setpriv") or "/usr/bin/setpriv"
+
+
+def _in_session(argv: list[str], ws: str, env: dict | None = None) -> list[str]:
+    """The command line that runs `argv` as this session: unchanged when the wall is off, so every
+    spawn site reads the same with or without it. A turn's agent process (the sites that pass the
+    turn's env) also joins the group of the one environment the turn names, which is what lets it
+    read that environment and no other (runner/environments.py).
+
+    The identity change is setpriv's: root execs it with the child's own scrubbed environment, and
+    setpriv then takes the session's uid and groups. Never Popen's user=/group=."""
     uid = _session_uid(ws)
     if uid is None:
-        return {}
+        return list(argv)
+    if not (os.path.isfile(_SETPRIV) and os.access(_SETPRIV, os.X_OK)):
+        # never run a session's process as root because the tool that drops the uid is missing
+        raise RuntimeError(f"setpriv is not available ({_SETPRIV}); a session process cannot start without it")
+    # The parent's lookup, as Popen made it: a CLI that is not installed still fails the spawn with
+    # FileNotFoundError naming it, rather than as setpriv's exit code after it started.
+    # setpriv resolves argv[0] on the same PATH (the child's environment), so argv stays as given.
+    if not argv or not shutil.which(argv[0], path=(env or os.environ).get("PATH")):
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), argv[0] if argv else "")
     gid = environments.reader_gid((env or {}).get("HR_ENVIRONMENT"))
-    return {"user": uid, "group": uid, "extra_groups": [gid] if gid is not None else []}
+    groups = f"--groups={gid}" if gid is not None else "--clear-groups"
+    # --inh-caps=-all: nothing in the inheritable set either, so no capability can come back through a
+    # file's own capabilities after the exec
+    return [_SETPRIV, f"--reuid={uid}", f"--regid={uid}", groups, "--inh-caps=-all", "--", *argv]
 
 
 def _ensure_passwd(uid: int, home: str) -> None:
@@ -827,7 +874,7 @@ def _child_env() -> dict:
     """The environment an agent process starts from: the runner's, minus anything secret-shaped.
     On the self-hosted box the runner's environment is the container's, and that carried the
     console password, the internal key and the secret-store key into every agent process."""
-    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
+    return {k: v for k, v in os.environ.items() if not _secret_env(k, v)}
 
 
 @app.middleware("http")
@@ -1147,8 +1194,9 @@ _GIT_SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
 def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", ws, *_GIT_SAFE, *args], capture_output=True, text=True,
-                          env={**_child_env(), **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
+    genv = {**_child_env(), **_GIT_ENV, **(env or {})}
+    return subprocess.run(_in_session(["git", "-C", ws, *_GIT_SAFE, *args], ws, genv), capture_output=True, text=True,
+                          env=genv, check=check)
 
 
 # Config the runner rewrites every turn and that can carry MCP credentials (see CHECKPOINT_EXCLUDE).
@@ -16272,7 +16320,7 @@ def _run_turn_proc(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize,
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+        proc = subprocess.Popen(_in_session(cmd, cwd, env), cwd=cwd, env=env, text=True, bufsize=1,
                                 # NOTHING a turn runs may wait on stdin. A CLI that takes its
                                 # prompt there reads the turn's prompt file (_prompt_handover),
                                 # which ends; every other one gets nothing, never the runner's
@@ -16287,7 +16335,7 @@ def _run_turn_proc(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize,
                                 # turned out to be irrelevant.
                                 stdin=stdin,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True, **_as_session(cwd, env))
+                                start_new_session=True)
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return
@@ -16667,9 +16715,9 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
             print(f"[resume] codex app-server: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
             append({"type": "assistant", "message": {"content": [{"type": "text", "text": _CODEX_NO_ROLLOUT_NOTE}]}})
     try:
-        proc = subprocess.Popen(["codex", "app-server"], cwd=cwd, env=env, text=True, bufsize=1,
+        proc = subprocess.Popen(_in_session(["codex", "app-server"], cwd, env), cwd=cwd, env=env, text=True, bufsize=1,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True, **_as_session(cwd, env))
+                                start_new_session=True)
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn app-server: {e}"[:500], done=True)
         return
@@ -17130,9 +17178,9 @@ def _run_hermes_proc(turn_id: str, cwd: str, env: dict, model: str, provider: st
         cmd = launch + ["-z", PROMPT_ARG, "--provider", provider, "--model", model,
                         "--usage-file", usage_path]
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+        proc = subprocess.Popen(_in_session(cmd, cwd, env), cwd=cwd, env=env, text=True, bufsize=1,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                start_new_session=True, **_as_session(cwd, env))
+                                start_new_session=True)
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return
@@ -17583,8 +17631,9 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         restored = False
         if nbytes:
             with open(spool_path, "rb") as tar_in:
-                proc = subprocess.run(["tar", "xzf", "-", "-C", ws], stdin=tar_in, capture_output=True,
-                                      env=_child_env(), **_as_session(ws))
+                tenv = _child_env()
+                proc = subprocess.run(_in_session(["tar", "xzf", "-", "-C", ws], ws, tenv), stdin=tar_in,
+                                      capture_output=True, env=tenv)
             if proc.returncode != 0:
                 raise HTTPException(500, f"untar failed: {proc.stderr.decode(errors='replace')[:300]}")
             restored = True
@@ -17651,8 +17700,9 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
         # the runner's environment. A file the session cannot read is left out (--ignore-failed-read) and named
         # in the log, rather than failing the checkpoint; any other failure still fails it.
         with os.fdopen(fd, "wb") as out:
-            proc = subprocess.run(["tar", "--ignore-failed-read", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
-                                  stdout=out, stderr=subprocess.PIPE, env=_child_env(), **_as_session(ws))
+            tenv = _child_env()
+            proc = subprocess.run(_in_session(["tar", "--ignore-failed-read", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
+                                              ws, tenv), stdout=out, stderr=subprocess.PIPE, env=tenv)
         if proc.returncode != 0:
             os.unlink(tar_path)
             raise HTTPException(500, f"tar failed: {proc.stderr.decode(errors='replace')[:300]}")
@@ -18816,8 +18866,8 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
     job = {"purge": True, "cwd": ws, "base_url": relay_base, "api_key": relay_tok}
     try:
         penv = _child_env()
-        proc = subprocess.run(_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv), capture_output=True, text=True,
-                              env=penv, timeout=180, **_as_session(ws))
+        proc = subprocess.run(_in_session(_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv), ws, penv),
+                              capture_output=True, text=True, env=penv, timeout=180)
     except Exception as e:  # noqa: BLE001
         print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
         return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}

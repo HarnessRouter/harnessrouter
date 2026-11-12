@@ -18,7 +18,9 @@ canary, raw, base64 and url-encoded, wherever a session could read it or carry i
 A scan that looks in the wrong place finds nothing, and nothing looks like a pass. So each place has
 a control, a value that MUST be found there. Missing it fails the base as BLIND.
 
-Prints labels and paths, never a value. Exit 0 only when every base is clean and no base is blind.
+Never prints a value. A clean or blind base gets its row; a leak prints only a count, because a release log is
+public and which base leaked what, and where, points at an unfixed issue in a published image. That detail goes to
+DETAIL, root-only, inside the container. Exit 0 only when every base is clean and no base is blind.
 Stdlib only, since this runs on the image's own python.
 """
 from __future__ import annotations
@@ -50,6 +52,7 @@ SESSION_UID_MIN = 20000             # the runner's per-session uids start here
 SKIP_AT_REST = ("/data/agent-tools", "/data/environments")   # GBs of tool installs, written before any canary
 SECRET_FILES = ("/data/secret-key", "/data/selfhost-initial-password")   # hold the instance's own, by design
 MAX_FILE = 8 * 1024 * 1024
+DETAIL = "/root/secret-canary-gate-detail.json"   # what leaked and where: root-only, never printed
 HOLD_S = 12                         # how long the first model call of a base waits, so its CLI is alive to scan
 TURN_S = 180
 MCP_ADDRESS = "hr-mcp-"
@@ -526,6 +529,7 @@ def main() -> int:
                         pass
 
     failed = 0
+    detail: dict = {"bases": {}, "instance": {}}
     for r in rows:
         base = r["base"]
         leaks = {}
@@ -542,16 +546,24 @@ def main() -> int:
             blind.append("mcp-address")
         state = "LEAK" if leaks else "BLIND" if blind else "clean"
         failed += state != "clean"
+        if leaks:
+            # A release log is public: which base, which credential and where it was found point at an
+            # unfixed issue in a published image. They go to the detail file; the log shows a count.
+            detail["bases"][base] = {lab.split(":")[-1]: where for lab, where in leaks.items()}
+            continue
         print(f"{state:5} {base:16} turn {r['status'] or '-':11} model {'y' if r['backend'] in Stand.model_reached else 'n'} "
               f"mcp {'y' if r['backend'] in Stand.mcp_reached else 'n'} blind {','.join(blind) or '-'} {r['error'][:90]}", flush=True)
-        for lab, where in leaks.items():
-            print(f"      {lab.split(':')[-1]}: {where}", flush=True)
     inst = {lab: sorted(table.where(lab))[:6] for lab in table.by_label if lab.startswith("instance:") and table.where(lab)}
     session_inst = {lab: [w for w in where if w.startswith(("process ", "session folder", "client read"))] for lab, where in inst.items()}
     session_inst = {k: v for k, v in session_inst.items() if v}
     if session_inst:
         failed += 1
-        print(f"LEAK  instance secrets in a session or a client read: {session_inst}", flush=True)
+        detail["instance"] = session_inst
+    if detail["bases"] or detail["instance"]:
+        with open(os.open(DETAIL, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+            json.dump(detail, fh, indent=1)
+        print(f"LEAK  found: {len(detail['bases'])} base(s), {len(detail['instance'])} instance secret(s). "
+              f"Details are in {DETAIL} inside the container, never in this log", flush=True)
     # The at-rest controls: the volume scan must be able to see a value that is stored in the clear.
     if not any(any(w.startswith("volume:") for w in table.where(f"{r['base']}:control:env")) for r in rows):
         failed += 1
