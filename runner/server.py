@@ -1294,6 +1294,16 @@ def _write_gitignore(gi: pathlib.Path) -> None:
 
 
 
+_GIT_OID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
+
+def _git_oid(out: str) -> str:
+    """An object id as git printed it, or "". The session's repo is the agent's, so an id read back
+    from it is used as an argument only when it is one: never a value that could read as an option."""
+    out = (out or "").strip()
+    return out if _GIT_OID.fullmatch(out) else ""
+
+
 def _git_shed_cli_home_history(ws: str) -> None:
     """Rewrite a pre-#193 workspace repo down to what /produced reads — the collected cursor's
     tree and HEAD's tree, each without .harness/home — and prune everything else.
@@ -1315,18 +1325,18 @@ def _git_shed_cli_home_history(ws: str) -> None:
         env = {"GIT_INDEX_FILE": scratch}
         _git(ws, "read-tree", commit, env=env)
         _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home", env=env)
-        return _git(ws, "write-tree", env=env).stdout.strip()
+        return _git_oid(_git(ws, "write-tree", env=env).stdout)
 
     try:
         parent: list[str] = []
         if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
             c_tree = _tree_without_home(_COLLECTED_REF)
-            c_new = _git(ws, "commit-tree", c_tree, "-m", "collected (cli home history shed)").stdout.strip()
+            c_new = _git_oid(_git(ws, "commit-tree", c_tree, "-m", "collected (cli home history shed)").stdout) if c_tree else ""
             if c_new:
                 _git(ws, "update-ref", _COLLECTED_REF, c_new)
                 parent = ["-p", c_new]
         h_tree = _tree_without_home("HEAD")
-        h_new = _git(ws, "commit-tree", h_tree, *parent, "-m", "checkpoint (cli home history shed)").stdout.strip()
+        h_new = _git_oid(_git(ws, "commit-tree", h_tree, *parent, "-m", "checkpoint (cli home history shed)").stdout) if h_tree else ""
         if h_new:
             _git(ws, "update-ref", "HEAD", h_new)      # HEAD is symbolic: this moves the branch
     finally:
@@ -17748,8 +17758,9 @@ def _collected_init(ws: str) -> None:
     semantics: what arrived in the checkpoint was not produced by any turn here."""
     if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode != 0:
         head = _git(ws, "rev-parse", "-q", "--verify", "HEAD")
-        if head.returncode == 0:
-            _git(ws, "update-ref", _COLLECTED_REF, head.stdout.strip())
+        oid = _git_oid(head.stdout) if head.returncode == 0 else ""
+        if oid:
+            _git(ws, "update-ref", _COLLECTED_REF, oid)
 
 
 def _collected_at_turn_start(ws: str) -> None:
@@ -17861,8 +17872,9 @@ def _produced_ack(ws: str) -> str:
     _git_ensure(ws)
     _git(ws, "add", "-A")
     _git(ws, "commit", "-q", "-m", f"collected {int(time.time())}", "--allow-empty")
-    head = _git(ws, "rev-parse", "HEAD").stdout.strip()
-    _git(ws, "update-ref", _COLLECTED_REF, head)
+    head = _git_oid(_git(ws, "rev-parse", "HEAD").stdout)
+    if head:
+        _git(ws, "update-ref", _COLLECTED_REF, head)
     return head
 
 
