@@ -455,7 +455,7 @@ def agent_body(job: dict, skills: list[dict], mcp_servers: list[dict]) -> dict:
             "tools": tools_config(job.get("tools_disabled") or []),
             "mcp_servers": mcp_servers,
             "skills": [{"type": "custom", "skill_id": s["id"], "version": s["version"]} for s in skills],
-            "metadata": {"harnessrouter": "1"}}
+            "metadata": {"harnessrouter": "1", "source": "harnessrouter"}}
 
 
 def system_prompt(job: dict) -> str:
@@ -632,7 +632,8 @@ class Turn:
         created = self.api.environment_create({
             "name": f"harnessrouter {pathlib.Path(self.cwd).name}"[:256],
             "description": "Created by HarnessRouter for one session; deleted with it.",
-            "config": {"type": "cloud"}, "metadata": {"harnessrouter": "1"}})
+            "config": {"type": "cloud"},
+            "metadata": {"harnessrouter": "1", "source": "harnessrouter"}})
         env_id = str((created or {}).get("id") or "")
         if not env_id:
             raise ApiError(0, "api_error", "environment create returned no id", "/environments")
@@ -651,7 +652,9 @@ class Turn:
             return [self.st["vault_id"]] if self.st.get("vault_id") else []
         vid = str(self.st.get("vault_id") or "")
         if not vid:
-            created = self.api.vault_create(f"harnessrouter {pathlib.Path(self.cwd).name}"[:255], {"harnessrouter": "1"})
+            created = self.api.vault_create(
+                f"harnessrouter {pathlib.Path(self.cwd).name}"[:255],
+                {"harnessrouter": "1", "source": "harnessrouter"})
             vid = str((created or {}).get("id") or "")
             if not vid:
                 raise ApiError(0, "api_error", "vault create returned no id", "/vaults")
@@ -747,7 +750,7 @@ class Turn:
         body: dict = {"agent": {"id": aid, "type": "agent", "version": version},
                       "environment_id": env_id,
                       "title": f"HarnessRouter {pathlib.Path(self.cwd).name}"[:200],
-                      "metadata": {"harnessrouter": "1"}}
+                      "metadata": {"harnessrouter": "1", "source": "harnessrouter"}}
         if vault_ids:
             body["vault_ids"] = vault_ids
         if resources:
