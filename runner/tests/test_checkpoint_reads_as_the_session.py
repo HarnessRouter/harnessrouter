@@ -112,13 +112,16 @@ def _fake_runs(monkeypatch, tar_result):
     seen = []
 
     def run(cmd, *a, **kw):
-        if cmd and cmd[0] == "tar":
-            seen.append(kw)
+        # a session's tar is started through setpriv: [setpriv, --reuid=…, …, "--", "tar", …]
+        prog = cmd[cmd.index("--") + 1:] if cmd and cmd[0] == server._SETPRIV and "--" in cmd else cmd
+        if prog and prog[0] == "tar":
+            seen.append({**kw, "argv": list(cmd)})
             return subprocess.CompletedProcess(cmd, tar_result[0], b"", tar_result[1])
         return subprocess.CompletedProcess(cmd, 0, "", "")
     monkeypatch.setattr(server.subprocess, "run", run)
     monkeypatch.setattr(server, "_git_ensure", lambda ws: None)
     monkeypatch.setattr(server, "_session_uid", lambda ws: UID)
+    monkeypatch.setattr(server, "_SETPRIV", sys.executable)     # present on any OS; nothing here really runs it
     return seen
 
 
@@ -138,7 +141,10 @@ def test_tar_runs_as_the_session_from_the_agents_environment(runner_anywhere, mo
     seen = _fake_runs(monkeypatch, (0, b""))
     assert runner_anywhere.get("/checkpoint", params={"identifier": IDENT}).status_code == 200
     kw = seen[0]
-    assert kw.get("user") == UID and kw.get("group") == UID
+    # as the session, through setpriv, never Popen's user=
+    assert kw["argv"][:7] == [server._SETPRIV, f"--reuid={UID}", f"--regid={UID}", "--clear-groups",
+                              "--inh-caps=-all", "--", "tar"]
+    assert "user" not in kw and "group" not in kw
     assert "HARNESS_INTERNAL_KEY" not in (kw.get("env") or {}) and kw.get("env") is not None
 
 

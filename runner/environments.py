@@ -30,6 +30,7 @@ with EACCES; that is the enforcement, not an instruction.
 from __future__ import annotations
 
 import asyncio
+import errno
 import grp
 import hashlib
 import json
@@ -216,10 +217,30 @@ def _source(env_id: str) -> pathlib.Path:
 
 
 def _build_as(env_id: str) -> dict:
-    """Popen/run arguments that make a build step run as the environment's own identity; empty
-    off root, so every step reads the same with or without it."""
+    """The identity a build step runs as, the environment's own; empty off root, so every step reads
+    the same with or without it. _as_identity turns it into the command line that does it."""
     gid = env_gid(env_id)
     return {"user": gid, "group": gid, "extra_groups": []} if gid is not None and _root() else {}
+
+
+_SETPRIV = shutil.which("setpriv") or "/usr/bin/setpriv"
+
+
+def _as_identity(argv: list[str], run_as: dict | None, env: dict | None = None) -> list[str]:
+    """`argv` run as `run_as`'s identity, through setpriv: root execs it with the step's own environment,
+    and setpriv then takes the build's identity. Never Popen's user=/group= (runner/server.py _in_session
+    does the same for sessions)."""
+    uid = (run_as or {}).get("user")
+    if uid is None:
+        return list(argv)
+    if not (os.path.isfile(_SETPRIV) and os.access(_SETPRIV, os.X_OK)):
+        raise RuntimeError(f"setpriv is not available ({_SETPRIV}); a build step cannot start without it")
+    if not argv or not shutil.which(argv[0], path=(env if env is not None else os.environ).get("PATH")):
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), argv[0] if argv else "")
+    gid = (run_as or {}).get("group", uid)
+    extra = (run_as or {}).get("extra_groups") or []
+    groups = f"--groups={','.join(str(g) for g in extra)}" if extra else "--clear-groups"
+    return [_SETPRIV, f"--reuid={uid}", f"--regid={gid}", groups, "--inh-caps=-all", "--", *argv]
 
 
 def _own(path: pathlib.Path, uid: int, gid: int) -> None:
@@ -815,7 +836,7 @@ def _run(log: list[str], cmd: list[str], cwd: str, env: dict, deadline: float, r
     if flush:
         flush()
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=left, **(run_as or {}))
+        r = subprocess.run(_as_identity(cmd, run_as, env), cwd=cwd, env=env, capture_output=True, text=True, timeout=left)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{cmd[0]} did not finish within the build's {BUILD_TIMEOUT}s")
     if r.stdout.strip():
@@ -834,15 +855,16 @@ def _packages(dst: pathlib.Path, env: dict, run_as: dict | None = None) -> list[
     pip = dst / ".venv" / "bin" / "pip"
     if pip.is_file():
         try:
-            r = subprocess.run([str(pip), "list", "--format=json"], capture_output=True, text=True, timeout=120, env=env, **run_as)
+            r = subprocess.run(_as_identity([str(pip), "list", "--format=json"], run_as, env), capture_output=True, text=True,
+                               timeout=120, env=env)
             for row in json.loads(r.stdout or "[]"):
                 out.append({"manager": "pip", "name": str(row.get("name")), "version": str(row.get("version"))})
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
     if (dst / "node_modules").is_dir():
         try:
-            r = subprocess.run(["npm", "ls", "--json", "--depth=0"], cwd=str(dst), capture_output=True, text=True,
-                               timeout=120, env=env, **run_as)
+            r = subprocess.run(_as_identity(["npm", "ls", "--json", "--depth=0"], run_as, env), cwd=str(dst),
+                               capture_output=True, text=True, timeout=120, env=env)
             deps = (json.loads(r.stdout or "{}") or {}).get("dependencies") or {}
             for name, info in sorted(deps.items()):
                 out.append({"manager": "npm", "name": name, "version": str((info or {}).get("version") or "")})
@@ -951,8 +973,9 @@ def _end_build_processes(gid: int | None) -> None:
     if gid is None or not _root():
         return
     try:
-        subprocess.run([sys.executable, "-I", "-c", "import os,signal\ntry:\n os.kill(-1,signal.SIGKILL)\nexcept ProcessLookupError:\n pass"],
-                       user=gid, group=gid, extra_groups=[], cwd="/", env={}, capture_output=True, timeout=30)
+        subprocess.run(_as_identity([sys.executable, "-I", "-c", "import os,signal\ntry:\n os.kill(-1,signal.SIGKILL)\nexcept ProcessLookupError:\n pass"],
+                                    {"user": gid, "group": gid, "extra_groups": []}, {"PATH": "/usr/bin:/bin"}),
+                       cwd="/", env={}, capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:
         raise RuntimeError(f"could not end the build's processes: {type(e).__name__}") from e
 

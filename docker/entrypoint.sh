@@ -2198,9 +2198,27 @@ if [ -n "$missing" ]; then
 fi
 
 # runner (loopback only). Root, for the per-session uid switch; HR_SESSION_UIDS=1 is the
-# declaration the runner fails closed without. The console's credentials and the secret-store key
-# are the product's and are not in its environment at all.
-( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
+# declaration the runner fails closed without. No secret is in its environment at all: the console's
+# credentials and the secret-store key are the product's, and so is every secret-shaped name an
+# operator passed with -e (the names runner/server.py _SECRET_ENV strips from agent processes). The
+# internal key, the one secret it needs, comes in a root-only file.
+RUNNER_SECRET_ENV='^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$|_KEY$|_PASS(WORD)?$|_PWD$|_CREDENTIALS?$|_DSN$'
+RUNNER_URL_CREDENTIAL='://[^/@[:space:]:]*:[^/@[:space:]]*@'
+RUNNER_PROXY_ENV='^(HTTP|HTTPS|ALL|FTP|NO)_PROXY$'
+runner_env_only() {
+  local v
+  shopt -s nocasematch
+  for v in $(compgen -e); do
+    if [[ $v =~ $RUNNER_SECRET_ENV ]]; then export -n "$v"; continue; fi
+    # a password in a URL is a secret whatever the name; a proxy's stays (agents need it to reach anything)
+    if [[ ${!v} =~ $RUNNER_URL_CREDENTIAL && ! $v =~ $RUNNER_PROXY_ENV ]]; then export -n "$v"; fi
+  done
+  shopt -u nocasematch
+}
+RUNNER_KEY_DIR=/run/harnessrouter
+install -d -m 700 -o root -g root "$RUNNER_KEY_DIR"
+( umask 077; printf '%s' "$HARNESS_INTERNAL_KEY" > "$RUNNER_KEY_DIR/internal-key" )
+( cd /app/runner && runner_env_only && exec env HR_INTERNAL_KEY_FILE="$RUNNER_KEY_DIR/internal-key" \
     HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host 127.0.0.1 --port 8081 --log-level warning ) &
 pids+=($!)
 
