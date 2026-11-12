@@ -349,6 +349,7 @@ def test_a_turn_with_a_tool_call_and_an_artifact(tmp_path, stub):
     assert not (tmp_path / ".harness" / "report.md").exists()
     # the Agent: the disabled tool is out of the whitelist AND named disallowed; the rest always_allow
     agent = stub.posted("POST", "/agents")[0][2]
+    assert agent["metadata"]["source"] == "harnessrouter"
     ts = agent["tools"][0]
     assert ts["type"] == "agent_toolset_20260401" and "Bash" not in ts["enabled_tools"] and ts["disallowed_tools"] == ["Bash"]
     assert all(c["permission_policy"]["type"] == "always_allow" for c in ts["configs"] if c.get("enabled"))
@@ -357,6 +358,8 @@ def test_a_turn_with_a_tool_call_and_an_artifact(tmp_path, stub):
     # the session pinned the Agent's version and the environment the turn created
     sess = stub.posted("POST", "/sessions")[0][2]
     assert sess["agent"] == {"id": agent_id(stub), "type": "agent", "version": 1} and sess["environment_id"].startswith("env_")
+    assert sess["metadata"]["source"] == "harnessrouter"
+    assert stub.posted("POST", "/environments")[0][2]["metadata"]["source"] == "harnessrouter"
     # the message went once, then the stream was opened from its id
     msgs = [c for c in stub.calls if c[0] == "POST" and c[1].endswith("/events")]
     assert len(msgs) == 1 and msgs[0][2]["events"][0]["content"] == [{"type": "text", "text": "write a report"}]
@@ -769,6 +772,7 @@ def test_skills_are_published_once_by_content_and_a_stdio_server_is_declared_una
     assert agent["skills"] == [{"type": "custom", "skill_id": "skill_" + agent["skills"][0]["skill_id"].split("_")[1], "version": "100"}]
     assert agent["mcp_servers"] == [{"name": "docs", "type": "url", "url": "https://mcp.example/mcp"}]
     # the bearer went into a Vault credential and the session names the vault; the token never in the Agent
+    assert stub.posted("POST", "/vaults")[0][2]["metadata"]["source"] == "harnessrouter"
     cred = [c for c in stub.calls if c[0] == "POST" and "/credentials" in c[1]][0][2]
     assert cred["auth"] == {"type": "static_bearer", "mcp_server_url": "https://mcp.example/mcp", "token": "s3cret"}
     assert "s3cret" not in json.dumps(agent)
