@@ -296,6 +296,11 @@ jobs:
           # Root never runs what the product user can change, read off the running container.
           docker exec --privileged -i smoke sh < scripts/check-root-boundary.sh \
             || { echo "::error::root runs something the product user can change on ${{ matrix.arch }}"; exit 1; }
+          # The browser libraries root installed with apt are the ones the pinned Playwright, the one the venv
+          # holds, asks for on the Debian this container runs, and every one of them is installed.
+          docker cp scripts/check-chromium-libs.py smoke:/tmp/check-chromium-libs.py
+          docker exec smoke python3 -I /tmp/check-chromium-libs.py \
+            || { echo "::error::the browser libraries are not the pinned Playwright's on ${{ matrix.arch }}"; exit 1; }
           # Nothing left to read in a session: a canary in every credential, one turn per base, and each
           # looked for in the session's processes and files, on the volume and in what a client reads. One
           # architecture is enough: where a credential goes doesn't depend on the CPU.

@@ -105,9 +105,10 @@ The agent CLIs are installed the same way. On the first start, root downloads ea
 it against a version and a digest written into the image. Anything that runs a downloaded package's
 own code runs as a separate user for that agent alone: npm or pip filling its folder, an install
 script, the checks that it works. When the install finishes, nothing of that user is left running,
-and the folder belongs to root again. One step still runs as root: the system libraries for the
-System One agent's browser, which Playwright installs with apt. An install can reach the network,
-as it must to download, so on a cloud VM block the metadata address as
+and the folder belongs to root again. Root itself installs one thing: the system libraries for the
+System One agent's browser, with apt, from a package list written into the image, so what root runs
+there is Debian's and nothing a download brought. An install can reach the network, as it must to
+download, so on a cloud VM block the metadata address as
 [Running on a cloud VM](#running-on-a-cloud-vm) shows; that covers the agents too.
 
 No extra privilege is granted to get there: no `--privileged`, no `--cap-add`, no custom seccomp

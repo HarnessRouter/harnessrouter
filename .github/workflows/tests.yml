@@ -38,6 +38,11 @@ jobs:
       - run: python3 scripts/test-check-install-pins.py
       - run: python3 scripts/check-install-pins.py
       - run: python3 scripts/test-install-env.py
+      # The browser libraries root installs with apt (docker/entrypoint.sh, CHROMIUM_LIBS) are the pinned
+      # Playwright's own, read off its source at that tag, for the image's Debian 13 on both architectures.
+      # The release gate checks the same against the driver the venv installed, in the container.
+      - run: python3 scripts/test-check-chromium-libs.py
+      - run: python3 scripts/check-chromium-libs.py --fetch --distro debian13-x64 --distro debian13-arm64
 
   # deploy/memories/up.sh, the parts that need no Docker: .env at mode 600, which container is
   # HarnessRouter, and that the image never carries a .env from the engines' folder.
