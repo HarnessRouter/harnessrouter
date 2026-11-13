@@ -20410,6 +20410,8 @@ def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
 # harnesses.md §4.3):
 #   hard        — the CLI enforces it (claude: a permissions.deny rule takes these exact names).
 #   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
+# A base whose switch reaches some of its tools and not others is "instruction", with the ones it
+# does withhold named in `hard_tools` (_tool_enforcement): each tool is labelled for what happens to it.
 _BASE_CATALOG: dict[str, dict] = {
     "codex": {
         "label": "Codex", "backend": "codex", "status": "ready",
@@ -20491,10 +20493,15 @@ _BASE_CATALOG: dict[str, dict] = {
         # The sdk profile's model-facing tools, read off the request header of a 0.1.2rc1 turn
         # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). The switch is
         # the profile's rows: a tool whose row registers nothing else is withheld (bash,
-        # str_replace_editor, web_fetch, todo_write, skill, subagent, subagent_fork, workflow;
-        # dsh_driver._rows_off), glob and grep only together, and read, write and edit never, since
-        # their row also holds read_image. So the base stays "instruction": the request covers what
-        # the rows cannot.
+        # str_replace_editor, todo_write, skill, subagent, subagent_fork, workflow;
+        # dsh_driver.TOOL_ROWS and _rows_off), and so is web_fetch, by its row's own `fetch` switch
+        # (dsh_driver._compose_patch). Those are `hard_tools`: the bases document labels each of
+        # them hard, so Settings never says "This agent can't switch it off" of a tool the agent is
+        # not offered once it is off.
+        # glob and grep share a row and are withheld only together, read, write and edit never,
+        # since their row also holds read_image: one of them alone is only asked, so the base stays
+        # "instruction" and they keep that label. gateway/tests/test_dsh_tool_labels.py holds the
+        # list to the driver's rows.
         # web_search is not offered: dsh's stock provider calls DeepSeek's own API with the relay's placeholder
         # key (401 every time, and off the turn's connection), so the driver turns that row off.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
@@ -20504,6 +20511,8 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("subagent", "Subagent"), ("subagent_fork", "Subagent (fork)"),
                   ("workflow", "Workflow")],
         "tool_enforcement": "instruction",
+        "hard_tools": ("bash", "str_replace_editor", "todo_write", "skill", "subagent", "subagent_fork",
+                       "workflow", "web_fetch"),
     },
     "goose": {
         "label": "goose", "backend": "goose", "status": "ready",
@@ -21125,6 +21134,13 @@ _BASE_CATALOG: dict[str, dict] = {
         "tool_enforcement": "hard",
     },
 }
+
+
+def _tool_enforcement(b: dict, tool: str) -> str:
+    """How far switching off one of a base's tools goes: "hard" for a tool its runtime withholds
+    (`hard_tools`, on a base that withholds only some), else the base's own word."""
+    return "hard" if tool in b.get("hard_tools", ()) else b["tool_enforcement"]
+
 
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
 # `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
@@ -25809,7 +25825,8 @@ async def list_bases(request: Request) -> dict:
             "models": [{"id": m["id"], "available": m["available"], "default": m["default"],
                         "reasoning": list(reasoning.levels_for(m["id"]))}
                        for m in view["models"]],
-            "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
+            # each tool's own word: a base's `hard_tools` are withheld even where the rest are only asked
+            "tools": [{"name": n, "label": lbl, "enforcement": _tool_enforcement(b, n)}
                       for n, lbl in b["tools"]],
             # Skills bundled into the image, which every base can use. A base ALSO discovers
             # skills of its own at run time that nothing outside a turn can enumerate, so
