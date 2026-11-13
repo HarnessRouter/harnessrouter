@@ -34,8 +34,9 @@ def test_env_clean_keeps_shell_safe_names_and_refuses_the_runtimes_own():
 
 
 def test_harness_env_resolves_header_vault_and_literal_and_names_the_secrets(monkeypatch):
-    async def _vault(org, auth):
+    async def _vault(org, auth, *, use, ws, any_ws=False):
         assert org == "org.a" and auth == "vault:harness-mcp-deploy-key"
+        assert use == gw.USE_ENV and not any_ws          # an environment value resolves for the environment only
         return "from-the-vault"
     monkeypatch.setattr(gw, "_resolve_mcp_auth", _vault)
     hv = {"env": json.dumps({"TOKEN": "$headers.X-App-Token", "DEPLOY": "vault:harness-mcp-deploy-key",
@@ -52,16 +53,20 @@ def test_a_vault_reference_reads_only_the_orgs_own_mcp_secrets(monkeypatch):
 
     async def _vault_get(tenant, key):
         asked.append((tenant, key))
+        if key.startswith(gw._MCP_BIND_PREFIX):       # every key here is bound to the environment of the Default Workspace
+            return json.dumps({"uses": [gw.USE_ENV], "workspaces": ["default"]})
         return f"<{tenant}>:{key}"
     monkeypatch.setattr(gw, "_vault_get", _vault_get)
     mine = gw._org_tenant("org.attacker.example")
-    assert asyncio.run(gw._resolve_mcp_auth("org.attacker.example", "vault:harness-mcp-github")) == f"<{mine}>:harness-mcp-github"
+    res = lambda org, ref: asyncio.run(gw._resolve_mcp_auth(org, ref, use=gw.USE_ENV, ws=""))  # noqa: E731
+    assert res("org.attacker.example", "vault:harness-mcp-github") == f"<{mine}>:harness-mcp-github"
     for ref in ("vault:harness-conn-OpenRouter", "vault:harness-integrations", "vault:harness-media-access",
-                "vault:harness-policy-x", "vault:" + gw._HOSTED_SECRET_PREFIX + "x", "vault:anything"):
-        assert asyncio.run(gw._resolve_mcp_auth("org.attacker.example", ref)) == "", ref
+                "vault:harness-policy-x", "vault:" + gw._HOSTED_SECRET_PREFIX + "x", "vault:anything",
+                "vault:" + gw._MCP_BIND_PREFIX + "github"):            # a binding record is never a secret
+        assert res("org.attacker.example", ref) == "", ref
     assert all(t == mine for t, _ in asked) and gw.GLOBAL_TENANT not in {t for t, _ in asked}
-    assert asyncio.run(gw._resolve_mcp_auth("", "vault:harness-mcp-github")) == ""      # no org, nothing resolves
-    assert asyncio.run(gw._resolve_mcp_auth("org.a", "literal-bearer")) == "literal-bearer"
+    assert res("", "vault:harness-mcp-github") == ""      # no org, nothing resolves
+    assert res("org.a", "literal-bearer") == "literal-bearer"
 
 
 def test_an_mcp_secret_is_stored_in_the_orgs_own_tenant(monkeypatch):
@@ -70,11 +75,17 @@ def test_an_mcp_secret_is_stored_in_the_orgs_own_tenant(monkeypatch):
     async def _vault_put(tenant, key, value):
         put.append((tenant, key, value))
     monkeypatch.setattr(gw, "_vault_put", _vault_put)
-    out = asyncio.run(gw._mcp_secret_store("org.songrenchu.example.com", "GitHub token", "ghp_x"))
-    assert put == [(gw._org_tenant("org.songrenchu.example.com"), "harness-mcp-github-token", "ghp_x")]
+    async def _vault_get(tenant, key):
+        return None
+    monkeypatch.setattr(gw, "_vault_get", _vault_get)
+    out = asyncio.run(gw._mcp_secret_store("org.songrenchu.example.com", "GitHub token", "ghp_x", ws=""))
+    tenant = gw._org_tenant("org.songrenchu.example.com")
+    assert put[0] == (tenant, "harness-mcp-github-token", "ghp_x")
+    # bound as it is stored: to the workspace it was stored in, and (no address given) to no use until first named
+    assert put[1] == (tenant, "harness-mcpbind-github-token", json.dumps({"uses": [], "workspaces": ["default"]}))
     assert out["ref"] == "vault:harness-mcp-github-token" and out["tenant"] != gw.GLOBAL_TENANT
     with pytest.raises(gw.HTTPException):
-        asyncio.run(gw._mcp_secret_store("", "x", "y"))
+        asyncio.run(gw._mcp_secret_store("", "x", "y", ws=""))
 
 
 def test_env_clean_refuses_the_loader_the_import_paths_the_trust_roots_and_the_proxies():

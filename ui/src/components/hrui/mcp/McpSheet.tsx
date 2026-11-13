@@ -8,7 +8,9 @@
 //   that failed is said beside Save.
 // - a token can be a per-request header reference (`$headers.Name`): shown as text, never stored,
 //   and the setup's declared headers are offered as one-click references.
-// - a stored token is never shown: the field says it is stored and an empty field keeps it.
+// - a stored token is never shown: the field says it is stored and an empty field keeps it. It is sent
+//   only to the server it was stored for (its host and port): an edit that moves the server to another
+//   one says so under the token, until a token is pasted for the new address.
 // - Remove, asked in the sheet itself.
 // - From Add-ons, adding is two steps (Richard, 2026-10-18): this sheet makes it (its button says
 //   Next, `next`), then Add to setups (ext/AddToSheet) chooses the setups that get it, each keeping
@@ -19,6 +21,7 @@
 // reference kept on the setup), then the setup's record (Add-ons) or its Settings draft.
 import { useMemo, useRef, useState } from 'react';
 import { testMcp, storeMcpSecret, type McpServer } from '@/lib/harness';
+import { tokenHost } from '@/lib/mcp-host';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import { Sheet, SheetTop } from '../Sheet';
 import { Skel, SkLine } from '../Skel';
@@ -33,11 +36,11 @@ export const addrKey = (u: string) => u.trim().replace(/\/+$/, '').toLowerCase()
 export const newMcpId = () => 'mcp.' + crypto.randomUUID().replace(/-/g, '').slice(0, 8);
 
 /** The auth a copy keeps: a typed header reference as it is, a typed token stored securely under
- *  this copy's id (only the reference is kept), nothing typed keeps `keep`. */
-export async function authFor(id: string, typed: string, keep: string | undefined): Promise<string | undefined> {
+ *  this copy's id for the server at `url` (only the reference is kept), nothing typed keeps `keep`. */
+export async function authFor(id: string, typed: string, keep: string | undefined, url?: string): Promise<string | undefined> {
   const t = typed.trim();
   if (!t) return keep;
-  return isHeaderRef(t) ? t : storeMcpSecret(id, t);
+  return isHeaderRef(t) ? t : storeMcpSecret(id, t, url);
 }
 
 /** A setup the server can be added to, and its copy of the server when it has one. */
@@ -106,6 +109,9 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
   const urlRef = useRef<HTMLInputElement | null>(null);
 
   const typedHdr = isHeaderRef(tok.trim());
+  // the stored token goes only to the server it was stored for: at another address, say so until a token is pasted
+  const keptFor = stored ? tokenHost(server?.url) : '';
+  const movedFrom = keptFor && !tok.trim() && okEndpoint(url) && tokenHost(url) !== keptFor ? keptFor.replace(/:(?:443|80)$/, '') : '';
   // a test answers for the endpoint and token it was run with; typing either makes it old
   const key = `${url.trim()}\n${tok.trim()}`;
   const cur = test && test.key === key ? test : null;
@@ -176,10 +182,13 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
       <div className="set-f"><label htmlFor="mcTok">Bearer token {typedHdr ? <span className="mcp-kind">per-request header</span> : <span className="muted">optional</span>}</label>
         <input id="mcTok" className="set-in mono" type={typedHdr ? 'text' : 'password'} autoComplete="off" spellCheck={false}
           placeholder={stored ? 'Stored. Leave empty to keep it.' : 'Paste a token, or $headers.Name'} value={tok}
-          aria-describedby={typedHdr ? 'mcTokHelp' : undefined} onChange={(e) => setTok(e.target.value)} onKeyDown={enter} />
+          aria-describedby={typedHdr ? 'mcTokHelp' : movedFrom ? 'mcTokMoved' : undefined} onChange={(e) => setTok(e.target.value)} onKeyDown={enter} />
         {/* said only once a header reference is typed: what it does differs from a token */}
         {typedHdr ? (
           <p className="set-help" id="mcTokHelp">Not stored. The value of the <code>{hdrName || 'Name'}</code> header your app sends with each task is passed to this server on every call.</p>
+        ) : null}
+        {movedFrom ? (
+          <p className="set-help mcp-warn" id="mcTokMoved">The stored token is sent only to {movedFrom}. Paste it again to use it at this address.</p>
         ) : null}
         {lacking.length ? (
           <p className="set-help mcp-warn">{lacking.join(', ')} {lacking.length === 1 ? 'does' : 'do'} not take a <code>{hdrName}</code> header yet. Add it in Environment &amp; limits under Headers, or the server gets no token.</p>

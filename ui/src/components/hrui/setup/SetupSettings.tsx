@@ -710,7 +710,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           onSave={async (v) => {
             const id = mcpEdit?.id || newMcpId();
             let auth: string | undefined;
-            try { auth = await authFor(id, v.token, mcpEdit?.auth); } catch { return 'The token could not be stored. Try again.'; }
+            try { auth = await authFor(id, v.token, mcpEdit?.auth, v.url); } catch { return 'The token could not be stored. Try again.'; }
             const m: McpServer = { ...(mcpEdit || { transport: 'http', enabled: true }), id, name: v.name, url: v.url };
             if (auth) m.auth = auth; else delete m.auth;
             set('mcp', pop.i != null ? c.mcp.map((x, k) => (k === pop.i ? m : x)) : [...c.mcp, m]);

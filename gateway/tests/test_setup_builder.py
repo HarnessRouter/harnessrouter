@@ -122,7 +122,11 @@ def env(monkeypatch):
     who = {"p": dict(ADA)}
     chat = FakeChat()
     store: dict[str, dict] = {r["id"]: dict(r) for r in _setup_rows()}
-    vault: dict[tuple[str, str], str] = {(gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001"): "crm-token-not-real"}
+    vault: dict[tuple[str, str], str] = {
+        (gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001"): "crm-token-not-real",
+        # bound as a store binds it: the server it was stored for, in the workspace its setup is in
+        (gw._org_tenant(ORG_A), "harness-mcpbind-mcp-crm00001"): json.dumps(
+            {"uses": [gw._mcp_use_of_url("https://crm.acme.example/mcp")], "workspaces": [WS_A]})}
     rec: dict = {"plugs_attach": [], "media": [], "offered": [], "lookups": [], "wires": [], "runner_envs": {}}
 
     async def principal(_request):

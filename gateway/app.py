@@ -4043,12 +4043,120 @@ def _vault_key(auth) -> str:
 
 
 _MCP_SECRET_PREFIX = "harness-mcp-"
+# A whole stored reference, as PUT /v1/mcp-secrets returns it. Only a value stored on the harness itself is read as
+# one: text a task's $headers put in is the caller's own, a literal, never a reference (_mcp_stored_ref).
+_MCP_REF_RE = re.compile(r"^vault:(harness-mcp-[a-z0-9-]+)$")
 
 
-async def _resolve_mcp_auth(org: str, auth: str) -> str:
+# ── Where a stored secret may go ──────────────────────────────────────────────────────────────
+# A stored MCP secret is bound to what it was saved for: the server it was stored for ("host:<host>:<port>") or the
+# environment ("env"), and the workspaces whose harnesses may name it. Every workspace of an organization shares one
+# secret store, and the runner writes a resolved token into the session's own .harness/mcp.json, so a binding by
+# address alone would not keep a token in its workspace: a key held to another workspace could name it at the right
+# address and read its own session. The binding sits beside the key under harness-mcpbind-, which nothing that
+# stores, resolves or deletes a secret by name can reach (each of those takes harness-mcp- only).
+_MCP_BIND_PREFIX = "harness-mcpbind-"
+USE_ENV = "env"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+_MCP_HOST_OK_RE = re.compile(r"[a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?|[0-9a-f:.]+")
+
+
+def _mcp_sha8(key: str) -> str:
+    return hashlib.sha256(str(key).encode()).hexdigest()[:8]
+
+
+def _mcp_stored_ref(value) -> str:
+    """The key a value stored on a harness references, or "" when it is not a whole stored reference."""
+    m = _MCP_REF_RE.match(value) if isinstance(value, str) else None
+    return m.group(1) if m else ""
+
+
+def _mcp_use_of_url(url) -> str:
+    """The use a server's address gives a stored secret: "host:<host>:<port>", read from the PARSED address the way
+    the connection is really made (httpx's host, lowercased, its trailing dot dropped; the port the connection goes
+    to). "" for anything that isn't a whole http(s) address with a fixed host, and "" matches no binding."""
+    raw = str(url or "").strip()
+    # Parsers disagree on these: a backslash, user information, whitespace and control characters. Python reads
+    # "https://Y\\@X/" as host X; a WHATWG parser (most MCP clients) reads host Y. So none binds anything, and the
+    # address the binding names is the one every client dials.
+    if not raw or "\\" in raw or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in raw):
+        return ""
+    try:
+        u = urllib.parse.urlsplit(raw)
+        if "@" in u.netloc:
+            return ""
+        scheme = u.scheme.lower()
+        split_host = (u.hostname or "").rstrip(".")
+        split_port = u.port
+        x = httpx.URL(raw)
+        host = x.raw_host.decode("ascii").lower().rstrip(".")
+        port = x.port
+    except (ValueError, UnicodeError, httpx.InvalidURL):
+        return ""
+    default = _DEFAULT_PORTS.get(scheme)
+    if not default or not host or split_port == 0 or "$" in host or x.scheme.lower() != scheme:
+        return ""
+    # urlsplit and httpx must read one host, in the form httpx dials it (IDNA 2008); when they disagree, nothing binds
+    try:
+        import idna
+        agreed = split_host.lower() if split_host.isascii() else idna.encode(split_host.lower()).decode("ascii")
+    except Exception:  # noqa: BLE001 -- idna.IDNAError and UnicodeError alike
+        return ""
+    if agreed != host or (split_port or default) != (port or default) or ("" in host.split(".") and ":" not in host):
+        return ""
+    if not _MCP_HOST_OK_RE.fullmatch(host):
+        return ""          # a name no resolver would look up: never one a binding names
+    return f"host:{host}:{port or default}"
+
+
+def _mcp_ws(org: str, ws) -> str:
+    """One name for a workspace in a binding: the Default Workspace has three spellings."""
+    ws = str(ws or "")
+    return "default" if ws in ("", "default", _WORKSPACE_DEFAULT_ID, f"{org or ''}__hr_default") else ws
+
+
+def _mcp_bind_key(key: str) -> str:
+    return _MCP_BIND_PREFIX + key[len(_MCP_SECRET_PREFIX):]
+
+
+async def _mcp_binding_get(tenant: str, key: str) -> dict | None:
+    """{"uses": set, "workspaces": set} for a stored key; None when it has none. A binding that can't be read as one
+    binds the key to nothing: it never reads as "no binding"."""
+    raw = await _vault_get(tenant, _mcp_bind_key(key))
+    if raw is None:
+        return None
+    try:
+        doc = json.loads(raw)
+    except (TypeError, ValueError):
+        doc = None
+    doc = doc if isinstance(doc, dict) else {}
+    pick = lambda k: {u for u in (doc.get(k) or []) if isinstance(u, str) and u}  # noqa: E731
+    return {"uses": pick("uses"), "workspaces": pick("workspaces")}
+
+
+async def _mcp_binding_add(tenant: str, key: str, *, uses=(), workspaces=()) -> dict:
+    """Add to a key's binding (a union; nothing is taken away here) and answer what it holds."""
+    have = await _mcp_binding_get(tenant, key)
+    cur = have or {"uses": set(), "workspaces": set()}
+    want = {"uses": cur["uses"] | {u for u in uses if u}, "workspaces": cur["workspaces"] | {w for w in workspaces if w}}
+    if have is None or want != have:
+        await _vault_put(tenant, _mcp_bind_key(key),
+                         json.dumps({"uses": sorted(want["uses"]), "workspaces": sorted(want["workspaces"])}))
+    return want
+
+
+async def _mcp_binding_delete(tenant: str, key: str) -> None:
+    with contextlib.suppress(Exception):
+        await _vault_delete(tenant, _mcp_bind_key(key))
+
+
+async def _resolve_mcp_auth(org: str, auth: str, *, use: str, ws, any_ws: bool = False) -> str:
     """Resolve an MCP server auth value or an environment value. 'vault:<key>' is the secret the
     org stored through PUT /v1/mcp-secrets (the key that call returned, under harness-mcp-),
-    read from the org's OWN vault tenant and nowhere else. Anything else is the literal.
+    read from the org's OWN vault tenant and nowhere else, and only for what it is bound to: `use`
+    (the server's _mcp_use_of_url, or USE_ENV) and `ws`, the workspace of the harness it goes to
+    (`any_ws`: a connection test by a caller that reaches the whole organization, never a turn).
+    Anything else is the literal.
 
     Two doors are shut here on purpose. The platform pool is never consulted: a reference is
     written by a customer and resolved into that customer's sandbox, and until 2026-09-22 the
@@ -4061,6 +4169,14 @@ async def _resolve_mcp_auth(org: str, auth: str) -> str:
         tenant = _org_tenant(org)
         if not tenant or not key.startswith(_MCP_SECRET_PREFIX) or key.startswith(_HOSTED_SECRET_PREFIX):
             print(f"[mcp] refusing to resolve {key[:40]!r} for {org}: not an MCP secret of this org", flush=True)
+            return ""
+        bound = await _mcp_binding_get(tenant, key)
+        why = ("not bound" if bound is None else "not stored for this use" if (not use or use not in bound["uses"])
+               else "not stored for this workspace" if not any_ws and _mcp_ws(org, ws) not in bound["workspaces"]
+               else "")
+        if why:
+            kind = use if str(use).startswith("host:") else (use or "-")
+            print(f"[mcp] stored secret {_mcp_sha8(key)} not resolved for {kind}: {why}", flush=True)
             return ""
         return await _vault_get(tenant, key) or ""
     return auth or ""
@@ -4140,10 +4256,14 @@ async def _harness_env(hv: dict | None, org: str, hdr_vals: dict[str, str]) -> t
     an empty string, so a shell test for the variable says what happened."""
     out: dict[str, str] = {}
     secret: list[str] = []
+    ws = (hv or {}).get("workspace")
     for name, ref in _parse_env((hv or {}).get("env")).items():
-        val = _sub_headers(ref, hdr_vals) if "$headers." in ref else ref
-        if isinstance(val, str) and val.startswith("vault:"):
-            val = await _resolve_mcp_auth(org, val)
+        # Only the value stored on the harness is a reference; what a request's $headers put in is the
+        # caller's own text, a literal, and is never resolved (one pass, stored value first).
+        if isinstance(ref, str) and ref.startswith("vault:"):
+            val = await _resolve_mcp_auth(org, ref, use=USE_ENV, ws=ws)
+        else:
+            val = _sub_headers(ref, hdr_vals) if "$headers." in ref else ref
         if not val:
             continue
         out[name] = str(val)
@@ -4237,17 +4357,27 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             continue
         entry = {"name": s.get("name") or s.get("id") or "mcp", "url": _url,
                  "transport": s.get("transport") or "http"}
-        # $headers refs resolve BEFORE vault: an auth of "$headers.X-App-JWT" is the caller's
-        # per-request token, not a vault key. Values are injected here, gateway-side, so the
-        # runner only ever receives fully-resolved literals (same contract as vault refs).
-        raw_auth = _sub_headers(str(s.get("auth") or ""), _hvals)
-        token = await _resolve_mcp_auth(org, raw_auth)
+        # One pass, the STORED value first: a stored reference resolves for the address this turn
+        # really connects to (the url after substitution, the same string handed to the runner) and
+        # for this harness's workspace. A $headers value ("$headers.X-App-JWT") is the caller's
+        # per-request text, substituted as a literal and never resolved, so a request can't name a
+        # stored key. Values are injected here, gateway-side: the runner receives literals only.
+        use = _mcp_use_of_url(_url)
+        ws = v.get("workspace")
+
+        async def _value(stored) -> str:
+            stored = str(stored or "")
+            if stored.startswith("vault:"):
+                return await _resolve_mcp_auth(org, stored, use=use, ws=ws)
+            return _sub_headers(stored, _hvals)
+
+        token = await _value(s.get("auth"))
         if token:
             entry["auth"] = token
         if isinstance(s.get("headers"), dict):
             entry["headers"] = {}
             for k, vv in s["headers"].items():     # a value kept in the store is resolved the way auth is
-                val = await _resolve_mcp_auth(org, _sub_headers(str(vv), _hvals))
+                val = await _value(vv)
                 if val:
                     entry["headers"][k] = val
         mcp_out.append(entry)
@@ -14988,6 +15118,10 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
 
 class McpSecretBody(BaseModel):
     token: str
+    # What the secret is for: the address of the server it is stored for, and/or the environment. A store that
+    # names neither keeps the uses it had, and a secret with none is bound where a harness first names it.
+    url: str | None = None
+    env: bool = False
 
 
 class McpTestBody(BaseModel):
@@ -14995,58 +15129,136 @@ class McpTestBody(BaseModel):
     auth: str | None = None   # literal bearer OR vault:<ref> (left blank → no auth)
 
 
-async def _mcp_secret_store(org: str, ref: str, token: str) -> dict:
+def _mcp_caller_ws(request: Request, p: dict) -> tuple[str, bool]:
+    """(the workspace a secret route acts in, whether the caller is held to it). A key held to a workspace acts in its
+    own, whatever header it sends; any other caller reaches the whole organization and names the workspace it is in."""
+    scoped = _key_scope(p)
+    return (scoped, True) if scoped else (str(request.headers.get("x-harness-workspace") or "default"), False)
+
+
+def _mcp_secret_key(ref: str) -> str:
+    # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
+    safe = re.sub(r"[^a-z0-9]+", "-", str(ref).lower()).strip("-") or "mcp"
+    return f"{_MCP_SECRET_PREFIX}{safe}"
+
+
+def _mcp_not_stored() -> HTTPException:
+    """The one answer for a stored secret a caller can't reach, the same as for one that doesn't exist."""
+    return uhp_error(404, "not_found", "There is no stored secret by that name in this workspace.", "ref")
+
+
+async def _mcp_secret_store(org: str, ref: str, token: str, *, ws, scoped: bool = False,
+                            uses: set[str] | None = None) -> dict:
     """Store a secret under a stable ref in the org's own vault tenant, so a harness config
     carries only 'vault:<key>' and the live token never lands in the graph. The org's tenant
     and nothing else: a dotted org id used to fall to the shared pool, where every org's
-    reference could read every other org's secret."""
+    reference could read every other org's secret.
+
+    It is bound as it is stored, to the workspace `ws` alone and, when `uses` names any, to those uses
+    alone: a stored value is new, so where an old one went no longer follows (a name another workspace
+    took first never carries its value there). A caller held to a workspace never writes over a secret
+    bound elsewhere."""
     tenant = _org_tenant(org)
     if not tenant:
         raise HTTPException(400, "no org to store the secret for")
-    # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
-    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
-    key = f"{_MCP_SECRET_PREFIX}{safe}"
+    key = _mcp_secret_key(ref)
+    w = _mcp_ws(org, ws)
+    bound = await _mcp_binding_get(tenant, key)
+    if scoped and (bound is None or w not in bound["workspaces"]) and (
+            bound is not None or await _vault_get(tenant, key) is not None):
+        raise _mcp_not_stored()
     await _vault_put_credential(tenant, key, token, "token")
+    named = {u for u in (uses or ()) if u}
+    have = bound or {"uses": set(), "workspaces": set()}
+    await _vault_put(tenant, _mcp_bind_key(key), json.dumps({
+        "uses": sorted(named or have["uses"]), "workspaces": [w]}))
     return {"ref": f"vault:{key}", "tenant": tenant}
+
+
+def _mcp_store_uses(body: McpSecretBody) -> set[str]:
+    """The uses a store call names. An address that isn't a whole http(s) address with a fixed host is refused: a
+    secret can't be bound to a host that is filled in per task."""
+    uses: set[str] = set()
+    if body.url:
+        use = _mcp_use_of_url(body.url)
+        if not use:
+            raise uhp_error(422, "invalid_secret_use",
+                            "A stored secret is bound to the server it is for, so its address must be a fixed "
+                            "http(s) address.", "url")
+        uses.add(use)
+    if body.env:
+        uses.add(USE_ENV)
+    return uses
 
 
 @app.put("/v1/orgs/{org}/mcp-secrets/{ref}")
 async def put_mcp_secret(org: str, ref: str, body: McpSecretBody, request: Request) -> dict:
-    await _owned_org(request, org)
     """Store an MCP server bearer token in the vault under a stable ref, so the harness config
     stores only 'vault:<ref>' and the live token never lands in the graph. Stored in the org's
     own vault tenant when valid, else the global pool (dotted org ids aren't valid vault tenants)."""
-    return await _mcp_secret_store(org, ref, body.token)
+    p = await _owned_org(request, org)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_store(org, ref, body.token, ws=ws, scoped=scoped, uses=_mcp_store_uses(body))
 
 
 @app.delete("/v1/orgs/{org}/mcp-secrets/{ref}")
 async def delete_mcp_secret(org: str, ref: str, request: Request) -> dict:
-    await _owned_org(request, org)
-    return await _mcp_secret_delete(org, ref)
+    p = await _owned_org(request, org)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_delete(org, ref, ws=ws, scoped=scoped)
 
 
-async def _mcp_secret_delete(org: str, ref: str) -> dict:
+async def _mcp_secret_delete(org: str, ref: str, *, ws, scoped: bool = False) -> dict:
     """Remove a stored MCP server token, at once and for good: a credential is not kept after its
     delete (Richard's rule, 2026-10-08), and before this the only way to be rid of one was to
-    overwrite it. A harness that still names the reference runs without it."""
+    overwrite it. A harness that still names the reference runs without it. A caller held to a
+    workspace removes only a secret bound to it."""
     tenant = _org_tenant(org)
     if not tenant:
         raise HTTPException(400, "no org to remove the secret for")
-    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
-    key = f"{_MCP_SECRET_PREFIX}{safe}"
+    key = _mcp_secret_key(ref)
+    if scoped:
+        bound = await _mcp_binding_get(tenant, key)
+        if bound is None or _mcp_ws(org, ws) not in bound["workspaces"]:
+            raise _mcp_not_stored()
     await BACKING.secrets.delete(tenant, key)
+    await _mcp_binding_delete(tenant, key)
     return {"ref": f"vault:{key}", "deleted": True}
+
+
+def _mcp_redact(obj, token: str):
+    """`obj` with every appearance of `token` taken out: a server that echoes the request back never hands a stored
+    token to whoever asked for the test."""
+    if not token:
+        return obj
+    if isinstance(obj, str):
+        return obj.replace(token, "[redacted]")
+    if isinstance(obj, list):
+        return [_mcp_redact(x, token) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _mcp_redact(v, token) for k, v in obj.items()}
+    return obj
+
+
+async def _mcp_test(org: str, body: McpTestBody, request: Request, p: dict) -> dict:
+    """Probe an MCP server (initialize + tools/list) so the config UI can validate a server and
+    show its tools before saving. A vault:<ref> auth resolves server-side, only for the address
+    being tested and only where the caller reaches the secret; the answer never carries it."""
+    if not body.url:
+        raise HTTPException(400, "url required")
+    ws, scoped = _mcp_caller_ws(request, p)
+    auth = str(body.auth or "")
+    token = auth
+    if auth.startswith("vault:"):
+        # a caller that reaches the whole organization may test a secret wherever it is bound
+        token = await _resolve_mcp_auth(org, auth, use=_mcp_use_of_url(body.url), ws=ws, any_ws=not scoped)
+    return _mcp_redact(await _mcp_list_tools(body.url, token), token)
 
 
 @app.post("/v1/orgs/{org}/mcp-test")
 async def test_mcp(org: str, body: McpTestBody, request: Request) -> dict:
-    await _owned_org(request, org)
-    """Probe an MCP server (initialize + tools/list) so the config UI can validate a server and
-    show its tools before saving. Resolves a vault:<ref> auth to the live token server-side."""
-    if not body.url:
-        raise HTTPException(400, "url required")
-    token = await _resolve_mcp_auth(org, str(body.auth or ""))
-    return await _mcp_list_tools(body.url, token)
+    p = await _owned_org(request, org)
+    return await _mcp_test(org, body, request, p)
 
 
 # ── PUBLIC mcp-secret + mcp-test (Bearer sk-hr-... key; org resolved from the key) ─────
@@ -15054,23 +15266,22 @@ async def test_mcp(org: str, body: McpTestBody, request: Request) -> dict:
 # harness config — so the live token never lands in the graph and never sits in plaintext config.
 @app.put("/v1/mcp-secrets/{ref}")
 async def put_mcp_secret_public(ref: str, body: McpSecretBody, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    return await _mcp_secret_store(org, ref, body.token)
+    org, p = await _pub_org_principal(request)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_store(org, ref, body.token, ws=ws, scoped=scoped, uses=_mcp_store_uses(body))
 
 
 @app.delete("/v1/mcp-secrets/{ref}")
 async def delete_mcp_secret_public(ref: str, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    return await _mcp_secret_delete(org, ref)
+    org, p = await _pub_org_principal(request)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_delete(org, ref, ws=ws, scoped=scoped)
 
 
 @app.post("/v1/mcp-test")
 async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    if not body.url:
-        raise HTTPException(400, "url required")
-    token = await _resolve_mcp_auth(org, str(body.auth or ""))
-    return await _mcp_list_tools(body.url, token)
+    org, p = await _pub_org_principal(request)
+    return await _mcp_test(org, body, request, p)
 
 
 # ── The database, an ordinary MCP server ──────────────────────────────────────────────────────
@@ -15367,7 +15578,7 @@ async def _mcp_migrate(org: str, hid: str, v: dict | None) -> dict | None:
     # A token written on a harness before its record stopped holding them goes to the secret store
     # here, the same once-and-in-place as below. A harness nothing reads keeps it until something does.
     listed = _mcp_list(v)
-    sealed = await _mcp_seal_literals(org, listed)
+    sealed = await _mcp_seal_literals(org, listed, ws=v.get("workspace"))
     if sealed != listed:
         await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(sealed)})
         v = {**v, "mcp_servers": json.dumps(sealed)}
@@ -21500,30 +21711,190 @@ def _mcp_is_literal(value) -> bool:
     return isinstance(value, str) and bool(value) and not value.startswith("vault:") and "$headers." not in value
 
 
-async def _mcp_seal_literals(org: str, servers: list[dict]) -> list[dict]:
+async def _mcp_seal_literals(org: str, servers: list[dict], *, ws=None) -> list[dict]:
     """A token or header value written on a harness goes to the secret store, and the record keeps
     only the reference, the shape the console already writes. A harness record is a row in a
     database, in the clear, and #624's promise is about every stored credential. A store that can't
-    encrypt is left as it was: there is nowhere better to put the value."""
+    encrypt is left as it was: there is nowhere better to put the value. Each is bound to its
+    server's address and the harness's workspace `ws`. A server whose host is filled in per task
+    keeps its literals as they are: a stored secret can't be bound to a host the caller picks."""
     if getattr(BACKING.secrets, "encrypts", True) is False or not _org_tenant(org):
         return servers
     out: list[dict] = []
     for s in servers:
         e = dict(s) if isinstance(s, dict) else s
-        if isinstance(e, dict):
+        use = _mcp_use_of_url(e.get("url")) if isinstance(e, dict) else ""
+        if isinstance(e, dict) and use:
             if _mcp_is_literal(e.get("auth")):
-                e["auth"] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", e["auth"]))["ref"]
+                e["auth"] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", e["auth"],
+                                                     ws=ws, uses={use}))["ref"]
             if isinstance(e.get("headers"), dict):
                 hdrs = dict(e["headers"])
                 for k, v in hdrs.items():
                     if _mcp_is_literal(v):
-                        hdrs[k] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", v))["ref"]
+                        hdrs[k] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", v,
+                                                           ws=ws, uses={use}))["ref"]
                 e["headers"] = hdrs
         out.append(e)
     return out
 
 
-async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None) -> list[dict]:
+def _mcp_secret_refused(code: str, msg: str, param: str) -> HTTPException:
+    return uhp_error(422, code, msg, param)
+
+
+async def _mcp_refs_named(org: str, p: dict | None, ws, servers: list | None, env: dict | None) -> None:
+    """Check, then bind, every stored secret a harness write names: a server's auth and headers at
+    that server's address, an environment value in the environment. For a harness in workspace `ws`:
+    - a secret not bound to `ws` is refused to a caller held to a workspace, in the words used for one
+      that doesn't exist; a caller that reaches the whole organization adds `ws` to it;
+    - a secret bound to no use yet is bound to this one (its first naming); one bound to other uses
+      is refused here, so it is stored again for this address rather than carried to a new one.
+    Nothing is written unless every name passes."""
+    named: list[tuple[str, str, str]] = []      # (key, use, param)
+    for s in servers or []:
+        if not isinstance(s, dict):
+            continue
+        use = _mcp_use_of_url(s.get("url"))
+        hdrs = s.get("headers") if isinstance(s.get("headers"), dict) else {}
+        for v in [s.get("auth"), *hdrs.values()]:
+            k = _mcp_stored_ref(v)
+            if k:
+                named.append((k, use, "mcp_servers"))
+    for v in (env or {}).values() if isinstance(env, dict) else ():
+        k = _mcp_stored_ref(v)
+        if k:
+            named.append((k, USE_ENV, "env"))
+    tenant = _org_tenant(org)
+    if not named or not tenant:
+        return
+    scoped = bool(_key_scope(p or {}))
+    w = _mcp_ws(org, ws)
+    adds: dict[str, tuple[set, set]] = {}
+    for key, use, param in named:
+        bound = await _mcp_binding_get(tenant, key)
+        if bound is None and await _vault_get(tenant, key) is None:
+            if scoped:
+                raise _mcp_secret_refused("invalid_secret_ref",
+                                          "There is no stored secret by that name in this workspace.", param)
+            continue                                 # names nothing: resolves nothing, as before
+        cur = bound or {"uses": set(), "workspaces": set()}
+        uses, wss = adds.setdefault(key, (set(), set()))
+        if w not in cur["workspaces"]:
+            if scoped:
+                raise _mcp_secret_refused("invalid_secret_ref",
+                                          "There is no stored secret by that name in this workspace.", param)
+            wss.add(w)
+        if not use:
+            raise _mcp_secret_refused("invalid_secret_use",
+                                      "A stored secret goes only to a server with a fixed http(s) address.", param)
+        if use in cur["uses"]:
+            continue
+        if cur["uses"] or (uses and use not in uses):
+            raise _mcp_secret_refused(
+                "secret_other_use",
+                "This stored secret was stored for another server or for the environment. Store it again "
+                "for this one to use it here.", param)
+        uses.add(use)
+    for key, (uses, wss) in adds.items():
+        if uses or wss:
+            await _mcp_binding_add(tenant, key, uses=uses, workspaces=wss)
+
+
+# ── Binding the stored secrets that harnesses already name (each start) ─────────────────────────
+# A secret stored before bindings existed has none, and an unbound secret resolves nothing. So at each start, every
+# secret a harness names is bound to what names it now: each server address and the environment it is named in, and
+# each naming harness's workspace. That keeps every install working as it was the moment before the upgrade, and it
+# never widens a binding that exists. A secret named in more than one place is reported at every start, its places
+# by name (an address is not a secret), until it is stored again for one; HR_MCP_BIND_STRICT=1 holds such a secret
+# instead of binding it, so it resolves nothing until then.
+_MCP_BIND_STRICT = os.environ.get("HR_MCP_BIND_STRICT", "").strip().lower() in ("1", "true", "yes", "on")
+_mcp_bind_task: "asyncio.Task | None" = None
+
+
+def _mcp_places(uses) -> str:
+    return ", ".join(sorted(u[len("host:"):] if u.startswith("host:") else "the environment" for u in uses))
+
+
+async def _mcp_bind_existing() -> dict:
+    """Bind every stored secret a harness names and that has no binding. A failed read of the harnesses raises
+    before anything is written (the caller tries again)."""
+    rows = await BACKING.graph.find_strict("Harness")
+    named: dict[tuple[str, str], tuple[set, set]] = {}
+    for v in rows:
+        org = str(v.get("org") or "")
+        if not org:
+            continue
+        ws = _mcp_ws(org, v.get("workspace"))
+        found: list[tuple[str, str]] = []
+        for s in _mcp_list(v):
+            use = _mcp_use_of_url(s.get("url"))
+            hdrs = s.get("headers") if isinstance(s.get("headers"), dict) else {}
+            found += [(k, use) for k in map(_mcp_stored_ref, [s.get("auth"), *hdrs.values()]) if k]
+        found += [(k, USE_ENV) for k in map(_mcp_stored_ref, _parse_env(v.get("env")).values()) if k]
+        for k, use in found:
+            uses, wss = named.setdefault((org, k), (set(), set()))
+            if use:
+                uses.add(use)
+            wss.add(ws)
+    bound = held = 0
+    wide: list[tuple[str, set, bool]] = []
+    for (org, key), (uses, wss) in sorted(named.items()):
+        tenant = _org_tenant(org)
+        if not tenant:
+            continue
+        have = await _mcp_binding_get(tenant, key)
+        if have is not None:
+            if len(have["uses"]) > 1:
+                wide.append((key, have["uses"], False))
+            continue
+        if await _vault_get(tenant, key) is None:
+            continue                                         # names nothing stored
+        if len(uses) > 1 and _MCP_BIND_STRICT:
+            wide.append((key, uses, True))
+            held += 1
+            continue
+        if len(uses) > 1:
+            wide.append((key, uses, False))
+        await _vault_put(tenant, _mcp_bind_key(key), json.dumps({"uses": sorted(uses), "workspaces": sorted(wss)}))
+        bound += 1
+    for key, uses, is_held in wide:
+        print(f"[mcp] WARNING stored secret {_mcp_sha8(key)} is named for more than one place: {_mcp_places(uses)}. "
+              f"Store it again for the one server it is for (PUT /v1/mcp-secrets/<ref> with that server's url)"
+              + (", and store a separate secret for each other place. Held by HR_MCP_BIND_STRICT: it resolves "
+                 "nothing until then." if is_held else ", and store a separate secret for each other place."),
+              flush=True)
+    print(f"[mcp] stored-secret bindings: {bound} bound now, {len(wide)} named for more than one place, "
+          f"{held} held", flush=True)
+    return {"bound": bound, "wide": len(wide), "held": held}
+
+
+@app.on_event("startup")
+async def _mcp_bind_on_start() -> None:
+    """Bind before serving. When the harnesses can't be read, nothing is written, an unbound secret resolves nothing,
+    and the binding is tried again every minute in the background until it is done."""
+    global _mcp_bind_task
+
+    async def again() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await _mcp_bind_existing()
+                return
+            except Exception as e:  # noqa: BLE001
+                print(f"[mcp] stored-secret bindings not written yet ({type(e).__name__}); trying again in 60 s",
+                      flush=True)
+
+    try:
+        await asyncio.wait_for(_mcp_bind_existing(), timeout=120)
+    except Exception as e:  # noqa: BLE001
+        print(f"[mcp] stored-secret bindings not written ({type(e).__name__}): a secret with no binding resolves "
+              f"nothing until they are; trying again in 60 s", flush=True)
+        _mcp_bind_task = asyncio.create_task(again())
+
+
+async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None, *,
+                              p: dict | None = None, ws=None) -> list[dict]:
     """What a write of a harness's servers stores. `cur` is the harness as it stands; a new one has none.
 
     The rule that a server the caller didn't send is gone has one exception, and it isn't a kept-if-omitted
@@ -21538,7 +21909,9 @@ async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None 
             raise uhp_error(400, "invalid_mcp_server",
                             f"'{s.get('name')}' is the name this agent's memories go by. Give this server another name.",
                             "mcp_servers")
-    return await _mcp_seal_literals(org, _mcp_servers_prepare(sent + kept))
+    prepared = _mcp_servers_prepare(sent + kept)
+    await _mcp_refs_named(org, p, ws, prepared, None)       # the stored secrets it names, before anything is stored
+    return await _mcp_seal_literals(org, prepared, ws=ws)
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -23775,7 +24148,8 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     memory_ws = _plug_workspace(request, p)
     memory_ask = _memory_ask(body.memory)
     await _memory_ask_check(org, memory_ws, memory_ask, {**p, "member": member})
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=workspace)
+    await _mcp_refs_named(org, p, workspace, None, body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
     body.plugins = await _plugins_prepare(body, org)
@@ -23879,7 +24253,8 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get("workspace"))
+    await _mcp_refs_named(org, _caller, cur.get("workspace"), None, body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
@@ -24156,6 +24531,15 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
     return org, p.get("member", "")
 
 
+async def _pub_org_principal(request: Request) -> tuple[str, dict]:
+    """(org, principal) for a public route that needs the caller's reach, not just its member."""
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    return org, p
+
+
 # Harnesses §5.1: a create's key is kept a day, as Tasks §6 asks of a task's, so a deploy retried the
 # next morning still finds the first copy.
 _HARNESS_IDEM_TTL = 86400
@@ -24231,7 +24615,8 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
         if first is not None:
             return _harness_out(first)
     try:
-        body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+        body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"))
+        await _mcp_refs_named(org, p, p.get("workspace"), None, body.env)
         body.skills = await _skills_prepare(body.skills)
         await _environment_check_ref(org, body.environment, p)
         body.plugins = await _plugins_prepare(body, org)
@@ -24479,6 +24864,7 @@ async def _setup_build_inventory(p: dict, bases, ctx: dict) -> dict:
                 servers[iid] = {"name": str(e.get("name") or host or url)[:60],
                                 "about": f"Served at {host}." if host else ""}
                 ctx["mcp"][iid] = e
+                ctx.setdefault("mcp_ws", {})[iid] = r.get("workspace")
         return skills, servers
 
     async def env_part():
@@ -24550,18 +24936,21 @@ async def _setup_build_skill_copy(sk: dict) -> dict:
     return (await _skills_prepare([{"name": name, "enabled": True, "files": files}]))[0]
 
 
-async def _setup_build_server_copy(org: str, e: dict) -> dict:
+async def _setup_build_server_copy(org: str, e: dict, *, src_ws, dst_ws) -> dict:
     """An MCP server as a new setup's own copy (Add-ons › Tools' Add to setups): an id of its own, a
-    stored token copied under that id (only its reference is kept), a header reference as it is."""
+    stored token copied under that id (only its reference is kept), a header reference as it is.
+    The token is read only where it is bound (the source setup's workspace `src_ws`, at the server's
+    address), and the copy is bound to that address and the new setup's workspace `dst_ws`."""
     nid = "mcp." + uuid.uuid4().hex[:8]
     out = {k: v for k, v in e.items() if k not in ("id", "auth")}
     out.update(id=nid, enabled=True)
     auth = str(e.get("auth") or "")
     if auth.startswith("vault:"):
-        token = await _resolve_mcp_auth(org, auth)
+        use = _mcp_use_of_url(e.get("url"))
+        token = await _resolve_mcp_auth(org, auth, use=use, ws=src_ws)
         if not token:
             raise RuntimeError("the server's token could not be read")
-        out["auth"] = (await _mcp_secret_store(org, nid, token))["ref"]
+        out["auth"] = (await _mcp_secret_store(org, nid, token, ws=dst_ws, uses={use}))["ref"]
     elif auth:
         out["auth"] = auth
     return out
@@ -24606,7 +24995,8 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
                 attached[x["id"]] = "off"
                 continue
             try:
-                servers.append(await _setup_build_server_copy(org, e))
+                servers.append(await _setup_build_server_copy(
+                    org, e, src_ws=(ctx.get("mcp_ws") or {}).get(x["id"]), dst_ws=ws))
                 taken.add(nm)
                 attached[x["id"]] = "on"
             except Exception as err:  # noqa: BLE001
@@ -25051,7 +25441,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        # second needs more steps than a document does. Absent, the base's default.
                        max_step=spec.get("max_step"),
                        timeout_seconds=spec.get("timeout_seconds"))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"))
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
     # plugin's own servers must not take, so they count as the harness's here.
@@ -25893,7 +26283,8 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get("workspace"))
+    await _mcp_refs_named(org, _p, v.get("workspace"), None, body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))

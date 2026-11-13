@@ -579,6 +579,7 @@ An agent runs in its own session, under its own user, and can read that session'
 
 - **Provider keys and remote MCP servers:** the server keeps the key, the server's address and its headers. The session gets a local address and a token that stops working when the turn ends, so nothing in its environment, folder or checkpoint still works afterwards.
 - **Your instance's own secrets:** the key that protects stored credentials, and the console password, can't be read by a session.
+- **A stored token goes only where it was stored for:** the server whose address it was stored with (its host and port), or a harness's variables when it was stored for them, and only to harnesses in the workspace it was stored in. `PUT /v1/mcp-secrets/{ref}` takes `{"token", "url"}` for a server or `{"token", "env": true}` for a variable; stored with neither, a token is bound where a harness first names it. To use a token for another server, store it again with that server's address. A token a harness names at a request-supplied address, or in a `$headers.` value, is never read. Tokens that harnesses named before this release are bound at start to where each one is named; one named in more than one place is listed by its places in the log at every start until it is stored again, and `HR_MCP_BIND_STRICT=1` holds such a token, so it is sent nowhere, instead of binding it.
 
 Some things can't be hidden from it:
 

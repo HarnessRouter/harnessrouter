@@ -80,8 +80,13 @@ def test_a_harness_keeps_the_reference_and_a_turn_gets_the_value(store, api, mon
     assert TOKEN not in json.dumps(hv)
     servers = asyncio.run(gw._mcp_seal_literals(ORG, hv.get("mcp_servers") or hv.get("mcpServers") or []))
     assert servers and servers[0]["auth"].startswith("vault:")
-    assert asyncio.run(gw._resolve_mcp_auth(ORG, servers[0]["auth"])) == TOKEN
-    assert asyncio.run(gw._resolve_mcp_auth(ORG, servers[0]["headers"]["X-Api"])) == HEADER
+    # each sealed value is bound to its server's address and the harness's workspace, and resolves there only
+    at = dict(use=gw._mcp_use_of_url(_server()["url"]), ws=hv.get("workspace") or "")
+    assert asyncio.run(gw._resolve_mcp_auth(ORG, servers[0]["auth"], **at)) == TOKEN
+    assert asyncio.run(gw._resolve_mcp_auth(ORG, servers[0]["headers"]["X-Api"], **at)) == HEADER
+    elsewhere = dict(use=gw._mcp_use_of_url("https://elsewhere.example/x"), ws=at["ws"])
+    assert asyncio.run(gw._resolve_mcp_auth(ORG, servers[0]["auth"], **elsewhere)) == ""
+    assert asyncio.run(gw._resolve_mcp_auth(ORG, servers[0]["auth"], use=gw.USE_ENV, ws=at["ws"])) == ""
 
 
 def test_an_older_record_is_moved_on_the_first_read(store, monkeypatch):
@@ -101,6 +106,8 @@ def test_an_older_record_is_moved_on_the_first_read(store, monkeypatch):
 def test_every_writer_goes_through_it():
     src = (pathlib.Path(gw.__file__)).read_text()
     # a create has nothing stored, and an update hands over what is, so the server's own entry stays (_is_memories_entry)
-    assert src.count("await _mcp_servers_stored(org, body.mcp_servers)") == 3
-    assert src.count("await _mcp_servers_stored(org, body.mcp_servers, cur)") + src.count("await _mcp_servers_stored(org, body.mcp_servers, v)") == 2
+    # each names its caller and the harness's workspace, which the stored secrets it names are checked against
+    assert src.count("await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=") == 3
+    assert src.count("await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get(\"workspace\"))") + \
+        src.count("await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get(\"workspace\"))") == 2
     assert src.count("_mcp_servers_prepare(body.mcp_servers)") == 0
