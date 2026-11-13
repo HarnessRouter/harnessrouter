@@ -4573,6 +4573,86 @@ _RELAY_OURS = frozenset({"x-internal-key", "cookie", "proxy-authorization", "for
                          "cf-connecting-ip", "true-client-ip", "x-client-ip"})
 
 
+# Header names a setup can never pass to its tools. A setup declares header NAMES (additional_headers); a task
+# request's values for them reach its MCP servers and its environment through $headers.<name>. A task request carries
+# the caller's own credential (Authorization) and the console's calls carry ours (x-harness-*), so none of those may be
+# declared or referenced: refused when a setup is written (422, _harness_header_names_refuse), and never read at a turn
+# (create_response), so a setup written before is covered too. Matched case-insensitively. A vendor's key names
+# (x-api-key, api-key, x-goog-api-key) stay a setup's own to use.
+_HDR_DENY = frozenset({"authorization", *(h.lower() for h in _RELAY_OURS)})
+_HDR_DENY_PREFIX = _RELAY_OURS_PREFIX
+
+
+def _header_denied(name) -> bool:
+    n = str(name or "").strip().lower()
+    return bool(n) and (n in _HDR_DENY or n.startswith(_HDR_DENY_PREFIX))
+
+
+def _header_denied_said(names) -> str:
+    """The words for a header a setup can't pass to its tools: which, and what to do instead."""
+    names = sorted({str(n) for n in names}, key=str.lower)
+    one = len(names) == 1
+    return (f"The header{'' if one else 's'} {', '.join(repr(n) for n in names)} can't be passed to tools. Use a header "
+            f"name of your own instead, such as X-My-Token, in the setup's Headers and in the tool that reads it.")
+
+
+def _denied_header_refs(value) -> set[str]:
+    """Every $headers.<name> reference to a denied name in a value: a string, or the strings anywhere in a list or dict."""
+    out: set[str] = set()
+
+    def walk(x) -> None:
+        if isinstance(x, str):
+            out.update(n for n in _HDR_REF.findall(x) if _header_denied(n))
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+    walk(value)
+    return out
+
+
+def _harness_header_names_refuse(body) -> None:
+    """422 for a setup that declares a denied header (_header_denied) or references one ($headers.<name>) in an MCP
+    server or its environment, naming the header."""
+    declared = [str(h).strip() for h in (getattr(body, "additional_headers", None) or []) if isinstance(h, str) and str(h).strip()]
+    for param, names in (("additional_headers", {h for h in declared if _header_denied(h)}),
+                         ("mcp_servers", _denied_header_refs(getattr(body, "mcp_servers", None))),
+                         ("env", _denied_header_refs(getattr(body, "env", None)))):
+        if names:
+            print(f"[headers] refused a setup write naming {len(names)} header(s) it can't pass to tools in {param}: "
+                  f"{','.join(sorted(n.lower() for n in names))}", flush=True)
+            raise uhp_error(422, "header_not_allowed", _header_denied_said(names), param)
+
+
+# A declared header whose VALUE is ours refuses the task, whatever the header is called: a setup could otherwise ask
+# people to paste their own key or console session into a header of its own (X-Auth), or catch an app that sends its
+# key twice. Ours: the credential this request authenticated with (its bearer, raw or with "Bearer "), this instance's
+# internal key, any API key of ours (sk-hr-...), and a console session (v1.<expiry>.<signature>). A credential shorter
+# than 16 characters is never matched, so a short value can't refuse every task.
+_HDR_OUR_KEY_RE = re.compile(r"sk-hr-[A-Za-z0-9_-]{8,}")
+_HDR_OUR_SESSION_RE = re.compile(r"(?<![0-9A-Za-z])v1\.\d{12,14}\.[0-9a-f]{64}(?![0-9a-f])")
+
+
+def _header_value_ours(value, request: Request) -> str:
+    """Why a declared header's value is ours ("" when it isn't): never the value itself."""
+    v = str(value or "")
+    if not v:
+        return ""
+    held = []
+    auth = str(request.headers.get("authorization") or "").strip()
+    held.append(auth[7:].strip() if auth.lower().startswith("bearer ") else auth)
+    held += [str(request.headers.get("x-harness-internal") or ""), INTERNAL_KEY]
+    if any(len(c) >= 16 and c in v for c in held):
+        return "the request's own credential"
+    if _HDR_OUR_KEY_RE.search(v):
+        return "an API key"
+    if _HDR_OUR_SESSION_RE.search(v):
+        return "a console session"
+    return ""
+
+
 # The headers a provider reads a key from. The caller's are never forwarded (_BROKER_HOP), and the
 # connection's own key goes in exactly one of them (_with_credential).
 _CREDENTIAL_HEADERS = ("authorization", "api-key", "x-api-key", "x-goog-api-key")
@@ -12258,10 +12338,24 @@ async def create_response(body: CreateResponseBody, request: Request):
             return []
     hdr_vals: dict[str, str] = {}
     declared = [h.strip() for h in _hv_arr("additional_headers") if isinstance(h, str) and h.strip()]
+    _denied = sorted({h.lower() for h in declared if _header_denied(h)})
     for _hn in declared:
+        if _header_denied(_hn):
+            continue                  # never read: a setup written before the write refused it (_header_denied)
         _v = request.headers.get(_hn)
         if _v is not None:
             hdr_vals[_hn.lower()] = _v
+    if _denied:
+        print(f"[headers] WARNING setup={_mcp_sha8(harness_id)} declares header(s) it can't pass to tools, not read: "
+              f"{','.join(_denied)}", flush=True)
+    for _hn, _v in hdr_vals.items():
+        _why = _header_value_ours(_v, request)
+        if _why:
+            print(f"[headers] WARNING setup={_mcp_sha8(harness_id)} header {_hn} carries {_why}; the task is refused",
+                  flush=True)
+            raise uhp_error(400, "header_not_allowed",
+                            f"The header '{_hn}' can't be passed to tools: it carries your own sign-in or API key. "
+                            f"Send the tool's own key in it instead.", "additional_headers")
     # The caller's W3C trace context (#473): read once here, carried to the runner with the turn.
     # `baggage` is never read — only these two headers may leave the box.
     trace_ctx = _trace_context(request.headers.get("traceparent"), request.headers.get("tracestate"))
@@ -12269,6 +12363,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # request didn't supply that header, the tool call would fail opaquely (bad auth at the MCP).
     # Reject up-front instead, naming exactly what's missing and where it's needed.
     missing: list[str] = []
+    refused: set[str] = set()   # a reference to a header no setup can pass to its tools (_header_denied)
     # Through the one reader, so this scan sees exactly the servers the turn will get.
     for _s in _mcp_list(hv):
         if str(_s.get("enabled")) in ("False", "false", "0"):
@@ -12276,8 +12371,15 @@ async def create_response(body: CreateResponseBody, request: Request):
         _blob = " ".join([str(_s.get("url") or ""), str(_s.get("auth") or ""),
                           " ".join(str(x) for x in (_s.get("headers") or {}).values())])
         for _ref in _HDR_REF.findall(_blob):
-            if _ref.lower() not in hdr_vals:
+            if _header_denied(_ref):
+                refused.add(_ref)
+            elif _ref.lower() not in hdr_vals:
                 missing.append(f"'{_ref}' (needed by MCP server '{_s.get('name') or _s.get('id') or 'mcp'}')")
+    refused |= _denied_header_refs(list(_parse_env((hv or {}).get("env")).values()))
+    if refused:
+        print(f"[headers] WARNING setup={_mcp_sha8(harness_id)} references header(s) it can't pass to tools: "
+              f"{','.join(sorted(r.lower() for r in refused))}; the task is refused", flush=True)
+        raise uhp_error(400, "header_not_allowed", _header_denied_said(refused), "additional_headers")
     if missing:
         raise HTTPException(400, "missing required header(s): " + ", ".join(sorted(set(missing)))
                             + ". This harness declares Additional Headers that its tools reference — "
@@ -21732,6 +21834,7 @@ def _harness_if_match(request: Request, v: dict) -> None:
 
 
 def _harness_props(body: HarnessBody) -> dict:
+    _harness_header_names_refuse(body)   # every write builds its record here: never one naming a header it can't pass
     base = _require_supported_base(body.base)   # refuse at create, not at the first task
     return {"name": body.name, "base": base, "base_label": body.base_label or base,
             "default_model": body.default_model or "", "system_prompt": body.system_prompt or "",
@@ -24240,6 +24343,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     memory_ws = _plug_workspace(request, p)
     memory_ask = _memory_ask(body.memory)
     await _memory_ask_check(org, memory_ws, memory_ask, {**p, "member": member})
+    _harness_header_names_refuse(body)
     body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=workspace, env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
@@ -24350,6 +24454,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
+    _harness_header_names_refuse(body)
     body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get("workspace"),
                                                  env=body.env)
     body.skills = await _skills_prepare(body.skills)
@@ -24713,6 +24818,7 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
         if first is not None:
             return _harness_out(first)
     try:
+        _harness_header_names_refuse(body)
         body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"), env=body.env)
         body.skills = await _skills_prepare(body.skills)
         await _environment_check_ref(org, body.environment, p)
@@ -25538,6 +25644,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        # second needs more steps than a document does. Absent, the base's default.
                        max_step=spec.get("max_step"),
                        timeout_seconds=spec.get("timeout_seconds"))
+    _harness_header_names_refuse(body)
     body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"), env=body.env)
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
@@ -26388,6 +26495,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request,
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
+    _harness_header_names_refuse(body)
     body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get("workspace"), env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
