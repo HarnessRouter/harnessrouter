@@ -20775,8 +20775,13 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("web_extract", "Web Extract")],
         # "instruction": hermes switches toolsets, not tools. Terminal is withheld (its toolset holds
         # only it and the process tool that serves it), and the four file tools are withheld when all
-        # four are off, but one file tool alone can only be asked (_hermes_toolsets_off).
+        # four are off, but one file tool alone can only be asked (_hermes_toolsets_off). So terminal
+        # is labelled hard (`hard_tools`): Settings never says "This agent can't switch it off" of a
+        # tool the agent is not offered once it is off. Web search can still arrive through the
+        # browser toolset, so it stays asked. gateway/tests/test_hermes_tool_labels.py holds the list
+        # to the runner's table.
         "tool_enforcement": "instruction",
+        "hard_tools": ("terminal",),
     },
     "pi": {
         "label": "Pi", "backend": "pi", "status": "ready",
