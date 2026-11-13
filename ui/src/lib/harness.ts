@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 
 import { harnessFetch } from '@/lib/hfetch';
+import { tokenHost } from '@/lib/mcp-host';
 import { getSession } from '@/lib/auth';
 import { appendWorkspaceQuery, workspaceHeaders } from '@/lib/workspace';
 
@@ -650,13 +651,16 @@ export async function testMcp(url: string, auth?: string): Promise<{ ok: boolean
 }
 
 /** Store an MCP bearer token securely and return a 'vault:<ref>' reference. The token never lands
- *  on the harness record; only the reference is kept there. */
-export async function storeMcpSecret(serverId: string, token: string): Promise<string> {
+ *  on the harness record; only the reference is kept there. With the server's address (`url`), the
+ *  token is kept for that server alone (its host and port); an address that names no one server
+ *  (tokenHost '') is left out, and the token is bound where a harness first names it. */
+export async function storeMcpSecret(serverId: string, token: string, url?: string): Promise<string> {
   const p = principal();
+  const at = (url || '').trim();
   const r = await harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(p.orgId)}/mcp-secrets/${encodeURIComponent(serverId)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
-    body: JSON.stringify({ token }),
+    body: JSON.stringify(tokenHost(at) ? { token, url: at } : { token }),
     cache: 'no-store',
   });
   if (!r.ok) throw new Error(`mcp-secret store failed: ${r.status}`);

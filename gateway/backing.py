@@ -498,9 +498,11 @@ class FileSecretStore:
             return v
 
         def _do():
+            # absent is None; any other failure to read raises, so an unreadable record is never taken for a
+            # missing one (a check that a name is free, a binding that must not be written over)
             try:
                 return self._p(tenant, name).read_text()
-            except OSError:
+            except (FileNotFoundError, NotADirectoryError):
                 return None
         raw = await asyncio.to_thread(_do)
         return self._open(raw) if raw is not None else None

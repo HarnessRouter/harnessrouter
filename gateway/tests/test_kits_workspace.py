@@ -177,3 +177,19 @@ def test_an_organization_holding_no_harness_still_launches_the_kit_once(world, m
     again = asyncio.run(gw.launch_kit("slides", _Req(), None))
     assert first["created"] and not again["created"]
     assert again["harnessId"] == first["harnessId"] and len([v for v in store.values() if v.get("kit") == "slides"]) == 1
+
+
+def test_a_launch_checks_stored_secrets_against_the_workspace_its_harness_gets(world, monkeypatch):
+    """The workspace a launch's stored secrets are checked and bound for is the one its harness record gets, in a
+    workspace other than the default, so a binding never lands on the default workspace and widens a secret."""
+    store, who = world
+    seen = []
+    real = gw._mcp_servers_stored
+
+    async def spy(org, incoming, cur=None, **kw):
+        seen.append(kw.get("ws"))
+        return await real(org, incoming, cur, **kw)
+    monkeypatch.setattr(gw, "_mcp_servers_stored", spy)
+    hid = asyncio.run(gw.launch_kit("slides", _Req(), None))["harnessId"]
+    assert store[hid]["workspace"] == "org.a__ws1" != ""
+    assert seen and all(gw._mcp_ws("org.a", w) == gw._mcp_ws("org.a", store[hid]["workspace"]) for w in seen)

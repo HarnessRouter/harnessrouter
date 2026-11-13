@@ -785,7 +785,8 @@ def test_a_hosted_entry_pointed_elsewhere_hands_that_server_nothing(api, connect
 def test_a_remote_entry_naming_a_hosted_record_resolves_to_nothing(connected):
     """The refusal at the funnel every outbound credential passes through, so it holds for callers
     that do not exist yet."""
-    assert asyncio.run(app._resolve_mcp_auth(ORG, f"vault:{_key(connected)}")) == ""
+    for use in ("host:evil.example:443", app.USE_ENV, ""):
+        assert asyncio.run(app._resolve_mcp_auth(ORG, f"vault:{_key(connected)}", use=use, ws="", any_ws=True)) == ""
 
 
 def test_a_url_that_only_looks_like_ours_is_not_treated_as_ours(api, connected):
