@@ -1234,7 +1234,10 @@ also removes the hosted tools behind it. Read the harness first, then send back 
 `system_prompt`, `default_model`, `mcp_servers`, `skills`, `disabled_tools`, `additional_headers`,
 `max_step`, `timeout_seconds` and `reasoning_effort` (the write body uses these snake_case names; the record you read
 uses camelCase) with the new package appended to `plugins`. Installed plugins round-trip as
-`{name, enabled, blob}`, so send those back unchanged and add the new one beside them. A harness's
+`{name, enabled, blob}`, so send those back unchanged and add the new one beside them. The read
+answers an `ETag`: send it back as `If-Match` on the PUT, and if the harness changed since your read
+(an edit in the console, another script) the PUT is refused with `412` `precondition_failed` and
+nothing is written, so read it again and redo the change instead of overwriting theirs. A harness's
 `source` (where it came from, as its create said, for example the demo run the console's Start saved
 it from) is not part of that configuration: it is kept as created, whatever a PUT sends.
 

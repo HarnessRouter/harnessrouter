@@ -48,7 +48,7 @@ Rules:
 
 | `type` | HTTP | Meaning |
 |---|---|---|
-| `invalid_request_error` | 400, 404, 409, 410, 413, 422 | The request was wrong. Retrying it unchanged will fail again. |
+| `invalid_request_error` | 400, 404, 409, 410, 412, 413, 422 | The request was wrong. Retrying it unchanged will fail again. |
 | `authentication_error` | 401 | The credential is missing, malformed or unknown. |
 | `permission_error` | 403 | Authenticated, but not allowed to do this. |
 | `rate_limit_error` | 429 | Too many requests, or a quota is exhausted. |
@@ -77,6 +77,7 @@ Rules:
 | `idempotency_key_reused` | 409 | An `Idempotency-Key` came back with a different request than the one it was first sent with ([Harnesses §5.1](harnesses.md#51-create)). |
 | `input_not_pending` | 409 | An `input_response` names a request the response has no pending one for: unknown, already answered, or passed over by a later task ([Tasks §3.2](tasks.md#32-asking-the-person)). |
 | `input_request_expired` | 410 | The answer came after the request's `expires_at`. The harness has to ask again. |
+| `precondition_failed` | 412 | An update's `If-Match` names no current version of the harness: it changed since the client read it ([Harnesses §5.2](harnesses.md#52-update)). Nothing was written. |
 | `input_response_invalid` | 422 | The answer does not fit the request's `kind` or `options`. The request stays pending. |
 | `file_too_large` | 413 | The upload exceeds the server's limit. `detail.max_bytes` states it. |
 | `model_unavailable` | 422 | The requested model cannot be served for this harness. |
@@ -138,6 +139,7 @@ to fix the harness, the second to send the task with another model.
 | `session_busy` | Yes, once the in-flight task is terminal |
 | `input_response_invalid` | Yes, with an answer that fits the request |
 | `input_request_expired` | No — the question is gone; send a new task and the harness asks again |
+| `precondition_failed` | Yes, after reading the harness again and redoing the change on what was read |
 | Any other `invalid_request_error` | No — fix the request |
 | `authentication_error` | No — fix the credential |
 | A task that reached `failed` | Only with the client's own judgment; it consumed real resources |
