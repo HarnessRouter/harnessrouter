@@ -2,9 +2,8 @@
 // The sheets Settings opens (docs/uxuidesign/console-79: delAgentHtml, popHtml's env picker), plus
 // the ones the design has no drawing for but the setup needs: a copy on another agent harness (the
 // design hands this to its New setup sheet) and an installed plugin package.
-import { isServiceEntry } from './setupParts';
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { strToU8, zipSync } from 'fflate';
 import {
   createCustom, deleteCustom, getPluginFiles, getSkillFiles, offeredOob, oobById, oobDefaultModel, oobModels, modelAvailability, setHarnessPlugs, useModelCatalogRead, type BaseInfo, type CustomHarness, type HarnessPlugin, type HarnessPlugs,
@@ -15,6 +14,7 @@ import { toast } from '../toast';
 import { ReadFailed } from '../ext/shared';
 import { plain, plural } from './settingsModel';
 import { deletedToast, memoryOnDelete, memoryOnDeleteLine, type MemoryOnDelete } from './setupMemory';
+import { duplicateParts, notCopiedLine } from './duplicate';
 
 export const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} aria-hidden="true"><path d="M5 12l5 5L20 7" /></svg>;
 
@@ -143,10 +143,11 @@ export function PackageSheet({ p, hid, busy, onToggle, onDetach, onClose }: {
   );
 }
 
-// ── A copy on another agent harness: same skills, plugins and instructions, new Harness ID ────────
-// The copy takes its instructions, skills, plugins, environment, built-in tool choices, limits and
-// request headers. Not its MCP servers or variables: the secrets they name belong to the original
-// (deleting it removes them), so the copy gets them added again in its own Settings.
+// ── A copy on another agent harness: same skills, tools, plugins and instructions, new Harness ID ──
+// The copy takes its instructions, skills, plugins, environment, built-in tool choices, limits,
+// request headers, its own MCP servers and its variables (duplicate.ts). A server the instance hosts
+// for this harness alone (a database connection, the media tools) cannot go with it: the sheet says
+// which before Save, and the saved message says it again.
 export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
   h: CustomHarness; bases: Record<string, BaseInfo> | null; plugs: HarnessPlugs | null | undefined;
   onClose: () => void; onDone: (c: CustomHarness) => void;
@@ -167,11 +168,12 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
   const srv = bases?.[base] || null;
   const takesSkills = srv?.takesSkills !== false, takesEnv = srv?.takesEnvironments !== false;
   const ownSkills = (h.skills || []).filter((s) => (s.files && s.files.length) || s.blob);
+  // the copy's servers under their new ids, worked out once for this harness
+  const parts = useMemo(() => duplicateParts(h), [h]);
   const notes = [
     !takesSkills && ownSkills.length ? `${o?.name || base} takes no skills, so the copy has none.` : '',
     !takesEnv && h.environment ? `${o?.name || base} can’t open an environment, so the copy has none.` : '',
-    (h.mcpServers || []).some((m) => !isServiceEntry(m)) || Object.keys(h.env || {}).length
-      ? 'Its MCP servers and environment variables are not copied: add them in the copy’s Settings.' : '',
+    notCopiedLine(parts.notCopied, 'before'),
   ].filter(Boolean);
 
   async function save() {
@@ -189,21 +191,22 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
       const c = await createCustom({
         name: nm, base, defaultModel: model, systemPrompt: h.systemPrompt, skills, plugins, environment: takesEnv ? h.environment || '' : '',
         disabledTools: h.disabledTools, maxStep: h.maxStep, timeoutSeconds: h.timeoutSeconds, reasoningEffort: h.reasoningEffort,
-        additionalHeaders: h.additionalHeaders,
+        additionalHeaders: h.additionalHeaders, mcpServers: parts.mcpServers, env: parts.env,
       });
+      const left = parts.notCopied.length ? ` ${notCopiedLine(parts.notCopied, 'after')}` : '';
       // its workspace plugins are its binding, written through their own route
       if (plugs && plugs.plugs.length) {
         try { await setHarnessPlugs(c.id, plugs.plugs); }
-        catch { toast(`Saved as ${c.name}. Its workspace plugins were not added; add them in its Settings.`); onDone(c); return; }
+        catch { toast(`Saved as ${c.name}. Its workspace plugins were not added; add them in its Settings.${left}`); onDone(c); return; }
       }
-      toast(`Saved as ${c.name}`);
+      toast(left ? `Saved as ${c.name}.${left}` : `Saved as ${c.name}`);
       onDone(c);
     } catch (e) { setBusy(false); toast(plain(e, 'The copy was not saved. Try again.')); }
   }
 
   return (
     <Sheet onClose={onClose} labelledBy="duh" className="small-sheet" busy={busy}>
-      <SheetTop id="duh" title="Duplicate harness" sub="Same skills, plugins and instructions, new Harness ID." onClose={onClose} />
+      <SheetTop id="duh" title="Duplicate harness" sub="Same skills, tools, plugins and instructions, new Harness ID." onClose={onClose} />
       <div className="set-f"><label htmlFor="duName">Name</label>
         <input id="duName" className="set-in" value={name} onChange={(e) => setName(e.target.value)} /></div>
       <div className="set-f"><label htmlFor="duBase">Agent harness</label>
