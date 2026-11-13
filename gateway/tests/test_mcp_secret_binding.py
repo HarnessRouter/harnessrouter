@@ -537,3 +537,24 @@ def test_updates_bind_the_records_own_workspace(api, caller):
     assert api.put(f"/v1/harnesses/{hid}", json={**body, "mcp_servers": [server("u2")]}).status_code == 200
     v = _record(hid)
     assert v["workspace"] == "ws-a" and turn(v)[0][0]["auth"] == TOKEN
+
+
+def test_a_duplicate_names_the_same_stored_secrets_and_is_checked_like_any_create(api, caller):
+    """Duplicate harness (the console) writes the copy as a create with the original's servers, under new ids, and
+    its variables: the copy's stored secrets are checked and bound like any create's."""
+    console_x = {"org": ORG, "member": "me@local", "workspace": "ws-x"}       # the console in workspace ws-x
+    console_y = {"org": ORG, "member": "me@local", "workspace": "ws-y"}
+    assert put(api, caller, ORG_WIDE, "dup", url=GOOD, ws_header="ws-x").status_code == 200
+    assert put(api, caller, ORG_WIDE, "dupenv", env=True, ws_header="ws-x").status_code == 200
+    env = {"T": "vault:harness-mcp-dupenv"}
+    original = make(api, caller, console_x, [server("dup", id="mcp.orig0001")], env=env)
+    assert original.status_code == 200, original.text
+    for who, ws in ((console_x, "ws-x"), (console_y, "ws-y")):                # the same workspace, then another
+        copy = make(api, caller, who, [server("dup", id="mcp." + uuid.uuid4().hex[:8])], env=env)
+        assert copy.status_code == 200, copy.text
+        v = _record(copy.json()["id"])
+        mcp, got = turn(v)
+        assert v["workspace"] == ws and mcp[0]["auth"] == TOKEN and got["T"] == TOKEN
+    assert binding("harness-mcp-dup")["workspaces"] == {"ws-x", "ws-y"}
+    r = make(api, caller, IN_B, [server("dup", id="mcp.scoped01")], env=env)   # a key held to another workspace
+    assert r.status_code == 422
