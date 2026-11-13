@@ -226,3 +226,11 @@ def test_a_vendors_key_and_short_values_pass(turns):
                           "Authorization": "Bearer abc"})                       # a credential under 16 never matches
     assert r.status_code == 200, r.text
     assert turns["runner"].ran == [{"x-api-key": "vendor-key-dummy-123456789", "x-short": "abc"}]
+
+
+def test_a_variable_named_like_the_runners_own_is_still_refused(api):
+    """The runner's own names (its credentials, its paths) are never a setup's variables, whatever their value names, so a
+    $headers value can never be placed under one of them."""
+    for name in ("HARNESS_INTERNAL_KEY", "HR_INTERNAL_KEY_FILE", "HR_TOKEN", "OPENAI_API_KEY", "PATH", "LD_PRELOAD"):
+        r = _create(api, additional_headers=["X-My-Token"], env={name: "$headers.X-My-Token"})
+        assert r.status_code == 400 and "reserved_env_name" in r.text, (name, r.text)

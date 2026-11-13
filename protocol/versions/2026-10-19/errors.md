@@ -78,6 +78,7 @@ Rules:
 | `input_not_pending` | 409 | An `input_response` names a request the response has no pending one for: unknown, already answered, or passed over by a later task ([Tasks §3.2](tasks.md#32-asking-the-person)). |
 | `input_request_expired` | 410 | The answer came after the request's `expires_at`. The harness has to ask again. |
 | `precondition_failed` | 412 | An update's `If-Match` names no current version of the harness: it changed since the client read it ([Harnesses §5.2](harnesses.md#52-update)). Nothing was written. |
+| `header_not_allowed` | 400, 422 | A harness declares, or references as `$headers.<name>`, a header that can't be passed to its tools, or a declared header's value carries the caller's own credential. Use a header name of the harness's own. |
 | `input_response_invalid` | 422 | The answer does not fit the request's `kind` or `options`. The request stays pending. |
 | `file_too_large` | 413 | The upload exceeds the server's limit. `detail.max_bytes` states it. |
 | `model_unavailable` | 422 | The requested model cannot be served for this harness. |
