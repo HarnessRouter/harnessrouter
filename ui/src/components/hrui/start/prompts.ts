@@ -44,7 +44,11 @@ const STARTER_KITS = /^(dashboard|video|mario|harness-bot|slides|sheets)$/;
 export const starterFolder = (kit: string | undefined | null): string => (kit && STARTER_KITS.test(kit) ? `kits/${kit}` : '');
 
 const HR_FILE = 'harnessrouter.json';
-export const INSTR_RULE = 'Instructions are stored in the HarnessRouter harness, not in my app’s code or sent with every task. Keep a copy of the harness in my repo as ' + HR_FILE + ' (harness_id, name, base, model, instructions). To change it later, fetch the live harness first (it may have been edited in HarnessRouter), update ' + HR_FILE + ', then apply it with the HarnessRouter API.';
+// The copy an app keeps in its repo is applied to whatever harness_id it names, so a file that still held another
+// harness's name and model overwrote a duplicate with them when an app moved to the duplicate by changing only the id.
+// The rule: fetch by harness_id first and send its ETag back as If-Match (the API refuses a stale apply with 412,
+// Harnesses §5.2), and a move to another harness replaces the whole file.
+export const INSTR_RULE = 'Instructions are stored in the HarnessRouter harness, not in my app’s code or sent with every task. Keep a copy of the harness in my repo as ' + HR_FILE + ' (harness_id, name, base, model, instructions). To change it later, fetch the harness by its harness_id first (it may have been edited in HarnessRouter) and keep the ETag the answer carries, update ' + HR_FILE + ', then apply it with the HarnessRouter API and send that ETag as If-Match. A 412 answer means the harness changed meanwhile: fetch it again and redo the change. If my app moves to another harness, fetch that harness by its harness_id and replace every field of ' + HR_FILE + ' with its own; never keep the old harness’s name, base or model.';
 const GUIDE_STEP = 'Read the setup guide first: ' + GUIDE + ' (if you cannot open links, ask me to paste it).';
 const NEW_OR_EXISTING = 'If this folder already has an app, add the feature there and keep its design and architecture. If it is empty, create a small web app for it first, and ask me which stack if it is unclear.';
 /** How every block asks for the key, as one of its steps: the person makes a new one in the sheet's

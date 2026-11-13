@@ -5698,6 +5698,7 @@ _UHP_STATUS_TYPE = {
     404: ("invalid_request_error", "not_found"),
     409: ("invalid_request_error", "conflict"),
     410: ("invalid_request_error", "gone"),
+    412: ("invalid_request_error", "precondition_failed"),
     413: ("invalid_request_error", "file_too_large"),
     422: ("invalid_request_error", "unprocessable"),
     429: ("rate_limit_error", "rate_limited"),
@@ -20628,6 +20629,8 @@ def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
 # harnesses.md §4.3):
 #   hard        — the CLI enforces it (claude: a permissions.deny rule takes these exact names).
 #   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
+# A base whose switch reaches some of its tools and not others is "instruction", with the ones it
+# does withhold named in `hard_tools` (_tool_enforcement): each tool is labelled for what happens to it.
 _BASE_CATALOG: dict[str, dict] = {
     "codex": {
         "label": "Codex", "backend": "codex", "status": "ready",
@@ -20709,10 +20712,15 @@ _BASE_CATALOG: dict[str, dict] = {
         # The sdk profile's model-facing tools, read off the request header of a 0.1.2rc1 turn
         # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). The switch is
         # the profile's rows: a tool whose row registers nothing else is withheld (bash,
-        # str_replace_editor, web_fetch, todo_write, skill, subagent, subagent_fork, workflow;
-        # dsh_driver._rows_off), glob and grep only together, and read, write and edit never, since
-        # their row also holds read_image. So the base stays "instruction": the request covers what
-        # the rows cannot.
+        # str_replace_editor, todo_write, skill, subagent, subagent_fork, workflow;
+        # dsh_driver.TOOL_ROWS and _rows_off), and so is web_fetch, by its row's own `fetch` switch
+        # (dsh_driver._compose_patch). Those are `hard_tools`: the bases document labels each of
+        # them hard, so Settings never says "This agent can't switch it off" of a tool the agent is
+        # not offered once it is off.
+        # glob and grep share a row and are withheld only together, read, write and edit never,
+        # since their row also holds read_image: one of them alone is only asked, so the base stays
+        # "instruction" and they keep that label. gateway/tests/test_dsh_tool_labels.py holds the
+        # list to the driver's rows.
         # web_search is not offered: dsh's stock provider calls DeepSeek's own API with the relay's placeholder
         # key (401 every time, and off the turn's connection), so the driver turns that row off.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
@@ -20722,6 +20730,8 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("subagent", "Subagent"), ("subagent_fork", "Subagent (fork)"),
                   ("workflow", "Workflow")],
         "tool_enforcement": "instruction",
+        "hard_tools": ("bash", "str_replace_editor", "todo_write", "skill", "subagent", "subagent_fork",
+                       "workflow", "web_fetch"),
     },
     "goose": {
         "label": "goose", "backend": "goose", "status": "ready",
@@ -21344,6 +21354,13 @@ _BASE_CATALOG: dict[str, dict] = {
     },
 }
 
+
+def _tool_enforcement(b: dict, tool: str) -> str:
+    """How far switching off one of a base's tools goes: "hard" for a tool its runtime withholds
+    (`hard_tools`, on a base that withholds only some), else the base's own word."""
+    return "hard" if tool in b.get("hard_tools", ()) else b["tool_enforcement"]
+
+
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
 # `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
 _SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
@@ -21660,6 +21677,58 @@ def _harness_source_prop(body: HarnessBody) -> dict:
     keeps the stored value whatever its body says."""
     src = str(body.source or "").strip()
     return {"source": src} if src else {}
+
+
+# ── a harness's version (Harnesses §5.2) ─────────────────────────────────────────────────────────
+# PUT /v1/harnesses/{hid} replaces the whole configuration, so a caller that builds its body from a
+# read (an app applying the copy it keeps in its repo, an upgrade step) overwrote whatever changed
+# in between: a person's edit in the console, another step's plugin. A read answers the harness's
+# version as an ETag and an update may send it back as If-Match; one that no longer matches is
+# refused 412 and nothing is written. Without If-Match an update replaces as it always has.
+#
+# The version is a digest of what an update replaces (_harness_props' fields), as stored. So it
+# moves with every write of one of them, whichever route made it (a kit's launch, a plugin publish,
+# the plugins binding, the memories entry), and stays put for a write of anything an update leaves
+# alone (the kit flag, the workspace, the live site, delete times), which a caller's read of the
+# configuration is not stale about. Nothing is stored for it, so a harness made before it existed
+# has one at once. A change written and then undone reads as the version it was: a caller that read
+# it has not missed anything.
+#
+# The check and the write are two operations on the store, not one: a write that lands in the
+# milliseconds between them can still be overwritten. What it stops is the stale read, which is
+# seconds to days old.
+_HARNESS_VERSIONED = ("name", "base", "base_label", "default_model", "system_prompt", "mcp_servers", "skills",
+                      "plugins", "disabled_tools", "additional_headers", "env", "calibrates", "environment",
+                      "max_step", "timeout_seconds", "reasoning_effort")
+_HARNESS_CHANGED = "This harness changed since you read it. Read it again and retry."
+
+
+def _harness_version(v: dict) -> str:
+    """The version of a stored harness: what an update replaces, digested."""
+    seen = json.dumps({k: (v or {}).get(k) for k in _HARNESS_VERSIONED}, sort_keys=True, default=str,
+                      separators=(",", ":"))
+    return hashlib.sha256(seen.encode()).hexdigest()[:32]
+
+
+def _harness_etag(response: Response | None, v: dict) -> None:
+    """Put the harness's version on an answer, as a strong ETag. FastAPI gives a route its Response;
+    a route function called directly may be given none."""
+    if response is not None:
+        response.headers["ETag"] = f'"{_harness_version(v)}"'
+
+
+def _harness_if_match(request: Request, v: dict) -> None:
+    """Refuse an update whose If-Match no longer names this harness's version (412, nothing written).
+    No If-Match: nothing to check. "*" matches any harness that exists, and this one does. A tag sent
+    back weak (W/"...") is compared by its value: a proxy that compresses an answer may weaken the
+    ETag it passes on, and the caller then holds only that form."""
+    raw = request.headers.get("if-match")
+    if raw is None:
+        return
+    tags = [t.strip().removeprefix("W/").strip('"') for t in raw.split(",") if t.strip()]
+    if "*" in tags or _harness_version(v) in tags:
+        return
+    raise uhp_error(412, "precondition_failed", _HARNESS_CHANGED, "If-Match")
 
 
 def _harness_props(body: HarnessBody) -> dict:
@@ -24208,8 +24277,10 @@ async def list_harnesses(org: str, request: Request,
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}")
-async def get_harness(org: str, hid: str, request: Request) -> dict:
+async def get_harness(org: str, hid: str, request: Request,
+                      response: Response = None) -> dict:  # type: ignore[assignment]
     v = await _mcp_migrate(org, hid, await _harness_in_reach(await _owned_org(request, org), hid))
+    _harness_etag(response, v)
     return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
 
 
@@ -24260,11 +24331,15 @@ async def export_harness_plugin(org: str, hid: str, request: Request) -> dict:
 
 
 @app.put("/v1/orgs/{org}/harnesses/{hid}")
-async def update_harness(org: str, hid: str, body: HarnessBody, request: Request) -> dict:
+async def update_harness(org: str, hid: str, body: HarnessBody, request: Request,
+                         response: Response = None) -> dict:  # type: ignore[assignment]
     _caller = await _owned_org(request, org)
     # V1C02-005: bind the mutation to the caller's org — a foreign harness id must not be editable.
     cur = await _harness_in_reach(_caller, hid)
     cur = await _mcp_migrate(org, hid, cur)
+    # If-Match (Harnesses §5.2): a harness changed since the caller's read is refused before anything
+    # in the body is looked at, and nothing is written.
+    _harness_if_match(request, cur)
     # Harnesses §5.2: id, base and createdAt are immutable. A body naming a different base is
     # refused rather than applied, because applying it would change the behaviour of every
     # session already attached to this harness.
@@ -24285,8 +24360,9 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     # refused save that had already scrubbed a record would disconnect a database nobody removed.
     await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
-    v = await _vertex_get(hid)
-    return _harness_out(v or {"id": hid}, await memory_plane.grant_counts(org))
+    v = await _vertex_get(hid) or {"id": hid}
+    _harness_etag(response, v)
+    return _harness_out(v, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/orgs/{org}/harnesses/{hid}")
@@ -26069,10 +26145,12 @@ async def cloud_upload_status_all(request: Request) -> dict:
 
 
 @app.get("/v1/harnesses/{hid}")
-async def get_harness_public(hid: str, request: Request) -> dict:
+async def get_harness_public(hid: str, request: Request,
+                             response: Response = None) -> dict:  # type: ignore[assignment]
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _mcp_migrate(org, hid, await _harness_in_reach(_caller, hid))
+    _harness_etag(response, v)   # its version, for an update's If-Match (Harnesses §5.2)
     return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
 
 
@@ -26158,7 +26236,8 @@ async def list_bases(request: Request) -> dict:
             "models": [{"id": m["id"], "available": m["available"], "default": m["default"],
                         "reasoning": list(reasoning.levels_for(m["id"]))}
                        for m in view["models"]],
-            "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
+            # each tool's own word: a base's `hard_tools` are withheld even where the rest are only asked
+            "tools": [{"name": n, "label": lbl, "enforcement": _tool_enforcement(b, n)}
                       for n, lbl in b["tools"]],
             # Skills bundled into the image, which every base can use. A base ALSO discovers
             # skills of its own at run time that nothing outside a turn can enumerate, so
@@ -26290,7 +26369,11 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
 
 
 @app.put("/v1/harnesses/{hid}")
-async def update_harness_public(hid: str, body: HarnessBody, request: Request) -> dict:
+async def update_harness_public(hid: str, body: HarnessBody, request: Request,
+                                response: Response = None) -> dict:  # type: ignore[assignment]
+    """Replace a harness's configuration (Harnesses §5.2). If-Match, optional: the ETag a read of the
+    harness answered. A harness that changed since is refused 412 and nothing is written. The answer
+    carries the version written. Without If-Match it replaces as it always has."""
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid)
@@ -26298,6 +26381,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     if _p.get("calibration") and str(body.calibrates or "") != str(v.get("calibrates") or ""):
         raise uhp_error(403, "forbidden", "A calibration credential cannot grant calibration.", "calibrates")
     v = await _mcp_migrate(org, hid, v)
+    _harness_if_match(request, v)   # before anything in the body is looked at; see update_harness
     if body.base and body.base != str(v.get("base") or ""):   # Harnesses §5.2, as in update_harness
         raise uhp_error(409, "harness_mismatch",
                         "A harness's base cannot change; create a different harness for a different base.",
@@ -26316,7 +26400,9 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     # client saved: its access is its grants, and a harness save is not a revocation.
     if await memory_plane.granted(org, _agent(hid), v.get("workspace")):
         await _memories_ensure(org, hid, await _vertex_get(hid) or v)
-    return _harness_out(await _vertex_get(hid) or {"id": hid}, await memory_plane.grant_counts(org))
+    saved = await _vertex_get(hid) or {"id": hid}
+    _harness_etag(response, saved)
+    return _harness_out(saved, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/harnesses/{hid}")

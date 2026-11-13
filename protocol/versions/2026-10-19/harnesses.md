@@ -285,6 +285,23 @@ Replaces the mutable configuration. A server MUST NOT change `id`, `base`, or `c
 the base of an existing harness would silently change the behaviour of every session already
 attached to it; a client that wants a different base MUST create a different harness.
 
+Because an update replaces the whole configuration, a client that builds its body from a read
+overwrites whatever changed between that read and its write: an edit made by a person, or by
+another client. A server MAY answer a read of a harness (`GET /v1/harnesses/{harness_id}`) and an
+update with an `ETag` header carrying the harness's version, a strong validator that changes
+whenever something an update replaces changes. A server that answers one MUST honour `If-Match` on
+an update of that harness:
+
+- an `If-Match` naming the harness's current version, or `*`, is applied as any update is, and the
+  answer carries the new version;
+- one that names no current version is refused with `412` and `code: "precondition_failed"`, and
+  nothing is written. The client reads the harness again and redoes its change on what it reads;
+- an update without `If-Match` replaces the configuration as it always has.
+
+The precondition is judged after the caller's scope, so a harness outside it is still `404`, and
+before the body: a body built from a stale read is refused as stale whatever else it would have been
+refused for. A client that read no `ETag` MUST NOT assume `If-Match` is honoured.
+
 ### 5.3 Delete
 
 ```http

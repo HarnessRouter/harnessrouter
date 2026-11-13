@@ -2,6 +2,21 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-10-19, addition: an update can name the version it was built from (ETag, If-Match)
+
+`PUT /v1/harnesses/{harness_id}` replaces the whole configuration, so a client that builds its body
+from a read (an app applying the copy of the harness it keeps, an upgrade step) silently overwrote
+whatever changed between its read and its write. A server MAY now answer a harness's read and
+update with an `ETag`, the harness's version, and one that does MUST honour `If-Match` on that
+harness's update ([Harnesses §5.2](versions/2026-10-19/harnesses.md#52-update)): a version that is no
+longer current is refused `412` `precondition_failed` and nothing is written; `*` matches the harness
+as it is; an update without `If-Match` replaces as before. The precondition is judged after scope
+(another caller's harness is still `404`) and before the body. Under [VERSIONING](VERSIONING.md) an
+optional request header and a response header fit within a version: a server that sends no `ETag`
+is unchanged, and a client learns support from the `ETag` it reads rather than from a capability.
+`412` joins `invalid_request_error`'s statuses, and the code is unprefixed on the precedent of
+`idempotency_key_reused`, as a code this specification now covers.
+
 ## Conformance suite 2026.10.19.post6 (2026-11-04)
 
 B-01…B-06 check the addition below on a server that reports `session_branching`: the first

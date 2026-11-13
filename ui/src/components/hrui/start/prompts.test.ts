@@ -231,3 +231,19 @@ it('the API every block names is this instance\u2019s own address, under /api/ha
   expect(API_BASE).toMatch(/^https?:\/\/[^/]+\/api\/harness$/);
   expect(handPrompt()).toContain('POST ' + API_BASE + '/v1/responses');
 });
+
+// An app moved to a duplicate by changing only harness_id in its repo copy, and applying that copy gave the duplicate
+// the original's name and model. Every block that keeps the copy says to fetch before applying, to send the ETag back
+// as If-Match (a stale apply is refused with 412), and to replace the whole copy when the app moves.
+describe.each(OWN_APP)('%s keeps its repo copy in step with the harness', (_name, text) => {
+  it('fetches the harness by its id before applying, and sends the ETag as If-Match', () => {
+    expect(text).toContain('fetch the harness by its harness_id first');
+    expect(text).toContain('keep the ETag the answer carries');
+    expect(text).toContain('send that ETag as If-Match');
+    expect(text).toContain('A 412 answer means the harness changed meanwhile: fetch it again and redo the change.');
+  });
+  it('replaces every field when the app moves to another harness', () => {
+    expect(text).toContain('If my app moves to another harness, fetch that harness by its harness_id and replace every field of harnessrouter.json with its own');
+    expect(text).toContain('never keep the old harness\u2019s name, base or model');
+  });
+});

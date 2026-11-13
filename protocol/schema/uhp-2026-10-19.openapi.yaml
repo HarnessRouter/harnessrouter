@@ -121,6 +121,8 @@ paths:
       responses:
         '200':
           description: The harness
+          headers:
+            ETag: { $ref: '#/components/headers/HarnessVersion' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Harness' }
@@ -132,6 +134,16 @@ paths:
       description: |
         Conformance class Full. `id`, `base` and `createdAt` are immutable — changing the base of an
         existing harness would silently change the behaviour of every session attached to it.
+        `If-Match` (optional) names the version the body was built from; see Harnesses §5.2.
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          description: |
+            The `ETag` a read of the harness answered, a comma-separated list of them, or `*`. A
+            harness whose version is none of them is refused with `412` and nothing is written.
+            Honoured by a server that answers reads with an `ETag`.
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -140,10 +152,19 @@ paths:
       responses:
         '200':
           description: The updated harness
+          headers:
+            ETag: { $ref: '#/components/headers/HarnessVersion' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Harness' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '412':
+          description: |
+            `precondition_failed`: the harness changed since the read whose `ETag` the `If-Match`
+            names. Nothing was written; read it again and redo the change.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     delete:
       tags: [Harnesses]
       operationId: deleteHarness
@@ -1641,6 +1662,13 @@ components:
       description: The protocol version actually used to serve this response.
       required: true
       schema: { type: string, examples: ['2026-08-11'] }
+    HarnessVersion:
+      description: |
+        The harness's version, a strong validator that changes whenever something an update
+        replaces changes. Optional; a server that sends it honours `If-Match` on the harness's
+        update (Harnesses §5.2).
+      required: false
+      schema: { type: string, examples: ['"5d41402abc4b2a76b9719d911017c592"'] }
 
   parameters:
     MemoryId:
@@ -2737,6 +2765,7 @@ components:
             - harness_busy
             - plugin_conflict
             - idempotency_key_reused
+            - precondition_failed
             - branch_unavailable
             - input_not_pending
             - input_request_expired

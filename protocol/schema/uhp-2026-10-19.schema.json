@@ -1971,6 +1971,7 @@
             "harness_busy",
             "plugin_conflict",
             "idempotency_key_reused",
+            "precondition_failed",
             "branch_unavailable",
             "input_not_pending",
             "input_request_expired",
