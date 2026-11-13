@@ -316,6 +316,10 @@ def test_a_job_is_saved_into_the_workspace_with_its_own_copies_of_the_skill_and_
     new_key = srv["auth"][len("vault:"):]
     assert new_key != "harness-mcp-mcp-crm00001" and env["vault"][(gw._org_tenant(ORG_A), new_key)] == "crm-token-not-real"
     assert env["vault"][(gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001")] == "crm-token-not-real"
+    # the copy is bound to the workspace its setup record got (not the default), and a turn there reads it
+    bind = json.loads(env["vault"][(gw._org_tenant(ORG_A), gw._mcp_bind_key(new_key))])
+    assert h["workspace"] == WS_A and bind["workspaces"] == [gw._mcp_ws(ORG_A, WS_A)]
+    assert bind["uses"] == [gw._mcp_use_of_url("https://crm.acme.example/mcp")]
     assert out["attached"] == {"skill:reply-tone": "on", CRM: "on"}
     assert env["plugs_attach"] == [] and env["media"] == []
 

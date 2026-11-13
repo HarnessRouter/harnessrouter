@@ -436,3 +436,104 @@ def test_strict_holds_a_secret_named_in_two_places(store, monkeypatch, capsys):
     assert binding("harness-mcp-a") is None
     mcp, _ = turn(vertex("ws-a", [server("a")]))
     assert "auth" not in mcp[0]
+
+
+# ── CAT's review: nothing left with no use, one check per write, the record's own workspace ──────
+
+def test_a_secret_named_only_where_nothing_binds_is_held_not_left_open(api, caller, store, monkeypatch, capsys):
+    run(store.put(ORG, "harness-mcp-t", TOKEN))
+    _graph(monkeypatch, [vertex("ws-a", [server("t", url="https://$headers.X-Host/mcp")])])
+    run(gw._mcp_bind_existing())
+    assert binding("harness-mcp-t") == {"uses": {gw.USE_HELD}, "workspaces": {"ws-a"}}
+    assert gw._mcp_sha8("harness-mcp-t") in capsys.readouterr().out
+    for url in (GOOD, EVIL):                                   # no first naming can aim it
+        assert make(api, caller, IN_A, [server("t", url=url)]).status_code == 422
+    assert make(api, caller, IN_A, env={"T": "vault:harness-mcp-t"}).status_code == 422
+    mcp, _ = turn(vertex("ws-a", [server("t", url="https://$headers.X-Host/mcp")]), {"x-host": "mcp.good.example"})
+    assert "auth" not in mcp[0]
+
+
+def test_a_store_with_no_use_is_said(api, caller, capsys):
+    assert put(api, caller, IN_A, "nouse").status_code == 200
+    assert gw._mcp_sha8("harness-mcp-nouse") in capsys.readouterr().out
+    assert put(api, caller, IN_A, "withurl", url=GOOD).status_code == 200
+    assert gw._mcp_sha8("harness-mcp-withurl") not in capsys.readouterr().out
+
+
+def test_a_refused_variable_leaves_no_binding_and_no_sealed_value(api, caller, store):
+    assert put(api, caller, IN_A, "fresh").status_code == 200                  # bound to no use yet
+    assert put(api, caller, IN_A, "forhost", url=GOOD).status_code == 200      # bound to a server
+    before = set(store_keys(store))
+    r = make(api, caller, IN_A, [server("fresh"), {"name": "lit", "url": GOOD, "auth": "a-literal-token"}],
+             env={"T": "vault:harness-mcp-forhost"})
+    assert r.status_code == 422 and "secret_other_use" in r.text
+    assert binding("harness-mcp-fresh")["uses"] == set()                        # the server's first naming not written
+    assert set(store_keys(store)) == before                                     # and no literal was sealed
+
+
+def store_keys(store):
+    root = pathlib.Path(store._root) if hasattr(store, "_root") else None
+    if root is None:
+        root = pathlib.Path(next(v for k, v in vars(store).items() if isinstance(v, (str, pathlib.Path)) and pathlib.Path(v).is_dir()))
+    return sorted(str(x.relative_to(root)) for x in root.rglob("*") if x.is_file())
+
+
+def test_a_store_answers_how_many_other_workspaces_it_left(api, caller, store):
+    bound(store, "harness-mcp-rot", {gw._mcp_use_of_url(GOOD)}, {"ws-a", "ws-b", "default"})
+    r = put(api, caller, ORG_WIDE, "rot", url=GOOD, ws_header="ws-a")
+    assert r.status_code == 200 and r.json()["other_workspaces_dropped"] == 2
+    assert binding("harness-mcp-rot")["workspaces"] == {"ws-a"}
+
+
+def test_an_unreadable_secret_is_an_error_not_a_free_name(store):
+    target = store._p(ORG, "harness-mcp-odd")
+    target.mkdir(parents=True)                                  # a directory where the record would be: unreadable
+    with pytest.raises(OSError):
+        run(store.get(ORG, "harness-mcp-odd"))
+    assert run(store.get(ORG, "harness-mcp-absent")) is None
+
+
+def _record(hid):
+    v = run(gw._vertex_get(hid))
+    assert v, hid
+    return v
+
+
+def test_create_through_the_console_route_binds_the_records_workspace(api, caller):
+    assert put(api, caller, ORG_WIDE, "c1", url=GOOD, ws_header="ws-x").status_code == 200
+    r = make(api, caller, ORG_WIDE, [server("c1")], ws_header="ws-x")
+    assert r.status_code == 200, r.text
+    v = _record(r.json()["id"])
+    assert v["workspace"] == "ws-x" and turn(v)[0][0]["auth"] == TOKEN
+    assert binding("harness-mcp-c1")["workspaces"] == {"ws-x"}                 # never widened to another workspace
+
+
+def test_create_with_a_workspace_key_binds_the_records_workspace(api, caller):
+    assert put(api, caller, IN_A, "c2", url=GOOD).status_code == 200
+    r = make(api, caller, IN_A, [server("c2")], env={"T": "vault:harness-mcp-c2e"})
+    assert r.status_code == 422                                  # (c2e names nothing in ws-a)
+    assert put(api, caller, IN_A, "c2e", env=True).status_code == 200
+    r = make(api, caller, IN_A, [server("c2")], env={"T": "vault:harness-mcp-c2e"})
+    assert r.status_code == 200, r.text
+    v = _record(r.json()["id"])
+    mcp, env = turn(v)
+    assert v["workspace"] == "ws-a" and mcp[0]["auth"] == TOKEN and env["T"] == TOKEN
+
+
+def test_updates_bind_the_records_own_workspace(api, caller):
+    r = make(api, caller, ORG_WIDE, [], ws_header="ws-x")
+    hid = r.json()["id"]
+    assert put(api, caller, ORG_WIDE, "u1", url=GOOD, ws_header="ws-x").status_code == 200
+    caller["p"] = dict(ORG_WIDE)
+    body = {"name": "u", "base": "claude-code", "mcp_servers": [server("u1")]}
+    assert api.put(f"/v1/orgs/{ORG}/harnesses/{hid}", json=body, headers={"x-harness-workspace": "default"}).status_code == 200
+    v = _record(hid)
+    assert v["workspace"] == "ws-x" and turn(v)[0][0]["auth"] == TOKEN       # the record's workspace, not the header's
+    assert binding("harness-mcp-u1")["workspaces"] == {"ws-x"}
+    r = make(api, caller, IN_A, [])
+    hid = r.json()["id"]
+    assert put(api, caller, IN_A, "u2", url=GOOD).status_code == 200
+    caller["p"] = dict(IN_A)
+    assert api.put(f"/v1/harnesses/{hid}", json={**body, "mcp_servers": [server("u2")]}).status_code == 200
+    v = _record(hid)
+    assert v["workspace"] == "ws-a" and turn(v)[0][0]["auth"] == TOKEN

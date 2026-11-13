@@ -4057,6 +4057,9 @@ _MCP_REF_RE = re.compile(r"^vault:(harness-mcp-[a-z0-9-]+)$")
 # stores, resolves or deletes a secret by name can reach (each of those takes harness-mcp- only).
 _MCP_BIND_PREFIX = "harness-mcpbind-"
 USE_ENV = "env"
+# What a binding holds for a secret no naming may take: a harness names it at no address a binding can name. It is
+# stored again with its url (or for the environment) before it goes anywhere.
+USE_HELD = "held"
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _MCP_HOST_OK_RE = re.compile(r"[a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?|[0-9a-f:.]+")
 
@@ -15172,7 +15175,12 @@ async def _mcp_secret_store(org: str, ref: str, token: str, *, ws, scoped: bool 
     have = bound or {"uses": set(), "workspaces": set()}
     await _vault_put(tenant, _mcp_bind_key(key), json.dumps({
         "uses": sorted(named or have["uses"]), "workspaces": [w]}))
-    return {"ref": f"vault:{key}", "tenant": tenant}
+    if not (named or have["uses"]):
+        print(f"[mcp] stored secret {_mcp_sha8(key)} was stored with no url and no env: the first harness to name it "
+              f"in its workspace binds it there. Store it with its server's url, or env, instead.", flush=True)
+    # the workspaces it went to before and no longer does, counted, so a person who rotated it from one workspace
+    # hears that the others' harnesses stop getting it
+    return {"ref": f"vault:{key}", "tenant": tenant, "other_workspaces_dropped": len(have["workspaces"] - {w})}
 
 
 def _mcp_store_uses(body: McpSecretBody) -> set[str]:
@@ -21743,14 +21751,14 @@ def _mcp_secret_refused(code: str, msg: str, param: str) -> HTTPException:
     return uhp_error(422, code, msg, param)
 
 
-async def _mcp_refs_named(org: str, p: dict | None, ws, servers: list | None, env: dict | None) -> None:
-    """Check, then bind, every stored secret a harness write names: a server's auth and headers at
-    that server's address, an environment value in the environment. For a harness in workspace `ws`:
+async def _mcp_refs_check(org: str, p: dict | None, ws, servers: list | None, env: dict | None) -> dict:
+    """Check every stored secret a harness write names, its servers and its variables together, and
+    answer what binding them adds (_mcp_refs_apply), before anything of the write is stored: a server's
+    auth and headers at that server's address, a variable in the environment. For a harness in `ws`:
     - a secret not bound to `ws` is refused to a caller held to a workspace, in the words used for one
       that doesn't exist; a caller that reaches the whole organization adds `ws` to it;
     - a secret bound to no use yet is bound to this one (its first naming); one bound to other uses
-      is refused here, so it is stored again for this address rather than carried to a new one.
-    Nothing is written unless every name passes."""
+      is refused here, so it is stored again for this address rather than carried to a new one."""
     named: list[tuple[str, str, str]] = []      # (key, use, param)
     for s in servers or []:
         if not isinstance(s, dict):
@@ -21767,7 +21775,7 @@ async def _mcp_refs_named(org: str, p: dict | None, ws, servers: list | None, en
             named.append((k, USE_ENV, "env"))
     tenant = _org_tenant(org)
     if not named or not tenant:
-        return
+        return {}
     scoped = bool(_key_scope(p or {}))
     w = _mcp_ws(org, ws)
     adds: dict[str, tuple[set, set]] = {}
@@ -21796,8 +21804,14 @@ async def _mcp_refs_named(org: str, p: dict | None, ws, servers: list | None, en
                 "This stored secret was stored for another server or for the environment. Store it again "
                 "for this one to use it here.", param)
         uses.add(use)
-    for key, (uses, wss) in adds.items():
-        if uses or wss:
+    return adds
+
+
+async def _mcp_refs_apply(org: str, adds: dict) -> None:
+    """Write what _mcp_refs_check said binding the write's names adds."""
+    tenant = _org_tenant(org)
+    for key, (uses, wss) in (adds or {}).items():
+        if tenant and (uses or wss):
             await _mcp_binding_add(tenant, key, uses=uses, workspaces=wss)
 
 
@@ -21856,6 +21870,11 @@ async def _mcp_bind_existing() -> dict:
             continue
         if len(uses) > 1:
             wide.append((key, uses, False))
+        if not uses:
+            # named only at an address no binding can name: held, never left for a first naming to aim
+            uses = {USE_HELD}
+            print(f"[mcp] stored secret {_mcp_sha8(key)} is named only at an address that is filled in per task or "
+                  f"that parsers read differently, so it goes nowhere: store it again with its server's url.", flush=True)
         await _vault_put(tenant, _mcp_bind_key(key), json.dumps({"uses": sorted(uses), "workspaces": sorted(wss)}))
         bound += 1
     for key, uses, is_held in wide:
@@ -21894,7 +21913,7 @@ async def _mcp_bind_on_start() -> None:
 
 
 async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None, *,
-                              p: dict | None = None, ws=None) -> list[dict]:
+                              p: dict | None = None, ws=None, env: dict | None = None) -> list[dict]:
     """What a write of a harness's servers stores. `cur` is the harness as it stands; a new one has none.
 
     The rule that a server the caller didn't send is gone has one exception, and it isn't a kept-if-omitted
@@ -21910,8 +21929,12 @@ async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None 
                             f"'{s.get('name')}' is the name this agent's memories go by. Give this server another name.",
                             "mcp_servers")
     prepared = _mcp_servers_prepare(sent + kept)
-    await _mcp_refs_named(org, p, ws, prepared, None)       # the stored secrets it names, before anything is stored
-    return await _mcp_seal_literals(org, prepared, ws=ws)
+    # every stored secret the write names, its servers and its variables (`env`, when the write sets them) together,
+    # is checked before anything is stored: a refusal leaves no binding and no sealed value behind
+    adds = await _mcp_refs_check(org, p, ws, prepared, env)
+    sealed = await _mcp_seal_literals(org, prepared, ws=ws)
+    await _mcp_refs_apply(org, adds)
+    return sealed
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -24148,8 +24171,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     memory_ws = _plug_workspace(request, p)
     memory_ask = _memory_ask(body.memory)
     await _memory_ask_check(org, memory_ws, memory_ask, {**p, "member": member})
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=workspace)
-    await _mcp_refs_named(org, p, workspace, None, body.env)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=workspace, env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
     body.plugins = await _plugins_prepare(body, org)
@@ -24253,8 +24275,8 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get("workspace"))
-    await _mcp_refs_named(org, _caller, cur.get("workspace"), None, body.env)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get("workspace"),
+                                                 env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
@@ -24615,8 +24637,7 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
         if first is not None:
             return _harness_out(first)
     try:
-        body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"))
-        await _mcp_refs_named(org, p, p.get("workspace"), None, body.env)
+        body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"), env=body.env)
         body.skills = await _skills_prepare(body.skills)
         await _environment_check_ref(org, body.environment, p)
         body.plugins = await _plugins_prepare(body, org)
@@ -25441,7 +25462,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        # second needs more steps than a document does. Absent, the base's default.
                        max_step=spec.get("max_step"),
                        timeout_seconds=spec.get("timeout_seconds"))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"))
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"), env=body.env)
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
     # plugin's own servers must not take, so they count as the harness's here.
@@ -26283,8 +26304,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get("workspace"))
-    await _mcp_refs_named(org, _p, v.get("workspace"), None, body.env)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get("workspace"), env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))

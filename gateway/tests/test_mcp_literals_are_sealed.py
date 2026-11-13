@@ -108,6 +108,8 @@ def test_every_writer_goes_through_it():
     # a create has nothing stored, and an update hands over what is, so the server's own entry stays (_is_memories_entry)
     # each names its caller and the harness's workspace, which the stored secrets it names are checked against
     assert src.count("await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=") == 3
-    assert src.count("await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get(\"workspace\"))") + \
-        src.count("await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get(\"workspace\"))") == 2
+    assert src.count("await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get(\"workspace\"),") + \
+        src.count("await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get(\"workspace\"), env=body.env)") == 2
+    # the variables are checked in the same one call, before anything is stored
+    assert "_mcp_refs_named" not in src and src.count("env=body.env)") == 5
     assert src.count("_mcp_servers_prepare(body.mcp_servers)") == 0
