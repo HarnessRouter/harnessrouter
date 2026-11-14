@@ -248,9 +248,25 @@ _INTERRUPTED_MESSAGE = ("This task stopped before it finished because the servic
 _CAP_MESSAGE = "This task did not finish within its time limit. Start a new turn to continue."
 
 
-def _interrupted_error() -> dict:
+def _interrupted_error(workspace: str | None = None) -> dict:
+    """The error of a turn this server cut short. With `workspace` (kept, checkpoint or lost) it also
+    says, in fields a client can act on, what the interruption left behind and that the step running
+    when it came may run again: a checkpoint cannot tell whether a tool's outside effect happened, so
+    it is always true here (Tasks §3.3). Without it, as a record from before carried it, only the reason."""
+    detail: dict = {"reason": "interrupted"}
+    if workspace:
+        detail.update({"workspace": workspace, "effects_may_repeat": True})
     return {"type": "harness_error", "code": "harness_error", "message": _INTERRUPTED_MESSAGE,
-            "detail": {"reason": "interrupted"}}
+            "detail": detail}
+
+
+def _interrupted_workspace(v: dict) -> str:
+    """What a cut turn left of its working directory, from the session's record `v`: `kept` where the
+    directory is a volume that outlives a restart (#530), and where it is a checkpoint tarball (the vg
+    backing) `checkpoint` when one was saved (a step's, #634, or a turn's end) and `lost` when none ever was."""
+    if BACKING.mode != "vg":
+        return "kept"
+    return "checkpoint" if str((v or {}).get("ws_sha") or "") else "lost"
 
 
 def _cap_error() -> dict:
@@ -282,7 +298,11 @@ async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
         except Exception:  # noqa: BLE001
             pass
         return
-    err = _interrupted_error()
+    v: dict = {}
+    if getattr(tr, "sid", None):
+        with contextlib.suppress(Exception):
+            v = await _vertex_get(tr.sid) or {}
+    err = _interrupted_error(_interrupted_workspace(v))
     try:
         for ev in tr.fail(err["message"], err):
             await emit(ev)
@@ -3823,7 +3843,8 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     rec["status"] = settled
     if settled == "failed" and vs == "failed" and proven:
         # the sweep proved why (a restart lost the turn, or the hard cap) and wrote it on the session
-        rec["error"] = _interrupted_error() if v["end_reason"] == "interrupted" else _cap_error()
+        rec["error"] = (_interrupted_error(_interrupted_workspace(v)) if v["end_reason"] == "interrupted"
+                        else _cap_error())
     elif settled == "failed" and capped and not rec.get("error"):
         rec["error"] = _cap_error()                # the reconciler's own hard cap: never a bare failed
     try:
@@ -5758,6 +5779,11 @@ UHP_CAPABILITIES = {
     # response's committed files and transcript (_branch_source, _branch_prepare). Optional at every
     # class (VERSIONING: within a version only optional things are added), so it is a capability.
     "session_branching": True,
+    # Tasks §3.3: a `resume` item in `input`, chained on a response this server itself cut short
+    # (a restart, a shutdown drain), continues the session and tells the harness it was cut off
+    # (_split_resume, _resume_prompt). A continuation like any other, so every base has it; the
+    # base's own resume applies where it has one.
+    "resume": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 # The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
@@ -8187,6 +8213,58 @@ def _answer_prompt(acc: dict, secret_env: str | None) -> str:
     if acc.get("kind") in ("choice", "confirm"):
         answer = json.dumps(_import_text(answer), ensure_ascii=False)
     return f'Answer to your question {q}: {answer}'
+
+
+# ── resuming a turn the server cut short (Tasks §3.3, capability resume) ───────────────────────
+def _split_resume(inp) -> dict | None:
+    """The one `resume` item a request may carry. It stands alone in `input`: another item beside
+    it, a second resume, a note that is not text, or an input_response too is a malformed body (400),
+    and a server without the capability refuses the item rather than read it as an empty task."""
+    if not isinstance(inp, list):
+        return None
+    found = [it for it in inp if isinstance(it, dict) and it.get("type") == "resume"]
+    if not found:
+        return None
+    if not UHP_CAPABILITIES.get("resume"):
+        raise uhp_error(400, "invalid_input", "This server does not support resume.", "input")
+    if len(found) > 1 or len(inp) > 1:
+        raise uhp_error(400, "invalid_input", "A resume is the only item of its request.", "input")
+    note = found[0].get("note")
+    if note is not None and not isinstance(note, str):
+        raise uhp_error(400, "invalid_input", "A resume's note is text.", "input.note")
+    return found[0]
+
+
+def _is_interrupted(rec: dict | None) -> bool:
+    """Whether this stored response is one the server itself cut short: `failed`, its error's reason
+    `interrupted` (a budget stop, a hard cap or a failure of the task's own is none of them)."""
+    if not isinstance(rec, dict) or str(rec.get("status") or "") != "failed":
+        return False
+    err = rec.get("error")
+    detail = err.get("detail") if isinstance(err, dict) else None
+    return isinstance(detail, dict) and detail.get("reason") == "interrupted"
+
+
+_RESUME_WORKSPACE = {
+    "kept": "Your working files are as you left them.",
+    "checkpoint": "Your working files are back at the last saved step; what you did after it is gone.",
+    "lost": "Your working files did not survive; you have this conversation only.",
+}
+
+
+def _resume_prompt(rec: dict, note: str | None) -> str:
+    """The server's own instruction for a resumed turn, for a base that has no native resume to say
+    it for it: that the last turn was cut off, what survived, and that the step that was running may
+    run again. The person's note follows as theirs."""
+    detail = ((rec.get("error") or {}).get("detail") or {}) if isinstance(rec.get("error"), dict) else {}
+    lines = ["Your previous turn was cut off before it finished, because the service running it restarted.",
+             _RESUME_WORKSPACE.get(str(detail.get("workspace") or ""), "")]
+    if detail.get("effects_may_repeat", True):
+        lines.append("The step you were on may run again, so check what it already did before you "
+                     "repeat anything with an outside effect.")
+    lines.append("Carry on from where you stopped.")
+    text = " ".join(x for x in lines if x)
+    return f'{text}\n\nThe person says: "{note}"' if note else text
 
 
 # ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
@@ -12178,6 +12256,16 @@ async def create_response(body: CreateResponseBody, request: Request):
         if not body.previous_response_id:
             raise uhp_error(400, "invalid_input", "A branch starts from the response named in "
                                                   "previous_response_id.", "branch")
+    # A resume (Tasks §3.3) is judged by its shape alone, here, before anything is read: a malformed
+    # one, or one with a branch, is a 400 whatever the response it names. Whether that response is
+    # interrupted is decided below, once the session is known.
+    resume_item = _split_resume(body.input)
+    if resume_item is not None and not body.previous_response_id:
+        raise uhp_error(400, "invalid_input", "A resume carries on the response named in "
+                                              "previous_response_id.", "previous_response_id")
+    if resume_item is not None and body.branch is True:
+        raise uhp_error(400, "invalid_input", "A branch does not resume the original response. Send "
+                                              "the resume without branch.", "branch")
     meta = body.metadata or {}
     probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
@@ -12392,7 +12480,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     history: list[dict] = []
     # An answer to the previous response's question (Tasks §3.2) is taken out before the rest of
     # the input is read as a message; it is checked once the session it answers in is resolved.
-    answer, live_input = _split_input_response(body.input)
+    answer, live_input = _split_input_response([] if resume_item is not None else body.input)
     if answer is not None and not body.previous_response_id:
         raise uhp_error(400, "invalid_input", "An input_response answers the response named in "
                                               "previous_response_id.", "previous_response_id")
@@ -12422,7 +12510,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 for f in files_in if f.get("content_b64") and f.get("filename")]
     if body.instructions:
         prompt = f"{body.instructions}\n\n---\n\n{prompt}"
-    if not prompt and not files_in and answer is None:
+    if not prompt and not files_in and answer is None and resume_item is None:
         raise HTTPException(400, "empty input")
     if files_in:
         names = ", ".join(f["filename"] for f in files_in)
@@ -12451,14 +12539,36 @@ async def create_response(body: CreateResponseBody, request: Request):
     # A later task passes the question over however it names the session (§3.2), so what a task
     # chains on is the session's newest response when it names no response of its own.
     _newest = ""
-    if answer is not None or (not body.previous_response_id and str(meta.get("session_id") or "").strip()):
+    if (answer is not None or resume_item is not None
+            or (not body.previous_response_id and str(meta.get("session_id") or "").strip())):
         with contextlib.suppress(Exception):
             _newest = str((await _session_turns_data(sid)).get("last_response_id") or "")
     _chained = None if branching else body.previous_response_id or _newest
     if _chained:
         _prev = await _resp_get(_chained)
         _pend = (_prev or {}).get("_pending_input") if isinstance(_prev, dict) else None
-        if answer is not None:
+        if resume_item is not None:
+            # Tasks §3.3: single-use and explicit. A response the server did not cut short is not
+            # resumable, and one a later task already resumed or passed over is not either (the
+            # session's newest response is no longer it). Read first as the sweep would leave it, so
+            # a turn cut by a restart that no read has settled yet still reads interrupted.
+            if (isinstance(_prev, dict) and str(_prev.get("status") or "") in _TURN_LIVE):
+                with contextlib.suppress(Exception):
+                    _prev = await _reconcile_response(_chained, _prev) or _prev
+            if not _is_interrupted(_prev):
+                raise uhp_error(409, "resume_not_pending", "That response was not interrupted, so there "
+                                "is nothing to resume.", "previous_response_id",
+                                {"previous_response_id": body.previous_response_id, "state": "not_interrupted"})
+            if _newest and _newest != body.previous_response_id:
+                raise uhp_error(409, "resume_not_pending", "A later task already resumed or passed that "
+                                "response over.", "previous_response_id",
+                                {"previous_response_id": body.previous_response_id, "state": "passed_over"})
+            note = (resume_item.get("note") or "").strip() or None
+            line = _resume_prompt(_prev, note)
+            prompt = line
+            user_text = "Resume the interrupted turn." + (f" {note}" if note else "")
+            input_items = [{"type": "resume", **({"note": note} if note else {})}]
+        elif answer is not None:
             if _newest and _newest != body.previous_response_id:
                 # a later task already ran: the question it passed over is no longer pending
                 raise uhp_error(409, "input_not_pending", "A later task passed that input request over.",
