@@ -165,8 +165,9 @@ def test_the_bases_document_carries_the_clis_own_levels_and_what_a_person_should
     notes = " ".join(agy["notes"])
     assert "does not update itself" in notes and "sends Google none" in notes
     assert "never given to the agent" in notes
+    assert "Crash reporting is off" in notes
     # in the person's words: no implementation names
-    for word in ("relay", "runner", "broker", "sandbox", "ACP", "telemetry flag", "gateway", "HR_"):
+    for word in ("relay", "runner", "broker", "sandbox", "ACP", "telemetry flag", "gateway", "HR_", "SENTRY"):
         assert word not in notes, word
     # another base's document is unchanged: no notes, and the shared table's levels
     other = _bases(monkeypatch)["gemini"]

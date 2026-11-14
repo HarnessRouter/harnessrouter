@@ -52,6 +52,27 @@ def test_the_turn_is_the_acp_server_with_telemetry_off_and_no_blanket_approval()
     assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"                 # "1" is not read by the CLI
 
 
+def test_every_launch_switches_off_usage_reporting_updates_and_crash_reporting():
+    _, env, job, _, _ = _build()
+    assert job["argv"][1:] == ["acp", "--disable-telemetry"]           # usage reporting
+    assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"                 # updates
+    assert env["ANTIGRAVITY_SENTRY_SAMPLE_RATE"] == "0"                 # crash reporting
+
+
+def test_the_cli_process_itself_is_started_with_all_three(tmp_path):
+    """The built turn, run through the driver against the fake agy, which records its own environment and argv."""
+    _, env, job, _, _ = _build(cwd=str(tmp_path))
+    log = tmp_path / "asked.ndjson"
+    job = {**job, "argv": [sys.executable, str(FAKE), *job["argv"][1:]]}
+    run_env = {**env, "FAKE_AGY_MODE": "silent", "FAKE_AGY_LOG": str(log), "HR_DRIVER_JOB": json.dumps(job)}
+    subprocess.run([sys.executable, str(pathlib.Path(D.__file__))], cwd=str(tmp_path), text=True,
+                   capture_output=True, stdin=subprocess.DEVNULL, timeout=60, env=run_env)
+    agent_env = json.loads(pathlib.Path(str(log) + ".env").read_text())
+    assert agent_env["ANTIGRAVITY_SENTRY_SAMPLE_RATE"] == "0"
+    assert agent_env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
+    assert json.loads(pathlib.Path(str(log) + ".argv").read_text())[1:] == ["acp", "--disable-telemetry"]
+
+
 def test_the_key_stays_in_the_relay_and_the_cli_gets_a_placeholder_and_the_relay():
     cmd, env, job, cwd, _ = _build()
     assert env["GEMINI_API_KEY"].startswith("hr-relay-") and env["GEMINI_API_KEY"] != KEY
@@ -331,7 +352,8 @@ def test_the_install_is_pinned_by_version_and_by_the_digest_of_each_archive():
     assert "install.sh" not in body.split("install_agy() {", 1)[1]      # never the vendor's script
     assert "| bash" not in body and "| sh" not in body
     assert 'iu_untar "$ag_tmp/agy.tar.gz" "$ag_x" antigravity' in body  # unpacked as the install uid
-    assert 'iu env AGY_CLI_DISABLE_AUTO_UPDATE=true "$TOOLS/bin/agy" --version' in body
+    # the install's own start of the CLI, to read its version, has updates and crash reporting off too
+    assert 'iu env AGY_CLI_DISABLE_AUTO_UPDATE=true ANTIGRAVITY_SENTRY_SAMPLE_RATE=0 "$TOOLS/bin/agy" --version' in body
     assert "storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_PIN}-${AGY_BUILD}/" in body
 
 
