@@ -22,6 +22,7 @@ import re
 import sys
 import tempfile
 import time
+import urllib.parse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -360,7 +361,8 @@ def test_a_session_delete_hands_the_runner_the_google_connection(monkeypatch):
     monkeypatch.setattr(gw, "SANDBOX_TRUST", "owner")
     body = run(gw._remote_delete_body("s1", {"backend": "antigravity", "last_connection": "integration:Google AI Studio"}))
     assert body["backend"] == "antigravity" and body["auth"]["api_key"] == "AIza-DUMMY-KEY"
-    assert body["auth"]["base_url"].startswith("https://generativelanguage.googleapis.com")
+    u = urllib.parse.urlsplit(body["auth"]["base_url"])
+    assert (u.scheme, u.hostname) == ("https", "generativelanguage.googleapis.com")
     assert run(gw._remote_delete_body("s1", {"backend": "codex"})) is None
     # a session whose connection is gone, with another of the same provider: nothing is guessed
     gone = run(gw._remote_delete_body("s1", {"backend": "antigravity", "last_connection": "integration:Old"}))
