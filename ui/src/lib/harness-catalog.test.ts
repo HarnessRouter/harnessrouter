@@ -81,6 +81,13 @@ test('the Antigravity CLI is offered only where the instance installed it, and r
   expect(h.instructionFileLabel('agy')).toBe('AGENTS.md');
 });
 
+test('a base the server says is unavailable here (waiting on its operator\'s switch) is not offered', () => {
+  const h = fresh();
+  const base = (id: string, status?: string) => ({ id, label: id, backend: id, models: [], ...(status ? { status } : {}) }) as unknown as import('./harness').BaseInfo;
+  expect(h.offeredOob({ agy: base('agy', 'unavailable'), hermes: base('hermes', 'ready') }).map((o) => o.id)).toEqual(['hermes']);
+  expect(h.offeredOob({ agy: base('agy', 'ready') }).map((o) => o.id)).toEqual(['agy']);
+});
+
 test('a harness saved with no model of its own keeps none, whatever the catalog says', async () => {
   const h = fresh();
   hf.mockResolvedValueOnce(json(MODELS));

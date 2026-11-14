@@ -1129,6 +1129,9 @@ Gemini 4 Hydrogen, Gemini 3.8 Flash, Gemini 3.6 Flash and Gemini 3.1 Pro, at the
 each model (Hydrogen up to `xhigh`). Carbon and Hydrogen are offered on this base only. What to know about
 it:
 
+- Run this base only on an instance where everyone who runs tasks is trusted; set `HR_AGY_TRUSTED_USERS=1` to
+  confirm. Set it on the container beside `HR_BACKENDS`. Until it is set, the base reads "unavailable": the
+  console does not offer it, and a task on a harness built on it is refused with that sentence.
 - It is downloaded from Google at first start, version 1.5.8, and checked against the sha256 committed in
   `docker/entrypoint.sh` for each architecture (about 105 MB). It does not update itself. To run another
   version, set `HR_AGY_VERSION`, `HR_AGY_BUILD` (the build number beside the version in the release's
@@ -1147,7 +1150,8 @@ it:
 A backend that fails to install is not fatal: the others still work. A base this instance has not
 installed (one left out of `HR_BACKENDS`, or one whose install failed) reads "not installed": the
 console does not offer it, and a task on a harness built on it is refused with that reason. The
-container's log names the install that failed.
+container's log names the install that failed. A base that waits on a switch of its own (the Antigravity
+CLI's `HR_AGY_TRUSTED_USERS`, above) reads "unavailable" the same way until the switch is set.
 
 Chromium is genuinely an image layer, so it stays a build flag:
 

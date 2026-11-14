@@ -9985,12 +9985,40 @@ def _not_installed_reason(label: str, backend: str) -> str:
             "to HR_BACKENDS and restart it.")
 
 
-def _require_installed(backend: str) -> None:
-    """Refuse a turn on a base this instance does not hold, in words and before anything is
-    allocated, rather than letting the runner fail to start it."""
+# A base that runs only once the instance's operator has confirmed, with one switch on the instance, what the
+# base's notes ask of it (see the base's notes). Until the switch is set the base reads "unavailable" in the
+# bases document and a task on it is refused, both with the base's ask, which names the switch.
+_OPERATOR_SWITCH: dict[str, str] = {"agy": "HR_AGY_TRUSTED_USERS"}
+
+
+def _operator_ask(switch: str) -> str:
+    """What the operator is asked to confirm, in the words the base's notes, the self-hosting guide and the
+    refusal all use."""
+    return f"Run this base only on an instance where everyone who runs tasks is trusted; set {switch}=1 to confirm."
+
+
+def _operator_switch_on(backend: str) -> bool:
+    switch = _OPERATOR_SWITCH.get(str(backend or ""))
+    return not switch or os.environ.get(switch, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _base_unavailable(label: str, backend: str) -> tuple[str, str]:
+    """Why a turn on `backend` cannot start on this instance: (its status in the bases document, the reason in
+    words), or ("", "") when it can. Not installed is said first: the switch is no use without the base."""
     if not _backend_installed(backend):
-        label = next((str(b["label"]) for b in _BASE_CATALOG.values() if b.get("backend") == backend), backend)
-        raise HTTPException(400, _not_installed_reason(label, backend))
+        return "not_installed", _not_installed_reason(label, backend)
+    if not _operator_switch_on(backend):
+        return "unavailable", f"{label} is not enabled on this instance. {_operator_ask(_OPERATOR_SWITCH[backend])}"
+    return "", ""
+
+
+def _require_installed(backend: str) -> None:
+    """Refuse a turn on a base that cannot run here (not installed, or waiting on its operator's switch), in
+    words and before anything is allocated, rather than letting the runner fail to start it."""
+    label = next((str(b["label"]) for b in _BASE_CATALOG.values() if b.get("backend") == backend), backend)
+    status, reason = _base_unavailable(label, backend)
+    if status:
+        raise HTTPException(400, reason)
 
 
 def _backend_of_builtin(harness_id: str) -> str:
@@ -21368,8 +21396,10 @@ _BASE_CATALOG: dict[str, dict] = {
                          "gemini-4-hydrogen": ("low", "medium", "high", "xhigh"),
                          "gemini-3.8-flash": ("low", "medium", "high"),
                          "gemini-3.6-flash": ("low", "medium", "high"), "gemini-3.1-pro-preview": ("low", "high")},
-        # What a person should know before choosing it, in their words (the bases document's `notes`).
-        "notes": ("Runs on a Google AI Studio key. The key stays with this instance and is never given to "
+        # What a person should know before choosing it, in their words (the bases document's `notes`): the
+        # operator's switch first (_OPERATOR_SWITCH), without which a task on this base is refused.
+        "notes": (_operator_ask(_OPERATOR_SWITCH["agy"]),
+                  "Runs on a Google AI Studio key. The key stays with this instance and is never given to "
                   "the agent.",
                   "Updates are off: the CLI is installed at a fixed version, its download checked against a "
                   "recorded digest, and it does not update itself.",
@@ -24959,7 +24989,7 @@ async def _setup_bases(org: str) -> dict:
     bases: dict = {}
     views: dict[str, list[str]] = {}
     for bid, b in _BASE_CATALOG.items():
-        if b.get("status") != "ready" or not _backend_installed(b["backend"]):
+        if b.get("status") != "ready" or _base_unavailable(b["label"], b["backend"])[0]:
             continue
         backend = b["backend"]
         if backend not in views:
@@ -26413,13 +26443,14 @@ async def list_bases(request: Request) -> dict:
         cat = _MODEL_CATALOG.get(backend, {})
         # the same view every picker reads (see list_models): catalog, custom endpoints, additions
         view = await _harness_models_view({}, backend, await _servable_models(org, backend))
-        installed = _backend_installed(backend)
+        off, why = _base_unavailable(b["label"], backend)
         out.append({
             "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
-            # "not_installed" for a base this instance does not hold, with the reason in words: the
-            # console does not offer it, rather than listing it ready to fail on its first turn
-            "status": b["status"] if installed else "not_installed",
-            **({} if installed else {"statusReason": _not_installed_reason(b["label"], backend)}),
+            # "not_installed" for a base this instance does not hold, "unavailable" for one waiting on its
+            # operator's switch (_OPERATOR_SWITCH), each with the reason in words: the console does not
+            # offer it, rather than listing it ready to fail on its first turn
+            "status": off or b["status"],
+            **({"statusReason": why} if off else {}),
             "systemPrompt": b["system_prompt"],
             "defaultModel": cat.get("default", ""),
             # `reasoning`: the thinking levels the model has, lowest first; empty where none was

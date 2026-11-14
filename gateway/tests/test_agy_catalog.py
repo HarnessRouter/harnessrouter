@@ -166,9 +166,11 @@ def test_the_bases_document_carries_the_clis_own_levels_and_what_a_person_should
     assert "does not update itself" in notes and "sends Google none" in notes
     assert "never given to the agent" in notes
     assert "Crash reporting is off" in notes
-    # in the person's words: no implementation names
+    # in the person's words: no implementation names. The one setting named is the operator's own switch.
+    assert ASK in agy["notes"]
+    rest = notes.replace(ASK, "")
     for word in ("relay", "runner", "broker", "sandbox", "ACP", "telemetry flag", "gateway", "HR_", "SENTRY"):
-        assert word not in notes, word
+        assert word not in rest, word
     # another base's document is unchanged: no notes, and the shared table's levels
     other = _bases(monkeypatch)["gemini"]
     assert "notes" not in other
@@ -184,8 +186,64 @@ def test_agy_is_opt_in_and_reads_not_installed_where_the_instance_does_not_hold_
     with pytest.raises(A.HTTPException):
         A._require_installed("agy")
     monkeypatch.setenv("HR_BACKENDS_INSTALLED", "claude,agy")
+    monkeypatch.setenv(SWITCH, "1")
     assert _bases(monkeypatch)["agy"]["status"] == "ready"
     entry = (pathlib.Path(__file__).resolve().parents[2] / "docker" / "entrypoint.sh").read_text()
     default = re.search(r'export HR_BACKENDS="\$\{HR_BACKENDS:-([^}]*)\}"', entry).group(1).split(",")
     assert "agy" not in default
 
+# ── the operator's confirmation ──────────────────────────────────────────────────────────────────
+SWITCH = "HR_AGY_TRUSTED_USERS"
+ASK = "Run this base only on an instance where everyone who runs tasks is trusted; set HR_AGY_TRUSTED_USERS=1 to confirm."
+
+
+def test_without_the_switch_a_task_on_the_base_is_refused_in_a_sentence_naming_it(monkeypatch):
+    monkeypatch.setenv("HR_BACKENDS_INSTALLED", "claude,agy")
+    for unset in (None, "", "0", "no", "false", "2"):
+        if unset is None:
+            monkeypatch.delenv(SWITCH, raising=False)
+        else:
+            monkeypatch.setenv(SWITCH, unset)
+        with pytest.raises(A.HTTPException) as refused:
+            A._require_installed("agy")
+        assert refused.value.status_code == 400, unset
+        assert ASK in refused.value.detail and SWITCH in refused.value.detail, unset
+        assert refused.value.detail.startswith("Antigravity CLI ")
+    # the bases document says the same, and the console does not offer it (status other than ready)
+    agy = _bases(monkeypatch)["agy"]
+    assert agy["status"] == "unavailable" and agy["statusReason"] == refused.value.detail
+    # nor does New setup
+    assert "agy" not in asyncio.run(A._setup_bases("local"))
+    # where nothing installs bases at start, the switch is still asked for
+    monkeypatch.delenv("HR_BACKENDS_INSTALLED")
+    with pytest.raises(A.HTTPException):
+        A._require_installed("agy")
+    # every other base is untouched
+    A._require_installed("claude")
+    A._require_installed("gemini")
+    assert _bases(monkeypatch)["gemini"]["status"] == "ready"
+
+
+def test_with_the_switch_set_the_base_runs(monkeypatch):
+    monkeypatch.setenv("HR_BACKENDS_INSTALLED", "claude,agy")
+    for on in ("1", "true", "yes", "on", " 1 "):
+        monkeypatch.setenv(SWITCH, on)
+        A._require_installed("agy")
+    agy = _bases(monkeypatch)["agy"]
+    assert agy["status"] == "ready" and "statusReason" not in agy
+    assert "agy" in asyncio.run(A._setup_bases("local"))
+
+
+def test_a_base_not_installed_says_so_before_it_asks_for_the_switch(monkeypatch):
+    monkeypatch.setenv("HR_BACKENDS_INSTALLED", "claude")
+    monkeypatch.delenv(SWITCH, raising=False)
+    with pytest.raises(A.HTTPException) as refused:
+        A._require_installed("agy")
+    assert refused.value.detail.startswith("Antigravity CLI is not installed on this instance.")
+    assert _bases(monkeypatch)["agy"]["status"] == "not_installed"
+
+
+def test_the_ask_is_in_the_same_words_in_the_notes_and_the_guide():
+    assert ASK in A._BASE_CATALOG["agy"]["notes"]
+    guide = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "self-hosting-guide.md").read_text()
+    assert ASK in " ".join(guide.replace("`", "").split())             # the same words, as the guide wraps them
