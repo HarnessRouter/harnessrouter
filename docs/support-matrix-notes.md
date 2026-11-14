@@ -5517,6 +5517,53 @@ process suite covers the released binary's Responses and JSON-RPC contracts. Liv
 columns, custom-harness measurement, the family tour, browser/environment columns, and
 benchmarks have not been measured. No other harness's verified results apply to Roder.
 
+## Antigravity CLI (agy) qualification
+
+Opt-in (`HR_BACKENDS` must name `agy`). Measured on agy 1.5.8 with a Google AI Studio key, on a
+self-hosted test instance (2026-11-13), the CLI running as an unprivileged user with a placeholder key
+and a local address standing in for Google, which added the real key and logged every call:
+
+- **Auth.** `modelProvider: "gemini"` in `~/.gemini/antigravity-cli/settings.json` and `GEMINI_API_KEY`
+  in the environment run it on the Gemini API ("authenticated via gemini_api_key"), with no Google
+  sign-in. `GOOGLE_GEMINI_BASE_URL` is honoured: every model call went to it as
+  `POST /v1beta/models/<id>:streamGenerateContent?alt=sse`, the key in `x-goog-api-key`. The real key
+  was found in none of the 1,356 files the runs left under the CLI's home and workspaces, and in no
+  process's environment or command line, sampled at every model call.
+- **Telemetry and updates.** The print mode (`agy -p`) posts to `play.googleapis.com/log` every few
+  seconds and at exit, and neither `enableTelemetry: false`, `telemetry.enabled: false` nor any
+  environment variable tried stops it; the print mode refuses `--disable-telemetry`. `agy acp
+  --disable-telemetry` made no such connection (without the flag, six in fourteen seconds), measured
+  through a proxy that logged every connection. So the base runs the ACP server. The updater runs in
+  the background unless `AGY_CLI_DISABLE_AUTO_UPDATE=true` ("1" is ignored), and declines a binary
+  whose directory it cannot write.
+- **Models.** `agy models` lists Gemini 4 Carbon, Hydrogen and Argon, Gemini 3.8, 3.7 and 3.6 Flash and
+  Gemini 3.1 Pro, each as `<model>-<level>` (Hydrogen up to xhigh, 3.1 Pro low and high only). The
+  level reaches Google as `thinkingConfig.thinkingLevel`. gemini-3.1-pro calls
+  `gemini-3.1-pro-preview`. Not offered here: gemini-3.7-flash, which Google answers as
+  gemini-3.8-flash, and Gemini 4 Hydrogen and Carbon, which are not in Google's model table here yet
+  (one Hydrogen turn ran at low). An unknown id is refused before any call. gemini-3.8-flash ran at low,
+  medium and high, gemini-3.1-pro at low and gemini-4-hydrogen at low; Argon and 3.6 Flash are listed
+  and not yet measured on this base.
+- **Helper model.** A new conversation's title and each web search call
+  `gemini-3.1-flash-lite-preview` on the same key; those calls are not in the CLI's reported usage.
+- **Usage.** The prompt's usage counts thinking inside `outputTokens` (a one-word answer that thought:
+  75 out, 74 of them thinking), reports the uncached input apart from `cachedReadTokens`, and covers
+  that prompt only, never the whole conversation.
+- **Resume.** `session/load` in a second process continued the conversation from
+  `~/.gemini/antigravity-cli/conversations/<id>.db`, and the model and level could be changed on it.
+- **MCP.** `~/.gemini/config/mcp_config.json`, with `command`/`args`/`env` (stdio) and `serverUrl`
+  (streamable HTTP), reached the model through its `call_mcp_tool`. `disabledTools` on a server keeps
+  a tool out of the list the model is shown.
+- **Switched-off tools.** The ACP server reads no settings file: its `permissions.deny` rules, model,
+  mode and `toolPermission` were all ignored (a denied `write_file` wrote its file). It asks the client
+  before a shell command and before nothing else, and a refused command fails and ends the turn. So
+  the shell is labelled hard and the other switches are asked of the agent. (The print mode does
+  enforce `permissions.deny`, even under `--dangerously-skip-permissions`, but cannot be run without
+  telemetry.)
+
+Live provider columns, the five console scenarios, the family tour and the browser and environment
+columns have not been run on this base.
+
 ### Claude Code 2.1.311 (0.41.12)
 
 Claude Code 2.1.280 refused Claude Fable 5.2 ("version 2.1.290 or newer is required"), so the image moves to

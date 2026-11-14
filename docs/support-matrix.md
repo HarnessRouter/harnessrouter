@@ -7849,3 +7849,6 @@ Measured 2026-09-27 on hr-test (self-hosted, 0.25.7-rc.17). One task in plain wo
 
 Roder's new native app-server adapter has deterministic process qualification only;
 its live provider matrix is pending. See [Roder](roder.md) for scope and commands.
+
+The Antigravity CLI (`agy`, opt-in) has its probe measurements only; its live provider matrix is
+pending. See [the notes](support-matrix-notes.md#antigravity-cli-agy-qualification).

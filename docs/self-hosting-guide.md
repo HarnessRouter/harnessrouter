@@ -1122,6 +1122,26 @@ and 69 MB of source, 83 seconds on a fresh volume (measured on Linux arm64). It 
 dependency pins, minus the packages that serve only what this base switches off (local embeddings and
 speech, which would bring torch; document parsing; the browser; its messaging integrations).
 
+Two bases are opt-in and are installed only when `HR_BACKENDS` names them: Roder (`roder`, below) and the
+Antigravity CLI (`agy`), Google's agent CLI. Add `agy` to the list, or set `HR_BACKENDS=agy` for an
+Antigravity-only installation. It runs on a Google AI Studio connection, on Gemini 4 Argon, Gemini 3.8
+Flash, Gemini 3.6 Flash and Gemini 3.1 Pro, at the thinking levels the CLI offers each model. What to know
+about it:
+
+- It is downloaded from Google at first start, version 1.5.8, and checked against the sha256 committed in
+  `docker/entrypoint.sh` for each architecture (about 105 MB). It does not update itself. To run another
+  version, set `HR_AGY_VERSION`, `HR_AGY_BUILD` (the build number beside the version in the release's
+  download path) and `HR_AGY_SHA256` together; without a digest it installs as "unverified" and the log
+  says so.
+- It sends no usage data to Google: each turn starts it with its telemetry switched off.
+- Your key stays on this instance and is never given to the agent. The CLI talks to a local address with a
+  placeholder, and the real key is added on the way to Google.
+- Besides the model you pick, it calls Gemini 3.1 Flash Lite on the same key to title a new conversation
+  and to run each web search. Those calls are not in the turn's token count.
+- Only its shell can be switched off for real: the CLI asks before every command, and the answer is no.
+  Its file, search and subagent tools never ask, so switching one off asks the agent not to use it. A
+  command the agent tries while the shell is off ends the turn, and the turn says why.
+
 A backend that fails to install is not fatal: the others still work. A base this instance has not
 installed (one left out of `HR_BACKENDS`, or one whose install failed) reads "not installed": the
 console does not offer it, and a task on a harness built on it is refused with that reason. The

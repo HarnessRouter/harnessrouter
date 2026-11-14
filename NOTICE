@@ -126,6 +126,13 @@ run, by you, under their own licenses:
                               committed in docker/entrypoint.sh). Opt-in: installed only when
                               HR_BACKENDS names it. No mark of its own is redistributed: the
                               console falls back to its generic glyph.
+  Antigravity CLI (agy)       Google's own terms (https://antigravity.google/terms); a proprietary
+                              binary, not open source. The 1.5.8 release archive the CLI's own
+                              installer fetches from Google, downloaded from Google at first start and
+                              never redistributed here, pinned by version and by the digests committed
+                              in docker/entrypoint.sh. Opt-in: installed only when HR_BACKENDS names
+                              it. No Google mark is redistributed: the console falls back to its
+                              generic glyph.
 
 Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
 public image; hermes-agent's publisher declared no license before 0.19.0. Installing the
