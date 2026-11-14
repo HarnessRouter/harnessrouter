@@ -1,0 +1,333 @@
+{
+ "recorded": "2026-11-14, antigravity-preview-09-2026 on gemini-4-hydrogen, stream + background, through the Gemini API on a Google AI Studio key. Google's ids are replaced, signatures elided, long strings cut as the probe cut them; nothing else is changed.",
+ "request": {
+  "agent": "antigravity-preview-09-2026",
+  "environment": "env_recorded",
+  "stream": true,
+  "background": true,
+  "store": true,
+  "tools": [
+   {
+    "type": "code_execution"
+   },
+   {
+    "type": "google_search"
+   },
+   {
+    "type": "url_context"
+   }
+  ],
+  "agent_config": {
+   "type": "antigravity",
+   "model": "gemini-4-hydrogen",
+   "max_total_tokens": 80000
+  }
+ },
+ "events": [
+  {
+   "event": "interaction.created",
+   "data": {
+    "interaction": {
+     "id": "v1_RECORDED",
+     "status": "in_progress",
+     "created": "2026-11-14T01:32:07Z",
+     "updated": "2026-11-14T01:32:07Z",
+     "environment_id": "env_recorded",
+     "service_tier": "standard",
+     "object": "interaction",
+     "agent": "antigravity-preview-09-2026"
+    },
+    "event_type": "interaction.created"
+   }
+  },
+  {
+   "event": "interaction.status_update",
+   "data": {
+    "interaction_id": "v1_RECORDED",
+    "status": "in_progress",
+    "event_type": "interaction.status_update"
+   }
+  },
+  {
+   "event": "step.start",
+   "data": {
+    "index": 0,
+    "step": {
+     "type": "thought"
+    },
+    "event_type": "step.start"
+   }
+  },
+  {
+   "event": "step.delta",
+   "data": {
+    "index": 0,
+    "delta": {
+     "content": {
+      "text": "**Executing the Instructions**\n\nI've carefully read the instructions. I will now execute `pwd` and `ls -la /workspace`. Following that, I'll create `/workspace/",
+      "type": "text"
+     },
+     "type": "thought_summary"
+    },
+    "event_type": "step.delta"
+   }
+  },
+  {
+   "event": "step.stop",
+   "data": {
+    "index": 0,
+    "event_type": "step.stop"
+   }
+  },
+  {
+   "event": "step.start",
+   "data": {
+    "index": 1,
+    "step": {
+     "id": "call_3230",
+     "signature": "SIGNATURE",
+     "type": "code_execution_call",
+     "arguments": {
+      "language": "bash",
+      "code": "pwd && ls -la /workspace"
+     }
+    },
+    "event_type": "step.start"
+   }
+  },
+  {
+   "event": "step.stop",
+   "data": {
+    "index": 1,
+    "event_type": "step.stop"
+   }
+  },
+  {
+   "event": "step.start",
+   "data": {
+    "index": 2,
+    "step": {
+     "id": "call_5079",
+     "type": "function_call",
+     "name": "write_to_file",
+     "arguments": {
+      "CodeContent": "PROBE-OK",
+      "Description": "Create /workspace/out.txt containing PROBE-OK",
+      "Overwrite": true,
+      "TargetFile": "/workspace/out.txt"
+     }
+    },
+    "event_type": "step.start"
+   }
+  },
+  {
+   "event": "step.stop",
+   "data": {
+    "index": 2,
+    "event_type": "step.stop"
+   }
+  },
+  {
+   "event": "step.start",
+   "data": {
+    "index": 3,
+    "step": {
+     "call_id": "call_3230",
+     "type": "code_execution_result",
+     "is_error": false,
+     "result": "[STDOUT]\n/workspace\ntotal 1\ndrwxr-xr-x 1 root root 80 Nov 14 01:32 .\ndrwxr-xr-x 1 root root 60 Nov 14 01:32 ..\n-rw-r--r-- 1 root root 12 Jan  1  1970 brief.md\nd"
+    },
+    "event_type": "step.start"
+   }
+  },
+  {
+   "event": "step.stop",
+   "data": {
+    "index": 3,
+    "event_type": "step.stop"
+   }
+  },
+  {
+   "event": "step.start",
+   "data": {
+    "index": 4,
+    "step": {
+     "call_id": "call_5079",
+     "type": "function_result",
+     "name": "write_to_file",
+     "is_error": false,
+     "result": "Created file file:///workspace/out.txt"
+    },
+    "event_type": "step.start"
+   }
+  },
+  {
+   "event": "step.stop",
+   "data": {
+    "index": 4,
+    "event_type": "step.stop"
+   }
+  },
+  {
+   "event": "step.start",
+   "data": {
+    "index": 5,
+    "step": {
+     "type": "model_output"
+    },
+    "event_type": "step.start"
+   }
+  },
+  {
+   "event": "step.delta",
+   "data": {
+    "index": 5,
+    "delta": {
+     "text": "/workspace",
+     "type": "text"
+    },
+    "event_type": "step.delta"
+   }
+  },
+  {
+   "event": "step.stop",
+   "data": {
+    "index": 5,
+    "event_type": "step.stop"
+   }
+  },
+  {
+   "event": "step.start",
+   "data": {
+    "index": 6,
+    "step": {
+     "type": "thought"
+    },
+    "event_type": "step.start"
+   }
+  },
+  {
+   "event": "step.delta",
+   "data": {
+    "index": 6,
+    "delta": {
+     "signature": "SIGNATURE",
+     "type": "thought_signature"
+    },
+    "event_type": "step.delta"
+   }
+  },
+  {
+   "event": "step.stop",
+   "data": {
+    "index": 6,
+    "event_type": "step.stop"
+   }
+  },
+  {
+   "event": "interaction.completed",
+   "data": {
+    "interaction": {
+     "id": "v1_RECORDED",
+     "status": "completed",
+     "usage": {
+      "total_tokens": 11697,
+      "total_input_tokens": 11443,
+      "input_tokens_by_modality": [
+       {
+        "modality": "text",
+        "tokens": 11443
+       }
+      ],
+      "total_cached_tokens": 3452,
+      "cached_tokens_by_modality": [
+       {
+        "modality": "text",
+        "tokens": 3452
+       }
+      ],
+      "total_output_tokens": 108,
+      "output_tokens_by_modality": [
+       {
+        "modality": "text",
+        "tokens": 108
+       }
+      ],
+      "total_tool_use_tokens": 0,
+      "total_thought_tokens": 146
+     },
+     "created": "2026-11-14T01:32:07Z",
+     "updated": "2026-11-14T01:32:17Z",
+     "environment_id": "env_recorded",
+     "service_tier": "standard",
+     "steps": [
+      {
+       "summary": [
+        {
+         "text": "**Executing the Instructions**\n\nI've carefully read the instructions. I will now execute `pwd` and `ls -la /workspace`. Following that, I'll create `/workspace/",
+         "type": "text"
+        }
+       ],
+       "type": "thought"
+      },
+      {
+       "id": "call_3230",
+       "signature": "SIGNATURE",
+       "type": "code_execution_call",
+       "arguments": {
+        "language": "bash",
+        "code": "pwd && ls -la /workspace"
+       }
+      },
+      {
+       "id": "call_5079",
+       "type": "function_call",
+       "name": "write_to_file",
+       "arguments": {
+        "CodeContent": "PROBE-OK",
+        "Description": "Create /workspace/out.txt containing PROBE-OK",
+        "Overwrite": true,
+        "TargetFile": "/workspace/out.txt"
+       }
+      },
+      {
+       "call_id": "call_3230",
+       "type": "code_execution_result",
+       "is_error": false,
+       "result": "[STDOUT]\n/workspace\ntotal 1\ndrwxr-xr-x 1 root root 80 Nov 14 01:32 .\ndrwxr-xr-x 1 root root 60 Nov 14 01:32 ..\n-rw-r--r-- 1 root root 12 Jan  1  1970 brief.md\nd"
+      },
+      {
+       "call_id": "call_5079",
+       "type": "function_result",
+       "name": "write_to_file",
+       "is_error": false,
+       "result": "Created file file:///workspace/out.txt"
+      },
+      {
+       "content": [
+        {
+         "text": "/workspace",
+         "type": "text"
+        }
+       ],
+       "type": "model_output"
+      },
+      "…+1"
+     ],
+     "object": "interaction",
+     "agent": "antigravity-preview-09-2026",
+     "agent_config": {
+      "model": "gemini-4-hydrogen",
+      "max_total_tokens": "80000",
+      "type": "antigravity"
+     }
+    },
+    "event_type": "interaction.completed"
+   }
+  },
+  {
+   "event": "done",
+   "data": "[DONE]"
+  }
+ ]
+}

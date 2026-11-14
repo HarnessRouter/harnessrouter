@@ -1567,7 +1567,9 @@ of tokens or more; `HR_ANTIGRAVITY_MAX_TOTAL_TOKENS` caps one message.
 
 **Tools.** Code Execution, Google Search and URL Context can each be switched off; one that is off is
 not offered to the agent, and a task in which Google runs it anyway ends `incomplete` and says so. The
-sandbox's file tools have no switch: with Code Execution off the agent can still write files.
+sandbox's file tools have no switch: with Code Execution off the agent can still write files. With all
+three off and no tool server, a task is refused: Google's agent reads an empty tool list as all of its
+tools on.
 
 **Files back.** When a message ends, what the agent added, changed or removed under `/workspace` comes
 back into the task's files. A file that cannot come back (over 100 MiB, `HR_ANTIGRAVITY_FILE_MAX_BYTES`;

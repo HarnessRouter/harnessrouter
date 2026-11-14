@@ -21285,9 +21285,13 @@ _BASE_CATALOG: dict[str, dict] = {
         # The built-ins a harness can switch off, in the API's own type names (pinned equal to the
         # runner's ANTIGRAVITY_TOOLS by gateway/tests/test_antigravity_catalog.py). A tool that is off is
         # left out of the interaction's `tools`, so Google does not offer it to the model: `hard` by UHP
-        # §4.3. The driver also watches the stream: a step of a switched-off tool ends the turn
-        # incomplete, saying so. The file tools come with the sandbox and have no switch, and with Code
-        # Execution off they can still write a file.
+        # §4.3. Measured 2026-11-14 on gemini-3.8-flash: with url_context alone the agent had no shell
+        # and no search, and said so. An EMPTY list is Google's default set (measured: `tools: []` and
+        # the agent searched Google), so a turn with every switch off and no MCP server is refused, never
+        # sent. The driver also watches the stream: a step of a switched-off tool ends the turn
+        # incomplete, saying so. The file tools (view_file, write_to_file, replace_file_content,
+        # list_dir, find_by_name) come with the sandbox and have no switch: with Code Execution off they
+        # can still write a file.
         "tools": [("code_execution", "Code Execution"), ("google_search", "Google Search"),
                   ("url_context", "URL Context")],
         "tool_enforcement": "hard",

@@ -30,11 +30,35 @@ gateway/tests/test_antigravity_catalog.py):
 - MCP: a stored secret, a server this instance hosts, a stdio or non-https server is not sent to
   Google, and the turn names each with why; a `$headers` value is sent after the declared-header checks.
 
-Not yet measured live, and each is a row of the column still to run: the six models, the exact SSE
-and file-listing shapes, whether `stream` with `background` is accepted, the cancel path's form
-(`{id}:cancel` is tried, then `{id}/cancel`), whether the environment's file listing reflects the
-agent's writes as soon as the interaction ends, and whether a request with every built-in tool off
-(`tools: []`) is read as "none" rather than "the default set".
+Measured live on 2026-11-14 (a probe through the Gemini API on the test instance's Google AI Studio
+key, 9 interactions, each capped with `max_total_tokens`; the 8 whose ids it held and all three
+environments deleted after; the recorded stream is `runner/tests/fixtures/antigravity/live-stream.json`):
+
+- All six models are accepted in `agent_config.model` (gemini-4-hydrogen, gemini-4-carbon,
+  gemini-4-argon, gemini-3.8-flash, gemini-3.6-flash, gemini-3.5-flash-lite); an unknown one is a
+  404, "Requested entity was not found."
+- `POST /v1beta/environments` with `{}` makes an environment (`{"id": <32 hex>, "status": "active"}`).
+- The archive upload needs `uploadType=media`: without it Google reads the body as a JSON request
+  and answers 500, "Invalid JSON payload". With it, `extract=true&overwrite=true` unpacks the
+  tar.gz into the path and the answer lists each file written.
+- The agent's working directory is `/workspace` (`pwd`), where the archive landed.
+- `stream: true` with `background: true` is accepted. The stream sends no event ids (no `id:` line,
+  no `event_id` field), so a reconnect reads the stream again from its start
+  (`GET /v1beta/interactions/{id}?stream=true` replays every event, its call steps as deltas). Live,
+  a call or result step arrives whole in `step.start`; the sandbox's file tools are `function_call`
+  steps Google runs itself (`write_to_file`, `view_file`, `replace_file_content`, `list_dir`,
+  `find_by_name`). `step.stop` carries the running `usage` and the step's own `step_usage`.
+- Usage: `total_tokens` is input + output + thinking (11443 + 108 + 146 = 11697), and
+  `total_cached_tokens` is part of the input (3452 of the 11443).
+- The file listing shows what the agent wrote as soon as the interaction ends, and the same 20 s
+  later. A download (`?alt=media`) answers 200 with the bytes, no redirect; a missing path is a 404.
+- `{id}/cancel` cancels (the interaction reads `cancelled` at once); `{id}:cancel` is 404, "Method not
+  found".
+- `tools: []` is the default set (the agent searched Google, and listed a shell, file tools, search
+  and browse); a non-empty list is enforced (with `url_context` alone it had no shell and no search).
+- There is no list of interactions (`GET /v1beta/interactions` is a 404): an interaction whose id is
+  lost cannot be found again. The first probe run lost one that way; it ran in an environment the
+  run then deleted, and is left at Google under its retention.
 
 ## dsh on the runner's relay (2026-10-27, #382)
 

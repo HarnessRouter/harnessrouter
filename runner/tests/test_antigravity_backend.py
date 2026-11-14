@@ -18,7 +18,11 @@ Interactions and Environments APIs. A remote runtime (qoder's shape, docs/harnes
   purge: every interaction and environment the state recorded is deleted
 
 A stub of Google's API (built here) answers the driver, run as the real subprocess it is; nothing
-here reaches Google.
+here reaches Google. Where the live API was measured (2026-11-14, through a probe on a Google AI Studio
+key), the stub answers as it did: an upload without uploadType=media is a 500 ("Invalid JSON payload"),
+`{id}:cancel` is "Method not found" and `{id}/cancel` cancels, an unknown model is a 404, and
+fixtures/antigravity/live-stream.json is a recorded stream (call and result steps arrive whole in
+step.start, no event ids).
 """
 import base64
 import http.server
@@ -42,6 +46,7 @@ import antigravity_driver as drv  # noqa: E402
 import server as rs  # noqa: E402
 
 DRIVER = str(pathlib.Path(__file__).resolve().parents[1] / "antigravity_driver.py")
+LIVE = json.loads((pathlib.Path(__file__).resolve().parent / "fixtures" / "antigravity" / "live-stream.json").read_text())
 KEY = "AIzaDUMMY-not-a-key-0123456789"      # AIza and 25 more: the scrub's shape for a Google key, not a real key's length
 # bsdtar on a developer's machine takes no --ignore-failed-read; the command's shape is pinned against
 # the checkpoint's own in test_the_archive_is_the_checkpoints_command
@@ -65,6 +70,7 @@ class Stub:
         self.hang = False
         self.fail_create: tuple[int, str] | None = None
         self.listing_extra: list[dict] = []
+        self.replay: list = []                     # what GET /interactions/{id}?stream=true streams, from the start
         self.n = 0
         self.lock = threading.Lock()
         stub = self
@@ -115,12 +121,16 @@ class Stub:
                     return self._send(200, {"id": eid, "status": "active"})
                 if p == "/v1beta/interactions":
                     doc = json.loads(body)
+                    if (doc.get("agent_config") or {}).get("model") not in drv.MODELS:
+                        return self._send(404, {"error": {"message": "Requested entity was not found.", "code": "not_found"}})
                     if stub.fail_create:
                         code, msg = stub.fail_create
                         return self._err(code, "INVALID_ARGUMENT", msg)
                     return self._stream_new(doc)
-                if p.endswith(":cancel") or p.endswith("/cancel"):
-                    iid = p.split("/")[3].split(":")[0]
+                if p.endswith(":cancel"):
+                    return self._err(404, "NOT_FOUND", "Method not found.")
+                if p.endswith("/cancel"):
+                    iid = p.split("/")[3]
                     if iid not in stub.interactions:
                         return self._err(404, "NOT_FOUND", "no such interaction")
                     stub.interactions[iid]["status"] = "cancelled"
@@ -139,8 +149,8 @@ class Stub:
                 self.send_header("transfer-encoding", "chunked")
                 self.end_headers()
 
-                def out(event: str, data: dict):
-                    raw = f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+                def out(event: str, data):
+                    raw = f"event: {event}\ndata: {data if isinstance(data, str) else json.dumps(data)}\n\n".encode()
                     self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
                     self.wfile.flush()
 
@@ -155,12 +165,15 @@ class Stub:
                         stub.envs[eid].pop(item[1], None)
                         continue
                     event, data = item
+                    if isinstance(data, str):
+                        out(event, data)
+                        continue
                     if event == "interaction.completed":
                         it = dict(data.get("interaction") or {})
                         it["id"] = iid
                         stub.interactions[iid].update(status=it.get("status"), usage=it.get("usage"))
                         data = {**data, "interaction": it}
-                    out(event, {**data, "event_type": event})
+                    out(event, {**data, "event_type": data.get("event_type", event)})
                 if stub.hang:
                     for _ in range(300):
                         if stub.interactions[iid]["status"] == "cancelled":
@@ -181,6 +194,20 @@ class Stub:
                     if iid not in stub.interactions:
                         return self._err(404, "NOT_FOUND", "no such interaction")
                     it = stub.interactions[iid]
+                    if q.get("stream") == "true" and stub.replay:
+                        self.send_response(200)
+                        self.send_header("content-type", "text/event-stream")
+                        self.send_header("transfer-encoding", "chunked")
+                        self.end_headers()
+                        for event, data in stub.replay:
+                            if event == "interaction.completed":
+                                it.update(status=data["interaction"]["status"], usage=data["interaction"].get("usage"))
+                            if event in ("interaction.created", "interaction.completed"):
+                                data = {**data, "interaction": {**data["interaction"], "id": iid}}
+                            raw = f"event: {event}\ndata: {data if isinstance(data, str) else json.dumps({**data, 'event_type': event})}\n\n".encode()
+                            self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                        return
                     return self._send(200, {k: v for k, v in it.items() if k != "body"})
                 if p.startswith("/v1beta/environments/") and "/files" not in p:
                     eid = parts[3]
@@ -208,6 +235,9 @@ class Stub:
             def do_PUT(self):  # noqa: N802
                 body = self._body()
                 u = self._record(body)
+                if dict(urllib.parse.parse_qsl(u.query)).get("uploadType") != "media":
+                    return self._send(500, {"error": {"message": "Invalid JSON payload: syntax error in request body.",
+                                                      "code": "api_error"}})
                 parts = u.path.split("/")
                 eid = parts[4]
                 target = urllib.parse.unquote("/".join(parts[6:]))
@@ -421,6 +451,90 @@ def test_usage_counts_tool_prompts_with_the_input_and_reasoning_never_exceeds_ou
     assert drv.usage_of({"total_output_tokens": "9"})["output_tokens"] == 9
 
 
+def test_the_recorded_live_stream_maps_step_for_step(tmp_path, stub, relay):
+    """A real stream (fixtures/antigravity/live-stream.json): the shell and the file tool arrive as
+    whole steps in step.start, the file tool is a server-run function_call (write_to_file), the answer
+    streams as text, and the usage is the interaction's own."""
+    stub.script = [[(e["event"], e["data"]) for e in LIVE["events"] if e["event"] != "interaction.created"]]
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "go"}, relay)
+    events, _ = normalise(lines)
+    blocks = [c for e in events if e["type"] in ("assistant", "user") for c in e["message"]["content"]]
+    uses = [b for b in blocks if b["type"] == "tool_use"]
+    assert [u["name"] for u in uses] == ["code_execution", "write_to_file"]
+    assert uses[0]["input"] == {"language": "bash", "code": "pwd && ls -la /workspace"}
+    assert uses[1]["input"]["TargetFile"] == "/workspace/out.txt"
+    results = {b["tool_use_id"]: b for b in blocks if b["type"] == "tool_result"}
+    assert results[uses[0]["id"]]["content"].startswith("[STDOUT]\n/workspace")
+    assert results[uses[1]["id"]]["content"] == "Created file file:///workspace/out.txt"
+    assert any(b["type"] == "thinking" and b["thinking"].startswith("**Executing the Instructions**") for b in blocks)
+    res = result_of(events)
+    assert res["subtype"] == "success" and res["result"] == "/workspace"
+    # 11443 in (3452 of it cached), 108 out and 146 thinking, 11697 in all
+    assert res["usage"] == {"input_tokens": 7991, "output_tokens": 254, "cache_read_tokens": 3452, "reasoning_tokens": 146}
+
+
+def test_every_built_in_off_with_no_server_is_refused_before_anything_is_made(tmp_path, stub, relay):
+    """Google reads an empty tool list as the default set (measured: `tools: []` and the agent searched
+    Google), so a turn with every switch off and nothing else to offer is refused rather than run
+    with the switches ignored. With a server, the list is the server alone."""
+    off = list(drv.TOOLS)
+    lines, _ = run_driver({"cwd": str(tmp_path), "prompt": "go", "tools_disabled": off}, relay)
+    res = hr_result(lines)
+    assert res["status"] == "failed" and "empty tool list" in res["reason"]
+    assert stub.calls == []
+    stub.script = [text_turn("ok")]
+    run_driver({"cwd": str(tmp_path), "prompt": "go", "tools_disabled": off,
+                "mcp_servers": [{"name": "crm", "url": "https://mcp.example.com/mcp"}]}, relay)
+    assert stub.creates()[0]["tools"] == [{"type": "mcp_server", "name": "crm", "url": "https://mcp.example.com/mcp"}]
+    assert all(t["type"] != "" for t in drv.tools_config(["google_search"], []))
+    with pytest.raises(drv.Refused):
+        drv.tools_config(off, [])
+
+
+def test_a_model_the_agent_does_not_take_fails_in_words(tmp_path, stub, relay):
+    lines, _ = run_driver({"cwd": str(tmp_path), "prompt": "go", "model": "gemini-no-such-model"}, relay)
+    res = hr_result(lines)
+    assert res["status"] == "failed" and "did not take the model 'gemini-no-such-model'" in res["reason"]
+
+
+def test_the_upload_is_a_simple_upload_into_the_workspace(tmp_path, stub, relay):
+    (tmp_path / "a.txt").write_text("a")
+    stub.script = [text_turn("ok")]
+    run_driver({"cwd": str(tmp_path), "prompt": "go"}, relay)
+    [up] = stub.uploads()
+    assert up["path"] == "/upload/v1beta/environments/env1/files/workspace"
+    assert up["query"] == {"uploadType": "media", "extract": "true", "overwrite": "true"}
+    assert up["headers"]["content-type"] == "application/gzip"
+
+
+def test_a_stream_with_no_event_ids_is_replayed_from_its_start_and_nothing_is_written_twice(tmp_path, stub, relay):
+    """Google sends no event ids (measured), so after a drop the interaction's stream is read again
+    from its start: a step already handled is skipped, and the text of the step that was cut is
+    continued, not repeated. In the replay the call's arguments come as deltas (measured)."""
+    stub.script = [[ev("step.start", index=0, step={"type": "code_execution_call", "id": "c1", "arguments": {"code": "ls"}}),
+                    ev("step.stop", index=0),
+                    ev("step.start", index=1, step={"type": "model_output"}),
+                    ev("step.delta", index=1, delta={"type": "text", "text": "Hel"})]]
+    stub.replay = [ev("interaction.created", interaction={"status": "in_progress"}),
+                   ev("step.start", index=0, step={"type": "code_execution_call", "id": "c1"}),
+                   ev("step.delta", index=0, delta={"type": "code_execution_call", "arguments": {"code": "ls"}}),
+                   ev("step.stop", index=0),
+                   ev("step.start", index=1, step={"type": "model_output"}),
+                   ev("step.delta", index=1, delta={"type": "text", "text": "Hel"}),
+                   ev("step.delta", index=1, delta={"type": "text", "text": "lo."}),
+                   ev("step.stop", index=1),
+                   ev("interaction.completed", interaction={"status": "completed", "usage": {"total_input_tokens": 9,
+                                                                                         "total_output_tokens": 2}}),
+                   ("done", "[DONE]")]
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "go"}, relay)
+    res = hr_result(lines)
+    assert res["status"] == "completed" and res["final"] == "Hello.", proc.stderr
+    assert [ln["p"]["text"] for ln in lines if ln["m"] == "text"] == ["Hel", "lo."]
+    assert len([ln for ln in lines if ln["m"] == "tool_use"]) == 1
+    assert len([ln for ln in lines if ln["m"] == "interaction"]) == 1          # one interaction, read twice
+    assert [c for c in stub.calls if c["method"] == "GET" and c["query"].get("stream") == "true"]
+
+
 def test_a_dropped_stream_resumes_from_the_last_event_id_without_writing_text_twice(tmp_path, stub, relay):
     """The stream ends before the interaction does; the driver asks where it stands and, still in
     progress, reconnects with the last event id; the end comes from the interaction's document."""
@@ -500,7 +614,8 @@ def test_sigterm_cancels_the_interaction_at_google_and_the_record_says_so(tmp_pa
     out, _ = proc.communicate(timeout=20)
     lines = [json.loads(ln) for ln in out.splitlines() if ln.startswith("{")]
     assert stub.interactions["v1_int2"]["status"] == "cancelled"
-    assert [c for c in stub.calls if c["path"] == "/v1beta/interactions/v1_int2:cancel"]
+    assert [c for c in stub.calls if c["path"] == "/v1beta/interactions/v1_int2/cancel"]
+    assert not [c for c in stub.calls if c["path"].endswith(":cancel")]       # /cancel first: it is the form that works
     res = hr_result(lines)
     assert res["status"] == "cancelled" and "cancel accepted by Google for interaction v1_int2" in res["reason"]
     assert proc.returncode == 0
