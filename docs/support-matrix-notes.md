@@ -6,6 +6,36 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## The Antigravity Agent, opt-in and still qualifying (2026-11-13)
+
+The `antigravity` base drives Google's managed Antigravity agent (`antigravity-preview-09-2026`)
+through the Gemini API's Interactions and Environments APIs, on the instance's Google AI Studio
+connection. It is the second remote runtime after `qoder` and follows its shape
+(docs/harness-verification.md, "Remote runtimes"). What is pinned, against a stub of Google's API
+with the real driver and the real relay route (runner/tests/test_antigravity_backend.py,
+gateway/tests/test_antigravity_catalog.py):
+
+- One Google environment per session, created on the first turn; each turn an interaction on it,
+  chained by `previous_interaction_id`; the environment id is the session id. An environment that is
+  gone is `resume_lost` and a new one is made from the task's files.
+- The workspace goes up as the checkpoint's own tar (its exclusions, plus `.harness` and `.git`, no
+  link), extracted into `/workspace`, only when it changed, under a size cap checked before anything
+  is created at Google. What the agent changes under `/workspace` comes back; a returned path is input
+  (no `..`, absolute, `.harness`/`.git` or symlinked path lands, and the turn names it).
+- The stream: text, thought summaries, tool calls and results, Google's usage (output includes the
+  thinking; reasoning is a subset; cache reads apart). `incomplete` at the token budget, `failed` with
+  Google's words, `requires_action`, and SIGTERM posts the interaction's cancel.
+- The key stays in the runner's relay route, sent only in `x-goog-api-key`, for this agent's
+  Interactions and Environments calls only; no event, state file or error carries it.
+- MCP: a stored secret, a server this instance hosts, a stdio or non-https server is not sent to
+  Google, and the turn names each with why; a `$headers` value is sent after the declared-header checks.
+
+Not yet measured live, and each is a row of the column still to run: the six models, the exact SSE
+and file-listing shapes, whether `stream` with `background` is accepted, the cancel path's form
+(`{id}:cancel` is tried, then `{id}/cancel`), whether the environment's file listing reflects the
+agent's writes as soon as the interaction ends, and whether a request with every built-in tool off
+(`tools: []`) is read as "none" rather than "the default set".
+
 ## dsh on the runner's relay (2026-10-27, #382)
 
 #382 takes the DeepSeek Harness driver's own relay away: every model call dsh makes now goes through a
