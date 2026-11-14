@@ -202,10 +202,25 @@ def test_the_result_carries_the_served_model_and_the_fresh_input_beside_the_cach
                                              "output_tokens": 2, "cached": 8118, "input": 2414}}}
     out = _gemini_to_claude({"type": "result", "status": "success", "stats": stats}, {"final": "PONG"})
     assert out == [{"type": "result", "subtype": "success", "is_error": False, "result": "PONG",
-                    "usage": {"input_tokens": 2414, "output_tokens": 2, "cache_read_tokens": 8118},
+                    # 10835 total - 10532 prompt: the 2 answer tokens and 301 thinking tokens (#690)
+                    "usage": {"input_tokens": 2414, "output_tokens": 303, "cache_read_tokens": 8118},
                     "model": "gemini-3.5-flash"}]
     assert _gemini_usage({}) == _norm_token_usage({})          # the same shape as every other normalizer
     assert _gemini_usage({"input_tokens": 100, "output_tokens": 5})["input_tokens"] == 100
+
+
+def test_the_stats_price_the_thinking_once_whatever_the_cli_counts_as_output():
+    """#690: gemini-cli's stats count only candidatesTokenCount as output_tokens; the thinking is in
+    total_tokens alone, so the output is total - input, read gross, before the cached part comes off."""
+    pong = {"total_tokens": 10835, "input_tokens": 10532, "output_tokens": 2, "cached": 8118}
+    assert _gemini_usage(pong) == {"input_tokens": 2414, "output_tokens": 303, "cache_read_tokens": 8118}
+    # a later gemini-cli that counts the thinking in output_tokens too is not counted twice
+    assert _gemini_usage({**pong, "output_tokens": 303})["output_tokens"] == 303
+    # a turn with thinking off: total = input + output, the output is unchanged
+    off = {"total_tokens": 10541, "input_tokens": 10532, "output_tokens": 9, "cached": 8118}
+    assert _gemini_usage(off) == {"input_tokens": 2414, "output_tokens": 9, "cache_read_tokens": 8118}
+    # no total to read: the stats' own output stands
+    assert _gemini_usage({"input_tokens": 100, "output_tokens": 5})["output_tokens"] == 5
 
 
 def test_every_listed_id_and_the_turns_model_are_pinned_to_themselves():
