@@ -114,6 +114,31 @@ def test_an_instance_with_only_a_google_connection_offers_and_routes_every_model
     assert run(gw._mapped_integration_conn("hermes", "gemini-4-argon"))["model"] == "gemini-4-argon"
 
 
+def test_the_picker_offers_the_agents_models_and_no_gemini_chat_model(monkeypatch):
+    """A Google connection serves the Gemini chat models on other bases; on this base the picker offers
+    the agent's own list and nothing else (two chat models were offered here, measured 2026-11-14)."""
+    integ = {"name": "Google AI Studio", "provider": "google", "config": {"api_key": "AIza-DUMMY"}}
+
+    async def integs():
+        return [integ]
+
+    async def stored():
+        return {}
+
+    async def chain(org, backend, _):
+        return []
+    monkeypatch.setattr(gw, "_integrations_doc", integs)
+    monkeypatch.setattr(gw, "_model_map_doc", stored)
+    monkeypatch.setattr(gw, "_resolve_chain", chain)
+    eff = run(gw._effective_model_map())
+    chat = [m for m in eff if m not in drv.MODELS]
+    assert chat, "the connection must map some Gemini chat model for this test to mean anything"
+    view = run(gw._harness_models_view({}, "antigravity", run(gw._servable_models("local", "antigravity"))))
+    assert [m["id"] for m in view["models"]] == list(drv.MODELS)
+    gem = run(gw._harness_models_view({}, "gemini", run(gw._servable_models("local", "gemini"))))
+    assert set(chat) & {m["id"] for m in gem["models"]}            # ...which a chat base still offers
+
+
 def test_the_bases_document_carries_the_description_and_offers_no_thinking_level(monkeypatch):
     async def org_member(_request):
         return "local", "owner"
