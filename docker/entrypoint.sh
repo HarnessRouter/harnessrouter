@@ -351,6 +351,7 @@ backend_bin() {
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
     roder)  echo "$TOOLS/bin/roder" ;;
+    agy)    echo "$TOOLS/bin/agy" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
@@ -447,7 +448,7 @@ install_base() {
 # can gain no privilege (--no-new-privs: no setuid program in the image changes its uid back).
 INSTALL_UID_BASE=19000
 # A new base goes at the END, so no base's uid moves.
-INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder "
+INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder agy "
 IU_UID=""; IU_HOME=""
 declare -A IU_HELD=()
 # Every directory the current install has filled, held or given back (a base can fill more than one:
@@ -1342,6 +1343,45 @@ install_roder() {
   fi
 }
 
+# agy, the Antigravity CLI (Google; under Google's terms, downloaded from Google at first start and never
+# redistributed in the image). Google's installer (antigravity.google/cli/install.sh) reads a manifest per
+# platform from its release server and fetches the archive it names; this pins that archive instead: the
+# version, the release's build segment beside it in the path, and the sha256 of each archive, committed here
+# for omp's reason. Computed from the 1.5.8 archives (2026-11-13); each agreed with the sha512 the release
+# server's manifest carries for it. The archive holds one file, the binary `antigravity`, kept as `agy`.
+# It updates itself in the background unless AGY_CLI_DISABLE_AUTO_UPDATE=true (the runner sets it on every
+# turn), and a session cannot write $TOOLS/bin either. Opt-in: not in the default HR_BACKENDS.
+AGY_PIN="${HR_AGY_VERSION:-1.5.8}"; AGY_PIN="${AGY_PIN#v}"
+AGY_BUILD="$( [ "$AGY_PIN" = 1.5.8 ] && echo 4602374149505024 || echo "${HR_AGY_BUILD:-}" )"
+AGY_SHA="$(pin_sha AGY 1.5.8 "$AGY_PIN" "$(by_arch \
+  905d4accfbd61bc00bee84bfaf24c59b85d334cabd786cf99237b66cfe06ab98 \
+  0ca407357661aa244fbc3b0e79a1d1d2623b2ca1515d2e2f77a801c3676bd562)")"
+install_agy() {
+  case "$HR_ARCH" in
+    amd64) ag_path="linux-x64/cli_linux_x64.tar.gz" ;;
+    arm64) ag_path="linux-arm/cli_linux_arm64.tar.gz" ;;
+    *) echo "unsupported architecture $HR_ARCH for the Antigravity CLI"; return 1 ;;
+  esac
+  if [ -z "$AGY_BUILD" ]; then
+    echo "HR_AGY_VERSION=$AGY_PIN needs HR_AGY_BUILD, the release's build segment beside the version in its path"; return 1
+  fi
+  ag_tmp="$(mktemp -d)"
+  curl -fsSL "https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_PIN}-${AGY_BUILD}/$ag_path" \
+    -o "$ag_tmp/agy.tar.gz" || { rm -rf "$ag_tmp"; return 1; }
+  check_sha "agy $AGY_PIN" "$ag_tmp/agy.tar.gz" "$AGY_SHA" || { rm -rf "$ag_tmp"; return 1; }
+  ag_x="$(unpack_dir "$ag_tmp")" && iu_untar "$ag_tmp/agy.tar.gz" "$ag_x" antigravity \
+    && unpacked "$ag_x" antigravity || { rm -rf "$ag_tmp"; return 1; }
+  # An agy-only install on a fresh volume (HR_BACKENDS=agy) is the first to write here.
+  mkdir -p "$TOOLS/bin" && install -m 755 "$ag_x/antigravity" "$TOOLS/bin/agy" || { rm -rf "$ag_tmp"; return 1; }
+  rm -rf "$ag_tmp"
+  # PROVE IT RUNS, and that it is the version that was pinned. Measured on 1.5.8: `agy --version` prints
+  # "1.5.8" and reads no stdin; it runs as the install uid, in that uid's own HOME, which goes with it.
+  ag_got="$(iu env AGY_CLI_DISABLE_AUTO_UPDATE=true "$TOOLS/bin/agy" --version </dev/null 2>/dev/null | head -n 1)"
+  if [ "$ag_got" != "$AGY_PIN" ]; then
+    echo "agy installed but reports '${ag_got:-nothing}', wanted $AGY_PIN"; rm -f "$TOOLS/bin/agy"; return 1
+  fi
+}
+
 # jcode (MIT, 1jehuang/jcode) publishes one prebuilt archive per target. v0.90.0 is the release
 # _build_jcode and _jcode_to_claude were measured against — the NDJSON event names, the per-request
 # `tokens` accounting, the resume error text and the tool ids all came out of this build. The
@@ -2075,6 +2115,10 @@ install_backends() {
   if wanted roder && ! current roder "$(ident "$RODER_PIN" "$RODER_SHA")"; then
     echo "[harnessrouter] installing Roder $RODER_PIN (MIT), ~102 MB…"
     install_base roder "Roder" install_roder || true
+  fi
+  if wanted agy && ! current agy "$(ident "$AGY_PIN" "$AGY_SHA")"; then
+    echo "[harnessrouter] installing the Antigravity CLI $AGY_PIN (Google's terms), ~105 MB…"
+    install_base agy "the Antigravity CLI" install_agy || true
   fi
 
   if wanted jcode && ! current jcode "$(ident "$JCODE_PIN" "$JCODE_SHA")"; then
