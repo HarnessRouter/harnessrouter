@@ -242,7 +242,7 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
   { id: 'agy', name: 'Antigravity CLI', version: 'v1.5.8', backend: 'agy', status: 'ready',
     // Placeholder only; the gateway's _MODEL_CATALOG["agy"]: Google's own ids, on a Google AI Studio key.
-    models: ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-pro-preview'], defaultModel: 'gemini-3.8-flash', moreModels: 0,
+    models: ['gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-pro-preview'], defaultModel: 'gemini-3.8-flash', moreModels: 0,
     systemPrompt: 'You are Antigravity, an agentic coding assistant. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'jcode', name: 'jcode', version: 'v0.90.0', backend: 'jcode', status: 'ready',

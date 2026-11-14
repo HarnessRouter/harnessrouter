@@ -5540,10 +5540,11 @@ and a local address standing in for Google, which added the real key and logged 
   Gemini 3.1 Pro, each as `<model>-<level>` (Hydrogen up to xhigh, 3.1 Pro low and high only). The
   level reaches Google as `thinkingConfig.thinkingLevel`. gemini-3.1-pro calls
   `gemini-3.1-pro-preview`. Not offered here: gemini-3.7-flash, which Google answers as
-  gemini-3.8-flash, and Gemini 4 Hydrogen and Carbon, which are not in Google's model table here yet
-  (one Hydrogen turn ran at low). An unknown id is refused before any call. gemini-3.8-flash ran at low,
-  medium and high, gemini-3.1-pro at low and gemini-4-hydrogen at low; Argon and 3.6 Flash are listed
-  and not yet measured on this base.
+  gemini-3.8-flash. Gemini 4 Carbon and Hydrogen are offered on this base only, under the CLI's own ids
+  (`gemini-4-carbon` low to high, `gemini-4-hydrogen` low to xhigh): Google's shared model table, and so
+  every other base on a Google key, does not list them. An unknown id is refused before any call.
+  gemini-3.8-flash ran at low, medium and high, gemini-3.1-pro at low and gemini-4-hydrogen at low;
+  Argon, Carbon and 3.6 Flash are listed and not yet measured on this base.
 - **Helper model.** A new conversation's title and each web search call
   `gemini-3.1-flash-lite-preview` on the same key; those calls are not in the CLI's reported usage.
 - **Usage.** The prompt's usage counts thinking inside `outputTokens` (a one-word answer that thought:

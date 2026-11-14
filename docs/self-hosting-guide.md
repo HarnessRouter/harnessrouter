@@ -1124,9 +1124,10 @@ speech, which would bring torch; document parsing; the browser; its messaging in
 
 Two bases are opt-in and are installed only when `HR_BACKENDS` names them: Roder (`roder`, below) and the
 Antigravity CLI (`agy`), Google's agent CLI. Add `agy` to the list, or set `HR_BACKENDS=agy` for an
-Antigravity-only installation. It runs on a Google AI Studio connection, on Gemini 4 Argon, Gemini 3.8
-Flash, Gemini 3.6 Flash and Gemini 3.1 Pro, at the thinking levels the CLI offers each model. What to know
-about it:
+Antigravity-only installation. It runs on a Google AI Studio connection, on Gemini 4 Argon, Gemini 4 Carbon,
+Gemini 4 Hydrogen, Gemini 3.8 Flash, Gemini 3.6 Flash and Gemini 3.1 Pro, at the thinking levels the CLI offers
+each model (Hydrogen up to `xhigh`). Carbon and Hydrogen are offered on this base only. What to know about
+it:
 
 - It is downloaded from Google at first start, version 1.5.8, and checked against the sha256 committed in
   `docker/entrypoint.sh` for each architecture (about 105 MB). It does not update itself. To run another
