@@ -145,11 +145,11 @@ def test_a_server_left_out_on_purpose_is_named_with_why_not_as_unreachable():
     blocks = gw._blocks_from_canonical({"type": "system", "subtype": "mcp_unavailable", "servers": [
         {"name": "memories", "reason": gw._WITHHELD_HOSTED, "withheld": True}]})
     assert blocks == [("text", '\n\n_Note: the MCP server "memories" was not given to the agent (a tool this instance '
-                               'serves itself: its access stays on this instance), so this reply ran without it._\n')]
+                               'serves itself: its access stays on this instance), so this reply ran without it._\n\n')]
     mixed = gw._blocks_from_canonical({"type": "system", "subtype": "mcp_unavailable", "servers": [
         {"name": "kept-here", "reason": "r", "withheld": True}, {"name": "dead", "reason": "fetch failed"}]})
     assert [t for _, t in mixed] == ['\n\n_Note: the MCP server "kept-here" was not given to the agent (r), so this '
-                                     'reply ran without it._\n',
+                                     'reply ran without it._\n\n',
                                      '\n\n_Note: the MCP server "dead" could not be reached, so this reply ran '
                                      'without those tools._\n']
 

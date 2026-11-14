@@ -7787,7 +7787,7 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
         for s in [s for s in rows if s.get("withheld")][:5]:
             why = str(s.get("reason") or "").strip()[:200]
             out.append(("text", f'\n\n_Note: the MCP server "{str(s["name"])[:80]}" was not given to the agent'
-                                f'{f" ({why})" if why else ""}, so this reply ran without it._\n'))
+                                f'{f" ({why})" if why else ""}, so this reply ran without it._\n\n'))   # the answer follows: its own paragraph
         names = [str(s.get("name") or "") for s in rows if not s.get("withheld")]
         if names:
             quoted = ", ".join(f'"{n}"' for n in names)
