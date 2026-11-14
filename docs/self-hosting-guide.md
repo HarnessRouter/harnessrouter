@@ -1555,7 +1555,10 @@ paid projects. Read them before you turn this base on. What is sent:
 put on each call there; the agent's process never holds it, and a call that is not one of this
 agent's (a model call, Google's file store, another agent) is refused before it leaves. Deleting a
 task deletes its sandbox and its stored conversation at Google; Google also removes a sandbox that has
-been idle for about a week.
+been idle for about a week. One case can't be cleaned up from here: if the instance never receives
+Google's reply to the request that started a message, that message's conversation at Google can't be
+found again (the Interactions API has no way to list them), and it stays there until Google's retention
+for the Gemini API removes it.
 
 **Connection.** The instance's Google AI Studio connection (provider `google`), its own key: this base
 runs in owner trust only (`HR_SANDBOX_TRUST=owner`, the default here). A connection whose address is not

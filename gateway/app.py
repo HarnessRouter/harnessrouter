@@ -21274,7 +21274,8 @@ _BASE_CATALOG: dict[str, dict] = {
                         "your Google AI Studio key. Each task's files, messages and the agent's work are sent "
                         "to Google's service and kept there under Google's terms for the Gemini API, which "
                         "differ between free and paid projects. Deleting a task here deletes its sandbox and "
-                        "stored conversation there. Tools this instance runs itself, and tools whose access "
+                        "stored conversation there, except a message whose start this instance never heard "
+                        "back about, which stays until Google's retention removes it. Tools this instance runs itself, and tools whose access "
                         "key is stored here, are not sent to Google; a tool reaches the agent only at a public "
                         "https address, with a key each request supplies or none."),
         # Shown read-only; the agent's instructions are the harness's own, with the workspace contract
