@@ -14,7 +14,8 @@ id is the session id the runner hands back for the next turn. `DELETE /workspace
 purge mode, which deletes every interaction and environment the state recorded.
 
 Files. The session's workspace goes up as one archive extracted into the environment's `workspace/`
-directory (PUT /upload/v1beta/environments/{id}/files/workspace?extract=true), made by the same tar
+directory (PUT /upload/v1beta/environments/{id}/files/workspace?uploadType=media&extract=true), the
+agent's working directory (measured: `pwd` answers /workspace), made by the same tar
 command the checkpoint makes, with its exclusions (the runner hands the command over in the job,
 server.CHECKPOINT_EXCLUDE plus .harness and .git), so what leaves this box for Google is never more
 than what a checkpoint keeps. It goes up only when the workspace changed since the last sync, and a
@@ -94,8 +95,8 @@ LISTING_MAX_PAGES = 50                      # of up to 1000 entries each
 SSE_LINE_MAX = 32 * 1024 * 1024
 
 CALL_TIMEOUT_S = 120.0
-# A stream read that waits this long without a byte is a dead connection: the turn reconnects from
-# the last event id (or polls the interaction) rather than hanging on it.
+# A stream read that waits this long without a byte is a dead connection: the turn reads the
+# interaction's stream again (or polls the interaction) rather than hanging on it.
 STREAM_READ_TIMEOUT_S = 150.0
 STREAM_RECONNECTS = 20
 POLL_S = 3.0
@@ -297,10 +298,13 @@ class Client:
         raise ApiError(0, "api_error", f"the file listing ran past {LISTING_MAX_PAGES} pages", path)
 
     def upload_archive(self, eid: str, path: str, archive: str) -> dict:
+        """The archive, unpacked into `path` over what is there. A simple upload: `uploadType=media`
+        (measured 2026-11-14: without it Google reads the body as a JSON request and answers 500,
+        "Invalid JSON payload"). The answer lists every file written."""
         size = os.path.getsize(archive)
         with open(archive, "rb") as f:
             resp = self._open("PUT", f"/upload/v1beta/environments/{_segments(eid)}/files/{_segments(path)}",
-                              data=f, query={"extract": "true", "overwrite": "true"},
+                              data=f, query={"uploadType": "media", "extract": "true", "overwrite": "true"},
                               ctype="application/gzip", length=size, timeout=600.0)
         try:
             raw = resp.read()
@@ -363,14 +367,14 @@ class Client:
         return self.call("GET", f"/v1beta/interactions/{_segments(iid)}")
 
     def interaction_cancel(self, iid: str) -> dict:
-        # The reference names `{id}:cancel`; the background guide names `{id}/cancel`. The first is
-        # tried, and the second when the first is not found.
+        # `{id}/cancel`, the background guide's form; the reference's `{id}:cancel` answered 404
+        # "Method not found." (measured 2026-11-14), and is tried only if the first is not found.
         try:
-            return self.call("POST", f"/v1beta/interactions/{_segments(iid)}:cancel", {})
+            return self.call("POST", f"/v1beta/interactions/{_segments(iid)}/cancel", {})
         except ApiError as e:
             if e.status != 404:
                 raise
-        return self.call("POST", f"/v1beta/interactions/{_segments(iid)}/cancel", {})
+        return self.call("POST", f"/v1beta/interactions/{_segments(iid)}:cancel", {})
 
     def interaction_delete(self, iid: str) -> dict:
         return self.call("DELETE", f"/v1beta/interactions/{_segments(iid)}")
@@ -643,9 +647,16 @@ def mcp_tools(servers: list[dict], withheld: list[dict]) -> tuple[list[dict], li
 
 def tools_config(disabled: list[str], mcp: list[dict]) -> list[dict]:
     """The built-ins that are on, by their type names, then the MCP servers. Always the explicit
-    list: the request never falls back to the default set."""
+    list. A list with every built-in left out and no server would be empty, and Google reads an
+    empty list as the default set (measured 2026-11-14: `tools: []` and the agent searched Google),
+    so that turn is refused here rather than run with the switches ignored; a non-empty list is
+    honoured (measured: with url_context alone the agent had no shell and no search)."""
     off = {str(t) for t in (disabled or [])}
-    return [{"type": t} for t in TOOLS if t not in off] + list(mcp)
+    tools = [{"type": t} for t in TOOLS if t not in off] + list(mcp)
+    if not tools:
+        raise Refused("every built-in tool of this agent is switched off and it has no MCP server, and Google's "
+                      "agent reads an empty tool list as all of its tools on; switch one on")
+    return tools
 
 
 def system_instruction(job: dict) -> str:
@@ -1124,10 +1135,13 @@ class Turn:
                 pass
 
     def run_interaction(self, body: dict) -> None:
-        """Create the interaction and read its stream to the end, reconnecting from the last event id
-        on a drop; when the stream cannot be had again, the interaction is polled. The message is
-        never sent twice: a create whose answer was lost before the interaction's id arrived is
-        looked for in nothing and fails the turn in words, rather than run again."""
+        """Create the interaction and read its stream to the end. On a drop, the interaction's stream
+        is read again (GET ?stream=true): Google sends no event ids (measured 2026-11-14: no `id:`
+        line, no `event_id` field), so the stream is replayed from its start, and a step already
+        handled is skipped and a step's text already written is not written again. When the stream
+        cannot be had again, the interaction is polled. The message is never sent twice: a create
+        whose answer was lost before the interaction's id arrived fails the turn in words (Google
+        has no list of interactions to find it in), rather than run again."""
         resp = None
         for _ in range(3):
             try:
@@ -1144,6 +1158,11 @@ class Turn:
                     body = {k: v for k, v in body.items() if k != "previous_interaction_id"}
                 elif e.status == 400 and body.get("background") and "background" in said:
                     body = {k: v for k, v in body.items() if k != "background"}
+                elif e.status == 404 and "not found" in said:
+                    # measured 2026-11-14: an agent_config.model the agent does not take is a 404,
+                    # "Requested entity was not found."
+                    raise Refused(f"Google's Antigravity agent did not take the model {self.model!r} "
+                                  f"({e.message or 'not found'})") from None
                 else:
                     raise
         if resp is None:
@@ -1254,6 +1273,7 @@ class Turn:
         servers, dropped = mcp_tools(self.job.get("mcp_servers") or [], self.job.get("mcp_withheld") or [])
         if dropped:
             _emit("mcp_unavailable", {"servers": dropped})
+        tools = tools_config(list(self.disabled), servers)        # refused here, before anything is made
         # the workspace's size is checked before anything is made at Google
         manifest = local_manifest(self.cwd, self.excludes, self.caps["upload"], self.links)
         if not eid:
@@ -1262,7 +1282,7 @@ class Turn:
         _emit("session", {"session_id": eid, "environment_id": eid})
         new_files = self.sync_up(manifest)
         self.sync_skills()
-        body = self.body(prev, self.input_parts(new_files), tools_config(list(self.disabled), servers))
+        body = self.body(prev, self.input_parts(new_files), tools)
         self.run_interaction(body)
         self.finished = True
         if self.interaction_id:
