@@ -84,7 +84,7 @@ export function BuildPage() {
           layout while it builds, never its own. The setup's actions join it once the setup exists, before the tabs */}
       <header className="ag-bar ag-rt">
         <div className="ag-lft">
-          <Link className="ag-back" href="/studio" aria-label="Back to Harness Studio" title="Harness Studio">{BACK_IC}</Link>
+          <Link className="ag-back" href="/studio" aria-label="Back to Harnesses" title="Harnesses">{BACK_IC}</Link>
           <div className="ag-ident">
             <div className="ag-l1"><h1 className="ag-name" title={cfg?.name || 'New harness'}>{cfg?.name || 'New harness'}</h1></div>
             <div className="ag-l2">

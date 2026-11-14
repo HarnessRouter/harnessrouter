@@ -73,7 +73,7 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
   return (
     <header className="ag-bar ag-rt">
       <div className="ag-lft">
-        <Link className="ag-back" href="/studio" aria-label="Back to Harness Studio" title="Harness Studio">{BACK_IC}</Link>
+        <Link className="ag-back" href="/studio" aria-label="Back to Harnesses" title="Harnesses">{BACK_IC}</Link>
         <div className="ag-ident">
           <div className="ag-l1">
             <h1 className="ag-name" title={r.h.name}>{r.h.name}</h1>
