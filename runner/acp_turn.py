@@ -97,10 +97,14 @@ class Acp:
     agent makes but the permission one is refused by name."""
 
     def __init__(self, argv: list[str], cwd: str, env: dict,
-                 on_update: Callable[[dict], None] | None = None, terminal: bool = False) -> None:
+                 on_update: Callable[[dict], None] | None = None, terminal: bool = False,
+                 permit: Callable[[dict], bool] | None = None) -> None:
         self.cwd = cwd
         self.env = env
         self.terminal = terminal
+        # `permit(params)` decides a `session/request_permission`: False picks the agent's own reject
+        # option. Without it every request is allowed, as before.
+        self.permit = permit
         self.proc = subprocess.Popen(argv, cwd=cwd, env=env, text=True, bufsize=1,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE, start_new_session=True)
@@ -212,9 +216,16 @@ class Acp:
             # The sandbox is the trust boundary and nobody is attached to answer, so this allows:
             # the grant claude gets with --dangerously-skip-permissions.
             opts = params.get("options") or []
+            want = "allow"
+            if self.permit is not None and not self.permit(params):
+                want = "reject"
             pick = next((o for o in opts
-                         if "allow" in str(o.get("kind", "")).lower()
-                         or "allow" in str(o.get("optionId", "")).lower()), None)
+                         if want in str(o.get("kind", "")).lower()
+                         or want in str(o.get("optionId", "")).lower()), None)
+            if want == "reject" and pick is None:
+                # no reject option offered: cancelled is the protocol's other way to say no
+                self._reply(msg, {"outcome": {"outcome": "cancelled"}})
+                return
             pick = pick or (opts[0] if opts else None)
             self._reply(msg, {"outcome": {"outcome": "selected", "optionId": pick["optionId"]}}
                         if pick else {"outcome": {"outcome": "cancelled"}})
