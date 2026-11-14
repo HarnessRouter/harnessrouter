@@ -1007,7 +1007,8 @@ def test_the_registration_points():
     assert rs.QODER_TOOLS == drv.TOOLS
     assert rs.QODER_EFFORTS == drv.EFFORTS
     assert rs._SESSION_PRESENT.get("qoder") is None     # the driver itself reports a lost session
-    assert not any(b.get("remote") for k, b in rs.BACKENDS.items() if k != "qoder")
+    # the remote runtimes, each with its own driver (antigravity: test_antigravity_backend.py)
+    assert {k for k, b in rs.BACKENDS.items() if b.get("remote")} == {"qoder", "antigravity"}
 
 
 def test_no_agent_doc_is_written_and_skills_are_staged_under_harness(tmp_path):

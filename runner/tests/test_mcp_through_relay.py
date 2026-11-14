@@ -299,4 +299,4 @@ def test_every_writer_is_downstream_of_the_relay():
 
 
 def test_only_a_runtime_that_is_not_a_process_here_keeps_the_real_address():
-    assert srv._MCP_AGENT_RUNS_ELSEWHERE == {"qoder"}
+    assert srv._MCP_AGENT_RUNS_ELSEWHERE == {"qoder", "antigravity"}

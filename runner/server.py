@@ -1124,6 +1124,19 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       "./.harness/home/.grok/docs",
                       "./.harness/home/.grok/bundled",
                       "./.harness/home/.grok/downloads"]
+# The checkpoint's tar, up to its output: read as the session, an unreadable file left out rather than
+# failing the archive, gzip at its fastest. _workspace_tar_argv adds the output, the exclusions and
+# the folder; the antigravity driver is handed this same command for what it sends to Google's
+# sandbox, so the two can never disagree about what leaves the box.
+_WORKSPACE_TAR = ("tar", "--ignore-failed-read", "-I", "gzip -1", "-cf")
+
+
+def _workspace_tar_argv(ws: str, out: str = "-", extra_excludes: tuple[str, ...] = ()) -> list[str]:
+    """The workspace's archive as the checkpoint makes it: CHECKPOINT_EXCLUDE (and `extra_excludes`)
+    left out, from the workspace root, into `out`."""
+    return [*_WORKSPACE_TAR, out, *(f"--exclude={p}" for p in (*CHECKPOINT_EXCLUDE, *extra_excludes)), "-C", ws, "."]
+
+
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-5.5")
@@ -1728,12 +1741,13 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # config.yaml, so a tree another backend wrote is not swept in (kimi's reason).
         rootrels = [".harness/home/.minimax/skills"]
         entryroot = ".harness/home/.minimax/skills"
-    elif backend == "qoder":
+    elif backend in ("qoder", "antigravity"):
         # Not where a loader looks — nothing on this box loads them. The folders are staged here
         # for the driver to publish as Qoder Skill resources bound on the session's Agent, which
-        # Qoder's sandbox then installs under the skill's own name. Under .harness/ so the bundle
-        # is never a produced file, and checkpointed so the content hash the driver keeps is
-        # comparable next turn.
+        # Qoder's sandbox then installs under the skill's own name (antigravity: to upload into the
+        # sandbox's .agents/skills/<name>/, where Google's runtime discovers them). Under .harness/
+        # so the bundle is never a produced file, and checkpointed so the content hash the driver
+        # keeps is comparable next turn.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
     elif backend in ("opencode", "kilo"):
@@ -2423,7 +2437,7 @@ def _compose_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_met
     instructions and its managed block (_write_agent_doc says what is in it); "" for a base that reads
     no workspace. Made from the turn's request alone, with nothing read from the workspace, so it is
     the owner's text whatever the agent has written there."""
-    if backend in ("systemone", "qoder"):
+    if backend in ("systemone", "qoder", "antigravity"):
         return ""
     base = (agent_doc or "").strip()
     lines = [_AGENTS_BEGIN, "## Workspace", "",
@@ -4794,7 +4808,7 @@ _MCP_TOKEN_PATH = re.compile(r"^/(hr-mcp-[0-9a-f]{32})(/[^?#]*)?")
 _MCP_ENDPOINTS_PER_ROUTE = 64
 # A runtime that isn't a process here dials the server from its own cloud and can't reach this
 # address. Its driver hands the credential to that service, and no agent runs on this machine to read it.
-_MCP_AGENT_RUNS_ELSEWHERE = frozenset({"qoder"})
+_MCP_AGENT_RUNS_ELSEWHERE = frozenset({"qoder", "antigravity"})
 _MCP_NOT_FORWARDED = frozenset({
     "host", "content-length", "authorization", "cookie", "connection", "keep-alive", "proxy-authenticate",
     "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade", "accept-encoding"})
@@ -7022,11 +7036,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if flags.get("cloud"):
             self._cloud(base, key, flags, path, body)
             return
-        if self.command == "DELETE" and not flags.get("passthrough"):
-            # DELETE is a remote runtime's (its own objects, deleted through its API). A model
-            # provider's route stays GET and POST: a sandbox must not delete what the org's key owns
-            # there (files, fine-tunes, batches) through the relay that holds that key.
-            data = b'{"error": "this route does not forward DELETE"}'
+        if self.command in ("DELETE", "PUT") and not flags.get("passthrough"):
+            # DELETE and PUT are a remote runtime's (its own objects, deleted or uploaded through its
+            # API). A model provider's route stays GET and POST: a sandbox must not delete what the
+            # org's key owns there (files, fine-tunes, batches) through the relay that holds that key.
+            data = f'{{"error": "this route does not forward {self.command}"}}'.encode()
             self.send_response(405)
             self.send_header("allow", "GET, POST")
             self.send_header("content-type", "application/json")
@@ -7052,8 +7066,25 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
         _relay_trace_headers(headers, flags)
+        if flags.get("google_key"):
+            # Google's own API reads its key from x-goog-api-key alone (a bearer beside it is taken
+            # for an OAuth token and refused), and this route forwards the Interactions and
+            # Environments calls of one turn and nothing else the key can do (_antigravity_call_refused).
+            why = _antigravity_call_refused(self.command, tail)
+            if why:
+                print(f"[relay] antigravity route refused {self.command} {tail.split('?', 1)[0][:120]}: {why}", flush=True)
+                data = json.dumps({"error": {"code": 403, "status": "PERMISSION_DENIED",
+                                             "message": f"this route does not forward that call: {why}"}}).encode()
+                self.send_response(403)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            headers.pop("authorization", None)
+            headers["x-goog-api-key"] = key
         if flags.get("passthrough"):
-            self._passthrough(base, key, tail, headers, body)
+            self._passthrough(base, key, tail, headers, body, keep_location=bool(flags.get("google_key")))
             return
         if (tail.split("?", 1)[0].strip("/").lower() in _LOCAL_SERVER_PROBES
                 and not _upstream_is_local_server(base)):
@@ -7728,7 +7759,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
 
-    def _passthrough(self, base: str, key: str, tail: str, headers: dict, body: bytes | None) -> None:
+    def _passthrough(self, base: str, key: str, tail: str, headers: dict, body: bytes | None,
+                     keep_location: bool = False) -> None:
         """A route that is only the credential boundary: the request goes up as the client wrote it
         and the answer comes down as the provider wrote it. No body rewrite, no retry ladder, and
         NONE of the taps — not the served model, not usage, not the finish reason.
@@ -7747,6 +7779,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             data = e.read()
             self.send_response(e.code)
             self.send_header("content-type", e.headers.get("content-type") or "application/json")
+            if keep_location and 300 <= e.code < 400 and e.headers.get("location"):
+                # A file download Google answers with a link of its own: the client decides whether to
+                # follow it (only to Google's https hosts, and without the placeholder). The redirect
+                # itself is never followed here, where the request carries the key.
+                self.send_header("location", e.headers["location"])
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -8055,6 +8092,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):   # noqa: N802 — model listings and the like
         self._forward(None)
 
+    def do_PUT(self):   # noqa: N802 — a remote runtime's uploads (the antigravity route's files)
+        self._forward(self.rfile.read(int(self.headers.get("content-length") or 0)))
+
     def do_DELETE(self):   # noqa: N802 — a remote runtime's objects are deleted through its API
         # A DELETE may carry a body (Qoder's SDK sends `{}`); left unread, those bytes stay on the
         # keep-alive socket and open the NEXT request's line ("{}DELETE", a 501 from the upstream).
@@ -8080,6 +8120,64 @@ def _qoder_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
         tok = "hr-relay-" + uuid.uuid4().hex
         _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key,
                                         _turn_route({"passthrough": True, **_route_trace_flag()}))
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
+# The calls an antigravity turn makes, the only ones its route forwards with the key on: the
+# Interactions API (create, read or stream, cancel, delete) and the Environments API (create, read,
+# delete, list and download files, upload an archive). Anything else Google serves to that key (model
+# calls, files, tuned models, other agents) is refused at the relay. Ids are Google's opaque tokens.
+_AG_ID = r"[A-Za-z0-9_.=-]{1,256}"
+_ANTIGRAVITY_CALLS = tuple((m, re.compile(p)) for m, p in (
+    ("POST", r"/v1beta/interactions"),
+    ("GET", rf"/v1beta/interactions/{_AG_ID}"),
+    ("DELETE", rf"/v1beta/interactions/{_AG_ID}"),
+    ("POST", rf"/v1beta/interactions/{_AG_ID}(?::cancel|/cancel)"),
+    ("POST", r"/v1beta/environments"),
+    ("GET", rf"/v1beta/environments/{_AG_ID}"),
+    ("DELETE", rf"/v1beta/environments/{_AG_ID}"),
+    ("GET", rf"/v1beta/environments/{_AG_ID}/files(?:/[^?#]*)?"),
+    ("PUT", rf"/upload/v1beta/environments/{_AG_ID}/files/[^?#]+"),
+))
+
+
+def _antigravity_call_refused(method: str, tail: str) -> str:
+    """Why the antigravity route does not forward this call ("" when it does). The path is decoded to
+    a fixed point before its segments are read, so an encoded `..` is a `..`; a credential in the
+    query is never forwarded beside the one the relay adds."""
+    path, _, query = tail.partition("?")
+    if any(k.lower() in ("key", "access_token", "api_key") for k, _v in urllib.parse.parse_qsl(query, keep_blank_values=True)):
+        return "a credential in the query"
+    decoded = path
+    for _ in range(4):
+        nxt = urllib.parse.unquote(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
+    segs = decoded.split("/")[1:]
+    if "\\" in decoded or "\0" in decoded or any(seg in ("", ".", "..") for seg in segs):
+        return "not a plain path"
+    if any(m == method.upper() and rx.fullmatch(path) for m, rx in _ANTIGRAVITY_CALLS):
+        return ""
+    return "not an Interactions or Environments call of this agent"
+
+
+def _antigravity_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
+    """Register one antigravity turn's Google API as a pass-through route; → (relay base, placeholder).
+
+    The relay is the credential boundary: the Google AI Studio key stays in this process, the driver
+    is handed a placeholder, and each call goes up as the driver wrote it with the key in
+    x-goog-api-key, for the calls in _ANTIGRAVITY_CALLS only. No taps (_passthrough): an interaction
+    names the configured model, never the one that served. The base is Google's host root; the
+    driver's paths carry their own /v1beta."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key,
+                                        _turn_route({"passthrough": True, "google_key": True, **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -12235,6 +12333,164 @@ def _qoder_eof(state: dict, rc: int) -> list[dict]:
 _qoder_to_claude.eof = _qoder_eof   # type: ignore[attr-defined]
 
 
+# ── antigravity: Google's managed Antigravity agent, through the Gemini API's Interactions API ──
+# The second remote runtime (qoder's shape, docs/harness-verification.md "remote runtimes"). The
+# turn process is runner/antigravity_driver.py, an HTTP client: it keeps one Google environment (a
+# Linux sandbox Google hosts) per session and a chain of interactions on it, sends the workspace up
+# as the checkpoint's own archive, streams the interaction, and brings back what the agent changed.
+# The standard library is all the driver needs, so it runs on the runner's own interpreter and this
+# base installs nothing.
+#
+# The connection is the instance's Google AI Studio key (provider `google`), its owner's own: in
+# owner trust the gateway hands it to the runner with the turn, and it stays in this process, in
+# the relay's route for the turn (_antigravity_relay_route), which forwards this agent's calls and
+# nothing else. Token usage is Google's own count (the interaction's `usage`); the served model is
+# not reported apart from the configured one, so a turn's result names none.
+ANTIGRAVITY_DEFAULT_MODEL = os.environ.get("ANTIGRAVITY_DEFAULT_MODEL", "gemini-4-hydrogen")
+ANTIGRAVITY_PROVIDERS = {"google"}
+ANTIGRAVITY_HOST = "generativelanguage.googleapis.com"
+ANTIGRAVITY_BASE = f"https://{ANTIGRAVITY_HOST}"
+ANTIGRAVITY_PYTHON = os.environ.get("HR_ANTIGRAVITY_PYTHON") or sys.executable
+ANTIGRAVITY_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "antigravity_driver.py")
+ANTIGRAVITY_STATE_REL = os.path.join(".harness", "antigravity", "state.json")   # the driver's record of its remote ids
+# The built-ins a harness can switch off, and the agent's models; pinned equal to the driver's
+# TOOLS and MODELS and to the gateway's catalog by tests.
+ANTIGRAVITY_TOOLS = ("code_execution", "google_search", "url_context")
+ANTIGRAVITY_MODELS = ("gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash",
+                      "gemini-3.6-flash", "gemini-3.5-flash-lite")
+# What an operator may cap, read once here and handed to the driver in the job: the tokens one
+# interaction may spend (Google's agent_config.max_total_tokens; unset, Google's own default), and
+# the bytes a turn sends to and brings back from Google's sandbox.
+ANTIGRAVITY_MAX_TOTAL_TOKENS = int(os.environ.get("HR_ANTIGRAVITY_MAX_TOTAL_TOKENS") or 0)
+ANTIGRAVITY_UPLOAD_MAX_BYTES = int(os.environ.get("HR_ANTIGRAVITY_UPLOAD_MAX_BYTES") or 100 * 1024 * 1024)
+ANTIGRAVITY_FILE_MAX_BYTES = int(os.environ.get("HR_ANTIGRAVITY_FILE_MAX_BYTES") or 100 * 1024 * 1024)
+# Never sent to Google beside CHECKPOINT_EXCLUDE: the runner's own tree (per-turn configs, staged
+# skills, the driver's state) and the session's git history, which holds every earlier version.
+_ANTIGRAVITY_NOT_SENT = ("./.harness", "./.git")
+
+
+def _build_antigravity(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                       resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                       mcp_withheld: list[dict] | None = None, tools_disabled: list[str] | None = None,
+                       agent_doc: str = "", input_files: list[str] | None = None,
+                       skills: list[dict] | None = None) -> list[str]:
+    """One antigravity turn's job, as argv for the driver.
+
+    The harness's instructions travel in the job and become each interaction's system_instruction,
+    so an edit reaches a continued conversation on its next message; this backend reads no
+    workspace file (the qoder precedent). A disabled built-in is left out of the request's tools.
+    The archive command is the checkpoint's (_WORKSPACE_TAR, CHECKPOINT_EXCLUDE), so what goes to
+    Google is never more than what a checkpoint keeps. MCP servers are the gateway's: what it would
+    not send to Google arrives in `mcp_withheld` with its reason, for the driver to report."""
+    pr = provider or "google"
+    if pr not in ANTIGRAVITY_PROVIDERS:
+        raise HTTPException(400, f"unknown antigravity provider '{pr}' (one of {sorted(ANTIGRAVITY_PROVIDERS)})")
+    if not auth.api_key:
+        raise HTTPException(400, "the Antigravity agent needs a Google AI Studio key (none configured)")
+    host = (urllib.parse.urlsplit(auth.base_url or "").hostname or "").lower() if auth.base_url else ANTIGRAVITY_HOST
+    if host != ANTIGRAVITY_HOST:
+        # The agent is Google's own API; a connection whose address is elsewhere (a proxy, another
+        # gateway) does not serve it, and its key is not sent anywhere it was not saved for.
+        raise HTTPException(400, "the Antigravity agent runs on Google's own Gemini API; this connection's "
+                                 "address is not Google's")
+    relay_base, relay_tok = _antigravity_relay_route(ANTIGRAVITY_BASE, auth.api_key)
+    thinking = _TURN_THINKING.get() or {}
+    if thinking.get("asked"):
+        thinking["applied"] = ""        # the agent takes no thinking level; the model's own default runs
+    job = {"cwd": cwd, "prompt": prompt, "model": model, "base_url": relay_base, "api_key": relay_tok,
+           "resume_session_id": resume_session_id or "",
+           "agent_doc": agent_doc or "",
+           "tools_disabled": [str(t) for t in (tools_disabled or []) if t],
+           "mcp_servers": [s for s in (mcp_servers or []) if isinstance(s, dict)],
+           "mcp_withheld": [w for w in (mcp_withheld or []) if isinstance(w, dict)],
+           "input_files": list(input_files or []),
+           "skills": list(skills or []),
+           "tar": {"argv": list(_WORKSPACE_TAR)},
+           "exclude": [*CHECKPOINT_EXCLUDE],
+           "max_total_tokens": ANTIGRAVITY_MAX_TOTAL_TOKENS,
+           "upload_max_bytes": ANTIGRAVITY_UPLOAD_MAX_BYTES,
+           "file_max_bytes": ANTIGRAVITY_FILE_MAX_BYTES}
+    return _driver_cmd(ANTIGRAVITY_PYTHON, ANTIGRAVITY_DRIVER, job, env)
+
+
+def _antigravity_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE antigravity driver NDJSON line to canonical claude stream-json events.
+
+    The result carries Google's own token count (`usage`: fresh input, output with the thinking in
+    it, cache reads, reasoning as a subset) and no `model`: an interaction names the model it was
+    configured with, never one that served. `reason` explains an `incomplete` turn (the token
+    budget, a file that did not come back, a tool that ran although switched off) and a failure."""
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if m in ("__hr_init", "session"):
+        sid = str(p.get("session_id") or "")
+        if not sid or state.get("_ag_init"):
+            return []
+        state["_ag_init"] = True
+        return [{"type": "system", "subtype": "init", "session_id": sid, "model": state.get("model")}]
+    if m == "resume_lost":
+        return [{"type": "system", "subtype": "resume_lost",
+                 "requested_session_id": str(p.get("requested_session_id") or "")}]
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if not txt:
+            return []
+        state["_ag_text"] = state.get("_ag_text", "") + txt
+        state["final"] = state["_ag_text"]
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if m == "thinking":
+        txt = str(p.get("text") or "")
+        return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": txt}]}}] if txt else []
+    if m == "tool_use":
+        if state.get("_ag_text") and not state["_ag_text"].endswith("\n"):
+            state["_ag_text"] += "\n\n"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": str(p.get("id") or ""), "name": str(p.get("name") or "tool"),
+             "input": p.get("input") if isinstance(p.get("input"), dict) else {}}]}}]
+    if m == "tool_result":
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(p.get("tool_use_id") or ""),
+             "is_error": bool(p.get("is_error")), "content": str(p.get("text") or "")}]}}]
+    if m == "mcp_unavailable":
+        servers = [{"name": str(s.get("name")), **({"reason": str(s["reason"])} if s.get("reason") else {}),
+                    **({"withheld": True} if s.get("withheld") is True else {})}
+                   for s in (p.get("servers") or []) if isinstance(s, dict) and s.get("name")]
+        return [{"type": "system", "subtype": "mcp_unavailable", "servers": servers}] if servers else []
+    if m in ("notice", "error"):
+        state.setdefault("_ag_notices", []).append(str(p.get("text") or p.get("message") or ""))
+        return []
+    if m == "__hr_result":
+        status = str(p.get("status") or "")
+        final = str(p.get("final") or "") or state.get("_ag_text", "")
+        reason = str(p.get("reason") or "")
+        usage = p.get("usage") if isinstance(p.get("usage"), dict) else {}
+        ev: dict = {"type": "result", "usage": usage}
+        if status == "completed":
+            state["final"] = final
+            ev.update(subtype="success", is_error=False, result=final)
+        elif status == "incomplete":
+            state["final"] = final
+            ev.update(subtype="incomplete", is_error=False, result=final or reason, reason=reason)
+        else:
+            # failed, cancelled: the reason is the answer the record shows
+            ev.update(subtype="error", is_error=True, result=reason or final or "the Antigravity turn failed",
+                      reason=reason)
+        return [ev]
+    return []
+
+
+def _antigravity_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result, so this fires only when it died before reaching it. Google's
+    interaction may still be running then (it runs in the background): the record says so."""
+    notes = [n for n in state.get("_ag_notices") or [] if n]
+    tail = notes[-1] if notes else f"antigravity driver exited {rc} without a result"
+    return [{"type": "result", "subtype": "error", "is_error": True, "usage": {},
+             "result": f"{tail}; Google's interaction may still be running"}]
+
+
+_antigravity_to_claude.eof = _antigravity_eof   # type: ignore[attr-defined]
+
+
 # ── systemone: the System One Harness (github.com/HarnessRouter/SystemOneHarness, Apache-2.0) ──
 # A loop over a decision model rather than a coding CLI: TypeSafe's Jev answers typed questions with
 # probabilities and writes no text, so the harness compiles the environment's actions into one
@@ -15894,6 +16150,10 @@ BACKENDS = {
     # cancel the remote turn before it dies — see _stop_proc.
     "qoder": {"providers": sorted(QODER_PROVIDERS), "default_model": QODER_DEFAULT_MODEL,
               "normalize": _qoder_to_claude, "remote": True},
+    # Google's managed Antigravity agent: the second remote runtime, qoder's shape. Its stop has the
+    # same grace, so the driver cancels the interaction at Google before it dies.
+    "antigravity": {"providers": sorted(ANTIGRAVITY_PROVIDERS), "default_model": ANTIGRAVITY_DEFAULT_MODEL,
+                    "normalize": _antigravity_to_claude, "remote": True},
     # MiMo Code is an opencode FORK whose `run --format json` stream is opencode's line for line
     # (measured on 0.1.15), so it shares opencode's normaliser rather than carrying a copy — the
     # same relationship omp has to pi.
@@ -16166,7 +16426,7 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 # CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
 # jcode's own usage, so it stays.
 _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
-                        "opencode", "mimo", "kilo", "qoder", "roder"}
+                        "opencode", "mimo", "kilo", "qoder", "roder", "antigravity"}
 
 
 # ── a question for the person ends the turn (UHP Tasks §3.2, #476) ──────────────────────────────
@@ -17702,7 +17962,6 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
         head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
     except Exception:
         head = full_commit = ""
-    excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
     fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     try:
         # The archive is read as the session, as /hydrate's untar writes as it: the checkpoint holds what the
@@ -17711,8 +17970,8 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
         # in the log, rather than failing the checkpoint; any other failure still fails it.
         with os.fdopen(fd, "wb") as out:
             tenv = _child_env()
-            proc = subprocess.run(_in_session(["tar", "--ignore-failed-read", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
-                                              ws, tenv), stdout=out, stderr=subprocess.PIPE, env=tenv)
+            proc = subprocess.run(_in_session(_workspace_tar_argv(ws), ws, tenv),
+                                  stdout=out, stderr=subprocess.PIPE, env=tenv)
         if proc.returncode != 0:
             os.unlink(tar_path)
             raise HTTPException(500, f"tar failed: {proc.stderr.decode(errors='replace')[:300]}")
@@ -18305,6 +18564,7 @@ class TurnReq(BaseModel):
     resume_session_id: str | None = None   # claude session id of a prior turn → conversational resume
     files: list[dict] | None = None        # caller-attached input files: [{filename, content_b64}]
     mcp_servers: list[dict] | None = None  # enabled MCP servers: [{name, url, transport?, auth?, headers?}]
+    mcp_withheld: list[dict] | None = None  # antigravity: servers the gateway would not send to Google: [{name, reason}]
     skills: list[dict] | None = None       # enabled skills: [{name, files:[{path, content|content_b64}]}]
     plugins: list[dict] | None = None      # enabled Claude Code plugins: [{name, files:[{path, content|content_b64}]}]
     agent_doc: str | None = None           # harness instruction doc → AGENTS.md (codex) / CLAUDE.md (claude)
@@ -18667,6 +18927,16 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                input_files=input_files,
                                skills=[{"name": s["name"], "dir": os.path.dirname(os.path.join(cwd, s["entry"]))}
                                        for s in installed_skills])
+        elif backend == "antigravity":
+            model = model or ANTIGRAVITY_DEFAULT_MODEL
+            # The agent doc becomes each interaction's system_instruction; the skill folders
+            # _write_skills staged and the workspace go up to Google's sandbox through the driver.
+            cmd = _build_antigravity(req.provider, auth, model, req.prompt, cwd, env,
+                                     resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                                     mcp_withheld=req.mcp_withheld, tools_disabled=req.tools_disabled,
+                                     agent_doc=agent_doc, input_files=input_files,
+                                     skills=[{"name": s["name"], "dir": os.path.dirname(os.path.join(cwd, s["entry"]))}
+                                             for s in installed_skills])
         elif backend == "systemone":
             model = model or SYSTEMONE_DEFAULT_MODEL
             cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
@@ -18852,17 +19122,49 @@ class WorkspaceDelete(BaseModel):
     backend: str | None = None
 
 
-def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
+def _qoder_purge_route(auth: Auth) -> tuple[str, str]:
+    return _qoder_relay_route((auth.base_url or QODER_DEFAULT_BASE).rstrip("/"), auth.api_key)
+
+
+def _antigravity_purge_route(auth: Auth) -> tuple[str, str]:
+    host = (urllib.parse.urlsplit(auth.base_url or "").hostname or "").lower() if auth.base_url else ANTIGRAVITY_HOST
+    if host != ANTIGRAVITY_HOST:
+        raise ValueError("the connection's address is not Google's")
+    return _antigravity_relay_route(ANTIGRAVITY_BASE, auth.api_key)
+
+
+# The remote runtimes whose turns leave objects at their vendor, each with the record its driver
+# keeps of them, the vendor's name for the log, its driver and the relay route a purge rides.
+_REMOTE_PURGES = {
+    "qoder": {"state": QODER_STATE_REL, "vendor": "Qoder", "python": lambda: QODER_PYTHON,
+              "driver": QODER_DRIVER, "route": _qoder_purge_route},
+    "antigravity": {"state": ANTIGRAVITY_STATE_REL, "vendor": "Google", "python": lambda: ANTIGRAVITY_PYTHON,
+                    "driver": ANTIGRAVITY_DRIVER, "route": _antigravity_purge_route},
+}
+
+
+def _remote_purge(ws: str, auth: Auth | None, backend: str | None = None) -> dict | None:
     """Delete what a remote backend's turns created outside this box, before the folder goes.
 
     The driver recorded every remote id it made in the session's .harness/ state; the same driver,
     in purge mode, deletes them through the relay (the credential stays here as on a turn). A
     delete that could not reach the runtime is reported with its ids and logged, never swallowed:
     the folder is still removed, since the session is already unreadable, but the answer says what
-    is left. None when the session made nothing remote."""
-    state = pathlib.Path(ws) / QODER_STATE_REL
-    if not state.is_file():
+    is left. None when the session made nothing remote. The credential that came with the delete is
+    the session's own backend's (`backend`), and only that runtime's record is purged with it."""
+    kinds = [k for k, spec in _REMOTE_PURGES.items() if (pathlib.Path(ws) / spec["state"]).is_file()]
+    if not kinds:
         return None
+    reports = [_remote_purge_one(ws, k, auth if (not backend or backend == k) else None) for k in kinds]
+    if len(reports) == 1:
+        return reports[0]
+    return {"backend": ",".join(kinds), "purged": all(r.get("purged") for r in reports), "runtimes": reports}
+
+
+def _remote_purge_one(ws: str, kind: str, auth: Auth | None) -> dict:
+    spec = _REMOTE_PURGES[kind]
+    rel = spec["state"]
+    state = pathlib.Path(ws) / rel
     if not (auth and auth.api_key):
         # The record is a file in the session's tree: the log names it and its size, never what it holds.
         try:
@@ -18870,19 +19172,22 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
                 size = state.stat().st_size
         except OSError:
             size = -1
-        print(f"[workspace] {ws}: remote Qoder objects recorded but no credential came with the delete; "
-              f"left in place, as recorded in {QODER_STATE_REL} ({size} bytes)", flush=True)
-        return {"backend": "qoder", "purged": False, "reason": "no credential", "state": QODER_STATE_REL}
-    base = (auth.base_url or QODER_DEFAULT_BASE).rstrip("/")
-    relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)
+        print(f"[workspace] {ws}: remote {spec['vendor']} objects recorded but no credential came with the delete; "
+              f"left in place, as recorded in {rel} ({size} bytes)", flush=True)
+        return {"backend": kind, "purged": False, "reason": "no credential", "state": rel}
+    try:
+        relay_base, relay_tok = spec["route"](auth)
+    except ValueError as e:
+        print(f"[workspace] {ws}: remote {spec['vendor']} objects left in place: {e}", flush=True)
+        return {"backend": kind, "purged": False, "reason": str(e), "state": rel}
     job = {"purge": True, "cwd": ws, "base_url": relay_base, "api_key": relay_tok}
     try:
         penv = _child_env()
-        proc = subprocess.run(_in_session(_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv), ws, penv),
+        proc = subprocess.run(_in_session(_driver_cmd(spec["python"](), spec["driver"], job, penv), ws, penv),
                               capture_output=True, text=True, env=penv, timeout=180)
     except Exception as e:  # noqa: BLE001
         print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
-        return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}
+        return {"backend": kind, "purged": False, "reason": f"purge did not run: {e}"[:300]}
     finally:
         _relay_forget([relay_tok])
     report: dict = {}
@@ -18895,9 +19200,9 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
             report = obj["p"]
     failed = report.get("failed") or []
     if failed or proc.returncode != 0:
-        print(f"[workspace] {ws}: remote purge left objects at Qoder: {json.dumps(failed)[:1500]} "
+        print(f"[workspace] {ws}: remote purge left objects at {spec['vendor']}: {json.dumps(failed)[:1500]} "
               f"(exit {proc.returncode}) {(proc.stderr or '')[-500:]}", flush=True)
-    return {"backend": "qoder", "purged": not failed and proc.returncode == 0,
+    return {"backend": kind, "purged": not failed and proc.returncode == 0,
             "done": report.get("done") or [], "failed": failed}
 
 
@@ -18929,7 +19234,7 @@ async def delete_workspace(identifier: str = "", body: WorkspaceDelete | None = 
     _ws_marker_clear(ident)
     if not os.path.isdir(ws):
         return {"identifier": ident, "removed": False, "reason": "no folder"}
-    remote = await run_in_threadpool(_remote_purge, ws, body.auth if body else None)
+    remote = await run_in_threadpool(_remote_purge, ws, body.auth if body else None, body.backend if body else None)
     uid = _session_uid(ws)
     shutil.rmtree(ws, ignore_errors=True)
     if uid is not None:

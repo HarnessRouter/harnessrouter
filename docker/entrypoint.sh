@@ -317,6 +317,8 @@ seal_tools
 # and an operator who wants them out sets HR_BACKENDS.
 # (A base left out is no longer a failing row: the list of what installed is exported to the
 # gateway as HR_BACKENDS_INSTALLED below, and the console does not offer the rest.)
+# Opt-in, and so not in this list: roder (until its live provider column is measured) and antigravity
+# (Google's managed agent: an operator turns it on knowing a task's files go to Google's service).
 export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
@@ -349,6 +351,11 @@ backend_bin() {
     # runner/qoder_driver.py on Qoder's SDK, in a venv of its own (install_qoder). The venv's
     # interpreter is what "installed" means here.
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
+    # antigravity has no binary and installs nothing: its runtime is Google's managed agent, and the
+    # turn process is runner/antigravity_driver.py on the standard library, run by the runner's own
+    # interpreter. That interpreter is what "installed" means here; the base is opt-in all the same
+    # (it is not in the default HR_BACKENDS), because a task's files go to Google's service.
+    antigravity) echo "$PY" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
     roder)  echo "$TOOLS/bin/roder" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
@@ -447,7 +454,7 @@ install_base() {
 # can gain no privilege (--no-new-privs: no setuid program in the image changes its uid back).
 INSTALL_UID_BASE=19000
 # A new base goes at the END, so no base's uid moves.
-INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder "
+INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder antigravity "
 IU_UID=""; IU_HOME=""
 declare -A IU_HELD=()
 # Every directory the current install has filled, held or given back (a base can fill more than one:

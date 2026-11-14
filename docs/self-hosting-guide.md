@@ -1122,6 +1122,9 @@ and 69 MB of source, 83 seconds on a fresh volume (measured on Linux arm64). It 
 dependency pins, minus the packages that serve only what this base switches off (local embeddings and
 speech, which would bring torch; document parsing; the browser; its messaging integrations).
 
+Two bases are opt-in and not in the default list: Roder (`roder`, below) and the Antigravity Agent
+(`antigravity`, Google's managed agent, below). Add either to `HR_BACKENDS` to turn it on.
+
 A backend that fails to install is not fatal: the others still work. A base this instance has not
 installed (one left out of `HR_BACKENDS`, or one whose install failed) reads "not installed": the
 console does not offer it, and a task on a harness built on it is refused with that reason. The
@@ -1155,6 +1158,9 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HR_BRANCH_COPY_MAX_BYTES` | `268435456` | The same, at most this many bytes in all (256 MiB). |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HR_RELAY_UPSTREAM_TIMEOUT_S` | `600` | How long one model call may go without sending anything before the task is told the provider did not answer. Several model APIs send nothing while a model thinks (OpenAI's Chat Completions sends nothing at all), so a shorter wait cuts long thinking off. Lower it only if you would rather end a stuck call sooner than wait out a long think. It was `180` in 0.31.0 only. |
+| `HR_ANTIGRAVITY_MAX_TOTAL_TOKENS` | unset | On the Antigravity Agent base, the most tokens one message may spend at Google (input, output and thinking; cached tokens do not count). Past it the task ends `incomplete` and says so, and the next message continues the work. Unset, Google's own limit applies. |
+| `HR_ANTIGRAVITY_UPLOAD_MAX_BYTES` | `104857600` | On the Antigravity Agent base, the most bytes of a task's files sent to Google's sandbox (100 MiB). A task over it is refused before anything is sent. |
+| `HR_ANTIGRAVITY_FILE_MAX_BYTES` | `104857600` | On the Antigravity Agent base, the largest single file brought back from Google's sandbox (100 MiB). A larger one is named in the task's result, which ends `incomplete`. |
 | `HR_ENTRA_AUTHORITY` | `https://login.microsoftonline.com` | Where an Azure connection that signs in with Microsoft Entra asks for its token. A sovereign cloud names its own. |
 | `HARNESS_RESP_HOLD_S` | `3` | How long the gateway lets the runner hold a request for a turn's events. `0` asks every 1.2 s as before 0.30.1. |
 | `HARNESS_INTERNAL_KEY` | generated | Per-container; never leaves the process tree. |
@@ -1522,3 +1528,59 @@ Set `HR_BACKENDS=roder` for a Roder-only installation. Roder uses its native app
 and a Responses connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, or a custom
 endpoint with `api_format=responses`). See [Roder setup and verification](roder.md) for
 installation, session state, tool policy, MCP, and qualification limits.
+
+### Antigravity Agent (Google's managed agent)
+
+The `antigravity` base runs Google's managed Antigravity agent (`antigravity-preview-09-2026`, in
+preview) through the Gemini API's Interactions API, in a Linux sandbox that Google hosts. Nothing is
+installed for it. It is opt-in: add `antigravity` to `HR_BACKENDS` and restart.
+
+**What leaves this instance.** Each task's files, its messages and the agent's work are sent to
+Google's service and kept there under Google's terms for the Gemini API, which differ between free and
+paid projects. Read them before you turn this base on. What is sent:
+
+- The task's files, as a checkpoint keeps them: the same exclusions (`tmp/`, dependency folders such as
+  `node_modules`, the credential files a checkpoint leaves out), never the session's `.harness/` folder
+  or its git history, and never a symbolic link. At most 100 MiB (`HR_ANTIGRAVITY_UPLOAD_MAX_BYTES`); a
+  task over it is refused before anything is sent. The files go up again only when they changed.
+- The harness's instructions and skills (the skills into the sandbox's `.agents/skills/`).
+- The tools it may use: an MCP server goes only when Google's sandbox can reach it (a public `https`
+  address, streamable HTTP) and nothing it carries is stored on this instance: its key, if any, comes
+  from each request through a declared header (`$headers.<name>`), checked like every tool's header.
+  A server whose key is stored here, a tool this instance serves itself (memory, media, databases) and
+  a plugin's stdio server are not sent; the task says which, and why. A harness's environment variables
+  do not reach this base.
+
+**What stays.** The Google AI Studio key is held by this instance's runner for the length of a task and
+put on each call there; the agent's process never holds it, and a call that is not one of this
+agent's (a model call, Google's file store, another agent) is refused before it leaves. Deleting a
+task deletes its sandbox and its stored conversation at Google; Google also removes a sandbox that has
+been idle for about a week. One case can't be cleaned up from here: if the instance never receives
+Google's reply to the request that started a message, that message's conversation at Google can't be
+found again (the Interactions API has no way to list them), and it stays there until Google's retention
+for the Gemini API removes it.
+
+**Connection.** The instance's Google AI Studio connection (provider `google`), its own key: this base
+runs in owner trust only (`HR_SANDBOX_TRUST=owner`, the default here). A connection whose address is not
+Google's is refused. Usage is billed to that key by Google: one message can take hundreds of thousands
+of tokens or more; `HR_ANTIGRAVITY_MAX_TOTAL_TOKENS` caps one message.
+
+**Models.** `gemini-4-hydrogen` (the default), `gemini-4-carbon`, `gemini-4-argon`,
+`gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`. The base takes no thinking level.
+
+**Tools.** Code Execution, Google Search and URL Context can each be switched off; one that is off is
+not offered to the agent, and a task in which Google runs it anyway ends `incomplete` and says so. The
+sandbox's file tools have no switch: with Code Execution off the agent can still write files. With all
+three off and no tool server, a task is refused: Google's agent reads an empty tool list as all of its
+tools on.
+
+**Files back.** When a message ends, what the agent added, changed or removed under `/workspace` comes
+back into the task's files. A file that cannot come back (over 100 MiB, `HR_ANTIGRAVITY_FILE_MAX_BYTES`;
+a path outside the task's folder; a path into `.harness` or `.git`; a path through a link) is named in
+the result, which ends `incomplete`. Anything the agent writes outside `/workspace`, or under
+`/workspace/tmp`, does not come back.
+
+**Limits.** An environment layer cannot be mounted on this base. A task stopped from the console is
+cancelled at Google. Google keeps each sandbox's files between messages; one idle for about a week is
+gone, and the next message starts a new sandbox from the task's files (the earlier conversation is then
+not continued).
