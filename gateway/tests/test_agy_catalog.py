@@ -35,18 +35,95 @@ def test_the_key_is_refused_to_a_brokered_sandbox_and_held_by_the_runner_in_owne
     assert A._auth_from_conn(conn, "sid1")["api_key"] == "AIza-t"      # to the runner, whose relay keeps it
 
 
+AGY_ONLY = {"gemini-4-hydrogen", "gemini-4-carbon"}
+
+
 def test_the_models_are_the_clis_on_a_gemini_key_and_each_is_served_as_itself():
     cat = A._MODEL_CATALOG["agy"]
     assert cat["default"] == R.AGY_DEFAULT_MODEL == "gemini-3.8-flash" and cat["default"] in cat["models"]
-    assert set(cat["models"]) <= set(A._VENDOR_MODELS["google"])
+    # Google's table, plus the two the CLI names that only this base offers
+    assert set(cat["models"]) <= set(A._VENDOR_MODELS["google"]) | A._CHANNEL_ALSO_SERVES[("google", "agy")]
     # every catalog id is one the CLI offers, under its own name where it differs
     assert {R.AGY_IDS.get(m, m) for m in cat["models"]} <= set(R.AGY_MODEL_LEVELS)
     # Google answers gemini-3.7-flash as gemini-3.8-flash: never offered as itself
     assert not set(cat["models"]) & A._GOOGLE_ANSWERS_AS_ANOTHER
     assert "agy" in A._STILL_QUALIFYING
-    # the CLI's two Gemini 4 ids Google's table does not carry yet are not offered as served
-    assert not {"gemini-4-hydrogen", "gemini-4-carbon"} & set(cat["models"])
-    assert {"gemini-4-hydrogen", "gemini-4-carbon"} <= set(R.AGY_MODEL_LEVELS)
+
+
+def test_hydrogen_and_carbon_are_offered_on_this_base_under_the_clis_own_ids():
+    cat = A._MODEL_CATALOG["agy"]
+    assert AGY_ONLY <= set(cat["models"])
+    assert AGY_ONLY <= set(R.AGY_MODEL_LEVELS)                          # the CLI's own ids, as `agy models` lists them
+    assert not AGY_ONLY & set(R.AGY_IDS)                                # sent to the CLI as they are
+    assert A._CHANNEL_ALSO_SERVES[("google", "agy")] == AGY_ONLY
+    # the family stays together, Argon still leading it
+    gem = [m for m in cat["models"] if m.startswith("gemini")]
+    assert gem[:3] == ["gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"]
+    # the shared table is untouched: no other base and no other connection is offered either
+    assert not AGY_ONLY & set(A._VENDOR_MODELS["google"])
+    for backend, c in A._MODEL_CATALOG.items():
+        if backend != "agy":
+            assert not AGY_ONLY & set(c["models"]), backend
+    assert [k for k in A._CHANNEL_ALSO_SERVES if AGY_ONLY & A._CHANNEL_ALSO_SERVES[k]] == [("google", "agy")]
+
+
+def _google(monkeypatch, *, chain=(), integration=True):
+    """A Google AI Studio key as an integration, or (chain=["google"], integration=False) as a chain connection."""
+    integ = {"name": "Google AI Studio", "provider": "google", "config": {"api_key": "AIza-t"}}
+
+    async def docs():
+        return [integ] if integration else []
+
+    async def mm():
+        return {m: integ["name"] for m in A._integration_models(integ)} if integration else {}
+
+    async def resolve(_org, _backend, _explicit):
+        return list(chain)
+
+    async def get_conn(_org, _name):
+        return {"provider": "google", "api_key": "AIza-t"}, None
+
+    monkeypatch.setattr(A, "_integrations_doc", docs)
+    monkeypatch.setattr(A, "_effective_model_map", mm)
+    monkeypatch.setattr(A, "_resolve_chain", resolve)
+    monkeypatch.setattr(A, "_get_connection", get_conn)
+
+
+def test_a_google_integration_serves_the_two_on_this_base_and_on_no_other(monkeypatch):
+    _google(monkeypatch)
+    got = asyncio.run(A._servable_models("org", "agy"))
+    assert AGY_ONLY <= got and {"gemini-4-argon", "gemini-3.8-flash"} <= got
+    assert not AGY_ONLY & asyncio.run(A._servable_models("org", "gemini"))
+    for m in sorted(AGY_ONLY):
+        conn = asyncio.run(A._mapped_integration_conn("agy", m))
+        assert conn and conn["name"] == "integration:Google AI Studio" and conn["provider"] == "google", m
+        assert A._map_model(conn, m) == m                               # Google's id is the CLI's
+        assert asyncio.run(A._mapped_integration_conn("gemini", m)) is None
+    # a model nothing names is still refused
+    assert asyncio.run(A._mapped_integration_conn("agy", "gemini-9-nope")) is None
+
+
+def test_a_google_chain_connection_serves_the_two_on_this_base_and_on_no_other(monkeypatch):
+    _google(monkeypatch, chain=["google"], integration=False)
+    got = asyncio.run(A._servable_models("org", "agy"))
+    assert AGY_ONLY <= got
+    assert not AGY_ONLY & asyncio.run(A._servable_models("org", "gemini"))
+    conn = {"provider": "google"}
+    assert A._conn_serves(conn, "gemini-4-hydrogen", "agy") and A._conn_serves(conn, "gemini-4-carbon", "agy")
+    assert not A._conn_serves(conn, "gemini-4-hydrogen", "gemini") and not A._conn_serves(conn, "gemini-4-carbon")
+    assert not A._conn_serves({"provider": "openrouter"}, "gemini-4-hydrogen", "agy")
+
+
+def test_the_bases_document_offers_both_with_the_levels_the_cli_lists(monkeypatch):
+    monkeypatch.delenv("HR_BACKENDS_INSTALLED", raising=False)
+    agy = _bases(monkeypatch)["agy"]
+    models = {m["id"]: m for m in agy["models"]}
+    assert models["gemini-4-hydrogen"]["available"] and models["gemini-4-carbon"]["available"]
+    assert models["gemini-4-hydrogen"]["reasoning"] == ["low", "medium", "high", "xhigh"]
+    assert models["gemini-4-carbon"]["reasoning"] == ["low", "medium", "high"]
+    # and a task may name them
+    assert A._model_authorized("gemini-4-hydrogen", "agy") and A._model_authorized("gemini-4-carbon", "agy")
+    assert not A._model_authorized("gemini-4-hydrogen", "gemini")
 
 
 def test_each_models_levels_are_the_ones_the_cli_takes():
@@ -110,3 +187,4 @@ def test_agy_is_opt_in_and_reads_not_installed_where_the_instance_does_not_hold_
     entry = (pathlib.Path(__file__).resolve().parents[2] / "docker" / "entrypoint.sh").read_text()
     default = re.search(r'export HR_BACKENDS="\$\{HR_BACKENDS:-([^}]*)\}"', entry).group(1).split(",")
     assert "agy" not in default
+
