@@ -454,6 +454,44 @@ async def resp_claim_input(org: str, rid: str, request_id: str, state: str, ttl_
     return False
 
 
+async def resp_claim_resume(org: str, rid: str, ttl_s: int, *, release: bool = False) -> bool:
+    """Claim the resume of an interrupted response (UHP Tasks §3.3, #673), once across replicas: a
+    compare-and-swap on its control record, so two resumes of the same response start one turn and
+    one `409 resume_not_pending`. True when this call made the claim, False when it was already made.
+    With `release`, undo it (the gateway's claim whose turn never ran), True when there was one to
+    undo. A record never written is created in the claimed state: the response record said the
+    turn was interrupted, and the first claim to write here wins."""
+    cont = await _container()
+    cex = _exceptions()
+    doc_id = f"resp::{org}::{rid}"
+    for _ in range(5):
+        try:
+            cur = await cont.read_item(doc_id, partition_key=_pk(org))
+        except cex.CosmosResourceNotFoundError:
+            if release:
+                return False
+            try:
+                await cont.create_item({"id": doc_id, "pk": _pk(org), "kind": "resp", "status": "failed",
+                                        "sid": "", "runner_turn_id": "", "ts": time.time(), "ttl": int(ttl_s),
+                                        "resume": "claimed"})
+                return True
+            except cex.CosmosResourceExistsError:
+                continue
+        held = cur.get("resume") == "claimed"
+        if release != held:
+            return False                     # claiming a claimed one, or releasing an unclaimed one
+        if release:
+            cur.pop("resume", None)
+        else:
+            cur.update(resume="claimed", ts=time.time(), ttl=max(int(cur.get("ttl") or 0), int(ttl_s)))
+        try:
+            await cont.replace_item(doc_id, cur, etag=cur["_etag"], match_condition=_IF_MATCH)
+            return True
+        except cex.CosmosAccessConditionFailedError:
+            continue                         # another claim raced in: read it and decide again
+    return False
+
+
 async def resp_mark_terminal(org: str, rid: str, status: str, ttl_s: int) -> dict:
     """One-way transition to a terminal status. Returns the record (with sid +
     runner_turn_id) so the caller can propagate cancellation to the runner.

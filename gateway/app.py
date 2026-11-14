@@ -8267,6 +8267,38 @@ def _resume_prompt(rec: dict, note: str | None) -> str:
     return f'{text}\n\nThe person says: "{note}"' if note else text
 
 
+_RESUME_CLAIMED: dict[str, float] = {}      # response id -> when this process claimed its resume
+_RESUME_CLAIMED_MAX = 4096
+
+
+async def _resume_claim(org: str, prev_id: str) -> bool:
+    """Claim the resume of `prev_id`, once: the first caller gets True and any other False (→ 409
+    resume_not_pending). Within this process the check and the set are one step with no await between
+    them, so two resumes that arrive together cannot both pass; across replicas the control store's
+    compare-and-swap decides it (resp_claim_resume), and a store that cannot decide refuses the resume
+    (503) rather than run the turn twice."""
+    if prev_id in _RESUME_CLAIMED:
+        return False
+    _RESUME_CLAIMED[prev_id] = time.time()
+    while len(_RESUME_CLAIMED) > _RESUME_CLAIMED_MAX:
+        _RESUME_CLAIMED.pop(next(iter(_RESUME_CLAIMED)), None)
+    if control_store.enabled():
+        try:
+            return await control_store.resp_claim_resume(org, prev_id, _INPUT_REQUEST_TTL_S)
+        except Exception as e:  # noqa: BLE001
+            _RESUME_CLAIMED.pop(prev_id, None)
+            raise HTTPException(503, "resume store unavailable; retry") from e
+    return True
+
+
+async def _resume_release(org: str, prev_id: str) -> None:
+    """Give the claim back when the turn it was for never ran, so the client's retry can resume."""
+    _RESUME_CLAIMED.pop(prev_id, None)
+    if control_store.enabled():
+        with contextlib.suppress(Exception):
+            await control_store.resp_claim_resume(org, prev_id, _INPUT_REQUEST_TTL_S, release=True)
+
+
 # ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
 # A task may start from a conversation held elsewhere: the console continues a recorded demo task as
 # the person's own by sending the recording's request and answer as earlier messages, then the new
@@ -12536,6 +12568,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     extra_secret: list[str] = []
     voided: list[str] = []
     claimed: tuple[str, dict] | None = None
+    resume_claim: str | None = None         # the response whose resume this turn claimed (§3.3)
     # A later task passes the question over however it names the session (§3.2), so what a task
     # chains on is the session's newest response when it names no response of its own.
     _newest = ""
@@ -12612,6 +12645,21 @@ async def create_response(body: CreateResponseBody, request: Request):
             if str(existing.get("req_hash") or "") not in ("", idem_rhash or ""):
                 raise HTTPException(409, "Idempotency-Key reused with a different request payload")
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
+    if resume_item is not None:
+        # The resume is claimed here, once: after the idempotency reservation, so a retry that carries
+        # the same key replays the first result instead of meeting its own claim, and before anything
+        # starts, so two resumes that arrive together cannot both run (Tasks §3.3, single-use).
+        try:
+            if not await _resume_claim(org, str(body.previous_response_id)):
+                raise uhp_error(409, "resume_not_pending", "That response was already resumed.",
+                                "previous_response_id",
+                                {"previous_response_id": body.previous_response_id, "state": "resumed"})
+        except BaseException:
+            if idem_key and idem_sha_v is not None:
+                with contextlib.suppress(Exception):
+                    await control_store.idem_release(org, idem_sha_v, resp_id)
+            raise
+        resume_claim = str(body.previous_response_id)
     if branching:
         try:
             # The same capacity gates as a turn, without publishing a heartbeat-only session.
@@ -12729,6 +12777,8 @@ async def create_response(body: CreateResponseBody, request: Request):
             # is not refused as already answered.
             with contextlib.suppress(Exception):
                 await _input_request_settle(org, claimed[0], claimed[1], "pending")
+        if resume_claim is not None:
+            await _resume_release(org, resume_claim)      # nothing ran: the retry may resume it
         raise
     # Past this point we are committed to executing; the turn will persist a terminal record even
     # on failure, so the reservation must stand (releasing would permit a double run).
