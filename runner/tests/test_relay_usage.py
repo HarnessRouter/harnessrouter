@@ -6,6 +6,7 @@ import pathlib
 import sys
 import threading
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -83,6 +84,113 @@ def test_a_turn_is_many_calls_and_the_route_sums_them():
         assert rs._relay_usage({"OPENAI_API_KEY": tok}) == {}
     finally:
         rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def _google_call(prompt, answer, thoughts=None, tool_use=None, cached=0):
+    meta = {"promptTokenCount": prompt, "candidatesTokenCount": answer, "cachedContentTokenCount": cached}
+    if thoughts is not None:
+        meta["thoughtsTokenCount"] = thoughts
+    if tool_use is not None:
+        meta["toolUsePromptTokenCount"] = tool_use
+    meta["totalTokenCount"] = prompt + answer + (thoughts or 0) + (tool_use or 0)
+    return {"usageMetadata": meta}
+
+
+def _on_route(flags, docs):
+    """What the relay folds onto a route as each call's answer passes (usage and thinking count)."""
+    for doc in docs:
+        rs._usage_add(flags, rs._usage_in_doc(doc))
+        rs._thinking_add(flags, rs._thinking_tokens_in(doc))
+    tok = "hr-relay-" + uuid.uuid4().hex
+    rs._HERMES_RELAY["routes"][tok] = ("https://generativelanguage.googleapis.com", "real", flags)
+    return tok
+
+
+def _gemini_result(stats):
+    return rs._gemini_to_claude({"type": "result", "status": "success", "stats": stats}, {"final": "ok"})[0]
+
+
+def test_a_gemini_turn_is_priced_off_googles_own_count_and_the_route_sums_its_calls():
+    """#690: on a gemini-cli turn (a google_native route) the relay's usage replaces the CLI's stats
+    whenever the relay saw the turn, summed over the turn's calls (three here, the last one without
+    thinking). Without grounding the stats' fallback agrees; the grounded turn below is where they part."""
+    calls = [_google_call(4000, 20, thoughts=180, cached=3000), _google_call(4300, 7, thoughts=60, cached=4000),
+             _google_call(4400, 2)]
+    tok = _on_route({"google_native": True}, calls)
+    try:
+        # the CLI's stats for the same turn: output_tokens is the answers alone
+        ev = _gemini_result({"total_tokens": 12969, "input_tokens": 12700, "output_tokens": 29, "cached": 7000})
+        rs._fill_relay_usage(ev, {"GEMINI_API_KEY": tok})
+        assert ev["usage"] == {"input_tokens": 5700, "output_tokens": 269, "cache_read_tokens": 7000}
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_a_grounded_gemini_turn_prices_exactly_on_the_relay_path():
+    """A turn grounded with Google Search: the tool-use prompt is prompt-side, so it is not output.
+    The stats fold it into total_tokens (their fallback's known limit); the relay's count does not."""
+    call = _google_call(900, 40, thoughts=120, tool_use=2500)
+    assert rs._usage_fields(call["usageMetadata"]) == {"input_tokens": 900, "output_tokens": 160, "cache_read_tokens": 0}
+    tok = _on_route({"google_native": True}, [call])
+    try:
+        ev = _gemini_result({"total_tokens": 3560, "input_tokens": 900, "output_tokens": 40})
+        assert ev["usage"]["output_tokens"] == 2660            # the stats alone count the tool-use prompt
+        rs._fill_relay_usage(ev, {"GEMINI_API_KEY": tok})
+        assert ev["usage"] == {"input_tokens": 900, "output_tokens": 160, "cache_read_tokens": 0}
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_a_gemini_turn_with_thinking_off_is_unchanged():
+    call = _google_call(500, 9)
+    assert rs._usage_fields(call["usageMetadata"]) == {"input_tokens": 500, "output_tokens": 9, "cache_read_tokens": 0}
+    tok = _on_route({"google_native": True}, [call])
+    try:
+        ev = _gemini_result({"total_tokens": 509, "input_tokens": 500, "output_tokens": 9})
+        assert (ev["usage"]["input_tokens"], ev["usage"]["output_tokens"]) == (500, 9)
+        rs._fill_relay_usage(ev, {"GEMINI_API_KEY": tok})
+        assert (ev["usage"]["input_tokens"], ev["usage"]["output_tokens"]) == (500, 9)
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_a_route_that_is_not_googles_still_keeps_a_clis_own_split_count():
+    """Only the google_native route changes: elsewhere a CLI's own count with a cache split stands."""
+    tok = _on_route({}, [{"usage": {"prompt_tokens": 50, "completion_tokens": 9,
+                                    "prompt_tokens_details": {"cached_tokens": 40}}}])
+    try:
+        ev = {"type": "result", "usage": {"input_tokens": 10, "output_tokens": 8, "cache_read_tokens": 40}}
+        rs._fill_relay_usage(ev, {"OPENAI_API_KEY": tok})
+        assert ev["usage"]["output_tokens"] == 8
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_the_thinking_count_never_exceeds_the_output_in_any_shape():
+    """One invariant across the shapes the relay reads: the provider's thinking count is part of the
+    output that prices the turn, so reasoning_tokens <= output_tokens on the result the gateway reads
+    (the gateway copies both into the Responses usage as given). Google's was the exception (#690)."""
+    shapes = {
+        "chat": ({"usage": {"prompt_tokens": 30, "completion_tokens": 50,
+                            "completion_tokens_details": {"reasoning_tokens": 41}}}, "OPENAI_API_KEY", {}),
+        "responses": ({"response": {"usage": {"input_tokens": 30, "input_tokens_details": {"cached_tokens": 0},
+                                              "output_tokens": 50, "output_tokens_details": {"reasoning_tokens": 41}}}},
+                      "OPENAI_API_KEY", {}),
+        "google": (_google_call(30, 9, thoughts=41), "GEMINI_API_KEY", {"google_native": True}),
+        "google grounded": (_google_call(30, 9, thoughts=41, tool_use=900), "GEMINI_API_KEY", {"google_native": True}),
+    }
+    for name, (doc, var, flags) in shapes.items():
+        assert rs._thinking_tokens_in(doc) <= rs._usage_in_doc(doc)["output_tokens"], name
+        tok = _on_route(dict(flags), [doc, doc])
+        try:
+            route = rs._HERMES_RELAY["routes"][tok][2]
+            ev = {"type": "result", "usage": {}}
+            rs._fill_relay_usage(ev, {var: tok})
+            rs._stamp_thinking(ev, {"reasoning": {"routes": [route]}})
+            assert ev["usage"]["reasoning_tokens"] == 82, name
+            assert ev["usage"]["reasoning_tokens"] <= ev["usage"]["output_tokens"], name
+        finally:
+            rs._HERMES_RELAY["routes"].pop(tok, None)
 
 
 def _upstream(handler):

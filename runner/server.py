@@ -6561,8 +6561,15 @@ def _usage_fields(u) -> dict:
         return out
     if "promptTokenCount" in u or "candidatesTokenCount" in u:
         cached = n(u.get("cachedContentTokenCount"))
+        # candidatesTokenCount is the answer alone. Google bills the thinking as output too ("Output
+        # price (including thinking tokens)"), so thoughtsTokenCount is added, the way completion_tokens
+        # already carries reasoning_tokens on the OpenAI shapes (#690). toolUsePromptTokenCount (what a
+        # grounded turn's search fed back to the model) is prompt-side and stays out of the output; it is
+        # not added to the input either, since retrieved Search context "is not charged as input tokens"
+        # and the searches are billed per query, not per token (Gemini API pricing, 2026-11-13).
         return {"input_tokens": max(n(u.get("promptTokenCount")) - cached, 0),
-                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached}
+                "output_tokens": n(u.get("candidatesTokenCount")) + n(u.get("thoughtsTokenCount")),
+                "cache_read_tokens": cached}
     return {}
 
 
@@ -6848,13 +6855,20 @@ def _fill_relay_usage(ev: dict, env: dict) -> None:
     has no cache split while the provider's does: a CLI that sums the provider's input and cache
     reads into one number bills every cached token at the full input rate (goose and OpenHands
     on Claude, read at list price in a customer's cost sheet, 2026-09-30). The provider's own
-    statement is the one that prices."""
+    statement is the one that prices.
+
+    On a gemini-cli turn (its route is Google's native API, `google_native`) the relay's count
+    replaces the CLI's whenever the relay saw the turn. Google's usageMetadata states the answer, the
+    thinking and a grounded turn's tool-use prompt apart; the CLI's stats count only the answer as
+    output and fold the rest into one total (#690), so they are the fallback (_gemini_usage) for a
+    turn the relay did not see."""
     relay = _relay_usage(env)
     if not relay:
         return
     own = ev.get("usage")
     cached = ("cache_read_tokens", "cache_write_tokens")
-    if not own or (any(relay.get(k) for k in cached) and not any((own or {}).get(k) for k in cached)):
+    if (not own or _turn_relay_flags(env).get("google_native")
+            or (any(relay.get(k) for k in cached) and not any((own or {}).get(k) for k in cached))):
         ev["usage"] = relay
 
 
@@ -11400,8 +11414,21 @@ def _gemini_usage(stats: dict) -> dict:
     prompt INCLUDING the cached part and `cached` is that part (its own `input` is the fresh count
     and agrees), so the fresh input is the difference, the same subtraction the codex path makes;
     without it the cached prefix (8k tokens of system prompt on a one-word turn) would be billed
-    at the full input rate."""
+    at the full input rate.
+
+    The stats' `output_tokens` is candidatesTokenCount alone: the thinking Google bills as output
+    appears only in `total_tokens` (checked in @google/gemini-cli-core 0.58.0 and 0.67.0), so the
+    output is max(output_tokens, total_tokens - input_tokens), both read gross, before the cached
+    part is taken off the input (#690). The max keeps it from counting the thinking twice if a later
+    gemini-cli puts it in output_tokens. This is the fallback for a turn the relay did not see
+    (_fill_relay_usage prices from Google's own usageMetadata when it did). Its known limit: on a
+    turn grounded with Google Search, total_tokens also holds toolUsePromptTokenCount, which the
+    stats do not report apart, so that part is counted as output here."""
     u = _norm_token_usage(stats)
+    if (isinstance(stats, dict) and isinstance(stats.get("total_tokens"), (int, float))
+            and isinstance(stats.get("input_tokens"), (int, float))):
+        generated = int(stats["total_tokens"]) - int(stats["input_tokens"])
+        u["output_tokens"] = max(int(u.get("output_tokens") or 0), generated)
     if isinstance(stats, dict) and isinstance(stats.get("cached"), (int, float)) and stats["cached"] > 0:
         cached = int(stats["cached"])
         u["cache_read_tokens"] = cached
