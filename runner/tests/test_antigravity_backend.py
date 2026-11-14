@@ -780,7 +780,7 @@ def test_only_public_https_streamable_servers_go_and_the_rest_are_reported(tmp_p
     events, _ = normalise(lines)
     sys_ev = [e for e in events if e.get("subtype") == "mcp_unavailable"][0]
     assert {s["name"] for s in sys_ev["servers"]} == {"vaulted", "local", "private", "sse", "proc"}
-    assert all(s.get("reason") for s in sys_ev["servers"])
+    assert all(s.get("reason") and s.get("withheld") is True for s in sys_ev["servers"])
     # the values handed to Google for its servers are in no line this driver wrote
     out = json.dumps(lines)
     assert "tok-from-request-1234" not in out and "acme-request-value" not in out

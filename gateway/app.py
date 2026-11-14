@@ -7779,7 +7779,16 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
         # A CLI that runs the turn without an MCP server it could not reach, and says nothing (Kimi
         # Code CLI does exactly that), leaves a person wondering why the agent never used their
         # tool. The runner reads the CLI's own record of it; this is the sentence that tells them.
-        names = [str(s.get("name") or "") for s in ev.get("servers") or [] if isinstance(s, dict) and s.get("name")]
+        rows = [s for s in ev.get("servers") or [] if isinstance(s, dict) and s.get("name")]
+        # A base that leaves a server out on purpose marks it `withheld`, with why (the Antigravity
+        # agent: Google's sandbox dials every tool itself, so a tool this instance serves, a stored
+        # key, a process or a private address is never sent). "Could not be reached" would send the
+        # person looking for an outage, so the note says what happened and why.
+        for s in [s for s in rows if s.get("withheld")][:5]:
+            why = str(s.get("reason") or "").strip()[:200]
+            out.append(("text", f'\n\n_Note: the MCP server "{str(s["name"])[:80]}" was not given to the agent'
+                                f'{f" ({why})" if why else ""}, so this reply ran without it._\n'))
+        names = [str(s.get("name") or "") for s in rows if not s.get("withheld")]
         if names:
             quoted = ", ".join(f'"{n}"' for n in names)
             word = "server" if len(names) == 1 else "servers"

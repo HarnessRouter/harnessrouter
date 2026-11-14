@@ -1272,7 +1272,8 @@ class Turn:
         _emit("__hr_init", {"session_id": eid})
         servers, dropped = mcp_tools(self.job.get("mcp_servers") or [], self.job.get("mcp_withheld") or [])
         if dropped:
-            _emit("mcp_unavailable", {"servers": dropped})
+            # left out on purpose, each with why: the reply's note says so, not "could not be reached"
+            _emit("mcp_unavailable", {"servers": [{**d, "withheld": True} for d in dropped]})
         tools = tools_config(list(self.disabled), servers)        # refused here, before anything is made
         # the workspace's size is checked before anything is made at Google
         manifest = local_manifest(self.cwd, self.excludes, self.caps["upload"], self.links)

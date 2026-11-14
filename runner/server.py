@@ -12452,7 +12452,8 @@ def _antigravity_to_claude(obj: dict, state: dict) -> list[dict]:
             {"type": "tool_result", "tool_use_id": str(p.get("tool_use_id") or ""),
              "is_error": bool(p.get("is_error")), "content": str(p.get("text") or "")}]}}]
     if m == "mcp_unavailable":
-        servers = [{"name": str(s.get("name")), **({"reason": str(s["reason"])} if s.get("reason") else {})}
+        servers = [{"name": str(s.get("name")), **({"reason": str(s["reason"])} if s.get("reason") else {}),
+                    **({"withheld": True} if s.get("withheld") is True else {})}
                    for s in (p.get("servers") or []) if isinstance(s, dict) and s.get("name")]
         return [{"type": "system", "subtype": "mcp_unavailable", "servers": servers}] if servers else []
     if m in ("notice", "error"):
