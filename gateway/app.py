@@ -10239,7 +10239,11 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
         # A model the vendor's table lists is curated somewhere and shown there; an id the operator
         # added to a vendor integration (rows_v 2) is as much the integration's own as a custom
         # endpoint's, and absent from every curated list, so it is listed here.
-        if provider != "custom" and canonical in _vendor_models(provider, backend):
+        # The vendor's whole table, not this base's own: a base with a table of its own at this vendor
+        # (_BACKEND_VENDOR_MODELS) has those models in `curated` already, and the vendor's chat models
+        # are curated elsewhere, not ids an operator added; asking with the backend read every Gemini
+        # chat model as operator-added and offered it on the Antigravity agent (measured 2026-11-14).
+        if provider != "custom" and canonical in _vendor_models(provider):
             continue
         if _integration_serves_backend(integ, backend):
             models.append({"id": canonical, "label": canonical, "backend": backend,
