@@ -1202,7 +1202,12 @@ _NATIVE_ONLY_BACKENDS = {"gemini",
                          # qoder: the driver speaks Qoder's own control API (sessions, events, files),
                          # which the broker's model doors do not carry; the runner's loopback relay is
                          # its credential boundary, and that needs the connection's key on the box
-                         "qoder"}
+                         "qoder",
+                         # antigravity: the driver speaks Google's Interactions and Environments APIs
+                         # (/v1beta/interactions, /v1beta/environments), which the broker does not carry
+                         # either (its paths are the model doors, and a Google connection's base there is
+                         # the OpenAI-compatible surface); qoder's boundary, the runner's relay route
+                         "antigravity"}
 
 
 # ── A harness that drives another harness ─────────────────────────────────────────────────────
@@ -1760,6 +1765,10 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # reason it is absent from _CUSTOM_FORMAT_BACKENDS: a custom integration is OpenAI- or
     # Anthropic-shaped.
     ("google", "gemini"): "google",
+    # antigravity (Google's managed Antigravity agent) runs on the same Google AI Studio key, through
+    # Google's Interactions API: the runner gets the key in owner trust only (_NATIVE_ONLY_BACKENDS)
+    # and keeps it in its relay. No other connection serves that API.
+    ("google", "antigravity"): "google",
     # TokenRouter serves Google's native API under the vendor prefix (models/google/<id>:, key in
     # x-goog-api-key; measured 2026-09-07) for the seven Gemini ids its table carries, so it drives
     # the gemini backend too; the runner still builds gemini as provider google and routes the CLI
@@ -1910,8 +1919,9 @@ async def _effective_image_model_map() -> dict[str, str]:
     return mm
 
 
-def _integration_models(integ: dict) -> dict[str, str]:
-    """Canonical → provider-native id for one integration.
+def _integration_models(integ: dict, backend: str = "") -> dict[str, str]:
+    """Canonical → provider-native id for one integration (on `backend`, when that base has a table
+    of its own at the integration's vendor: _BACKEND_VENDOR_MODELS).
 
     The vendor table in source is the base; anything stored on the integration overlays it. Only
     genuine overrides are stored (see admin_integrations_put), so this is "what the source says
@@ -1949,7 +1959,7 @@ def _integration_models(integ: dict) -> dict[str, str]:
             return rows
         model_id = str((integ.get("config") or {}).get("model_id") or "").strip()
         return {model_id: model_id} if model_id else {}
-    models = dict(_vendor_models(str(integ.get("provider") or "").lower()))
+    models = dict(_vendor_models(str(integ.get("provider") or "").lower(), backend))
     additive = integ.get("rows_v") == 2
     for m in (integ.get("models") or []):
         canonical = str(m.get("canonical") or "").strip()
@@ -1957,6 +1967,19 @@ def _integration_models(integ: dict) -> dict[str, str]:
         if canonical and pid and (canonical in models or additive):
             models[canonical] = pid
     return models
+
+
+def _integration_models_any(integ: dict) -> dict[str, str]:
+    """Every model an integration serves on some base: its vendor's table, and the table of each base
+    that takes a table of its own at that vendor (_BACKEND_VENDOR_MODELS: the Antigravity agent's
+    models on a Google connection). Which base may run one is still each base's catalog and wiring."""
+    out = dict(_integration_models(integ))
+    vendor = str(integ.get("provider") or "").lower()
+    for (v, backend) in _BACKEND_VENDOR_MODELS:
+        if v == vendor:
+            for canonical, pid in _integration_models(integ, backend).items():
+                out.setdefault(canonical, pid)
+    return out
 
 
 async def _effective_model_map() -> dict[str, str]:
@@ -1975,7 +1998,7 @@ async def _effective_model_map() -> dict[str, str]:
     dead route left behind by an edit, and following it would fail at the point of no return.
     """
     integrations = await _integrations_doc()
-    servable = {str(i.get("name") or ""): _integration_models(i) for i in integrations}
+    servable = {str(i.get("name") or ""): _integration_models_any(i) for i in integrations}
     stored = await _model_map_doc()
     # Explicit empty value = "off". Auto-claiming is what makes a new model light up without a
     # re-save; it must not also override an operator who deliberately removed a row.
@@ -2063,7 +2086,7 @@ def _integration_driving(integrations: list[dict], backend: str, canonical: str,
     for integ in sorted(integrations, key=lambda i: str(i.get("name") or "")):
         if integ is first or not drives(integ):
             continue
-        models = _integration_models(integ)
+        models = _integration_models(integ, backend)
         if canon in models or canon.lower() in models:
             return integ
     return None
@@ -2087,8 +2110,12 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     provider = _INTEGRATION_WIRING.get(((integ.get("provider") or "").lower(), backend))
     if not provider:
         return None
-    models = _integration_models(integ)
+    models = _integration_models(integ, backend)
     pid = models.get(canon) or models.get(canon.lower()) or ""
+    if not pid and canon in _integration_models_any(integ):
+        # a model this integration serves only on another base (the Antigravity agent's own models on a
+        # Google connection): not this base's to run, and never a fall-through to the connection's default
+        return None
     conn = {"name": f"integration:{iname}", "backend": backend, "provider": provider,
             # the vendor beside the runner's name for it, for the same reason as in _chain_wired:
             # this connection's model id table is the VENDOR's, and an integration whose model
@@ -4285,10 +4312,40 @@ def _sub_headers(value: str, hdr_vals: dict[str, str]) -> str:
     return _HDR_REF.sub(lambda m: hdr_vals.get(m.group(1).lower(), ""), value)
 
 
+# Bases whose agent runs at a third party's service, which dials each MCP server from there: what is
+# handed to the runner for them reaches that service. The binding rule for stored secrets (a token
+# goes only to the server and workspace it was stored for) makes a vendor's sandbox a destination no
+# stored token was stored for, so for these bases _harness_plugins sends a server only when nothing
+# it carries is stored here: its address public https, its values each request's own ($headers.<name>,
+# already held to _header_denied and _header_value_ours by create_response) or none.
+_MCP_TO_THIRD_PARTY = frozenset({"antigravity"})
+_WITHHELD_STORED = ("its access key is stored on this instance, and a stored key goes only to the server it "
+                    "was saved for, never to the agent's service")
+_WITHHELD_HOSTED = "a tool this instance serves itself: its access stays on this instance"
+_WITHHELD_STDIO = "a tool that runs as a process on this instance, which the agent's service cannot start"
+_WITHHELD_ADDRESS = "the agent's service reaches tools at a public https address only"
+
+
+def _only_per_request(values) -> bool:
+    """Whether every non-empty value is a request's own: each one names a $headers.<name> reference,
+    and none is (or names) a stored secret. A literal is a stored value too (#687 seals one written on
+    a harness), so it does not pass."""
+    for raw in values:
+        v = str(raw or "")
+        if not v:
+            continue
+        if v.startswith("vault:") or "vault:" in v or "$headers." not in v:
+            return False
+    return True
+
+
 async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] | None = None,
-                           hv: dict | None = None, sid: str = "") -> tuple[list[dict], list[dict], list[str], list[str]]:
+                           hv: dict | None = None, sid: str = "",
+                           withheld: list[dict] | None = None) -> tuple[list[dict], list[dict], list[str], list[str]]:
     """Resolve a harness's ENABLED MCP servers + skills for a turn. MCP auth refs are resolved
     from the vault here so the runner never sees vault keys, only the live token (or none).
+    `withheld`, for a base whose agent runs at a third party (_MCP_TO_THIRD_PARTY): every server that
+    may not go there is left out, and named in it with the reason, before anything is resolved.
     `hv` (HR-INF-010): the already-read harness vertex — the SOLE caller (_resp_execute) always
     threads it, so we DON'T re-read. Using the same snapshot as agent_doc means both degrade
     together if the read failed (hv is None → empty plugins), never inconsistently (review #5).
@@ -4339,6 +4396,9 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             # this harness, this session and the record this entry's auth names, and it expires.
             if _hosted_server_name(s) == _MEMORIES_SERVER and not _memories_go_with(v, org):
                 continue            # not the harness's own organization: never the owner's memory (_memories_go_with)
+            if withheld is not None:
+                withheld.append({"name": str(s.get("name") or s.get("id") or "mcp"), "reason": _WITHHELD_HOSTED})
+                continue
             key = _vault_key(s.get("auth"))
             if not key.startswith(_HOSTED_SECRET_PREFIX):
                 print(f"[mcp] '{s.get('name')}' on {harness_id} points here but names no record "
@@ -4360,6 +4420,15 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             continue
         entry = {"name": s.get("name") or s.get("id") or "mcp", "url": _url,
                  "transport": s.get("transport") or "http"}
+        if withheld is not None:
+            stored = [s.get("auth"), *((s.get("headers") or {}).values() if isinstance(s.get("headers"), dict) else ())]
+            why = ("" if _only_per_request(stored) else _WITHHELD_STORED) or (
+                "" if urllib.parse.urlsplit(_url).scheme == "https" else _WITHHELD_ADDRESS)
+            if why:
+                print(f"[mcp] '{entry['name']}' on {harness_id} not sent to the agent's service: "
+                      f"{'stored key' if why == _WITHHELD_STORED else 'not https'}", flush=True)
+                withheld.append({"name": str(entry["name"]), "reason": why})
+                continue
         # One pass, the STORED value first: a stored reference resolves for the address this turn
         # really connects to (the url after substitution, the same string handed to the runner) and
         # for this harness's workspace. A $headers value ("$headers.X-App-JWT") is the caller's
@@ -4462,6 +4531,9 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
                 suppressed = [n for n in suppressed if n != sk["name"]]
                 skills_out.append({"name": sk["name"], "files": sfiles, "plugin": pe["name"]})
         for s in pe["mcpServers"]:
+            if s.get("transport") == "stdio" and withheld is not None:
+                withheld.append({"name": str(s["name"]), "reason": _WITHHELD_STDIO})
+                continue
             if s.get("transport") == "stdio":
                 mcp_out.append({"name": s["name"], "transport": "stdio", "command": s["command"],
                                 "args": list(s.get("args") or []), "env": dict(s.get("env") or {}),
@@ -4474,6 +4546,12 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             entry = {"name": s["name"], "url": s["url"], "transport": s.get("transport") or "http"}
             if isinstance(s.get("headers"), dict):
                 entry["headers"] = {str(k): str(vv) for k, vv in s["headers"].items()}
+            if withheld is not None and (entry.get("headers")
+                                         or urllib.parse.urlsplit(str(entry["url"])).scheme != "https"):
+                # a package's headers are kept with the package here, as written: stored values
+                withheld.append({"name": str(s["name"]),
+                                 "reason": _WITHHELD_STORED if entry.get("headers") else _WITHHELD_ADDRESS})
+                continue
             mcp_out.append(entry)
 
     # Built-ins the harness never mentions: on when the image says so. Implicit, so the set follows
@@ -6581,35 +6659,40 @@ async def _session_index() -> dict:
     return idx
 
 
+# A remote backend's vendor: the provider of the connection that holds a session's objects there.
+_REMOTE_PROVIDERS = {"qoder": "qoder", "antigravity": "google"}
+
+
 async def _remote_delete_body(sid: str, v: dict | None) -> dict | None:
     """What the runner's DELETE /workspace needs for a session of a REMOTE backend: the connection
     whose runtime holds the session's objects, so the runner can delete them there too (the
-    conversation, the files, the Agent the turns created — runner _remote_purge). None for a local
-    backend, where the folder is all there is. The connection is the org's integration for that
-    provider, handed over the way a turn hands it (_auth_from_conn: owner trust, the key; broker
-    trust, nothing — this backend is not brokered — and the runner then says what was left)."""
+    conversation, the files, the Agent or sandbox the turns created — runner _remote_purge). None
+    for a local backend, where the folder is all there is. The connection is the org's integration
+    for that provider, handed over the way a turn hands it (_auth_from_conn: owner trust, the key;
+    broker trust, nothing — these backends are not brokered — and the runner then says what was left)."""
     backend = str((v or {}).get("backend") or "").lower()
-    if backend != "qoder":
+    provider = _REMOTE_PROVIDERS.get(backend)
+    if not provider:
         return None
     try:
         integs = await _integrations_doc()
     except Exception:  # noqa: BLE001
         integs = []
     # The connection the session's turns ran on (last_connection, "integration:<name>"): its objects
-    # live in THAT account. Another Qoder connection's key would be refused there and leave them
-    # billing, so with more than one and the session's own gone, nothing is guessed.
-    qoders = [i for i in integs if str(i.get("provider") or "").lower() == "qoder"]
+    # live in THAT account. Another connection's key would be refused there and leave them in place
+    # (billing, on Qoder), so with more than one and the session's own gone, nothing is guessed.
+    own = [i for i in integs if str(i.get("provider") or "").lower() == provider]
     last = str((v or {}).get("last_connection") or "")
     used = last.split(":", 1)[1] if last.startswith("integration:") else ""
-    integ = next((i for i in qoders if str(i.get("name") or "") == used), None) if used else None
-    if integ is None and len(qoders) == 1 and not used:
-        integ = qoders[0]
+    integ = next((i for i in own if str(i.get("name") or "") == used), None) if used else None
+    if integ is None and len(own) == 1 and not used:
+        integ = own[0]
     if not integ:
-        print(f"[delete] session {sid}: a qoder session whose connection ({last or 'unrecorded'}) is not "
-              f"configured among {len(qoders)} qoder integration(s); its remote objects cannot be deleted "
+        print(f"[delete] session {sid}: a {backend} session whose connection ({last or 'unrecorded'}) is not "
+              f"configured among {len(own)} {provider} integration(s); its remote objects cannot be deleted "
               "from here", flush=True)
         return {"backend": backend}
-    conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend, "provider": "qoder",
+    conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend, "provider": provider,
             **{k: val for k, val in (integ.get("config") or {}).items() if val not in (None, "")}}
     auth = _auth_from_conn(_with_provider_base(conn) or conn, sid)
     return {"backend": backend, "auth": auth}
@@ -6910,11 +6993,24 @@ _PROVIDER_CATALOG: dict[str, dict] = {
 _RUNNER_VENDOR = {"azure": "azure-foundry", "openai-api": "openai"}
 
 
-def _vendor_models(provider: str) -> dict[str, str]:
-    """The {canonical: vendor id} table for a provider, by either of its names. Empty when we
-    have no table for that vendor — callers must decide explicitly what that means."""
+# A base that takes a vendor's models of its own, not the vendor's chat table: Google's managed
+# Antigravity agent runs the models Google lists for the agent (agent_config.model), two of which
+# the chat table does not carry and which no other base offers. Keyed (vendor, backend); every
+# reader that knows the backend asks _vendor_models with it, and every other reader is unchanged.
+_BACKEND_VENDOR_MODELS: dict[tuple[str, str], dict[str, str]] = {
+    ("google", "antigravity"): {m: m for m in ("gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon",
+                                               "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")},
+}
+
+
+def _vendor_models(provider: str, backend: str = "") -> dict[str, str]:
+    """The {canonical: vendor id} table for a provider, by either of its names, and for `backend` when
+    that base has a table of its own at this vendor (_BACKEND_VENDOR_MODELS). Empty when we have no
+    table for that vendor — callers must decide explicitly what that means."""
     p = (provider or "").lower()
-    return _VENDOR_MODELS.get(_RUNNER_VENDOR.get(p, p), {})
+    v = _RUNNER_VENDOR.get(p, p)
+    own = _BACKEND_VENDOR_MODELS.get((v, (backend or "").lower()))
+    return own if own is not None else _VENDOR_MODELS.get(v, {})
 
 
 def _provider_model_id(provider: str, canonical: str) -> str | None:
@@ -8897,8 +8993,8 @@ _MODEL_ORDER: tuple[str, ...] = (
     # Anthropic
     "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
     "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-    # Google
-    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    # Google (Gemini 4 Hydrogen and Carbon: the Antigravity agent's, not in the chat table)
+    "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
     "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
     "gemini-3-flash-preview",
     # xAI
@@ -8972,7 +9068,7 @@ def _map_model(conn: dict, friendly: str) -> str | None:
         return default if default and default.lower() not in ("claude", "anthropic", "bedrock") else None
 
     # One lookup for every vendor we have a table for: canonical -> that vendor's own id.
-    table = _vendor_models(provider)
+    table = _vendor_models(provider, backend)
     if friendly and friendly in table:
         return table[friendly]
     if backend == "claude" or (backend in ("hermes", "pi", "dsh", "omp") and provider in ("anthropic", "bedrock")):
@@ -9503,7 +9599,7 @@ _MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
 # catalog-wide rules for a measured base (gpt-6.1-sol leads the gpt-6 family wherever it is offered,
 # and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
 # place that exception is written; a base leaves the set when its live column is in.
-_STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
+_STILL_QUALIFYING: frozenset[str] = frozenset({"roder", "antigravity"})
 
 # _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
 # on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
@@ -9537,6 +9633,11 @@ _MODEL_CATALOG["qoder"] = {"default": "ultimate",
                            # the five console scenarios. Qoder also lists cmodel (Cantus), not measured
                            # and not offered: one turn there costs about 16 credits
                            "models": list(_VENDOR_MODELS["qoder"])}
+# antigravity: the models Google's Antigravity agent takes in agent_config.model, its default first
+# (_BACKEND_VENDOR_MODELS[("google", "antigravity")], pinned equal to the runner's ANTIGRAVITY_MODELS).
+# Opt-in and still qualifying: none has run a live column on this base yet.
+_MODEL_CATALOG["antigravity"] = {"default": "gemini-4-hydrogen",
+                                 "models": list(_BACKEND_VENDOR_MODELS[("google", "antigravity")])}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
@@ -9900,7 +10001,7 @@ def _channel_refuses(provider: str, backend: str, model: str) -> bool:
     return (model or "").strip() in _CHANNEL_REFUSES.get((str(provider or "").lower(), backend), frozenset())
 
 
-def _conn_serves(conn: dict, friendly: str) -> bool:
+def _conn_serves(conn: dict, friendly: str, backend: str = "") -> bool:
     """Whether this connection's vendor actually serves the requested model.
 
     Table membership, not a name heuristic. The heuristic this replaces classified models by
@@ -9911,7 +10012,7 @@ def _conn_serves(conn: dict, friendly: str) -> bool:
     A vendor we have no table for cannot be filtered at all; that is stated here rather than
     happening by accident, and it is NOT the path the model catalog uses (see
     _provider_model_id, which is a pure lookup and refuses anything unlisted)."""
-    table = _vendor_models(conn.get("provider") or "")
+    table = _vendor_models(conn.get("provider") or "", backend or str(conn.get("backend") or ""))
     if not table:
         return True
     m = (friendly or "").strip()
@@ -10091,7 +10192,7 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         if conn and _chain_refusal(conn, backend):
             continue
         provider = str((conn or {}).get("provider") or "").lower()
-        table = _vendor_models(provider)
+        table = _vendor_models(provider, backend)
         if not table:
             return None
         servable |= set(table) - _CHANNEL_REFUSES.get((provider, backend), frozenset())
@@ -10138,7 +10239,7 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
         # A model the vendor's table lists is curated somewhere and shown there; an id the operator
         # added to a vendor integration (rows_v 2) is as much the integration's own as a custom
         # endpoint's, and absent from every curated list, so it is listed here.
-        if provider != "custom" and canonical in _vendor_models(provider):
+        if provider != "custom" and canonical in _vendor_models(provider, backend):
             continue
         if _integration_serves_backend(integ, backend):
             models.append({"id": canonical, "label": canonical, "backend": backend,
@@ -10947,7 +11048,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # instead of re-reading it twice more here. Beyond cutting reads, a same-request snapshot means
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
     try:
-        mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
+        mcp_withheld: list[dict] | None = [] if backend in _MCP_TO_THIRD_PARTY else None
+        mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(
+            harness_id, org, hdr_vals, hv=hv, sid=sid, withheld=mcp_withheld)
         turn_env, turn_secret = await _harness_env(hv, org, hdr_vals)
     except BaseException:
         _memories_turn_start_drop(_mem_start)
@@ -10957,9 +11060,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # a name the prompt gives; a secret's value is redacted from everything read back.
         turn_env = {**turn_env, **extra_env}
         turn_secret = [*turn_secret, *(extra_secret or [])]
-    if mcp_servers or skills or skills_suppressed or tools_disabled:
+    if mcp_servers or skills or skills_suppressed or tools_disabled or mcp_withheld:
         rec["plugins"] = {"mcp": [m.get("name") for m in mcp_servers], "skills": [s.get("name") for s in skills],
-                          "skills_off": skills_suppressed, "tools_off": tools_disabled}
+                          "skills_off": skills_suppressed, "tools_off": tools_disabled,
+                          **({"mcp_withheld": [w["name"] for w in mcp_withheld]} if mcp_withheld else {})}
     if environment:
         # Provenance: which layer, at which build, this turn read. The session carries the id so its
         # detail names it; the turn record carries the version, since a rebuild changes what the
@@ -11044,7 +11148,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # (validated against the integration's model list at save time) — the family heuristic
         # reads the RUNNER provider (e.g. openai-api for a TokenRouter aggregator) and would
         # wrongly reject non-gpt families, so it applies to chain connections only.
-        if pre is None and (not _conn_serves(conn, model_req)
+        if pre is None and (not _conn_serves(conn, model_req, backend)
                             or _channel_refuses(str(conn.get("provider") or ""), backend, model_req)):
             # Multi-family backend (hermes): this connection's provider can't run the requested
             # model's family — skipping is the honest move (running it would silently substitute
@@ -11095,6 +11199,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                     or None) if effort else None,
                 "auth": sandbox_auth, "resume_session_id": resume, "files": files_in,
                 "mcp_servers": mcp_servers, "skills": skills, "plugins": plugin_pkgs, "agent_doc": agent_doc,
+                # what was not sent to a third party's agent service, by name and why (_MCP_TO_THIRD_PARTY)
+                **({"mcp_withheld": mcp_withheld} if mcp_withheld is not None else {}),
                 "skills_suppressed": skills_suppressed, "tools_disabled": turn_tools_off,
                 # The project layer, read-only at /env/<slug> (runner/environments.py): id, slug, entry.
                 "environment": ({"id": environment["id"], "slug": environment["slug"],
@@ -21160,6 +21266,39 @@ _BASE_CATALOG: dict[str, dict] = {
         "environments": False,
         "remote": True,
     },
+    "antigravity": {
+        "label": "Antigravity Agent", "backend": "antigravity", "status": "ready",
+        # What an operator reads where the base is listed, before turning it on (HR_BACKENDS) and on
+        # every listing after: where the work runs, what leaves this instance and who keeps it.
+        "description": ("Google's managed Antigravity agent, run in a sandbox Google hosts and paid for with "
+                        "your Google AI Studio key. Each task's files, messages and the agent's work are sent "
+                        "to Google's service and kept there under Google's terms for the Gemini API, which "
+                        "differ between free and paid projects. Deleting a task here deletes its sandbox and "
+                        "stored conversation there. Tools this instance runs itself, and tools whose access "
+                        "key is stored here, are not sent to Google; a tool reaches the agent only at a public "
+                        "https address, with a key each request supplies or none."),
+        # Shown read-only; the agent's instructions are the harness's own, with the workspace contract
+        # the driver adds (runner/antigravity_driver.py system_instruction).
+        "system_prompt": ("You are Google's Antigravity agent, working in a Linux sandbox with code execution, "
+                          "file tools and web access. The task's files are in /workspace: save every "
+                          "deliverable there."),
+        # The built-ins a harness can switch off, in the API's own type names (pinned equal to the
+        # runner's ANTIGRAVITY_TOOLS by gateway/tests/test_antigravity_catalog.py). A tool that is off is
+        # left out of the interaction's `tools`, so Google does not offer it to the model: `hard` by UHP
+        # §4.3. The driver also watches the stream: a step of a switched-off tool ends the turn
+        # incomplete, saying so. The file tools come with the sandbox and have no switch, and with Code
+        # Execution off they can still write a file.
+        "tools": [("code_execution", "Code Execution"), ("google_search", "Google Search"),
+                  ("url_context", "URL Context")],
+        "tool_enforcement": "hard",
+        # The runtime is Google's (runner BACKENDS["antigravity"]["remote"]): skills are uploaded into
+        # the sandbox's .agents/skills/; a plugin's stdio MCP servers, servers this instance hosts and
+        # servers whose key is stored here are not sent (reported unavailable, with why); an
+        # environment layer cannot be mounted; the agent takes no thinking level.
+        "environments": False,
+        "remote": True,
+        "reasoning": False,
+    },
     "qwen": {
         "label": "Qwen Code", "backend": "qwen", "status": "ready",
         "system_prompt": ("You are Qwen Code, an autonomous coding agent. You work on a real git "
@@ -24857,9 +24996,9 @@ class SetupBuildBody(BaseModel):
     key: str = ""
 
 
-# A base Auto never picks although it takes skills: qoder runs on its own remote runtime, which mounts
-# no environment and reads none of this instance's keys.
-_SETUP_NOT_AUTO = frozenset({"qoder"})
+# A base Auto never picks although it takes skills: qoder and antigravity run on a remote runtime,
+# which mounts no environment and reads none of this instance's keys.
+_SETUP_NOT_AUTO = frozenset({"qoder", "antigravity"})
 _SETUP_MEDIA_DECL = {"name": "media", "id": "mcp.media"}
 
 
@@ -26342,11 +26481,13 @@ async def list_bases(request: Request) -> dict:
             "status": b["status"] if installed else "not_installed",
             **({} if installed else {"statusReason": _not_installed_reason(b["label"], backend)}),
             "systemPrompt": b["system_prompt"],
+            # what the base is and where the work goes, in words, where the catalog says (a remote runtime)
+            **({"description": b["description"]} if b.get("description") else {}),
             "defaultModel": cat.get("default", ""),
             # `reasoning`: the thinking levels the model has, lowest first; empty where none was
             # measured, and the console offers no level there (runner/reasoning.py has the table).
             "models": [{"id": m["id"], "available": m["available"], "default": m["default"],
-                        "reasoning": list(reasoning.levels_for(m["id"]))}
+                        "reasoning": list(reasoning.levels_for(m["id"])) if b.get("reasoning", True) else []}
                        for m in view["models"]],
             # each tool's own word: a base's `hard_tools` are withheld even where the rest are only asked
             "tools": [{"name": n, "label": lbl, "enforcement": _tool_enforcement(b, n)}

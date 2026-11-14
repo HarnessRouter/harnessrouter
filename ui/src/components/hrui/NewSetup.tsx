@@ -52,7 +52,7 @@ const SENTENCE = 'Write it as a sentence, e.g. Answer support emails in our tone
 // Auto picks among the general agent harnesses the platform can pay a first test on: not one that
 // takes no skills (a decision model), nor one that runs on the organization's own token alone
 // (setup_check.NO_FREE_BASES on the server, which makes the same choice).
-const OWN_TOKEN_ONLY = ['qoder'];
+const OWN_TOKEN_ONLY = ['qoder', 'antigravity'];
 
 /** Reads like a change to the person's own code: say once where that belongs, without blocking. */
 function codeAsk(t: string): boolean {
