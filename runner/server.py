@@ -767,7 +767,8 @@ _CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "
                         # with no switch to stop it
                         "VIBE_", "MISTRAL_",
                         # agy reads AGY_ and ANTIGRAVITY_ names as its own switches: its auto-update
-                        # (AGY_CLI_DISABLE_AUTO_UPDATE), another sign-in (AGY_ADC_AUTH) and another model
+                        # (AGY_CLI_DISABLE_AUTO_UPDATE) and crash reporting (ANTIGRAVITY_SENTRY_SAMPLE_RATE),
+                        # which the runner sets, and another sign-in (AGY_ADC_AUTH) and another model
                         # endpoint (AGY_LLM_GATEWAY_URL), each of which would move it off the relay
                         "AGY_", "ANTIGRAVITY_")
 _CALLER_ENV_RESERVED_NAMES = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
@@ -15866,6 +15867,8 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
 #   * AGY_CLI_DISABLE_AUTO_UPDATE=true stops the self-update ("Auto-update disabled via environment variable");
 #     "1" does not. The binary is root's in a directory no session can write, which the updater also
 #     declines ("is not fully accessible ... skipping update"), so the pin holds either way.
+#   * ANTIGRAVITY_SENTRY_SAMPLE_RATE=0 switches its crash reporting off, on every start of the CLI (each turn
+#     here, and the install's version check in docker/entrypoint.sh).
 AGY_PROVIDERS = {"google"}
 AGY_BIN = os.environ.get("HR_AGY_BIN", "/data/agent-tools/bin/agy")
 AGY_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agy_driver.py")
@@ -16007,7 +16010,8 @@ def _agy_relay_route(api_key: str) -> tuple[str, str]:
 def _build_agy(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                tools_disabled: list[str] | None = None) -> list[str]:
-    """One agy turn, as argv for the driver: `agy acp --disable-telemetry` with the job in its environment.
+    """One agy turn, as argv for the driver: `agy acp --disable-telemetry` with the job in its environment, and
+    its updates and crash reporting off there (AGY_CLI_DISABLE_AUTO_UPDATE, ANTIGRAVITY_SENTRY_SAMPLE_RATE).
 
     No --dangerously-skip-permissions: the ACP server then asks before a shell command, and the driver
     answers (yes, or no when the harness switched the shell off). Nobody else is asked anything."""
@@ -16033,6 +16037,7 @@ def _build_agy(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     env["GOOGLE_GEMINI_BASE_URL"] = relay_base
     env.pop("GOOGLE_API_KEY", None)                # the CLI would prefer it over GEMINI_API_KEY
     env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"    # "true", not "1": the CLI ignores "1"
+    env["ANTIGRAVITY_SENTRY_SAMPLE_RATE"] = "0"    # its crash reporting, off
     _agy_settings(home)
     _agy_mcp_config(home, mcp_servers, tools_disabled)
     off = set(_tool_names_off(tools_disabled))

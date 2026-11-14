@@ -1134,7 +1134,8 @@ it:
   version, set `HR_AGY_VERSION`, `HR_AGY_BUILD` (the build number beside the version in the release's
   download path) and `HR_AGY_SHA256` together; without a digest it installs as "unverified" and the log
   says so.
-- It sends no usage data to Google: each turn starts it with its telemetry switched off.
+- It sends no usage data to Google: each turn starts it with its telemetry switched off. Its crash reporting
+  is switched off too, on every start.
 - Your key stays on this instance and is never given to the agent. The CLI talks to a local address with a
   placeholder, and the real key is added on the way to Google.
 - Besides the model you pick, it calls Gemini 3.1 Flash Lite on the same key to title a new conversation

@@ -21375,6 +21375,7 @@ _BASE_CATALOG: dict[str, dict] = {
                   "recorded digest, and it does not update itself.",
                   "Usage data is off: the CLI is started with its usage reporting switched off and sends "
                   "Google none.",
+                  "Crash reporting is off: the CLI is started with its crash reporting switched off.",
                   "It also calls Gemini 3.1 Flash Lite on the same key, to title a new conversation and to "
                   "run each web search. Those calls are not in the turn's token count."),
     },

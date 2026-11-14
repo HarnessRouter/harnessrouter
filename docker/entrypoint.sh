@@ -1376,7 +1376,7 @@ install_agy() {
   rm -rf "$ag_tmp"
   # PROVE IT RUNS, and that it is the version that was pinned. Measured on 1.5.8: `agy --version` prints
   # "1.5.8" and reads no stdin; it runs as the install uid, in that uid's own HOME, which goes with it.
-  ag_got="$(iu env AGY_CLI_DISABLE_AUTO_UPDATE=true "$TOOLS/bin/agy" --version </dev/null 2>/dev/null | head -n 1)"
+  ag_got="$(iu env AGY_CLI_DISABLE_AUTO_UPDATE=true ANTIGRAVITY_SENTRY_SAMPLE_RATE=0 "$TOOLS/bin/agy" --version </dev/null 2>/dev/null | head -n 1)"
   if [ "$ag_got" != "$AGY_PIN" ]; then
     echo "agy installed but reports '${ag_got:-nothing}', wanted $AGY_PIN"; rm -f "$TOOLS/bin/agy"; return 1
   fi

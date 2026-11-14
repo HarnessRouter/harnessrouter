@@ -5535,7 +5535,9 @@ and a local address standing in for Google, which added the real key and logged 
   --disable-telemetry` made no such connection (without the flag, six in fourteen seconds), measured
   through a proxy that logged every connection. So the base runs the ACP server. The updater runs in
   the background unless `AGY_CLI_DISABLE_AUTO_UPDATE=true` ("1" is ignored), and declines a binary
-  whose directory it cannot write.
+  whose directory it cannot write. Every start of the CLI (each turn, and the install's version check)
+  also sets `ANTIGRAVITY_SENTRY_SAMPLE_RATE=0`, which switches its crash reporting off; that one has not
+  been measured through the proxy.
 - **Models.** `agy models` lists Gemini 4 Carbon, Hydrogen and Argon, Gemini 3.8, 3.7 and 3.6 Flash and
   Gemini 3.1 Pro, each as `<model>-<level>` (Hydrogen up to xhigh, 3.1 Pro low and high only). The
   level reaches Google as `thinkingConfig.thinkingLevel`. gemini-3.1-pro calls
