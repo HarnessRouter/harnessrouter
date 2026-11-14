@@ -659,6 +659,9 @@ _SESSION_PRESENT = {
     # zeroclaw: the driver asks for `session/resume` on every turn that has an id and starts a new
     # session when the store says it is not there, so the store is asked here too.
     "zeroclaw": _zeroclaw_session_present,
+    # agy: the driver asks the agent to load the conversation, and the conversation's own database in
+    # the CLI's store is what says it is there (the lookup _build_agy makes for resume_known).
+    "agy": lambda cwd, cmd, sid: _agy_session_present(cwd, cmd, sid),
 }
 
 
@@ -762,7 +765,11 @@ _CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "
                         # vibe reads VIBE_<key> as config overrides (enable_telemetry among them), and a
                         # visible MISTRAL_API_KEY makes it fetch the organization's settings from Mistral
                         # with no switch to stop it
-                        "VIBE_", "MISTRAL_")
+                        "VIBE_", "MISTRAL_",
+                        # agy reads AGY_ and ANTIGRAVITY_ names as its own switches: its auto-update
+                        # (AGY_CLI_DISABLE_AUTO_UPDATE), another sign-in (AGY_ADC_AUTH) and another model
+                        # endpoint (AGY_LLM_GATEWAY_URL), each of which would move it off the relay
+                        "AGY_", "ANTIGRAVITY_")
 _CALLER_ENV_RESERVED_NAMES = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
                               "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
                               "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
@@ -954,7 +961,11 @@ _REBUILT_CACHES = (".harness/home/.omp/natives", ".harness/home/.codex/.tmp", ".
                    # openai-responses provider.rs). Each is made again when missing. NOT here: its
                    # threads (the conversation), memory/ and knowledge/ (what the agent saved), and
                    # threads/discovery-state (a thread's promoted tools).
-                   ".harness/roder/code-index", ".harness/roder/discovery", ".harness/roder/models-cache.json")
+                   ".harness/roder/code-index", ".harness/roder/discovery", ".harness/roder/models-cache.json",
+                   # agy 1.5.8 unpacks these from its own binary when they are missing: builtin/ (its
+                   # bundled skills and plugins, a manifest and checksum beside them) at every start,
+                   # bin/ (a 17 MB media encoder) at a new session's first prompt
+                   ".harness/home/.gemini/antigravity-cli/builtin", ".harness/home/.gemini/antigravity-cli/bin")
 
 # .git history travels in the tarball, so these must be git-ignored too (see _git_ensure).
 # Persist conversation transcripts ($HOME -> .harness/home: ~/.claude/projects, ~/.codex/sessions)
@@ -1071,6 +1082,17 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # sessions.db in the same directory and MUST travel, so the exclusion is the
                       # file and not the directory (nanobot's shape).
                       "./.harness/home/.deepagents/.state/auth.json",
+                      # agy: its MCP config is rewritten every turn and carries a stdio server's env
+                      # and a remote server's headers as written; ~/.config/antigravity is its own
+                      # store for plugin credentials (file-based where no keyring runs); its logs and
+                      # crash dumps are where a CLI prints what it was handed, and its updater's state
+                      # is not the turn's. The conversation (antigravity-cli/conversations/<id>.db and
+                      # brain/) MUST travel: it is what session/load reads.
+                      "./.harness/home/.gemini/config/mcp_config.json",
+                      "./.harness/home/.config/antigravity",
+                      "./.harness/home/.gemini/antigravity-cli/log",
+                      "./.harness/home/.gemini/antigravity-cli/crashes",
+                      "./.harness/home/.gemini/antigravity-cli/updater",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -1819,6 +1841,12 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # so the bundle is never a produced file.
         rootrels = [str(_ZEROCLAW_AGENT_WS / "skills")]
         entryroot = str(_ZEROCLAW_AGENT_WS / "skills")
+    elif backend == "agy":
+        # ~/.gemini/config/skills/<name>/SKILL.md, the CLI's global skills root (its customization
+        # reference, 1.5.8), under the redirected HOME. Not the workspace's .agents/skills, which the
+        # user collects.
+        rootrels = [".harness/home/.gemini/config/skills"]
+        entryroot = ".harness/home/.gemini/config/skills"
     else:
         # dsh's driver copies these into dsh's own skill root each turn (dsh_driver._install_skills), where its
         # `skill` tool finds them; the AGENTS.md block below names them.
@@ -2050,7 +2078,10 @@ _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "g
                        "docker-agent": ("sse",),
                        # opensquilla's MCPServerEntry takes transport "stdio" | "sse" only, so a
                        # streamable-HTTP server has no client here either.
-                       "opensquilla": ("http",)}
+                       "opensquilla": ("http",),
+                       # agy 1.5.8: a remote server is streamable HTTP or nothing ("The legacy
+                       # HTTP+SSE transport ... isn't supported", its MCP reference).
+                       "agy": ("sse",)}
 _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
 
 
@@ -2352,7 +2383,10 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    # fast-agent has no instruction-file convention at all: the
                                    # file the runner writes is passed as the agent's instruction
                                    # with -i, which is aider's arrangement, so the name is ours.
-                                   "fast-agent", "roder")
+                                   "fast-agent", "roder",
+                                   # agy reads the workspace's AGENTS.md (or GEMINI.md) as rules,
+                                   # beside ~/.gemini/GEMINI.md (its customization reference, 1.5.8)
+                                   "agy")
         else "CLAUDE.md")
 
 
@@ -15816,6 +15850,201 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
     return _driver_cmd(FAST_AGENT_PYTHON, FAST_AGENT_DRIVER, job, env)
 
 
+# ── agy: Google's Antigravity CLI, over its ACP server (runner/agy_driver.py) ──────────────────────
+# Opt-in (docker/entrypoint.sh installs it only when HR_BACKENDS names it). Everything here was read off
+# agy 1.5.8 running against Google's Gemini API with a Google AI Studio key (2026-11-13):
+#   * `modelProvider: "gemini"` in settings.json with GEMINI_API_KEY in the environment runs the CLI on the
+#     Gemini API directly ("ChainedAuth: authenticated via gemini_api_key"), and GOOGLE_GEMINI_BASE_URL is
+#     honoured: every model call went to it as POST /v1beta/models/<id>:streamGenerateContent?alt=sse, the
+#     key in x-goog-api-key. So the CLI is handed the runner's loopback relay and a placeholder, and the
+#     relay adds the real key, the way gemini-cli is run (_build_gemini). GOOGLE_API_KEY would win over
+#     GEMINI_API_KEY in this CLI ("Both ... are set. Using GOOGLE_API_KEY."), and it never reaches a turn
+#     (_CALLER_ENV_RESERVED).
+#   * It also calls a helper model of its own on the same key: gemini-3.1-flash-lite-preview, for a new
+#     conversation's title and for each web search (googleSearch grounding). Those calls ride the relay
+#     too and are not in the CLI's reported usage.
+#   * AGY_CLI_DISABLE_AUTO_UPDATE=true stops the self-update ("Auto-update disabled via environment variable");
+#     "1" does not. The binary is root's in a directory no session can write, which the updater also
+#     declines ("is not fully accessible ... skipping update"), so the pin holds either way.
+AGY_PROVIDERS = {"google"}
+AGY_BIN = os.environ.get("HR_AGY_BIN", "/data/agent-tools/bin/agy")
+AGY_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agy_driver.py")
+AGY_DEFAULT_MODEL = os.environ.get("AGY_DEFAULT_MODEL", "gemini-3.8-flash")
+# The models `agy models` lists on a Gemini API key (1.5.8), each with the thinking levels it takes. The
+# session's model id is "<model>-<level>" (gemini-3.8-flash-low), and the level reaches Google as
+# thinkingConfig.thinkingLevel (LOW, MEDIUM, HIGH measured on the wire). An unknown id is refused by the CLI.
+AGY_MODEL_LEVELS: dict[str, tuple[str, ...]] = {
+    "gemini-4-carbon": ("low", "medium", "high"),
+    "gemini-4-hydrogen": ("low", "medium", "high", "xhigh"),
+    "gemini-4-argon": ("low", "medium", "high"),
+    "gemini-3.8-flash": ("low", "medium", "high"),
+    "gemini-3.7-flash": ("low", "medium", "high"),
+    "gemini-3.6-flash": ("low", "medium", "high"),
+    "gemini-3.1-pro": ("low", "high"),
+}
+# The catalog's id where it differs from the CLI's: the catalog keeps Google's API id, which every other base
+# on a Google connection uses (agy's gemini-3.1-pro calls models/gemini-3.1-pro-preview).
+AGY_IDS = {"gemini-3.1-pro-preview": "gemini-3.1-pro"}
+# The tools agy offers the model on a Gemini API key, read off its requests' functionDeclarations (1.5.8);
+# call_mcp_tool, list_resources and read_resource join them when an MCP server is configured.
+AGY_TOOLS = ("read_file", "write_file", "edit_file", "run_command", "search_web", "invoke_subagent",
+             "define_subagent", "manage_subagents", "manage_task", "send_message", "schedule", "swarm",
+             "ask_question")
+# What a switch withholds for real: agy's ACP server asks the client before a shell command and before
+# nothing else, and the driver answers no for a switched-off shell (agy_driver.permit).
+AGY_WITHHELD_BY_ANSWER = {"run_command": ("run_command",)}
+
+
+def _agy_session_model(model: str, effort: str = "") -> tuple[str, str]:
+    """(the CLI's model id with its level, the level) for a catalog model and the turn's thinking level.
+
+    A level the model has is used as asked; `none` and `minimal` take its lowest, `xhigh` its highest where
+    it has no xhigh. With no level asked, medium where the model has it, else its lowest. An id already
+    carrying a level the model has (gemini-3.8-flash-high) is taken as it is."""
+    m = AGY_IDS.get(model, model)
+    levels = AGY_MODEL_LEVELS.get(m)
+    if levels is None:
+        base, _, lvl = m.rpartition("-")
+        if base in AGY_MODEL_LEVELS and lvl in AGY_MODEL_LEVELS[base]:
+            return m, lvl
+        raise HTTPException(400, f"the Antigravity CLI does not offer model '{model}' "
+                                 f"(one of {sorted(AGY_MODEL_LEVELS)})")
+    asked = (effort or "").strip().lower()
+    if asked in levels:
+        lvl = asked
+    elif asked in ("none", "minimal"):
+        lvl = levels[0]
+    elif asked in ("xhigh", "max"):
+        lvl = levels[-1]
+    else:
+        lvl = "medium" if "medium" in levels else levels[0]
+    return f"{m}-{lvl}", lvl
+
+
+def _agy_home(cwd: str) -> pathlib.Path:
+    return pathlib.Path(cwd) / ".harness" / "home"
+
+
+def _agy_session_present(cwd: str, cmd: list[str] | None, session_id: str) -> bool:
+    """Whether the CLI's own store holds this conversation: one database per conversation, by its id."""
+    if not session_id or "/" in session_id or session_id in (".", ".."):
+        return False
+    return (_agy_home(cwd) / ".gemini" / "antigravity-cli" / "conversations" / f"{session_id}.db").is_file()
+
+
+def _agy_mcp_config(home: pathlib.Path, mcp_servers: list[dict] | None,
+                    tools_disabled: list[str] | None = None) -> pathlib.Path:
+    """~/.gemini/config/mcp_config.json under the redirected HOME, rewritten every turn (an empty map when
+    the harness has none, so a server removed from it does not stay). agy's own schema: `command`/`args`/
+    `env` for a stdio server, `serverUrl` (+ `headers`) for a remote one, which must speak streamable HTTP
+    (an SSE server reaches it through the runner's stdio bridge, _BRIDGED_TRANSPORTS). Measured on 1.5.8,
+    both kinds reached the model and answered through its call_mcp_tool. A harness's switched-off MCP tool
+    (mcp__<server>__<tool>) goes in that server's `disabledTools`, which keeps it out of the list the model
+    is shown."""
+    off_by_server: dict[str, list[str]] = {}
+    for t in _tool_names_off(tools_disabled):
+        if t.startswith("mcp__") and t.count("__") >= 2:
+            _, srv, tool = t.split("__", 2)
+            off_by_server.setdefault(srv, []).append(tool)
+    servers: dict = {}
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = str(sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"serverUrl": url}
+            hdrs = _mcp_headers(sv)
+            if hdrs:
+                entry["headers"] = hdrs
+        elif sv.get("command"):
+            cmdv = sv["command"]
+            argv = cmdv if isinstance(cmdv, list) else [str(cmdv)]
+            entry = {"command": str(argv[0]), "args": [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        else:
+            continue
+        if off_by_server.get(name):
+            entry["disabledTools"] = sorted(off_by_server[name])
+        servers[name] = entry
+    path = home / ".gemini" / "config" / "mcp_config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():                       # never write through a link the agent planted
+        path.unlink()
+    path.write_text(json.dumps({"mcpServers": servers}, indent=2))
+    return path
+
+
+def _agy_settings(home: pathlib.Path) -> pathlib.Path:
+    """~/.gemini/antigravity-cli/settings.json: the Gemini API as the model provider, and nothing else.
+    The key is not here: GEMINI_API_KEY in the environment, and only the relay's placeholder at that."""
+    path = home / ".gemini" / "antigravity-cli" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        path.unlink()
+    path.write_text(json.dumps({"modelProvider": "gemini"}, indent=2))
+    return path
+
+
+def _agy_relay_route(api_key: str) -> tuple[str, str]:
+    """Google's own Gemini API as one turn's route: the native path, the key in x-goog-api-key. The turn's
+    thinking level is NOT on the route: the CLI sends it itself, in the model id (_agy_session_model), and the
+    relay writing one into every call would put the main model's level on the helper model's calls too."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = ("https://generativelanguage.googleapis.com", api_key,
+                                        _turn_route({"google_native": True, "google_own": True,
+                                                     **_route_trace_flag()}))
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
+def _build_agy(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+               resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+               tools_disabled: list[str] | None = None) -> list[str]:
+    """One agy turn, as argv for the driver: `agy acp --disable-telemetry` with the job in its environment.
+
+    No --dangerously-skip-permissions: the ACP server then asks before a shell command, and the driver
+    answers (yes, or no when the harness switched the shell off). Nobody else is asked anything."""
+    pr = provider or "google"
+    if pr not in AGY_PROVIDERS:
+        raise HTTPException(400, f"unknown agy provider '{pr}' (one of {sorted(AGY_PROVIDERS)})")
+    if not auth.api_key:
+        raise HTTPException(400, "agy needs an api_key (none configured)")
+    host = (urllib.parse.urlsplit(auth.base_url or "").hostname or "").lower()
+    if auth.base_url and host != "generativelanguage.googleapis.com":
+        # The CLI speaks Google's native API and names its own helper model on it, so only Google's own
+        # endpoint serves every call it makes; another address would be a promise the second call breaks.
+        raise HTTPException(400, "the Antigravity CLI runs on Google's Gemini API only (a Google AI Studio key)")
+    thinking = _TURN_THINKING.get() or {}
+    agy_model, level = _agy_session_model(model, str(thinking.get("asked") or ""))
+    if thinking.get("asked"):
+        thinking["applied"] = level
+    home = _agy_home(cwd)
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)
+    relay_base, relay_tok = _agy_relay_route(auth.api_key)
+    env["GEMINI_API_KEY"] = relay_tok              # the placeholder; the relay finds the route by it
+    env["GOOGLE_GEMINI_BASE_URL"] = relay_base
+    env.pop("GOOGLE_API_KEY", None)                # the CLI would prefer it over GEMINI_API_KEY
+    env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"    # "true", not "1": the CLI ignores "1"
+    _agy_settings(home)
+    _agy_mcp_config(home, mcp_servers, tools_disabled)
+    off = set(_tool_names_off(tools_disabled))
+    withheld = sorted({n for switch, names in AGY_WITHHELD_BY_ANSWER.items() if switch in off for n in names})
+    known = bool(resume_session_id) and _agy_session_present(cwd, None, resume_session_id or "")
+    job = {"argv": [AGY_BIN, "acp", "--disable-telemetry"], "cwd": cwd, "prompt": prompt,
+           "model": model, "agy_model": agy_model,
+           "resume": resume_session_id or "", "resume_known": known,
+           "withheld": withheld, "timeout": MAX_TURN_SECONDS}
+    return _driver_cmd(sys.executable, AGY_DRIVER, job, env)
+
+
 
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
@@ -15939,6 +16168,9 @@ BACKENDS = {
     # The zeroclaw driver emits claude's stream-json itself (see zeroclaw_driver.py).
     "zeroclaw": {"providers": sorted(ZEROCLAW_PROVIDERS), "default_model": ZEROCLAW_DEFAULT_MODEL,
                  "normalize": _claude_passthrough},
+    # agy is driven over its ACP server, so runner/agy_driver.py emits claude's stream-json itself.
+    "agy": {"providers": sorted(AGY_PROVIDERS), "default_model": AGY_DEFAULT_MODEL,
+            "normalize": _claude_passthrough},
 }
 
 
@@ -16166,7 +16398,7 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 # CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
 # jcode's own usage, so it stays.
 _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
-                        "opencode", "mimo", "kilo", "qoder", "roder"}
+                        "opencode", "mimo", "kilo", "qoder", "roder", "agy"}
 
 
 # ── a question for the person ends the turn (UHP Tasks §3.2, #476) ──────────────────────────────
@@ -18277,7 +18509,9 @@ def capabilities(identifier: str = "") -> dict:
 # _cline_settings).
 # The gateway's catalog says the same thing per base (tool_enforcement "instruction" for exactly
 # these), and gateway/tests/test_tool_enforcement_parity.py holds the two together.
-_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "opensquilla"})
+# agy: only its shell has a switch (the driver's answer to the ACP permission request, AGY_WITHHELD_BY_ANSWER);
+# its file, search and subagent tools never ask, so they are asked off here.
+_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "opensquilla", "agy"})
 
 
 def _disabled_tools_note(backend: str, tools_disabled: list[str] | None) -> str:
@@ -18766,6 +19000,11 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                  # the harness's own variables and the platform's HR_ ones a turn carries
                                  caller_keys=[*_caller_env(req.env),
                                               *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
+        elif backend == "agy":
+            model = model or AGY_DEFAULT_MODEL
+            cmd = _build_agy(req.provider, auth, model, req.prompt, cwd, env,
+                             resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                             tools_disabled=req.tools_disabled)
         elif backend == "zeroclaw":
             model = model or ZEROCLAW_DEFAULT_MODEL
             cmd = _build_zeroclaw(req.provider, auth, model, req.prompt, cwd, env,
