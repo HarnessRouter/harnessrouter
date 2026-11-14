@@ -119,6 +119,10 @@
           "type": "boolean",
           "description": "A harness can end its turn by asking the person something: the response ends `incomplete`\nwith reason `input_required` and an `input_request` item, and the answer is an\n`input_response` item on the next request, chained on that response. See Tasks §3.2.\nOptional at every class.\n"
         },
+        "resume": {
+          "type": "boolean",
+          "description": "A `resume` item in `input`, chained on a response the server itself cut short (`failed`,\n`error.detail.reason` `interrupted`), continues the session and tells the harness it was\ncut off. See Tasks §3.3. Optional at every class.\n"
+        },
         "plugins": {
           "type": "boolean",
           "description": "The server installs Agent Plugins packages into harnesses, serves their files, and exports\na harness as a package. Optional at every class.\n"
@@ -749,7 +753,7 @@
               }
             }
           ],
-          "description": "A bare string is shorthand for one user message. Without `previous_response_id`, on a\nserver with `input_history`, `user` and `assistant` messages before the last `user` message\nare the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).\nWith `previous_response_id`, on a server with `input_requests`, one item may be an\n`InputResponse`: the answer to the question that response asked (Tasks §3.2).\n"
+          "description": "A bare string is shorthand for one user message. Without `previous_response_id`, on a\nserver with `input_history`, `user` and `assistant` messages before the last `user` message\nare the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).\nWith `previous_response_id`, on a server with `input_requests`, one item may be an\n`InputResponse`: the answer to the question that response asked (Tasks §3.2).\nOn a server with `resume`, one item may be a `Resume` instead: a request to carry on an\ninterrupted response, alone in `input` (Tasks §3.3).\n"
         },
         "model": {
           "type": "string",
@@ -1095,6 +1099,50 @@
           "description": "An option `id` for `choice` and `confirm`; any text for `free_text` and `secret`."
         }
       }
+    },
+    "Resume": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "description": "A request to carry on a response the server itself cut short, as the only item of\n`CreateResponseRequest.input` on a request chained on that response (Tasks §3.3). A resume\nis single-use: a response already resumed, or passed over, is `409 resume_not_pending`.\n",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "resume"
+        },
+        "note": {
+          "type": "string",
+          "description": "The person's words for the harness, given to it as they are."
+        }
+      }
+    },
+    "InterruptedDetail": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "description": "`Error.detail` of a `failed` response the server itself cut short (Tasks §3.3). A client\ndeciding whether to resume reads `workspace` and `effects_may_repeat`.\n",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "const": "interrupted"
+        },
+        "workspace": {
+          "type": "string",
+          "enum": [
+            "kept",
+            "checkpoint",
+            "lost"
+          ],
+          "description": "`kept`: the working directory is as the turn left it. `checkpoint`: as of the last saved\ntool step. `lost`: nothing of it survived; the turn is still resumable, from the\nconversation alone.\n"
+        },
+        "effects_may_repeat": {
+          "type": "boolean",
+          "description": "`true` when the step running when the turn was cut may run again, because a checkpoint\ncannot tell whether a tool's outside effect happened.\n"
+        }
+      },
+      "additionalProperties": true
     },
     "ContentPart": {
       "type": "object",
@@ -1976,6 +2024,7 @@
             "input_not_pending",
             "input_request_expired",
             "input_response_invalid",
+            "resume_not_pending",
             "file_too_large",
             "model_unavailable",
             "model_not_available",

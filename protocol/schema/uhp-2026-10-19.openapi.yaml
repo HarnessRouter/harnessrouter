@@ -1839,6 +1839,12 @@ components:
             with reason `input_required` and an `input_request` item, and the answer is an
             `input_response` item on the next request, chained on that response. See Tasks §3.2.
             Optional at every class.
+        resume:
+          type: boolean
+          description: |
+            A `resume` item in `input`, chained on a response the server itself cut short (`failed`,
+            `error.detail.reason` `interrupted`), continues the session and tells the harness it was
+            cut off. See Tasks §3.3. Optional at every class.
         plugins:
           type: boolean
           description: |
@@ -2201,6 +2207,8 @@ components:
             are the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).
             With `previous_response_id`, on a server with `input_requests`, one item may be an
             `InputResponse`: the answer to the question that response asked (Tasks §3.2).
+            On a server with `resume`, one item may be a `Resume` instead: a request to carry on an
+            interrupted response, alone in `input` (Tasks §3.3).
         model: { type: string, description: Canonical model id. Omitted means the harness default. }
         metadata:
           type: object
@@ -2377,6 +2385,41 @@ components:
         answer:
           type: string
           description: An option `id` for `choice` and `confirm`; any text for `free_text` and `secret`.
+
+    Resume:
+      type: object
+      required: [type]
+      description: |
+        A request to carry on a response the server itself cut short, as the only item of
+        `CreateResponseRequest.input` on a request chained on that response (Tasks §3.3). A resume
+        is single-use: a response already resumed, or passed over, is `409 resume_not_pending`.
+      properties:
+        type: { type: string, const: resume }
+        note:
+          type: string
+          description: The person's words for the harness, given to it as they are.
+
+    InterruptedDetail:
+      type: object
+      required: [reason]
+      description: |
+        `Error.detail` of a `failed` response the server itself cut short (Tasks §3.3). A client
+        deciding whether to resume reads `workspace` and `effects_may_repeat`.
+      properties:
+        reason: { type: string, const: interrupted }
+        workspace:
+          type: string
+          enum: [kept, checkpoint, lost]
+          description: |
+            `kept`: the working directory is as the turn left it. `checkpoint`: as of the last saved
+            tool step. `lost`: nothing of it survived; the turn is still resumable, from the
+            conversation alone.
+        effects_may_repeat:
+          type: boolean
+          description: |
+            `true` when the step running when the turn was cut may run again, because a checkpoint
+            cannot tell whether a tool's outside effect happened.
+      additionalProperties: true
 
     ContentPart:
       type: object
@@ -2770,6 +2813,7 @@ components:
             - input_not_pending
             - input_request_expired
             - input_response_invalid
+            - resume_not_pending
             - file_too_large
             - model_unavailable
             - model_not_available
