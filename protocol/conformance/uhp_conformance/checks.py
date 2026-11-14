@@ -1641,6 +1641,82 @@ def _t12_measure(ctx, hid: str, nonce: str, model: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════════════
 # Full — a question for the person (Tasks §3.2, capability input_requests)
 # ══════════════════════════════════════════════════════════════════════════════════════
+# Full — resuming an interrupted turn (Tasks §3.3, capability resume)
+# ══════════════════════════════════════════════════════════════════════════════════════
+# A server cuts a turn short when it restarts or drains, and a client asks to carry on with a
+# `resume` item chained on that response. A black-box suite cannot make a server restart, so these
+# checks measure what it can: the refusals §3.3 requires of a resume that has nothing to resume,
+# and the refusal of a server that does not report the capability. That a resume of a real
+# interrupted turn is single-use, idempotent and honoured on a `lost` workspace is measured by the
+# reference server's own tests (gateway/tests/test_resume.py), which can cut a turn.
+
+
+def _resume_item(note: str | None = None) -> dict:
+    return {"type": "resume", **({"note": note} if note else {})}
+
+
+def _post_resume(ctx, prev: str | None, items: list) -> "object":
+    body: dict = {"input": items}
+    if prev:
+        body["previous_response_id"] = prev
+    return ctx.client.post("/v1/responses", body=body)
+
+
+def _finished_response(ctx) -> str:
+    """The id of a response that ended and was not interrupted: the one nothing can be resumed from."""
+    r = _run_blocking(ctx)
+    if r.status != 200 or not isinstance(r.json, dict) or not r.json.get("id"):
+        raise Skip(f"the task to chain a resume on did not return a response (HTTP {r.status})")
+    return str(r.json["id"])
+
+
+@check("T-15", "A resume with nothing to resume is refused, and starts no task", "full",
+       f"{SPEC}/tasks.md#33-resuming-an-interrupted-turn")
+def t15(ctx):
+    """§3.3 on a server that reports `resume`: a resume chained on a response that is not
+    interrupted is `409 resume_not_pending`; a resume with no `previous_response_id`, with another
+    item beside it, or twice in one request is `400 invalid_input`. None of them starts a task, so
+    the response named is as it was."""
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if not caps.get("resume"):
+        raise Skip("this server does not report the resume capability")
+    prev = _finished_response(ctx)
+    before = ctx.client.get(f"/v1/responses/{prev}")
+    refused = _post_resume(ctx, prev, [_resume_item()])
+    assert refused.status == 409 and _error_code(refused) == "resume_not_pending", (
+        f"a resume chained on a response that was not interrupted returned HTTP {refused.status} "
+        f"{_error_code(refused)!r}; §3.3 requires 409 resume_not_pending")
+    for what, got in (
+            ("no previous_response_id", _post_resume(ctx, None, [_resume_item()])),
+            ("another item beside it", _post_resume(ctx, prev, [_resume_item(),
+                                                                 {"role": "user", "content": "go on"}])),
+            ("a second resume", _post_resume(ctx, prev, [_resume_item(), _resume_item()]))):
+        assert got.status == 400 and _error_code(got) == "invalid_input", (
+            f"a resume with {what} returned HTTP {got.status} {_error_code(got)!r}; §3.3 requires "
+            "400 invalid_input")
+    after = ctx.client.get(f"/v1/responses/{prev}")
+    assert (before.json or {}).get("status") == (after.json or {}).get("status"), (
+        "a refused resume changed the response it named")
+    return "409 resume_not_pending for a finished response; 400 invalid_input for three malformed shapes"
+
+
+@check("T-16", "A server without resume refuses a resume item rather than running it", "full",
+       f"{SPEC}/tasks.md#33-resuming-an-interrupted-turn")
+def t16(ctx):
+    """§3.3: a server that does not report `resume` refuses the item with `400 invalid_input`. It
+    does not read it as an empty or an ordinary task, which would start a turn on nothing."""
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if caps.get("resume"):
+        raise Skip("this server reports the resume capability; T-15 measures it")
+    prev = _finished_response(ctx)
+    got = _post_resume(ctx, prev, [_resume_item()])
+    assert got.status == 400 and _error_code(got) == "invalid_input", (
+        f"a resume item sent to a server without the capability returned HTTP {got.status} "
+        f"{_error_code(got)!r}; §3.3 requires 400 invalid_input")
+    return "400 invalid_input"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
 # A harness that needs one answer ends its turn on the question: the response is `incomplete`
 # with reason `input_required`, the question is its last `input_request` item and its last
 # message's text, and the answer is an `input_response` item on the next task, chained on that

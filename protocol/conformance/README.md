@@ -131,6 +131,15 @@ A few of them are worth calling out, because they catch things a schema check ne
   the nonce nowhere. A model that never asked measured nothing, so both skip; so does a server
   without the capability. `tests/test_input_requests.py` runs both against a server that gets each
   rule wrong, one defect at a time.
+- **T-15/T-16**: resuming an interrupted turn (Tasks §3.3). A black-box suite cannot make a server
+  restart, so these measure what it can. T-15, on a server that reports `resume`, chains a `resume`
+  on a response that is not interrupted and requires `409 resume_not_pending`, then sends a resume
+  with no `previous_response_id`, with another item beside it, and twice, and requires `400
+  invalid_input` each time, with the response named unchanged. T-16, on a server that does not
+  report `resume`, requires the item refused `400 invalid_input` rather than run as an empty task.
+  That a resume of a real interrupted turn is single-use, idempotent and honoured on a lost
+  workspace is checked by the reference server's own tests. `tests/test_resume_checks.py` runs both
+  checks against a server that gets each refusal wrong, one defect at a time.
 - **R-01…R-08** — session sharing, which is mostly a set of refusals. Sessions §5 requires that a
   shared view be read-only, revocable, and free of credentials, and a check that merely opens a
   link and reads the conversation passes against a server that also lets that link continue the
