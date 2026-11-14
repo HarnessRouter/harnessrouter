@@ -27,9 +27,10 @@ HARNESS_TS = UI / "lib" / "harness.ts"
 # itself (SetupSettings.tsx) carries no file name of its own.
 SETTINGS = [UI / "components" / "hrui" / "setup" / "settingsModel.ts", UI / "components" / "hrui" / "setup" / "SetupSettings.tsx"]
 
-# The bases that read no workspace file: systemone's instructions travel in the job, qoder's with the
-# hosted session it drives, so there is no file to name and the page says so instead of inventing one.
-NO_FILE = {"systemone", "qoder"}
+# The bases that read no workspace file: systemone's instructions travel in the job, qoder's and
+# antigravity's with the hosted session each drives, so there is no file to name and the page says so
+# instead of inventing one.
+NO_FILE = {"systemone", "qoder", "antigravity"}
 
 
 def _label_map() -> dict:
