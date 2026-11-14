@@ -1199,6 +1199,9 @@ _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-f
 # API-key path (measured 2026-09-06: pointed at a dead port it retried "fetch failed" against it),
 # so the native paths can be brokered later; until the broker carries them, this set is the guard.
 _NATIVE_ONLY_BACKENDS = {"gemini",
+                         # agy (Antigravity CLI) speaks Google's native API too, and calls a helper
+                         # model of its own on the same key; the runner's loopback relay holds the key
+                         "agy",
                          # qoder: the driver speaks Qoder's own control API (sessions, events, files),
                          # which the broker's model doors do not carry; the runner's loopback relay is
                          # its credential boundary, and that needs the connection's key on the box
@@ -1760,6 +1763,11 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # reason it is absent from _CUSTOM_FORMAT_BACKENDS: a custom integration is OpenAI- or
     # Anthropic-shaped.
     ("google", "gemini"): "google",
+    # agy (the Antigravity CLI) the same way, on Google's own endpoint only: it names a helper model of
+    # its own (gemini-3.1-flash-lite-preview, for titles and web search) on the same key, which an
+    # aggregator's vendor table would not rename, so no TokenRouter or hosted row (measured on 1.5.8 with
+    # a Google AI Studio key, 2026-11-13).
+    ("google", "agy"): "google",
     # TokenRouter serves Google's native API under the vendor prefix (models/google/<id>:, key in
     # x-goog-api-key; measured 2026-09-07) for the seven Gemini ids its table carries, so it drives
     # the gemini backend too; the runner still builds gemini as provider google and routes the CLI
@@ -9498,12 +9506,21 @@ for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
 # one model its process suite has run until its live provider column is measured, so it is named in
 # _STILL_QUALIFYING below rather than held to the family rules a measured base keeps.
 _MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
+# agy (the Antigravity CLI): the models `agy models` lists on a Gemini API key (1.5.8) that Google's own table
+# serves as themselves, under Google's ids (agy's gemini-3.1-pro calls models/gemini-3.1-pro-preview). Not
+# offered: gemini-3.7-flash, which Google answers as gemini-3.8-flash (_GOOGLE_ANSWERS_AS_ANOTHER), and the
+# CLI's gemini-4-hydrogen and gemini-4-carbon, which are not in Google's table until its /v1beta/models is
+# read for them (one hydrogen turn ran through the CLI at low). The runner turns each into the CLI's own id
+# with its thinking level (runner AGY_MODEL_LEVELS). gemini-3.8-flash ran every probe turn (low, medium and
+# high) and is the default; the others are still qualifying.
+_MODEL_CATALOG["agy"] = {"default": "gemini-3.8-flash",
+                         "models": ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview"]}
 # Bases still qualifying their wider catalog. Each offers only the models measured on it so far, and
 # its default was chosen for that start rather than measured across every provider column, so the
 # catalog-wide rules for a measured base (gpt-6.1-sol leads the gpt-6 family wherever it is offered,
 # and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
 # place that exception is written; a base leaves the set when its live column is in.
-_STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
+_STILL_QUALIFYING: frozenset[str] = frozenset({"roder", "agy"})
 
 # _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
 # on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
@@ -21300,6 +21317,35 @@ _BASE_CATALOG: dict[str, dict] = {
         # off, the shell can still write a file.
         "tool_enforcement": "hard",
     },
+    "agy": {
+        "label": "Antigravity CLI", "backend": "agy", "status": "ready",
+        "system_prompt": ("You are Antigravity, an agentic coding assistant. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The tools agy 1.5.8 offers its model on a Gemini API key, read off its requests (runner
+        # AGY_TOOLS). Its ACP server reads no settings file, so its permission rules cannot be set; it
+        # asks the client before a shell command and before nothing else, and the driver answers no for
+        # a switched-off shell: `hard_tools`. The file, search and subagent tools never ask, so the rest
+        # are asked off in the instructions, "instruction". The limit every base with a shell has: with
+        # File Write off, the shell can still write a file.
+        "tools": [("run_command", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("search_web", "Web Search"), ("invoke_subagent", "Subagents")],
+        "tool_enforcement": "instruction",
+        "hard_tools": ("run_command",),
+        # The thinking levels each model takes on this CLI (runner AGY_MODEL_LEVELS), which differ from
+        # the same model's on another base's channel (no "none" here).
+        "model_levels": {"gemini-4-argon": ("low", "medium", "high"), "gemini-3.8-flash": ("low", "medium", "high"),
+                         "gemini-3.6-flash": ("low", "medium", "high"), "gemini-3.1-pro-preview": ("low", "high")},
+        # What a person should know before choosing it, in their words (the bases document's `notes`).
+        "notes": ("Runs on a Google AI Studio key. The key stays with this instance and is never given to "
+                  "the agent.",
+                  "Updates are off: the CLI is installed at a fixed version, its download checked against a "
+                  "recorded digest, and it does not update itself.",
+                  "Usage data is off: the CLI is started with its usage reporting switched off and sends "
+                  "Google none.",
+                  "It also calls Gemini 3.1 Flash Lite on the same key, to title a new conversation and to "
+                  "run each web search. Those calls are not in the turn's token count."),
+    },
     "opensquilla": {
         "label": "OpenSquilla", "backend": "opensquilla", "status": "ready",
         "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
@@ -26345,9 +26391,12 @@ async def list_bases(request: Request) -> dict:
             "defaultModel": cat.get("default", ""),
             # `reasoning`: the thinking levels the model has, lowest first; empty where none was
             # measured, and the console offers no level there (runner/reasoning.py has the table).
+            # A base whose CLI takes its own levels for a model says so (`model_levels`), and those win.
             "models": [{"id": m["id"], "available": m["available"], "default": m["default"],
-                        "reasoning": list(reasoning.levels_for(m["id"]))}
+                        "reasoning": list((b.get("model_levels") or {}).get(m["id"]) or reasoning.levels_for(m["id"]))}
                        for m in view["models"]],
+            # what a person should know before choosing the base, in their words; absent where there is none
+            **({"notes": list(b["notes"])} if b.get("notes") else {}),
             # each tool's own word: a base's `hard_tools` are withheld even where the rest are only asked
             "tools": [{"name": n, "label": lbl, "enforcement": _tool_enforcement(b, n)}
                       for n, lbl in b["tools"]],
