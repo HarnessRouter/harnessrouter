@@ -1124,6 +1124,19 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       "./.harness/home/.grok/docs",
                       "./.harness/home/.grok/bundled",
                       "./.harness/home/.grok/downloads"]
+# The checkpoint's tar, up to its output: read as the session, an unreadable file left out rather than
+# failing the archive, gzip at its fastest. _workspace_tar_argv adds the output, the exclusions and
+# the folder; the antigravity driver is handed this same command for what it sends to Google's
+# sandbox, so the two can never disagree about what leaves the box.
+_WORKSPACE_TAR = ("tar", "--ignore-failed-read", "-I", "gzip -1", "-cf")
+
+
+def _workspace_tar_argv(ws: str, out: str = "-", extra_excludes: tuple[str, ...] = ()) -> list[str]:
+    """The workspace's archive as the checkpoint makes it: CHECKPOINT_EXCLUDE (and `extra_excludes`)
+    left out, from the workspace root, into `out`."""
+    return [*_WORKSPACE_TAR, out, *(f"--exclude={p}" for p in (*CHECKPOINT_EXCLUDE, *extra_excludes)), "-C", ws, "."]
+
+
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-5.5")
@@ -17711,8 +17724,8 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
         # in the log, rather than failing the checkpoint; any other failure still fails it.
         with os.fdopen(fd, "wb") as out:
             tenv = _child_env()
-            proc = subprocess.run(_in_session(["tar", "--ignore-failed-read", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
-                                              ws, tenv), stdout=out, stderr=subprocess.PIPE, env=tenv)
+            proc = subprocess.run(_in_session(_workspace_tar_argv(ws), ws, tenv),
+                                  stdout=out, stderr=subprocess.PIPE, env=tenv)
         if proc.returncode != 0:
             os.unlink(tar_path)
             raise HTTPException(500, f"tar failed: {proc.stderr.decode(errors='replace')[:300]}")
