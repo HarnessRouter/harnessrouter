@@ -127,6 +127,13 @@ Against `2026-10-04`, one rule changes and the rest is additive.
   `input_response` item on the next task, chained on that response. Three refusals name what went
   wrong with an answer (`input_not_pending`, `input_request_expired`, `input_response_invalid`),
   and a secret answer never enters the conversation. A server without the capability never asks.
+- **An interrupted turn can be resumed** ([Tasks §3.3](tasks.md#33-resuming-an-interrupted-turn)),
+  added after publication and additive: with the `resume` capability, a `resume` item in `input`,
+  chained on a response the server itself cut short (`failed`, `error.detail.reason` `interrupted`),
+  continues the session and tells the harness it was cut off. The interrupted response says what is
+  left (`error.detail.workspace`: `kept`, `checkpoint` or `lost`) and whether the last step may run
+  again (`effects_may_repeat`). A resume is single-use (`409 resume_not_pending`). A server without
+  the capability refuses the item with `400 invalid_input`.
 - **A task can branch from an earlier response** ([Sessions §1.1](sessions.md#11-branching-from-an-earlier-response)),
   added after publication and additive: with the `session_branching` capability, `branch: true`
   beside `previous_response_id` starts a new session from that response's committed files and the

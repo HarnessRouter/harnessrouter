@@ -360,6 +360,65 @@ This section is additive. A server without the capability never emits `input_req
 that does not know the item sees a terminal `incomplete` response with the question in its text
 (§3.1: a client tolerates item types it does not recognise).
 
+### 3.3 Resuming an interrupted turn
+
+A server can end a turn itself: a restart, or a shutdown that drains its running turns. The turn did
+not fail and was not stopped by a budget or a question; it was cut. Such a response is
+**interrupted**. A server reports it as `failed`, with `error.detail.reason` `interrupted`
+([Lifecycle §3](lifecycle.md#3-task-lifecycle)); a budget stop (`max_steps`, `timeout`) and a question
+(`input_required`) are not interrupted, and a hard-cap stop keeps the reason `timeout`.
+
+An interrupted response also says what the interruption left behind, beside the reason, in
+`error.detail`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `workspace` | string | `kept` (the working directory is as the turn left it), `checkpoint` (it is as of the last saved tool step) or `lost` (nothing of it survived) |
+| `effects_may_repeat` | boolean | `true` when the step that was running when the turn was cut may run again. A checkpoint cannot tell whether a tool's outside effect happened, so a server MUST send `true` unless it knows no step was in flight |
+
+A client deciding by itself whether to resume reads these two fields; the error's `message` says the
+same in words.
+
+On a server that reports the `resume` capability, the client asks for a resume with a `resume` item
+in `input`, chained on the interrupted response the way an `input_response` answers a question (§3.2):
+
+```json
+{ "previous_response_id": "resp_a1b2c3",
+  "input": [ { "type": "resume", "note": "carry on, but skip the tests" } ] }
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `type` | string | yes | `resume` |
+| `note` | string | no | The person's words for the harness, given to it as they are, as an `input_response` answer is |
+
+A server that reports `resume`:
+
+- MUST run it as a continuation of the session ([Sessions §1](sessions.md#1-continuing-a-session)),
+  and MUST tell the harness, in the server's own words, that the previous turn was cut off, using the
+  base's own resume where it has one. The `note`, when present, reaches the harness as the person's
+  words.
+- MUST accept a resume whose `workspace` is `lost`. The harness is told the workspace is gone and
+  carries on from the conversation alone; refusing it would leave the client nothing better to do.
+- MUST refuse a resume with `409` and `code: "resume_not_pending"` when the named response is not
+  interrupted, or when a later task in the session has already resumed it or passed it over. A
+  resume is single-use and explicit; it never happens by itself.
+- MUST honour an `Idempotency-Key` on a resume as on a task (§6): a retry of a request that timed out
+  returns the first resume's result and does not start a second continuation.
+- MUST refuse a request that carries `resume` and no `previous_response_id`, any other item beside
+  `resume` in `input`, or more than one `resume`, with `400` and `code: "invalid_input"`.
+- MUST treat any other input chained on an interrupted response as a normal task, as before.
+
+A server that does not report `resume` MUST refuse a `resume` item with `400` and
+`code: "invalid_input"`, and MUST NOT read it as an empty or an ordinary task. A client checks the
+capability before sending the item.
+
+This section is additive. A server without the capability never accepts the item. A server MAY add
+`workspace` and `effects_may_repeat` to an interrupted response without the capability, since a client
+ignores fields it does not know ([Versioning](../../VERSIONING.md)). A later version moves an
+interrupted turn from `failed` to `incomplete` with `incomplete_details.reason` `interrupted`, since a
+client treats the two classes differently; these fields then move to `incomplete_details`.
+
 ## 4. Reading a task back
 
 ```http

@@ -60,6 +60,7 @@ credentials. The document MUST NOT contain anything principal-specific.
     "harness_retirement": false,
     "input_history": false,
     "input_requests": true,
+    "resume": true,
     "session_sharing": true,
     "session_branching": true,
     "idempotency": true,
@@ -130,6 +131,9 @@ Rules:
   `input_required` ([Tasks §3.2](tasks.md#32-asking-the-person)), or a server's own word for another
   cause, such as `interrupted` for a turn a restart cut short. `incomplete_details` is `null` on every
   other status.
+- A turn the server itself cut short (a restart, a shutdown drain) is reported `failed` with
+  `error.detail.reason` `interrupted` in this version, and a client may ask to resume it
+  ([Tasks §3.3](tasks.md#33-resuming-an-interrupted-turn)).
 - A `cancelled` task MUST report `cancelled`, not `failed`. A client that asked for a stop did not
   experience an error.
 - Terminal responses MUST retain whatever output was produced before they became terminal. Discarding
