@@ -11,10 +11,11 @@ jest.mock('@/lib/harness', () => ({
   offeredOob: () => [{ id: 'claude-code', name: 'Claude Code' }, { id: 'qoder', name: 'Qoder Cloud Agent' }],
   oobById: (id: string) => ({ id }),
   oobDefaultModel: () => 'claude-sonnet',
-  useBasesRead: () => ({ value: { 'claude-code': { takesSkills: true }, qoder: {} }, failed: false, retry: () => {} }),
+  useBasesRead: () => ({ value: { 'claude-code': { takesSkills: true, backend: 'claude' }, qoder: {} }, failed: false, retry: () => {} }),
   useModelCatalogRead: () => ({ value: { models: ['claude-sonnet'] }, failed: false, retry: () => {} }),
 }));
-jest.mock('@/lib/providers', () => ({ providerById: () => null, useModelProviders: () => ({ connectionFor: () => null, state: 'ready' }) }));
+const mockConnectionFor = jest.fn((_model: string, _backend?: string) => null);
+jest.mock('@/lib/providers', () => ({ providerById: () => null, useModelProviders: () => ({ connectionFor: mockConnectionFor, state: 'ready' }) }));
 jest.mock('@/components/HarnessLogo', () => ({ harnessLogoSrc: () => '' }));
 jest.mock('./Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 jest.mock('./toast', () => ({ toast: jest.fn() }));
@@ -52,4 +53,19 @@ test('each harness: its name whole in its own element, and the one chosen marked
   expect(opts.slice(1).map((o) => o.querySelector('.dd-hn')?.textContent)).toEqual(['Claude Code', 'Qoder Cloud Agent']);
   expect(opts.map((o) => o.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false']);
   expect(document.querySelector('[role="listbox"] .h-pre')).toBeNull();
+});
+
+test('the model menu asks which key serves each model on the harness chosen, not instance-wide', async () => {
+  const [hOpener] = Array.from(el.querySelectorAll('button[aria-haspopup="listbox"]')) as HTMLButtonElement[];
+  await act(async () => { hOpener.click(); });
+  await flush();
+  const cc = Array.from(document.querySelectorAll('[role="listbox"] [role="option"]')).find((o) => o.textContent?.includes('Claude Code')) as HTMLButtonElement;
+  await act(async () => { cc.click(); });
+  await flush();
+  mockConnectionFor.mockClear();
+  const mOpener = Array.from(el.querySelectorAll('button[aria-haspopup="listbox"]'))[1] as HTMLButtonElement;
+  await act(async () => { mOpener.click(); });
+  await flush();
+  expect(document.querySelector('[role="listbox"]')?.getAttribute('aria-label')).toBe('Model');
+  expect(mockConnectionFor).toHaveBeenCalledWith('claude-sonnet', 'claude');
 });

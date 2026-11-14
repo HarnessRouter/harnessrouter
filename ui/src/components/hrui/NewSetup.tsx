@@ -229,7 +229,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   const hs = offered.filter((o) => !ql || baseName(o.id, bases).toLowerCase().includes(ql));
   const ms = models.filter((x) => x !== AUTO && (!ql || x.toLowerCase().includes(ql)));
   const def = hAuto ? '' : oobDefaultModel(oobById(h));
-  const keyOf = (x: string) => { const c = providers.connectionFor(x); return c ? (providerById(c.provider)?.name || c.provider) : ''; };
+  const keyOf = (x: string) => { const c = providers.connectionFor(x, hAuto ? undefined : bases?.[h]?.backend); return c ? (providerById(c.provider)?.name || c.provider) : ''; };
   const logo = (id: string) => { const s = harnessLogoSrc(id); return s ? <img className="h-logo" src={s} alt="" /> : null; };
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     const first = pop.current?.querySelector<HTMLButtonElement>('.dd-o');
