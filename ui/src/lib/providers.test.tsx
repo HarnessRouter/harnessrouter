@@ -41,6 +41,32 @@ test('the document read: each model\'s key, and ready', async () => {
   expect(seen.hasConnections).toBe(true);
 });
 
+test('on a harness, the key named is one that harness can use, in the order the router tries them', async () => {
+  fetchMock.mockResolvedValue(json({
+    integrations: [
+      { name: 'vercel', provider: 'vercel', models: [{ canonical: 'gemini-4-argon' }, { canonical: 'claude-sonnet-4' }] },
+      { name: 'tr', provider: 'tokenrouter', models: [{ canonical: 'gemini-4-argon' }] },
+      { name: 'google', provider: 'google', models: [{ canonical: 'gemini-4-argon' }] },
+      { name: 'mine', provider: 'custom', config: { api_format: 'openai' }, models: [{ canonical: 'qwen-3' }] },
+    ],
+    model_map: { 'gemini-4-argon': 'vercel', 'claude-sonnet-4': 'vercel', 'qwen-3': 'mine' },
+    catalog: [
+      { id: 'vercel', backends: ['claude', 'codex'] },
+      { id: 'tokenrouter', backends: ['claude', 'gemini'] },
+      { id: 'google', backends: ['gemini'] },
+      { id: 'custom', backends: [], format_backends: { openai: ['hermes'], anthropic: ['claude'] } },
+    ],
+  }));
+  await mount();
+  await settle();
+  expect(seen.connectionFor('gemini-4-argon')).toEqual({ name: 'vercel', provider: 'vercel' });
+  expect(seen.connectionFor('gemini-4-argon', 'claude')).toEqual({ name: 'vercel', provider: 'vercel' });
+  expect(seen.connectionFor('gemini-4-argon', 'gemini')).toEqual({ name: 'google', provider: 'google' });
+  expect(seen.connectionFor('claude-sonnet-4', 'gemini')).toBeNull();
+  expect(seen.connectionFor('qwen-3', 'hermes')).toEqual({ name: 'mine', provider: 'custom' });
+  expect(seen.connectionFor('qwen-3', 'claude')).toBeNull();
+});
+
 test('loading until it lands; a failed read is asked again, and a later answer is believed', async () => {
   fetchMock.mockResolvedValueOnce(json({ detail: 'down' }, 503)).mockResolvedValue(json(DOC));
   await mount();
