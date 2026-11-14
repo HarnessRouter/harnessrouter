@@ -72,6 +72,15 @@ test('a base the server says this instance has not installed is not offered', ()
   expect(h.offeredOob({ roder: base('roder', 'ready') }).map((o) => o.id)).toEqual(['roder']);
 });
 
+test('the Antigravity CLI is offered only where the instance installed it, and reads AGENTS.md', () => {
+  const h = fresh();
+  const base = (id: string, status?: string) => ({ id, label: id, backend: id, models: [], ...(status ? { status } : {}) }) as unknown as import('./harness').BaseInfo;
+  expect(h.offeredOob({ agy: base('agy', 'not_installed') })).toEqual([]);
+  const offered = h.offeredOob({ agy: base('agy', 'ready') });
+  expect(offered.map((o) => [o.id, o.backend, o.name])).toEqual([['agy', 'agy', 'Antigravity CLI']]);
+  expect(h.instructionFileLabel('agy')).toBe('AGENTS.md');
+});
+
 test('a harness saved with no model of its own keeps none, whatever the catalog says', async () => {
   const h = fresh();
   hf.mockResolvedValueOnce(json(MODELS));

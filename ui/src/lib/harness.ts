@@ -24,7 +24,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | 'roder' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | 'roder' | 'agy' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -239,6 +239,11 @@ export const OOB: OobHarness[] = [
   { id: 'roder', name: 'Roder', version: 'v0.4.8', backend: 'roder', status: 'ready',
     models: ['gpt-6.1-sol'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Roder, an autonomous coding agent. Complete the task in the workspace.',
+    tools: [], skills: [] },
+  { id: 'agy', name: 'Antigravity CLI', version: 'v1.5.8', backend: 'agy', status: 'ready',
+    // Placeholder only; the gateway's _MODEL_CATALOG["agy"]: Google's own ids, on a Google AI Studio key.
+    models: ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-pro-preview'], defaultModel: 'gemini-3.8-flash', moreModels: 0,
+    systemPrompt: 'You are Antigravity, an agentic coding assistant. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'jcode', name: 'jcode', version: 'v0.90.0', backend: 'jcode', status: 'ready',
     // Placeholder only. jcode speaks one OpenAI shape, chat/completions, through the relay, so the
@@ -710,6 +715,8 @@ const AGENTS_MD_BASES = [
   // workspace is a git PROJECT, which every session here is.
   'dcode',
   'roder',
+  // agy reads the workspace's AGENTS.md as rules.
+  'agy',
 ];
 export function instructionFileLabel(baseId: string | null | undefined): string {
   const id = baseId || '';
