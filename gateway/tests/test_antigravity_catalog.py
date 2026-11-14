@@ -139,6 +139,21 @@ def test_the_picker_offers_the_agents_models_and_no_gemini_chat_model(monkeypatc
     assert set(chat) & {m["id"] for m in gem["models"]}            # ...which a chat base still offers
 
 
+def test_a_server_left_out_on_purpose_is_named_with_why_not_as_unreachable():
+    """The agent's reply says which tool it ran without and why (a tool this instance serves stays here);
+    "could not be reached" was the sentence before, which reads as an outage (seen live, 2026-11-14)."""
+    blocks = gw._blocks_from_canonical({"type": "system", "subtype": "mcp_unavailable", "servers": [
+        {"name": "memories", "reason": gw._WITHHELD_HOSTED, "withheld": True}]})
+    assert blocks == [("text", '\n\n_Note: the MCP server "memories" was not given to the agent (a tool this instance '
+                               'serves itself: its access stays on this instance), so this reply ran without it._\n')]
+    mixed = gw._blocks_from_canonical({"type": "system", "subtype": "mcp_unavailable", "servers": [
+        {"name": "kept-here", "reason": "r", "withheld": True}, {"name": "dead", "reason": "fetch failed"}]})
+    assert [t for _, t in mixed] == ['\n\n_Note: the MCP server "kept-here" was not given to the agent (r), so this '
+                                     'reply ran without it._\n',
+                                     '\n\n_Note: the MCP server "dead" could not be reached, so this reply ran '
+                                     'without those tools._\n']
+
+
 def test_the_bases_document_carries_the_description_and_offers_no_thinking_level(monkeypatch):
     async def org_member(_request):
         return "local", "owner"
