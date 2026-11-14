@@ -372,15 +372,32 @@ def test_a_continuation_reads_its_input_exactly_as_before(env):
 
 
 @pytest.mark.parametrize("base", sorted(gw._BASE_CATALOG))
-def test_every_base_is_handed_the_history(env, base):
+def test_every_base_is_handed_the_history(env, base, monkeypatch):
     """Every base, through the route: the turn is given the history in its prompt and only the new
     message as its own text."""
+    for switch in gw._OPERATOR_SWITCH.values():      # a base waiting on its operator's switch runs once it is set
+        monkeypatch.setenv(switch, "1")
     hid = _setup(env, base=base)
     r = _post(env, hid, fork_input())
     assert r.status_code == 200, r.text
     ran = env["turns"].ran[-1]
     assert ran["backend"] == gw._BASE_CATALOG[base]["backend"]
     assert f"user: {REQUEST}\nassistant: {ANSWER}\n" in ran["prompt"] and ran["user_text"] == NEW
+
+
+def test_a_base_waiting_on_its_operators_switch_is_refused_through_the_route_and_runs_once_it_is_set(env, monkeypatch):
+    """The Antigravity CLI without HR_AGY_TRUSTED_USERS: the task is refused before anything runs, in the
+    sentence that names the switch; with it, the same task runs."""
+    monkeypatch.delenv("HR_AGY_TRUSTED_USERS", raising=False)
+    hid = _setup(env, base="agy")
+    before = len(env["turns"].ran)
+    r = _post(env, hid, "hi")
+    assert r.status_code == 400, r.text
+    assert "set HR_AGY_TRUSTED_USERS=1 to confirm." in r.json()["detail"]
+    assert len(env["turns"].ran) == before                     # nothing ran
+    monkeypatch.setenv("HR_AGY_TRUSTED_USERS", "1")
+    assert _post(env, hid, "hi").status_code == 200
+    assert env["turns"].ran[-1]["backend"] == "agy"
 
 
 # ── the runner's own request ─────────────────────────────────────────────────────────────────────

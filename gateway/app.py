@@ -1199,6 +1199,9 @@ _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-f
 # API-key path (measured 2026-09-06: pointed at a dead port it retried "fetch failed" against it),
 # so the native paths can be brokered later; until the broker carries them, this set is the guard.
 _NATIVE_ONLY_BACKENDS = {"gemini",
+                         # agy (Antigravity CLI) speaks Google's native API too, and calls a helper
+                         # model of its own on the same key; the runner's loopback relay holds the key
+                         "agy",
                          # qoder: the driver speaks Qoder's own control API (sessions, events, files),
                          # which the broker's model doors do not carry; the runner's loopback relay is
                          # its credential boundary, and that needs the connection's key on the box
@@ -1760,6 +1763,11 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # reason it is absent from _CUSTOM_FORMAT_BACKENDS: a custom integration is OpenAI- or
     # Anthropic-shaped.
     ("google", "gemini"): "google",
+    # agy (the Antigravity CLI) the same way, on Google's own endpoint only: it names a helper model of
+    # its own (gemini-3.1-flash-lite-preview, for titles and web search) on the same key, which an
+    # aggregator's vendor table would not rename, so no TokenRouter or hosted row (measured on 1.5.8 with
+    # a Google AI Studio key, 2026-11-13).
+    ("google", "agy"): "google",
     # TokenRouter serves Google's native API under the vendor prefix (models/google/<id>:, key in
     # x-goog-api-key; measured 2026-09-07) for the seven Gemini ids its table carries, so it drives
     # the gemini backend too; the runner still builds gemini as provider google and routes the CLI
@@ -2064,7 +2072,8 @@ def _integration_driving(integrations: list[dict], backend: str, canonical: str,
         if integ is first or not drives(integ):
             continue
         models = _integration_models(integ)
-        if canon in models or canon.lower() in models:
+        if (canon in models or canon.lower() in models
+                or canon in _channel_also_serves(str(integ.get("provider") or ""), backend)):
             return integ
     return None
 
@@ -2078,9 +2087,12 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
         return None
     mm = await _effective_model_map()
     iname = mm.get(canon) or mm.get(canon.lower())
-    if not iname:
+    integrations = await _integrations_doc()
+    # a model an integration serves for this base only (_CHANNEL_ALSO_SERVES) is in no model map: the first
+    # integration that drives the base and serves it, by name, as for an unmapped model the map would take
+    if not iname and not any(canon in _channel_also_serves(str(i.get("provider") or ""), backend) for i in integrations):
         return None
-    integ = _integration_driving(await _integrations_doc(), backend, canon, iname)
+    integ = _integration_driving(integrations, backend, canon, iname)
     if not integ:
         return None
     iname = str(integ.get("name") or "")
@@ -8897,9 +8909,10 @@ _MODEL_ORDER: tuple[str, ...] = (
     # Anthropic
     "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
     "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-    # Google
-    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
-    "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
+    # Google (gemini-4-carbon and gemini-4-hydrogen are the Antigravity CLI's alone, after Argon, which leads
+    # the family on every base that offers it)
+    "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.7-flash",
+    "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
     "gemini-3-flash-preview",
     # xAI
     "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
@@ -9498,12 +9511,23 @@ for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
 # one model its process suite has run until its live provider column is measured, so it is named in
 # _STILL_QUALIFYING below rather than held to the family rules a measured base keeps.
 _MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
+# agy (the Antigravity CLI): the models `agy models` lists on a Gemini API key (1.5.8), under Google's ids (agy's
+# gemini-3.1-pro calls models/gemini-3.1-pro-preview). Four are in Google's own table and served as themselves;
+# gemini-4-carbon and gemini-4-hydrogen are the CLI's own ids, which Google's shared table does not carry, so
+# they are offered on this base only (_CHANNEL_ALSO_SERVES) and the shared table, and every other base on a
+# Google key, is unchanged (one hydrogen turn ran through the CLI at low; carbon is listed and not yet run).
+# Not offered: gemini-3.7-flash, which Google answers as gemini-3.8-flash (_GOOGLE_ANSWERS_AS_ANOTHER). The
+# runner turns each into the CLI's own id with its thinking level (runner AGY_MODEL_LEVELS). gemini-3.8-flash
+# ran every probe turn (low, medium and high) and is the default; the others are still qualifying.
+_MODEL_CATALOG["agy"] = {"default": "gemini-3.8-flash",
+                         "models": ["gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.8-flash",
+                                    "gemini-3.6-flash", "gemini-3.1-pro-preview"]}
 # Bases still qualifying their wider catalog. Each offers only the models measured on it so far, and
 # its default was chosen for that start rather than measured across every provider column, so the
 # catalog-wide rules for a measured base (gpt-6.1-sol leads the gpt-6 family wherever it is offered,
 # and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
 # place that exception is written; a base leaves the set when its live column is in.
-_STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
+_STILL_QUALIFYING: frozenset[str] = frozenset({"roder", "agy"})
 
 # _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
 # on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
@@ -9900,7 +9924,22 @@ def _channel_refuses(provider: str, backend: str, model: str) -> bool:
     return (model or "").strip() in _CHANNEL_REFUSES.get((str(provider or "").lower(), backend), frozenset())
 
 
-def _conn_serves(conn: dict, friendly: str) -> bool:
+# The other way round: models a connection of `provider` serves for `backend` beyond its vendor's table, because
+# that base's own client names them on the vendor's endpoint. The vendor's table stays what every other base
+# reads, so no other base is offered them. A pair listed here is servable for the picker, and a turn on that base
+# finds the connection for the model, as it would a model in the table. The id reaches the base as written here.
+#   ("google", "agy"): the Antigravity CLI's gemini-4-carbon and gemini-4-hydrogen (`agy models`, 1.5.8).
+_CHANNEL_ALSO_SERVES: dict[tuple[str, str], frozenset[str]] = {
+    ("google", "agy"): frozenset({"gemini-4-carbon", "gemini-4-hydrogen"}),
+}
+
+
+def _channel_also_serves(provider: str, backend: str) -> frozenset[str]:
+    """The models a connection of `provider` serves for `backend` beyond its table (_CHANNEL_ALSO_SERVES)."""
+    return _CHANNEL_ALSO_SERVES.get((str(provider or "").lower(), str(backend or "")), frozenset())
+
+
+def _conn_serves(conn: dict, friendly: str, backend: str = "") -> bool:
     """Whether this connection's vendor actually serves the requested model.
 
     Table membership, not a name heuristic. The heuristic this replaces classified models by
@@ -9910,14 +9949,16 @@ def _conn_serves(conn: dict, friendly: str) -> bool:
 
     A vendor we have no table for cannot be filtered at all; that is stated here rather than
     happening by accident, and it is NOT the path the model catalog uses (see
-    _provider_model_id, which is a pure lookup and refuses anything unlisted)."""
+    _provider_model_id, which is a pure lookup and refuses anything unlisted).
+
+    With `backend`, a model this vendor serves for that base only (_CHANNEL_ALSO_SERVES) counts too."""
     table = _vendor_models(conn.get("provider") or "")
     if not table:
         return True
     m = (friendly or "").strip()
     if not m:
         return True                      # no model requested: the connection default decides
-    return m in table or m in table.values()
+    return m in table or m in table.values() or m in _channel_also_serves(conn.get("provider") or "", backend)
 
 
 def _installed_backends() -> frozenset[str] | None:
@@ -9944,12 +9985,40 @@ def _not_installed_reason(label: str, backend: str) -> str:
             "to HR_BACKENDS and restart it.")
 
 
-def _require_installed(backend: str) -> None:
-    """Refuse a turn on a base this instance does not hold, in words and before anything is
-    allocated, rather than letting the runner fail to start it."""
+# A base that runs only once the instance's operator has confirmed, with one switch on the instance, what the
+# base's notes ask of it (see the base's notes). Until the switch is set the base reads "unavailable" in the
+# bases document and a task on it is refused, both with the base's ask, which names the switch.
+_OPERATOR_SWITCH: dict[str, str] = {"agy": "HR_AGY_TRUSTED_USERS"}
+
+
+def _operator_ask(switch: str) -> str:
+    """What the operator is asked to confirm, in the words the base's notes, the self-hosting guide and the
+    refusal all use."""
+    return f"Run this base only on an instance where everyone who runs tasks is trusted; set {switch}=1 to confirm."
+
+
+def _operator_switch_on(backend: str) -> bool:
+    switch = _OPERATOR_SWITCH.get(str(backend or ""))
+    return not switch or os.environ.get(switch, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _base_unavailable(label: str, backend: str) -> tuple[str, str]:
+    """Why a turn on `backend` cannot start on this instance: (its status in the bases document, the reason in
+    words), or ("", "") when it can. Not installed is said first: the switch is no use without the base."""
     if not _backend_installed(backend):
-        label = next((str(b["label"]) for b in _BASE_CATALOG.values() if b.get("backend") == backend), backend)
-        raise HTTPException(400, _not_installed_reason(label, backend))
+        return "not_installed", _not_installed_reason(label, backend)
+    if not _operator_switch_on(backend):
+        return "unavailable", f"{label} is not enabled on this instance. {_operator_ask(_OPERATOR_SWITCH[backend])}"
+    return "", ""
+
+
+def _require_installed(backend: str) -> None:
+    """Refuse a turn on a base that cannot run here (not installed, or waiting on its operator's switch), in
+    words and before anything is allocated, rather than letting the runner fail to start it."""
+    label = next((str(b["label"]) for b in _BASE_CATALOG.values() if b.get("backend") == backend), backend)
+    status, reason = _base_unavailable(label, backend)
+    if status:
+        raise HTTPException(400, reason)
 
 
 def _backend_of_builtin(harness_id: str) -> str:
@@ -10094,10 +10163,15 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         table = _vendor_models(provider)
         if not table:
             return None
-        servable |= set(table) - _CHANNEL_REFUSES.get((provider, backend), frozenset())
+        servable |= (set(table) | _channel_also_serves(provider, backend)) - _CHANNEL_REFUSES.get((provider, backend), frozenset())
     integ_list = list(integrations.values())
     for canonical, iname in (await _effective_model_map()).items():
         if _integration_driving(integ_list, backend, canonical, iname):
+            servable.add(canonical)
+    # a model an integration serves for this base only, beyond its vendor's table: never in the model map,
+    # which every base reads
+    for canonical in {m for i in integ_list for m in _channel_also_serves(str(i.get("provider") or ""), backend)}:
+        if _integration_driving(integ_list, backend, canonical, None):
             servable.add(canonical)
     return servable
 
@@ -11044,7 +11118,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # (validated against the integration's model list at save time) — the family heuristic
         # reads the RUNNER provider (e.g. openai-api for a TokenRouter aggregator) and would
         # wrongly reject non-gpt families, so it applies to chain connections only.
-        if pre is None and (not _conn_serves(conn, model_req)
+        if pre is None and (not _conn_serves(conn, model_req, backend)
                             or _channel_refuses(str(conn.get("provider") or ""), backend, model_req)):
             # Multi-family backend (hermes): this connection's provider can't run the requested
             # model's family — skipping is the honest move (running it would silently substitute
@@ -21300,6 +21374,41 @@ _BASE_CATALOG: dict[str, dict] = {
         # off, the shell can still write a file.
         "tool_enforcement": "hard",
     },
+    "agy": {
+        "label": "Antigravity CLI", "backend": "agy", "status": "ready",
+        "system_prompt": ("You are Antigravity, an agentic coding assistant. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The tools agy 1.5.8 offers its model on a Gemini API key, read off its requests (runner
+        # AGY_TOOLS). Its ACP server reads no settings file, so its permission rules cannot be set; it
+        # asks the client before a shell command and before nothing else, and the driver answers no for
+        # a switched-off shell: `hard_tools`. The file, search and subagent tools never ask, so the rest
+        # are asked off in the instructions, "instruction". The limit every base with a shell has: with
+        # File Write off, the shell can still write a file.
+        "tools": [("run_command", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("search_web", "Web Search"), ("invoke_subagent", "Subagents")],
+        "tool_enforcement": "instruction",
+        "hard_tools": ("run_command",),
+        # The thinking levels each model takes on this CLI (runner AGY_MODEL_LEVELS), which differ from
+        # the same model's on another base's channel (no "none" here).
+        "model_levels": {"gemini-4-argon": ("low", "medium", "high"),
+                         "gemini-4-carbon": ("low", "medium", "high"),
+                         "gemini-4-hydrogen": ("low", "medium", "high", "xhigh"),
+                         "gemini-3.8-flash": ("low", "medium", "high"),
+                         "gemini-3.6-flash": ("low", "medium", "high"), "gemini-3.1-pro-preview": ("low", "high")},
+        # What a person should know before choosing it, in their words (the bases document's `notes`): the
+        # operator's switch first (_OPERATOR_SWITCH), without which a task on this base is refused.
+        "notes": (_operator_ask(_OPERATOR_SWITCH["agy"]),
+                  "Runs on a Google AI Studio key. The key stays with this instance and is never given to "
+                  "the agent.",
+                  "Updates are off: the CLI is installed at a fixed version, its download checked against a "
+                  "recorded digest, and it does not update itself.",
+                  "Usage data is off: the CLI is started with its usage reporting switched off and sends "
+                  "Google none.",
+                  "Crash reporting is off: the CLI is started with its crash reporting switched off.",
+                  "It also calls Gemini 3.1 Flash Lite on the same key, to title a new conversation and to "
+                  "run each web search. Those calls are not in the turn's token count."),
+    },
     "opensquilla": {
         "label": "OpenSquilla", "backend": "opensquilla", "status": "ready",
         "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
@@ -24880,7 +24989,7 @@ async def _setup_bases(org: str) -> dict:
     bases: dict = {}
     views: dict[str, list[str]] = {}
     for bid, b in _BASE_CATALOG.items():
-        if b.get("status") != "ready" or not _backend_installed(b["backend"]):
+        if b.get("status") != "ready" or _base_unavailable(b["label"], b["backend"])[0]:
             continue
         backend = b["backend"]
         if backend not in views:
@@ -26334,20 +26443,24 @@ async def list_bases(request: Request) -> dict:
         cat = _MODEL_CATALOG.get(backend, {})
         # the same view every picker reads (see list_models): catalog, custom endpoints, additions
         view = await _harness_models_view({}, backend, await _servable_models(org, backend))
-        installed = _backend_installed(backend)
+        off, why = _base_unavailable(b["label"], backend)
         out.append({
             "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
-            # "not_installed" for a base this instance does not hold, with the reason in words: the
-            # console does not offer it, rather than listing it ready to fail on its first turn
-            "status": b["status"] if installed else "not_installed",
-            **({} if installed else {"statusReason": _not_installed_reason(b["label"], backend)}),
+            # "not_installed" for a base this instance does not hold, "unavailable" for one waiting on its
+            # operator's switch (_OPERATOR_SWITCH), each with the reason in words: the console does not
+            # offer it, rather than listing it ready to fail on its first turn
+            "status": off or b["status"],
+            **({"statusReason": why} if off else {}),
             "systemPrompt": b["system_prompt"],
             "defaultModel": cat.get("default", ""),
             # `reasoning`: the thinking levels the model has, lowest first; empty where none was
             # measured, and the console offers no level there (runner/reasoning.py has the table).
+            # A base whose CLI takes its own levels for a model says so (`model_levels`), and those win.
             "models": [{"id": m["id"], "available": m["available"], "default": m["default"],
-                        "reasoning": list(reasoning.levels_for(m["id"]))}
+                        "reasoning": list((b.get("model_levels") or {}).get(m["id"]) or reasoning.levels_for(m["id"]))}
                        for m in view["models"]],
+            # what a person should know before choosing the base, in their words; absent where there is none
+            **({"notes": list(b["notes"])} if b.get("notes") else {}),
             # each tool's own word: a base's `hard_tools` are withheld even where the rest are only asked
             "tools": [{"name": n, "label": lbl, "enforcement": _tool_enforcement(b, n)}
                       for n, lbl in b["tools"]],

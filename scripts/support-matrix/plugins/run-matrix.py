@@ -57,7 +57,7 @@ BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode"
          # natively; dcode reads the claude-shaped config, which
          # carries all three. No remote column has been measured on any of them against a live
          # server yet — that is what this dimension is for.
-         "vibe", "docker-agent", "fast-agent", "dcode", "roder"]
+         "vibe", "docker-agent", "fast-agent", "dcode", "roder", "agy"]
 NO_STDIO: set[str] = set()
 # The public probe the remote columns call: its SSE end answers PROBE-SSE-<id>, its streamable-HTTP
 # end PROBE-HTTP-<id>. Both are the same fixed server, so a wrong answer is the base, not the probe.

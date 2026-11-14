@@ -24,7 +24,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | 'roder' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | 'roder' | 'agy' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -240,6 +240,11 @@ export const OOB: OobHarness[] = [
     models: ['gpt-6.1-sol'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Roder, an autonomous coding agent. Complete the task in the workspace.',
     tools: [], skills: [] },
+  { id: 'agy', name: 'Antigravity CLI', version: 'v1.5.8', backend: 'agy', status: 'ready',
+    // Placeholder only; the gateway's _MODEL_CATALOG["agy"]: Google's own ids, on a Google AI Studio key.
+    models: ['gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-pro-preview'], defaultModel: 'gemini-3.8-flash', moreModels: 0,
+    systemPrompt: 'You are Antigravity, an agentic coding assistant. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
   { id: 'jcode', name: 'jcode', version: 'v0.90.0', backend: 'jcode', status: 'ready',
     // Placeholder only. jcode speaks one OpenAI shape, chat/completions, through the relay, so the
     // list is the other chat-completions bases' and the two Responses-only ids are not on it.
@@ -284,11 +289,15 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
 ];
 
+/** The statuses of a base no task can start on here: not installed (an opt-in base, or one whose install
+ *  failed), or unavailable (installed, and waiting on a switch its operator sets). */
+const NOT_RUNNABLE = new Set(['not_installed', 'unavailable']);
+
 /** The built-in harnesses a person can pick: the ones the server's bases document lists, less any it
- *  says this instance has not installed (an opt-in base, or one whose install failed). None until
- *  it has been read (useBasesRead says whether it could be). */
+ *  says cannot run on this instance (NOT_RUNNABLE). None until it has been read (useBasesRead says
+ *  whether it could be). */
 export function offeredOob(bases: Record<string, BaseInfo> | null): OobHarness[] {
-  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id] && bases[o.id].status !== 'not_installed');
+  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id] && !NOT_RUNNABLE.has(bases[o.id].status));
 }
 
 /** A base by its id, or by the backend it runs: the gateway takes either for a setup's base, so a setup made through the
@@ -383,7 +392,8 @@ export function modelAvailable(backend: string | null | undefined, id: string): 
 export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
 export interface BuiltinSkill { name: string; title: string; description: string; defaultEnabled: boolean; origin: string }
 export interface BaseInfo {
-  /** `not_installed` for a base this instance does not hold, with `statusReason` saying so in words. */
+  /** `not_installed` for a base this instance does not hold, `unavailable` for one waiting on its operator's
+   *  switch, each with `statusReason` saying so in words. */
   id: string; label: string; backend: string; status: string; statusReason?: string; systemPrompt: string;
   defaultModel: string;
   /** `reasoning`: the thinking levels the model has, lowest first; empty or absent where it has
@@ -710,6 +720,8 @@ const AGENTS_MD_BASES = [
   // workspace is a git PROJECT, which every session here is.
   'dcode',
   'roder',
+  // agy reads the workspace's AGENTS.md as rules.
+  'agy',
 ];
 export function instructionFileLabel(baseId: string | null | undefined): string {
   const id = baseId || '';

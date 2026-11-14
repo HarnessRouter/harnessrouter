@@ -152,3 +152,36 @@ def test_a_conversation_the_store_has_but_will_not_load_fails_rather_than_starti
     assert res["is_error"] and "could not be continued" in res["result"]
     asked = [json.loads(line)["method"] for line in log.read_text().splitlines() if line.strip() and "method" in line]
     assert "session/new" not in asked
+
+
+# ── the permission answer a driver decides ─────────────────────────────────────────────────────
+_ASKER = r'''
+import json, sys
+opts = json.loads(sys.argv[2])
+sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": "1", "method": "session/request_permission",
+                             "params": {"toolCall": {"name": "run_command"}, "options": opts}}) + "\n")
+sys.stdout.flush()
+open(sys.argv[1], "w").write(sys.stdin.readline())
+'''
+
+
+def _asked(tmp_path, permit, opts):
+    agent, out = tmp_path / "asker.py", tmp_path / "reply.json"
+    agent.write_text(_ASKER)
+    acp = A.Acp([sys.executable, str(agent), str(out), json.dumps(opts)], str(tmp_path), dict(os.environ), permit=permit)
+    acp.proc.wait(timeout=20)
+    acp.close()
+    return json.loads(out.read_text())["result"]["outcome"]
+
+
+AGY_OPTS = [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+            {"optionId": "deny", "name": "Deny", "kind": "reject_once"}]
+
+
+def test_a_permission_the_driver_refuses_is_answered_with_the_agents_own_reject_option(tmp_path):
+    assert _asked(tmp_path, lambda p: p["toolCall"]["name"] != "run_command", AGY_OPTS) == {"outcome": "selected", "optionId": "deny"}
+    assert _asked(tmp_path, lambda p: True, AGY_OPTS) == {"outcome": "selected", "optionId": "allow"}
+    # without a decision every request is allowed, as before
+    assert _asked(tmp_path, None, AGY_OPTS) == {"outcome": "selected", "optionId": "allow"}
+    # an agent that offers no way to say no is answered cancelled, never allowed
+    assert _asked(tmp_path, lambda p: False, AGY_OPTS[:1]) == {"outcome": "cancelled"}
