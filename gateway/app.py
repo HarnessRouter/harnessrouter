@@ -5874,9 +5874,10 @@ UHP_CAPABILITIES = {
     "resume": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
-# The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
-# One base end to end is the reference; the others ask in prose until each gets its own wiring.
-_INPUT_REQUEST_BASES = {"claude"}
+# The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py):
+# claude as an MCP server, antigravity as a function its driver declares to Google. The others ask in
+# prose until each gets its own wiring.
+_INPUT_REQUEST_BASES = {"claude", "antigravity"}
 # How long a question's claim record lives (control_store.resp_set_pending_input): a question
 # stands until it is answered, voided by another turn, or expires by its own `expires_at`; a
 # claim older than this is decided by the response record alone.
@@ -21538,6 +21539,9 @@ _BASE_CATALOG: dict[str, dict] = {
         "environments": False,
         "remote": True,
         "reasoning": False,
+        # `ask_user` is declared to Google as a function of the interaction (runner/antigravity_driver.py);
+        # a secret answer stays on this instance and the agent is told it was given (Tasks §3.2, #476).
+        "input_requests": True,
     },
     "qwen": {
         "label": "Qwen Code", "backend": "qwen", "status": "ready",

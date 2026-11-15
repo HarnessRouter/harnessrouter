@@ -375,8 +375,11 @@ def _items(body):
 
 # ── what the server says it does ─────────────────────────────────────────────────────────────────
 
-def test_the_capability_is_declared_and_the_base_that_has_it_is_named():
+def test_the_capability_is_declared_and_the_bases_that_have_it_are_named():
     assert gw.UHP_CAPABILITIES["input_requests"] is True
     assert gw._BASE_CATALOG["claude-code"]["input_requests"] is True
-    assert gw._INPUT_REQUEST_BASES == {"claude"}
-    assert all(not b.get("input_requests") for k, b in gw._BASE_CATALOG.items() if k != "claude-code")
+    assert gw._BASE_CATALOG["antigravity"]["input_requests"] is True
+    assert gw._INPUT_REQUEST_BASES == {"claude", "antigravity"}
+    # the catalog's word and the runner job's word are the same bases
+    assert {b["backend"] for b in gw._BASE_CATALOG.values() if b.get("input_requests")} == gw._INPUT_REQUEST_BASES
+    assert all(not b.get("input_requests") for k, b in gw._BASE_CATALOG.items() if k not in ("claude-code", "antigravity"))

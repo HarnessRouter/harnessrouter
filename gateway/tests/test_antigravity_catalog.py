@@ -173,6 +173,23 @@ def test_the_bases_document_carries_the_description_and_offers_no_thinking_level
     assert "description" not in bases["codex"]
 
 
+def test_the_base_takes_questions_for_the_person(monkeypatch):
+    """ask_user (Tasks §3.2): the bases document says a task here can end by asking, and the runner
+    job of a turn on this base says it may ask, so the driver declares the function to Google."""
+    async def org_member(_request):
+        return "local", "owner"
+
+    async def servable(_org, _backend):
+        return None
+    monkeypatch.setattr(gw, "_pub_org_member", org_member)
+    monkeypatch.setattr(gw, "_servable_models", servable)
+    monkeypatch.delenv("HR_BACKENDS_INSTALLED", raising=False)
+    bases = {b["id"]: b for b in run(gw.list_bases(None))["bases"]}
+    assert bases["antigravity"]["takesInputRequests"] is True and bases["claude-code"]["takesInputRequests"] is True
+    assert bases["codex"]["takesInputRequests"] is False
+    assert "antigravity" in gw._INPUT_REQUEST_BASES
+
+
 def test_only_the_owner_trust_hands_the_runner_the_key(monkeypatch):
     conn = {"name": "integration:Google", "backend": "antigravity", "provider": "google", "api_key": "AIza-DUMMY-KEY"}
     monkeypatch.setattr(gw, "SANDBOX_TRUST", "")
