@@ -2,7 +2,7 @@
 
 All notable changes to the Unified Harness Protocol.
 
-## Conformance suite 2026.10.19.post7 (2026-11-14)
+## Conformance suite 2026.10.19.post8 (2026-11-15)
 
 T-15 and T-16 check the addition below. T-15, on a server that reports `resume`, requires `409
 resume_not_pending` for a resume chained on a response that is not interrupted, and `400
