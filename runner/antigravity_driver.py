@@ -35,6 +35,14 @@ of the MCP servers it handed to Google are replaced before a line is written.
 Cancellation: the runner sends SIGTERM and waits a bounded grace before its SIGKILL (a remote backend,
 BACKENDS[...]["remote"]). The handler raises out of whatever read is in flight, the turn posts
 `POST /v1beta/interactions/{id}:cancel`, says on stdout whether that was accepted, and exits.
+
+A question for the person (UHP Tasks §3.2). When the job says the turn may ask (`asks`), the
+interaction declares one function of its own, `ask_user`, defined by ask_user_mcp. Google cannot run
+it: an interaction that calls it ends `requires_action` with the call open. The turn then emits the
+call and its result as the runner's own ask tool (server._is_ask_tool), and the runner ends the turn
+there, `input_required`. The next message is sent as that call's `function_result` on the same chain,
+whatever the person said: the answer line the gateway writes, which for a secret names where the
+value is kept on this instance and never carries the value itself.
 """
 from __future__ import annotations
 
@@ -56,6 +64,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+
+import ask_user_mcp
 
 AGENT = "antigravity-preview-09-2026"
 # The schema revision every call pins (the steps schema; the docs' background examples send it).
@@ -81,6 +91,14 @@ TOOLS = ("code_execution", "google_search", "url_context")
 TOOL_STEPS = {"code_execution": ("code_execution_call", "code_execution_result"),
               "google_search": ("google_search_call", "google_search_result"),
               "url_context": ("url_context_call", "url_context_result")}
+
+# The question for the person: the function declared to Google when the turn may ask, from the one
+# definition every base asks through (ask_user_mcp); the name its call is emitted under, which is the
+# one the runner's watcher ends a turn at (server._is_ask_tool); and the call's result in this turn.
+ASK_FUNCTION = {"type": "function", "name": ask_user_mcp.TOOL_NAME, "description": ask_user_mcp.DESCRIPTION,
+                "parameters": ask_user_mcp.INPUT_SCHEMA}
+ASK_TOOL_USE = f"mcp__harnessrouter__{ask_user_mcp.TOOL_NAME}"
+ASKED = "The question was put to the person; their answer arrives as the next message."
 
 # The caps. Each is checked before the work it bounds, never after.
 UPLOAD_MAX_BYTES = 100 * 1024 * 1024        # the workspace sent to Google, summed before the archive is made
@@ -659,6 +677,18 @@ def tools_config(disabled: list[str], mcp: list[dict]) -> list[dict]:
     return tools
 
 
+def pending_ask(steps) -> dict:
+    """The ask_user call an interaction that ended `requires_action` waits on: the last function_call
+    of that name in its steps with no function_result for its id. {} when there is none."""
+    steps = [s for s in (steps or []) if isinstance(s, dict)]
+    answered = {str(s.get("call_id") or "") for s in steps if s.get("type") == "function_result"}
+    for s in reversed(steps):
+        cid = str(s.get("id") or "")
+        if s.get("type") == "function_call" and s.get("name") == ask_user_mcp.TOOL_NAME and cid and cid not in answered:
+            return s
+    return {}
+
+
 def system_instruction(job: dict) -> str:
     base = str(job.get("agent_doc") or "").strip()
     block = "\n".join([
@@ -701,6 +731,10 @@ class Turn:
         self.landed: list[str] = []
         self.failures: list[str] = []
         self.images = 0
+        self.asks = bool(job.get("asks"))       # the turn may ask the person (ASK_FUNCTION is declared)
+        self.ask_call: dict = {}                # the agent's ask_user call this interaction stopped on
+        self.answering = ""                     # the open ask_user call this message answers
+        self.plain_input: list[dict] = []       # this message as it goes when it answers no call
 
     # ── the environment ──
     def find_environment(self, resume: str) -> tuple[str, str, bool]:
@@ -732,7 +766,10 @@ class Turn:
             if status == "in_progress":
                 raise Refused("Google is still working on an earlier message of this conversation; stop it or "
                               "wait for it to finish")
-            if status in ("requires_action", "requires_continuation"):
+            if status == "requires_action":
+                # stopped on the agent's question: this message answers it, on the same chain
+                self.answering = str(pending_ask(last.get("steps")).get("id") or "")
+            if status in ("requires_action", "requires_continuation") and not self.answering:
                 prev = ""           # nothing of ours answers it: the next message starts a new chain here
         return resume, prev, False
 
@@ -945,6 +982,15 @@ class Turn:
             self.images += 1
         return parts
 
+    def answer_input(self, parts: list[dict]) -> list[dict]:
+        """This message as the result of the ask_user call the conversation stopped on: what the person
+        said next, the answer the gateway wrote or a new message instead of one. A function's result is
+        text, so an attached image goes as a file only."""
+        if len(parts) > 1:
+            self.notes.append("an attached image was sent as a file only: this message answers the agent's question")
+        return [{"type": "function_result", "call_id": self.answering, "name": ask_user_mcp.TOOL_NAME,
+                 "result": str(parts[0].get("text") or "")}]
+
     def body(self, prev: str, parts: list[dict], tools: list[dict]) -> dict:
         cfg: dict = {"type": "antigravity", "model": self.model}
         if self.max_total_tokens > 0:
@@ -1087,12 +1133,19 @@ class Turn:
                     args = parsed if isinstance(parsed, dict) else {"arguments": parsed}
                 except ValueError:
                     args = {"arguments": step["_args"]}
+            if stype == "function_call" and self.asks and step.get("name") == ask_user_mcp.TOOL_NAME:
+                # the question for the person: kept, and put to them when the interaction ends on it
+                # (put_question), never as a tool of the agent's own
+                self.ask_call = {"id": str(step.get("id") or ""), "input": args}
+                return
             name = str(step.get("name") or stype.removesuffix("_call") or "tool")
             if stype == "mcp_server_tool_call" and step.get("server_name"):
                 name = f"mcp__{step['server_name']}__{step.get('name') or 'tool'}"
             _emit("tool_use", {"id": str(step.get("id") or ""), "name": name, "input": args})
             return
         if stype.endswith("_result"):
+            if stype == "function_result" and self.answering and str(step.get("call_id") or "") == self.answering:
+                return                          # this message itself (answer_input), not a tool's result
             res = step.get("result")
             if isinstance(res, list):
                 text = "\n".join(str(c.get("text") or "") if isinstance(c, dict) else str(c) for c in res)
@@ -1156,6 +1209,9 @@ class Turn:
                                       "afresh in the same files")
                     _emit("notice", {"text": self.notes[-1]})
                     body = {k: v for k, v in body.items() if k != "previous_interaction_id"}
+                    if self.answering:
+                        # a new chain has no call to answer: the message goes as itself
+                        body["input"], self.answering = self.plain_input, ""
                 elif e.status == 400 and body.get("background") and "background" in said:
                     body = {k: v for k, v in body.items() if k != "background"}
                 elif e.status == 404 and "not found" in said:
@@ -1221,8 +1277,11 @@ class Turn:
         if isinstance(doc.get("usage"), dict):
             self.usage_doc = doc["usage"]
         steps = [s for s in (doc.get("steps") or []) if isinstance(s, dict)]
-        # the GET timeline opens with the message's own user_input step; what follows it is this turn's
-        last_input = max((i for i, s in enumerate(steps) if s.get("type") == "user_input"), default=-1)
+        # the GET timeline opens with the message's own user_input step (an answer's own function_result);
+        # what follows it is this turn's
+        last_input = max((i for i, s in enumerate(steps) if s.get("type") == "user_input"
+                          or (self.answering and s.get("type") == "function_result"
+                              and str(s.get("call_id") or "") == self.answering)), default=-1)
         mine = steps[last_input + 1:]
         # an answer the stream had begun: the document's copy of it continues from what was written
         partial = "".join(st.get("_text") or "" for i, st in sorted(self.steps.items())
@@ -1245,6 +1304,11 @@ class Turn:
                     partial = ""
                     continue
             self._finish({**s, "_text": "", "_args": ""})
+        if self.status == "requires_action" and self.asks and not self.ask_call:
+            # the question the stream did not deliver: the call the interaction waits on
+            call = pending_ask(mine)
+            if call:
+                self._finish({**call, "_text": "", "_args": ""})
         err = doc.get("error") if isinstance(doc.get("error"), dict) else None
         if err and not self.error:
             self.error = _SCRUB.text(f"{err.get('code') or err.get('status') or 'error'}: {err.get('message') or ''}")[:500]
@@ -1275,6 +1339,8 @@ class Turn:
             # left out on purpose, each with why: the reply's note says so, not "could not be reached"
             _emit("mcp_unavailable", {"servers": [{**d, "withheld": True} for d in dropped]})
         tools = tools_config(list(self.disabled), servers)        # refused here, before anything is made
+        if self.asks:
+            tools.append(ASK_FUNCTION)      # after the refusal: the question is not a tool of the agent's work
         # the workspace's size is checked before anything is made at Google
         manifest = local_manifest(self.cwd, self.excludes, self.caps["upload"], self.links)
         if not eid:
@@ -1283,7 +1349,8 @@ class Turn:
         _emit("session", {"session_id": eid, "environment_id": eid})
         new_files = self.sync_up(manifest)
         self.sync_skills()
-        body = self.body(prev, self.input_parts(new_files), tools)
+        self.plain_input = self.input_parts(new_files)
+        body = self.body(prev, self.answer_input(self.plain_input) if self.answering else self.plain_input, tools)
         self.run_interaction(body)
         self.finished = True
         if self.interaction_id:
@@ -1308,6 +1375,8 @@ class Turn:
                    "so far is kept, and the next message continues it" if self.max_total_tokens else
                    "Google ended the interaction incomplete")
             self.result("incomplete", why + ("; files not brought back: " + "; ".join(self.failures) if self.failures else ""))
+        elif status == "requires_action" and self.ask_call:
+            self.put_question()
         elif status in ("requires_action", "requires_continuation"):
             self.result("incomplete", f"the agent stopped for an action this base does not answer ({status})")
         elif status == "cancelled":
@@ -1315,6 +1384,28 @@ class Turn:
         else:
             self.result("failed", self.error or f"Google ended the interaction {status}")
         return 0
+
+    def put_question(self) -> None:
+        """The interaction stopped on the agent's ask_user call, which Google leaves open for this side
+        to answer. The call and its result go out as the runner's own ask tool, the last lines before
+        the result, once the files are back and the chain is saved: the runner ends the turn at that
+        result (input_required) and the gateway puts the question to the person. It is the turn's
+        verdict: a file that did not come back is asked for again on the next message."""
+        call = self.ask_call
+        req, why = ask_user_mcp.validate_request(call["input"])
+        _emit("tool_use", {"id": call["id"], "name": ASK_TOOL_USE, "input": call["input"]})
+        if req is None:
+            # a question that asks nothing (a choice with one option) is not put to the person; the
+            # next message answers the call all the same
+            _emit("tool_result", {"tool_use_id": call["id"], "text": f"ask_user: {why}", "is_error": True})
+            self.result("incomplete", f"the agent's question could not be put to the person ({why}); "
+                                      "the next message answers it")
+            return
+        # The runner stops this process at the result below. The interaction has ended and nothing at
+        # Google is left to cancel, so that stop is no cancel, and the result still goes out.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        _emit("tool_result", {"tool_use_id": call["id"], "text": ASKED, "is_error": False})
+        self.result("incomplete", "input_required")
 
     def result(self, status: str, reason: str) -> None:
         _emit("__hr_result", {"status": status, "reason": reason,

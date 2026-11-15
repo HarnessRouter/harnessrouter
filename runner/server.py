@@ -12422,7 +12422,7 @@ def _build_antigravity(provider: str, auth: Auth, model: str, prompt: str, cwd: 
                        resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                        mcp_withheld: list[dict] | None = None, tools_disabled: list[str] | None = None,
                        agent_doc: str = "", input_files: list[str] | None = None,
-                       skills: list[dict] | None = None) -> list[str]:
+                       skills: list[dict] | None = None, asks: bool = False) -> list[str]:
     """One antigravity turn's job, as argv for the driver.
 
     The harness's instructions travel in the job and become each interaction's system_instruction,
@@ -12430,7 +12430,9 @@ def _build_antigravity(provider: str, auth: Auth, model: str, prompt: str, cwd: 
     workspace file (the qoder precedent). A disabled built-in is left out of the request's tools.
     The archive command is the checkpoint's (_WORKSPACE_TAR, CHECKPOINT_EXCLUDE), so what goes to
     Google is never more than what a checkpoint keeps. MCP servers are the gateway's: what it would
-    not send to Google arrives in `mcp_withheld` with its reason, for the driver to report."""
+    not send to Google arrives in `mcp_withheld` with its reason, for the driver to report. `asks`: the
+    turn may ask the person (#476), so the driver declares `ask_user` to Google as a function, and an
+    interaction that stops on its call ends the turn input_required."""
     pr = provider or "google"
     if pr not in ANTIGRAVITY_PROVIDERS:
         raise HTTPException(400, f"unknown antigravity provider '{pr}' (one of {sorted(ANTIGRAVITY_PROVIDERS)})")
@@ -12454,6 +12456,7 @@ def _build_antigravity(provider: str, auth: Auth, model: str, prompt: str, cwd: 
            "mcp_withheld": [w for w in (mcp_withheld or []) if isinstance(w, dict)],
            "input_files": list(input_files or []),
            "skills": list(skills or []),
+           "asks": bool(asks),
            "tar": {"argv": list(_WORKSPACE_TAR)},
            "exclude": [*CHECKPOINT_EXCLUDE],
            "max_total_tokens": ANTIGRAVITY_MAX_TOTAL_TOKENS,
@@ -12519,7 +12522,10 @@ def _antigravity_to_claude(obj: dict, state: dict) -> list[dict]:
             ev.update(subtype="success", is_error=False, result=final)
         elif status == "incomplete":
             state["final"] = final
-            ev.update(subtype="incomplete", is_error=False, result=final or reason, reason=reason)
+            # a question for the person (#476) has no words beside it: the answer is the agent's text
+            # so far, and the question is the gateway's item
+            ev.update(subtype="incomplete", is_error=False,
+                      result=final if reason == "input_required" else (final or reason), reason=reason)
         else:
             # failed, cancelled: the reason is the answer the record shows
             ev.update(subtype="error", is_error=True, result=reason or final or "the Antigravity turn failed",
@@ -16488,6 +16494,10 @@ _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
 # `input_required` and the question beside it, which the gateway turns into the response's
 # `input_request` item.
 _ASK_SERVER_NAME = "harnessrouter"
+# The bases a turn may ask on: claude through the MCP server below; antigravity through a function
+# its driver declares to Google, whose call it emits under this server's tool name
+# (antigravity_driver.ASK_TOOL_USE).
+_ASK_BASES = frozenset({"claude", "antigravity"})
 
 
 def _ask_user_server() -> dict:
@@ -18659,7 +18669,7 @@ class TurnReq(BaseModel):
                                            # which knows it when the base here is a broker's; unset = read it off the base
     traceparent: str | None = None          # the caller's W3C trace context (#473); unset = the turn has none
     tracestate: str | None = None           # its vendor state for that trace; never `baggage`
-    input_requests: bool = False            # claude: serve `ask_user`, and end the turn at its call (#476)
+    input_requests: bool = False            # claude, antigravity: serve `ask_user`, and end the turn at its call (#476)
 
 
 def _session_tree_refused(e: OSError, ws: str) -> bool:
@@ -19010,7 +19020,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                      mcp_withheld=req.mcp_withheld, tools_disabled=req.tools_disabled,
                                      agent_doc=agent_doc, input_files=input_files,
                                      skills=[{"name": s["name"], "dir": os.path.dirname(os.path.join(cwd, s["entry"]))}
-                                             for s in installed_skills])
+                                             for s in installed_skills],
+                                     asks=bool(req.input_requests))
         elif backend == "systemone":
             model = model or SYSTEMONE_DEFAULT_MODEL
             cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
@@ -19156,7 +19167,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                            # the values the record may not carry (see get_turn)
                            "secrets": _turn_secrets(req.env or {}, req.env_secret),
                            # served `ask_user` on this turn, so its result ends the turn (#476)
-                           "asks": bool(req.input_requests) and backend == "claude"}
+                           "asks": bool(req.input_requests) and backend in _ASK_BASES}
         if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
             _turns[turn_id]["events"].append({"type": "assistant", "_ts": time.time(),
                                               "message": {"content": [{"type": "text", "text": codex_note}]}})

@@ -9,6 +9,9 @@ Interactions and Environments APIs. A remote runtime (qoder's shape, docs/harnes
       Google's own (output with the thinking, reasoning a subset, cache reads apart)
   the status: completed, incomplete with the token budget's reason, failed with Google's words,
       requires_action, cancelled (SIGTERM posts :cancel)
+  a question for the person: `ask_user` declared as a function only when the turn may ask; the
+      interaction that stops on its call ends the turn input_required, and the next message is the
+      call's function_result on the same chain, a secret's value never in it
   files: the workspace goes up as the checkpoint's archive (its exclusions, .harness and .git out,
       no link followed or sent), only when it changed, under a size cap checked before anything is
       made at Google; what the agent changed comes back, and a path from Google is input: `..`,
@@ -38,11 +41,13 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import antigravity_driver as drv  # noqa: E402
+import ask_user_mcp  # noqa: E402
 import server as rs  # noqa: E402
 
 DRIVER = str(pathlib.Path(__file__).resolve().parents[1] / "antigravity_driver.py")
@@ -57,7 +62,8 @@ TAR = {"argv": ["tar", "-czf"]}
 class Stub:
     """Environments hold files ({env: {path: bytes}}); an interaction create streams the scripted
     events of the next turn in `script` (a list of turns, each a list of (event, data) pairs and
-    ("write", path, bytes) / ("delete", path) actions on the environment's files)."""
+    ("write", path, bytes) / ("delete", path) actions on the environment's files, and ("doc", fields)
+    to set what GET /interactions/{id} answers, such as a requires_action status and its steps)."""
 
     def __init__(self):
         self.calls: list[dict] = []
@@ -163,6 +169,9 @@ class Stub:
                         continue
                     if item[0] == "delete":
                         stub.envs[eid].pop(item[1], None)
+                        continue
+                    if item[0] == "doc":
+                        stub.interactions[iid].update(item[1])
                         continue
                     event, data = item
                     if isinstance(data, str):
@@ -313,11 +322,12 @@ def text_turn(*chunks: str, usage: dict | None = None, status: str = "completed"
     return t
 
 
-def run_driver(job: dict, relay: tuple, timeout: float = 30.0):
+def run_driver(job: dict, relay: tuple, timeout: float = 30.0, env: dict | None = None):
     base, tok = relay
     job = {"base_url": base, "api_key": tok, "model": "gemini-4-hydrogen", "tar": TAR,
            "exclude": list(rs.CHECKPOINT_EXCLUDE), **job}
-    proc = subprocess.run([sys.executable, DRIVER, json.dumps(job)], capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run([sys.executable, DRIVER, json.dumps(job)], capture_output=True, text=True, timeout=timeout,
+                          env=env)
     lines = [json.loads(ln) for ln in proc.stdout.splitlines() if ln.strip().startswith("{")]
     return lines, proc
 
@@ -626,6 +636,191 @@ def test_the_eof_says_googles_interaction_may_still_be_running():
     assert out[0]["is_error"] and "may still be running" in out[0]["result"]
 
 
+# ── a question for the person (UHP Tasks §3.2, #476) ──────────────────────────────────────────────
+CALL = "call_8460055444960515510"
+COLOUR = {"kind": "choice", "options": [{"id": "red", "label": "Red"}, {"id": "blue", "label": "Blue"}],
+          "prompt": "Which colour?"}
+
+
+def ask_turn(args: dict, call_id: str = CALL) -> list:
+    """An interaction that stops on the agent's ask_user call, as measured: the call arrives whole in
+    step.start, the interaction ends requires_action with no model_output, and its document holds the
+    open call."""
+    call = {"type": "function_call", "id": call_id, "name": "ask_user", "arguments": args}
+    return [ev("interaction.status_update", status="in_progress"),
+            ev("step.start", index=0, step={"type": "thought"}), ev("step.stop", index=0),
+            ev("step.start", index=1, step=call), ev("step.stop", index=1),
+            ("doc", {"steps": [{"type": "user_input", "content": [{"type": "text", "text": "ask"}]}, call]}),
+            ev("interaction.completed", interaction={"status": "requires_action", "usage": {
+                "total_input_tokens": 900, "total_cached_tokens": 100, "total_output_tokens": 20,
+                "total_thought_tokens": 30}}),
+            ev("done")]
+
+
+def answered_turn(call_id: str = CALL, text: str = "ANSWERED blue") -> list:
+    """The continuation, as measured: its steps open with the function_result it was sent, then the answer."""
+    return [ev("step.start", index=0, step={"type": "function_result", "call_id": call_id, "name": "ask_user",
+                                             "result": "as sent"}),
+            ev("step.stop", index=0),
+            ev("step.start", index=1, step={"type": "model_output"}),
+            ev("step.delta", index=1, delta={"type": "text", "text": text}),
+            ev("step.stop", index=1),
+            ev("interaction.completed", interaction={"status": "completed", "usage": {"total_input_tokens": 50,
+                                                                                     "total_output_tokens": 5}}),
+            ev("done")]
+
+
+def test_the_ask_function_is_declared_only_when_the_turn_may_ask(tmp_path, stub, relay):
+    for name in ("plain", "asks"):
+        (tmp_path / name).mkdir()
+    stub.script = [text_turn("ok"), text_turn("ok")]
+    run_driver({"cwd": str(tmp_path / "plain"), "prompt": "go"}, relay)
+    run_driver({"cwd": str(tmp_path / "asks"), "prompt": "go", "asks": True}, relay)
+    plain, asks = stub.creates()
+    assert plain["tools"] == [{"type": "code_execution"}, {"type": "google_search"}, {"type": "url_context"}]
+    # the one definition every base asks through
+    assert asks["tools"] == plain["tools"] + [{"type": "function", "name": "ask_user",
+                                               "description": ask_user_mcp.DESCRIPTION,
+                                               "parameters": ask_user_mcp.INPUT_SCHEMA}]
+    # the question is no tool of the agent's work: every built-in off and no server is still refused
+    lines, _ = run_driver({"cwd": str(tmp_path / "asks"), "prompt": "go", "asks": True,
+                           "tools_disabled": list(drv.TOOLS)}, relay)
+    res = hr_result(lines)
+    assert res["status"] == "failed" and "empty tool list" in res["reason"]
+    assert len(stub.creates()) == 2
+
+
+def test_a_call_to_ask_user_is_the_question_and_the_turn_ends_on_it_not_failed(tmp_path, stub, relay):
+    stub.script = [ask_turn(COLOUR)]
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "Ask me which colour.", "asks": True}, relay)
+    assert [ln["p"] for ln in lines if ln["m"] == "tool_use"] == [
+        {"id": CALL, "name": "mcp__harnessrouter__ask_user", "input": COLOUR}], proc.stderr
+    assert [ln["p"] for ln in lines if ln["m"] == "tool_result"] == [
+        {"tool_use_id": CALL, "text": drv.ASKED, "is_error": False}]
+    # the last lines, once the files are back and the chain is saved: the runner stops the turn at the result
+    assert [ln["m"] for ln in lines][-3:] == ["tool_use", "tool_result", "__hr_result"]
+    res = hr_result(lines)
+    assert res["status"] == "incomplete" and res["reason"] == "input_required" and res["final"] == ""
+    assert res["interaction_id"] == "v1_int2"
+    assert res["usage"] == {"input_tokens": 800, "output_tokens": 50, "cache_read_tokens": 100, "reasoning_tokens": 30}
+    events, _ = normalise(lines)
+    blocks = [c for e in events if e["type"] in ("assistant", "user") for c in e["message"]["content"]]
+    assert rs._is_ask_tool(blocks[-2]["name"]) and blocks[-2]["input"] == COLOUR
+    assert blocks[-1]["tool_use_id"] == CALL and blocks[-1]["is_error"] is False
+    final = result_of(events)
+    # no sentence of the driver's stands in for an answer: the question is the gateway's item
+    assert final["subtype"] == "incomplete" and final["is_error"] is False and final["result"] == ""
+    st = json.loads((tmp_path / rs.ANTIGRAVITY_STATE_REL).read_text())
+    assert st["last_interaction_id"] == "v1_int2" and "pending_interaction_id" not in st
+    # the call stays open at Google for the answer: nothing was cancelled
+    assert stub.interactions["v1_int2"]["status"] == "requires_action"
+    assert not [c for c in stub.calls if "cancel" in c["path"]]
+
+
+def test_the_runner_ends_the_turn_input_required_at_the_question(tmp_path, stub, relay):
+    """The real driver under the runner's turn loop: the watcher reads the ask tool's call and result,
+    stops the driver at the result, and the turn is incomplete with the question, not failed and not
+    cancelled; the interaction at Google is left open for the answer."""
+    stub.script = [ask_turn(COLOUR)]
+    base, tok = relay
+    env = os.environ.copy()
+    cmd = rs._driver_cmd(sys.executable, DRIVER, {"base_url": base, "api_key": tok, "model": "gemini-4-hydrogen",
+                                                  "tar": TAR, "exclude": list(rs.CHECKPOINT_EXCLUDE),
+                                                  "cwd": str(tmp_path), "prompt": "Ask me.", "asks": True}, env)
+    turn_id = "agask-" + uuid.uuid4().hex
+    rs._turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False, "started": time.time(),
+                          "backend": "antigravity", "model": "gemini-4-hydrogen", "asks": True}
+    try:
+        rs._run_turn_bg(turn_id, cmd, env, str(tmp_path), rs._antigravity_to_claude, "gemini-4-hydrogen",
+                        timeout_seconds=60)
+        rec = rs._turns[turn_id]
+    finally:
+        rs._turns.pop(turn_id, None)
+    assert rec["status"] == "incomplete" and rec["reason"] == "input_required", rec.get("error")
+    assert rec["input_request"] == ask_user_mcp.validate_request(COLOUR)[0]
+    assert rec["result"] == "" and rec["done"]
+    final = [e for e in rec["events"] if e.get("type") == "result"][-1]
+    assert final["subtype"] == "incomplete" and final["is_error"] is False and final["usage"]["input_tokens"] == 800
+    assert stub.interactions["v1_int2"]["status"] == "requires_action"
+    assert not [c for c in stub.calls if "cancel" in c["path"]]
+
+
+@pytest.mark.parametrize("said", ['Answer to your question "Which colour?": "blue"', "Actually, write a poem instead."])
+def test_the_next_message_is_the_open_calls_result_on_the_same_chain(tmp_path, stub, relay, said):
+    """Whatever the person says next answers the open call: the answer line the gateway writes, or a
+    new message instead of an answer. The request is the first one's agent, environment, tools and
+    agent_config, chained on the interaction that asked."""
+    stub.script = [ask_turn(COLOUR), answered_turn()]
+    run_driver({"cwd": str(tmp_path), "prompt": "Ask me which colour.", "asks": True}, relay)
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": said, "asks": True, "resume_session_id": "env1"}, relay)
+    first, second = stub.creates()
+    assert second["previous_interaction_id"] == "v1_int2"
+    assert second["input"] == [{"type": "function_result", "call_id": CALL, "name": "ask_user", "result": said}]
+    same = ("agent", "environment", "tools", "agent_config")
+    assert {k: second[k] for k in same} == {k: first[k] for k in same}
+    res = hr_result(lines)
+    assert res["status"] == "completed" and res["final"] == "ANSWERED blue", proc.stderr
+    # the message itself, echoed in the interaction's steps, is not a tool's result in the transcript
+    assert not [ln for ln in lines if ln["m"] in ("tool_use", "tool_result")]
+
+
+def test_with_no_open_question_the_message_goes_as_text_as_before(tmp_path, stub, relay):
+    stub.script = [text_turn("one"), text_turn("two")]
+    run_driver({"cwd": str(tmp_path), "prompt": "first", "asks": True}, relay)
+    run_driver({"cwd": str(tmp_path), "prompt": "second", "asks": True, "resume_session_id": "env1"}, relay)
+    second = stub.creates()[1]
+    assert second["previous_interaction_id"] == "v1_int2" and second["input"] == [{"type": "text", "text": "second"}]
+    assert second["tools"][-1]["name"] == "ask_user"
+    # stopped on a call this side does not answer: the next message starts a new chain, as before
+    stub.interactions["v1_int3"].update(status="requires_action",
+                                        steps=[{"type": "function_call", "id": "c9", "name": "other", "arguments": {}}])
+    stub.script = [text_turn("three")]
+    run_driver({"cwd": str(tmp_path), "prompt": "third", "asks": True, "resume_session_id": "env1"}, relay)
+    third = stub.creates()[2]
+    assert "previous_interaction_id" not in third and third["input"] == [{"type": "text", "text": "third"}]
+    # a call already answered is not open
+    call = {"type": "function_call", "id": CALL, "name": "ask_user", "arguments": COLOUR}
+    assert drv.pending_ask([call, {"type": "function_result", "call_id": CALL, "name": "ask_user", "result": "x"}]) == {}
+    assert drv.pending_ask([{"type": "user_input"}, call]) == call and drv.pending_ask(None) == {}
+
+
+def test_a_secret_answer_never_reaches_google(tmp_path, stub, relay):
+    """The gateway puts a secret answer in the turn's environment and writes a line that names the
+    variable: the line is the call's result at Google, and the value is in nothing sent there."""
+    nonce = "nonce-" + uuid.uuid4().hex
+    stub.script = [ask_turn({"kind": "secret", "prompt": "Your deploy token?"}), answered_turn(text="Noted.")]
+    run_driver({"cwd": str(tmp_path), "prompt": "deploy", "asks": True}, relay)
+    line = ('Answer to your question "Your deploy token?": a secret, in the environment variable HR_INPUT_INREQ_1. '
+            "Read it from there when you need it; never print, repeat or store it.")
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": line, "asks": True, "resume_session_id": "env1"}, relay,
+                             env={**os.environ, "HR_INPUT_INREQ_1": nonce})
+    assert hr_result(lines)["status"] == "completed", proc.stderr
+    assert stub.creates()[1]["input"] == [{"type": "function_result", "call_id": CALL, "name": "ask_user", "result": line}]
+    for c in stub.calls:
+        assert nonce.encode() not in c["body"] and nonce not in json.dumps([c["path"], c["query"], c["headers"]])
+    assert nonce not in proc.stdout and nonce not in (tmp_path / rs.ANTIGRAVITY_STATE_REL).read_text()
+
+
+def test_a_question_that_asks_nothing_is_not_put_and_the_turn_says_why(tmp_path, stub, relay):
+    stub.script = [ask_turn({"kind": "choice", "prompt": "Which?", "options": [{"id": "a", "label": "A"}]})]
+    lines, _ = run_driver({"cwd": str(tmp_path), "prompt": "go", "asks": True}, relay)
+    [res_line] = [ln["p"] for ln in lines if ln["m"] == "tool_result"]
+    assert res_line["is_error"] is True and "two options" in res_line["text"]
+    res = hr_result(lines)
+    assert res["status"] == "incomplete" and "could not be put to the person" in res["reason"]
+
+
+def test_a_question_the_stream_did_not_deliver_is_read_from_the_interaction(tmp_path, stub, relay):
+    """The stream carried the agent's thinking and ended before the call: the interaction's document
+    says requires_action and holds the open call, which is the question all the same."""
+    call = {"type": "function_call", "id": CALL, "name": "ask_user", "arguments": COLOUR}
+    stub.script = [[ev("step.start", index=0, step={"type": "thought"}), ev("step.stop", index=0),
+                    ("doc", {"status": "requires_action", "steps": [{"type": "user_input", "content": []}, call]})]]
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "go", "asks": True}, relay)
+    assert [ln["p"]["name"] for ln in lines if ln["m"] == "tool_use"] == ["mcp__harnessrouter__ask_user"], proc.stderr
+    assert hr_result(lines)["reason"] == "input_required"
+
+
 # ── files ────────────────────────────────────────────────────────────────────────────────────────
 def test_the_workspace_goes_up_as_the_checkpoint_keeps_it_and_no_link_is_sent(tmp_path, stub, relay):
     ws = tmp_path
@@ -881,6 +1076,22 @@ def test_the_builder_hands_the_driver_the_relay_and_a_placeholder_never_the_key(
         rs._build_antigravity("google", rs.Auth(api_key="k", base_url="https://proxy.example.com/v1"), "m", "hi",
                               str(tmp_path), {})
     assert "not Google's" in e.value.detail
+
+
+def test_a_turn_on_this_base_may_ask_and_its_job_says_so(tmp_path):
+    """The turn record's `asks` arms the runner's watcher for this base too, and the driver's job
+    carries the same word, so the function is declared exactly when a call to it ends the turn."""
+    assert {"claude", "antigravity"} <= rs._ASK_BASES
+    src = pathlib.Path(rs.__file__).read_text()
+    assert '"asks": bool(req.input_requests) and backend in _ASK_BASES' in src
+    i = src.index('elif backend == "antigravity":')
+    assert "asks=bool(req.input_requests)" in src[i:i + 1200]
+    for kw, want in (({"asks": True}, True), ({}, False)):
+        env: dict = {}
+        rs._build_antigravity("google", rs.Auth(api_key=KEY), "gemini-4-hydrogen", "hi", str(tmp_path), env, **kw)
+        job = json.loads(env["HR_DRIVER_JOB"])
+        rs._HERMES_RELAY["routes"].pop(job["api_key"], None)
+        assert job["asks"] is want
 
 
 def test_the_registration_points():
