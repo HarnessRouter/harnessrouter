@@ -49,10 +49,12 @@ def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, o
 
 
 def principals_of(p: dict) -> list[str]:
-    """Who a caller is to the access model: the person, and the group that is the workspace it acts in."""
+    """Who a caller is to the access model: the person (or, for a key minted for no one, the key itself as
+    key:<key id>, mp.creator_of), and the group that is the workspace it acts in."""
     out = []
-    if p.get("member"):
-        out.append(f"member:{p['member']}")
+    creator = mp.creator_of(p)
+    if creator:
+        out.append(mp.creator_principal(creator))
     if p.get("workspace"):
         out.append(f"group:{p['workspace']}")
     return out
@@ -68,7 +70,8 @@ async def _who(request: Request) -> tuple[str, str, str, list[str]]:
     # its own workspace connected, and a key held to a workspace can't name another to spend its vendor account.
     # The caller acts in that workspace alone: it reaches that workspace's memories and no other's (mp.acting_in).
     ws = _workspace_of(request, p)
-    return org, str(p.get("member") or ""), ws, mp.placed(principals_of(p), ws)
+    # the second value is who this caller acts as (mp.creator_of): a member, or a key minted for no one as key:<id>
+    return org, mp.creator_of(p), ws, mp.placed(principals_of(p), ws)
 
 
 def _writer(request: Request) -> dict:
