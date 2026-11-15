@@ -1553,6 +1553,8 @@ paid projects. Read them before you turn this base on. What is sent:
   A server whose key is stored here, a tool this instance serves itself (memory, media, databases) and
   a plugin's stdio server are not sent; the task says which, and why. A harness's environment variables
   do not reach this base.
+- When a task can ask the person a question, the definition of one custom function, `ask_user` (its
+  name, description and parameters), and the person's answers, except a secret's value.
 
 **What stays.** The Google AI Studio key is held by this instance's runner for the length of a task and
 put on each call there; the agent's process never holds it, and a call that is not one of this
@@ -1576,6 +1578,13 @@ not offered to the agent, and a task in which Google runs it anyway ends `incomp
 sandbox's file tools have no switch: with Code Execution off the agent can still write files. With all
 three off and no tool server, a task is refused: Google's agent reads an empty tool list as all of its
 tools on.
+
+**Questions for the person.** This base takes questions (`ask_user`, the `input_requests` capability,
+`takesInputRequests` on `GET /v1/bases`): each message of a task that can ask declares `ask_user` to
+Google as a custom function. When the agent calls it, the task ends `incomplete` with the question, and
+the next message, the answer or anything else the person sends instead, goes to Google as that call's
+result in the same conversation. A secret answer stays on this instance: the agent is told one was
+given, never its value, so it cannot use a secret in Google's sandbox.
 
 **Files back.** When a message ends, what the agent added, changed or removed under `/workspace` comes
 back into the task's files. A file that cannot come back (over 100 MiB, `HR_ANTIGRAVITY_FILE_MAX_BYTES`;
