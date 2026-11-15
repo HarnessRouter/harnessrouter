@@ -7,11 +7,15 @@ against what the CLI really sends. It records what it was asked in $FAKE_AGY_LOG
 in $FAKE_AGY_LOG.env, and its argv in $FAKE_AGY_LOG.argv. FAKE_AGY_MODE: `ok` (a write, a shell command
 that asks first, an MCP call, then the answer), `thinking` (an answer that thought; `apart` reports the
 thinking beside the output instead of inside it), `bad_model` (set_model refused), `load_fails` (the
-stored session will not load), `silent` (end_turn with nothing said).
+stored session will not load), `silent` (end_turn with nothing said), `steps` (the fixture's uhp_steps
+chain, three calls) and `ask` (one call to the runner's ask_user). Before its first call to an MCP tool,
+agy 1.5.8 reads the tool's definition, <HOME>/.gemini/antigravity-cli/mcp/<server>/<tool>.json, with its
+read_file; `steps` and `ask` do the same, and each MCP call takes a moment, as a real one does.
 """
 import json
 import os
 import sys
+import time
 
 MODE = os.environ.get("FAKE_AGY_MODE", "ok")
 LOG = open(os.environ["FAKE_AGY_LOG"], "w")
@@ -117,6 +121,29 @@ for line in sys.stdin:
                      {"inputTokens": 8254, "outputTokens": 148, "cachedReadTokens": 0, "cachedWriteTokens": 0,
                       "thoughtTokens": 2825, "totalTokens": 11227})
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn", "usage": usage}})
+            continue
+        if MODE in ("steps", "ask"):
+            server, name = ("conformance_fixture", "uhp_steps") if MODE == "steps" else ("harnessrouter", "ask_user")
+            definition = os.path.join(os.environ["HOME"], ".gemini", "antigravity-cli", "mcp", server, name + ".json")
+            tool("call_d", "read_file", {"Path": definition}, "read", f"Read {name}.json",
+                 output='{"name": "%s"}' % name)
+            for i in range(1 if MODE == "ask" else 3):
+                args = ({"nonce": "n1"} if MODE == "steps" else
+                        {"kind": "choice", "prompt": "Which language?",
+                         "options": [{"id": "en", "label": "English"}, {"id": "zh", "label": "Chinese"}]})
+                call = {"sessionUpdate": "tool_call", "toolCallId": f"call_m{i}", "name": "call_mcp_tool",
+                        "args": {"Arguments": args, "ServerName": server, "ToolName": name},
+                        "rawInput": {"Arguments": args, "ServerName": server, "ToolName": name},
+                        "status": "in_progress", "kind": "execute", "title": f"MCP Tool {name}"}
+                update(call)
+                time.sleep(0.5)
+                out = (f"step {i + 1} of 3; call again" if MODE == "steps" else json.dumps({"status": "input_required"}))
+                update({**call, "sessionUpdate": "tool_call_update", "status": "completed", "rawOutput": out,
+                        "content": [{"type": "content", "content": {"type": "text", "text": out}}]})
+            update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "DONE"}})
+            send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn", "usage": {
+                "inputTokens": 900, "outputTokens": 20, "cachedReadTokens": 0, "cachedWriteTokens": 0,
+                "thoughtTokens": 0, "totalTokens": 920}}})
             continue
         tool("call_1", "write_file", {"Content": "alpha", "Path": os.path.join(params.get("cwd") or os.getcwd(), "a.txt")},
              "edit", "File a.txt", diff="alpha\n")

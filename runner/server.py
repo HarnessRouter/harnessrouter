@@ -16545,11 +16545,13 @@ def _running_usage(state: dict) -> dict:
 
 def _count_tool_calls(ev: dict, state: dict) -> int:
     """The tool calls a turn has made so far, counted by id, so a normaliser that reports one call
-    twice does not spend the budget twice."""
+    twice does not spend the budget twice. A call its driver marks `not_a_step` is part of calling
+    another tool (agy reads an MCP tool's definition before its first call to it, agy_driver
+    _Definitions): it stays in the record and spends nothing."""
     seen = state.setdefault("_tool_ids", set())
     blocks = (ev.get("message") or {}).get("content")
     for b in blocks if isinstance(blocks, list) else []:
-        if isinstance(b, dict) and b.get("type") == "tool_use":
+        if isinstance(b, dict) and b.get("type") == "tool_use" and not b.get("not_a_step"):
             seen.add(str(b.get("id") or f"#{len(seen)}"))
     return len(seen)
 

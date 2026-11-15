@@ -14,6 +14,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -326,6 +327,97 @@ def test_the_cli_never_sees_the_job_or_the_key(tmp_path):
     assert KEY not in json.dumps(agent_env)
     argv = json.loads(pathlib.Path(str(log) + ".argv").read_text())
     assert argv[1:] == ["acp", "--disable-telemetry"]
+
+
+# ── an MCP call, and the read of its definition ─────────────────────────────────────────────────
+MCP_CALL = {"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "call_mcp_tool", "status": "in_progress",
+            "kind": "execute", "title": "MCP Tool uhp_steps",
+            "rawInput": {"Arguments": {"nonce": "n1"}, "ServerName": "conformance_fixture", "ToolName": "uhp_steps"}}
+
+
+def _calls(home=""):
+    evs: list = []
+    return evs, D._Calls(D.Stream(lambda title, kind: title or kind or "tool", out=D._Definitions(str(home), out=evs.append)))
+
+
+def test_an_mcp_calls_input_is_the_tools_own_arguments():
+    """agy routes every MCP tool through call_mcp_tool with the tool's arguments inside its own input; the call is
+    named for the tool, so its input is the tool's, as every other base gives it."""
+    for raw in ({"nonce": "n1"}, '{"nonce": "n1"}'):
+        evs, calls = _calls()
+        calls.update({**MCP_CALL, "rawInput": {**MCP_CALL["rawInput"], "Arguments": raw}})
+        (use,) = _blocks(evs, "tool_use")
+        assert use["name"] == "mcp__conformance_fixture__uhp_steps" and use["input"] == {"nonce": "n1"}
+    # arguments that are not an object keep the call's whole input, so nothing it carried is lost
+    for raw in ("not json", '["a"]', ["a"], None):
+        wrapper = {**MCP_CALL["rawInput"], "Arguments": raw}
+        assert D.mcp_arguments(wrapper) == wrapper
+    # a failed call carries its input in `args` only: named and unwrapped the same
+    evs, calls = _calls()
+    calls.update({**{k: v for k, v in MCP_CALL.items() if k != "rawInput"}, "status": "failed",
+                  "args": MCP_CALL["rawInput"]})
+    (use,) = _blocks(evs, "tool_use")
+    assert use["name"] == "mcp__conformance_fixture__uhp_steps" and use["input"] == {"nonce": "n1"}
+
+
+def _read(cid, path):
+    return {"sessionUpdate": "tool_call", "toolCallId": cid, "name": "read_file", "status": "in_progress",
+            "kind": "read", "title": "Read", "rawInput": {"Path": str(path)}}
+
+
+def test_the_first_read_of_a_tools_definition_is_not_a_step_and_a_second_one_is(tmp_path):
+    home = tmp_path / ".harness" / "home"
+    mcp = home / ".gemini" / "antigravity-cli" / "mcp"
+    evs, calls = _calls(home)
+    calls.update(_read("r1", mcp / "conformance_fixture" / "uhp_steps.json"))
+    calls.update(_read("r2", f"{mcp}/./conformance_fixture//uhp_steps.json"))   # the same file again
+    calls.update(_read("r3", tmp_path / "notes.json"))                          # a file of the workspace's
+    calls.update(_read("r4", mcp / ".." / "settings.json"))                     # beside the definitions, not under them
+    calls.update(_read("r5", mcp / "conformance_fixture" / "uhp_steps.txt"))    # not a definition
+    calls.update(_read("r6", mcp / "harnessrouter" / "ask_user.json"))          # another tool's, read once
+    uses = _blocks(evs, "tool_use")
+    assert [u["id"] for u in uses] == ["r1", "r2", "r3", "r4", "r5", "r6"]      # every read stays in the record
+    assert [bool(u.get("not_a_step")) for u in uses] == [True, False, False, False, False, True]
+    state: dict = {}
+    assert [rs._count_tool_calls({"type": "assistant", "message": {"content": [u]}}, state) for u in uses] == \
+        [0, 1, 2, 3, 4, 4]
+
+
+def _run_driver(tmp_path, mode, max_turns=None):
+    """The real driver against the fake agy, through the runner's own turn loop."""
+    home = tmp_path / ".harness" / "home"
+    log = tmp_path / "asked.ndjson"
+    job = {"argv": [sys.executable, str(FAKE), "acp", "--disable-telemetry"], "cwd": str(tmp_path), "prompt": "go",
+           "model": "gemini-3.8-flash", "agy_model": "gemini-3.8-flash-medium", "resume": "", "resume_known": False,
+           "withheld": [], "timeout": 60}
+    env = {**os.environ, "HOME": str(home), "FAKE_AGY_MODE": mode, "FAKE_AGY_LOG": str(log),
+           "HR_DRIVER_JOB": json.dumps(job)}
+    tid = "agy-" + mode + "-" + os.urandom(6).hex()
+    rs._turns[tid] = {"status": "running", "events": [], "result": "", "done": False, "started": time.time(),
+                      "backend": "agy", "model": "gemini-3.8-flash"}
+    try:
+        rs._run_turn_bg(tid, [sys.executable, str(pathlib.Path(D.__file__))], env, str(tmp_path),
+                        rs._claude_passthrough, "gemini-3.8-flash", timeout_seconds=60,
+                        max_turns=max_turns, count_steps=bool(max_turns))
+        return rs._turns[tid]
+    finally:
+        rs._turns.pop(tid, None)
+
+
+def test_a_one_step_budget_answers_the_tool_once_and_stops_at_the_next_call(tmp_path):
+    """T-12's shape: `max_step: 1` and a chain of three calls. The read of the tool's definition agy makes before
+    its first call is part of that call, so the one step is the tool's: it is answered, and the turn stops at the
+    second call, incomplete at its budget."""
+    rec = _run_driver(tmp_path, "steps", max_turns=1)
+    uses = _blocks(rec["events"], "tool_use")
+    answered = {b["tool_use_id"] for b in _blocks(rec["events"], "tool_result")}
+    steps = [b for b in uses if b["name"] == "mcp__conformance_fixture__uhp_steps"]
+    assert steps[0]["input"] == {"nonce": "n1"}
+    assert steps[0]["id"] in answered, "the one step the budget allows was stopped before the tool answered"
+    assert len(steps) == 2 and steps[1]["id"] not in answered
+    assert rec["status"] == "max_turns"
+    read = next(b for b in uses if b["name"] == "read_file")
+    assert read["not_a_step"] is True and read["id"] in answered           # in the record, spending nothing
 
 
 # ── the install: opt-in, pinned by version and digest ──────────────────────────────────────────

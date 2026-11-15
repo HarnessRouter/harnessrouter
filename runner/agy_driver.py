@@ -47,6 +47,53 @@ def tool_name(update: dict) -> str:
     return name or str(update.get("title") or update.get("kind") or "tool")
 
 
+def mcp_arguments(raw):
+    """An MCP call's own arguments, out of call_mcp_tool's input ({"Arguments": {...}, "ServerName": ...,
+    "ToolName": ...}): the dict, or the dict a JSON string of it holds. Anything else keeps the whole input,
+    so nothing the call carried is lost."""
+    if not isinstance(raw, dict):
+        return raw
+    args = raw.get("Arguments")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            return raw
+    return args if isinstance(args, dict) else raw
+
+
+class _Definitions:
+    """agy reads an MCP tool's definition before its first call to the tool: a read_file of
+    <HOME>/.gemini/antigravity-cli/mcp/<server>/<tool>.json (1.5.8). That read is part of calling the tool,
+    not a step of the turn's own, so the first read of each such file is marked `not_a_step`, which the
+    runner's step budget passes over (server._count_tool_calls); the call stays in the record. A second
+    read of the same file counts as any other call."""
+
+    def __init__(self, home: str, out=emit) -> None:
+        self.roots = {os.path.join(os.path.normpath(h), ".gemini", "antigravity-cli", "mcp") + os.sep
+                      for h in ({home, os.path.realpath(home)} if home else ())}
+        self.read: set[str] = set()
+        self.out = out
+
+    def definition(self, args) -> str:
+        """The normalised path a read_file's input names, if it is a tool definition under the CLI's home."""
+        p = args.get("Path") if isinstance(args, dict) else None
+        if not isinstance(p, str) or not os.path.isabs(p):
+            return ""
+        p = os.path.normpath(p)
+        return p if p.endswith(".json") and any(p.startswith(r) for r in self.roots) else ""
+
+    def __call__(self, ev: dict) -> None:
+        blocks = (ev.get("message") or {}).get("content") if ev.get("type") == "assistant" else None
+        for b in blocks if isinstance(blocks, list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "read_file":
+                path = self.definition(b.get("input"))
+                if path and path not in self.read:
+                    self.read.add(path)
+                    b["not_a_step"] = True
+        self.out(ev)
+
+
 def usage(u) -> dict:
     """A prompt's usage, in the runner's contract: fresh input, output with thinking in it, the cache
     split, and the thinking as `reasoning_tokens`, never more than the output it is part of.
@@ -76,16 +123,22 @@ def usage(u) -> dict:
 
 
 class _Calls:
-    """What the record shows of a call: agy's own name for it, put where acp_turn's Stream reads one."""
+    """What the record shows of a call: agy's own name for it, put where acp_turn's Stream reads one, and an
+    MCP call's input as the tool's own arguments."""
 
     def __init__(self, stream: Stream) -> None:
         self.stream = stream
 
     def update(self, u: dict) -> None:
         if str(u.get("sessionUpdate") or "") in ("tool_call", "tool_call_update"):
-            u = {**u, "title": tool_name(u)}
+            u = dict(u)
             if not isinstance(u.get("rawInput"), dict) and isinstance(u.get("args"), dict):
                 u["rawInput"] = u["args"]          # agy carries the arguments in both; a failed call in `args` only
+            u["title"] = tool_name(u)
+            if str(u.get("name") or "") == "call_mcp_tool":
+                # the call is named mcp__<server>__<tool> above, so its input is that tool's: a watcher that
+                # reads a tool's arguments (the runner's ask_user) reads them as any other base gives them
+                u["rawInput"] = mcp_arguments(u.get("rawInput"))
             diffs = [c for c in u.get("content") or [] if isinstance(c, dict) and c.get("type") == "diff"]
             if diffs:
                 # A file write reports what it wrote as a diff, which has no text block of its own.
@@ -102,7 +155,8 @@ def main() -> int:
     withheld = {str(t) for t in job.get("withheld") or []}
     refused: list[str] = []
     started = time.time()
-    stream = Stream(lambda title, kind: title or kind or "tool")
+    # HOME is the CLI's own (the runner's redirected one), so the definitions it reads are under it
+    stream = Stream(lambda title, kind: title or kind or "tool", out=_Definitions(str(env.get("HOME") or "")))
     calls = _Calls(stream)
 
     def permit(params: dict) -> bool:
