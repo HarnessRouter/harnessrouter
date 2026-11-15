@@ -16058,12 +16058,16 @@ def _agy_relay_route(api_key: str) -> tuple[str, str]:
 
 def _build_agy(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-               tools_disabled: list[str] | None = None) -> list[str]:
+               tools_disabled: list[str] | None = None, input_requests: bool = False) -> list[str]:
     """One agy turn, as argv for the driver: `agy acp --disable-telemetry` with the job in its environment, and
     its updates and crash reporting off there (AGY_CLI_DISABLE_AUTO_UPDATE, ANTIGRAVITY_SENTRY_SAMPLE_RATE).
 
     No --dangerously-skip-permissions: the ACP server then asks before a shell command, and the driver
-    answers (yes, or no when the harness switched the shell off). Nobody else is asked anything."""
+    answers (yes, or no when the harness switched the shell off). Nobody else is asked anything.
+
+    With `input_requests` the question tool (#476) is one more stdio server in the CLI's MCP config. The
+    driver names its call mcp__harnessrouter__ask_user and hands on the tool's own arguments, which is what
+    the runner's watcher ends the turn at (_is_ask_tool, _ask_question_seen)."""
     pr = provider or "google"
     if pr not in AGY_PROVIDERS:
         raise HTTPException(400, f"unknown agy provider '{pr}' (one of {sorted(AGY_PROVIDERS)})")
@@ -16088,7 +16092,9 @@ def _build_agy(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"    # "true", not "1": the CLI ignores "1"
     env["ANTIGRAVITY_SENTRY_SAMPLE_RATE"] = "0"    # its crash reporting, off
     _agy_settings(home)
-    _agy_mcp_config(home, mcp_servers, tools_disabled)
+    # last, so the runner's server wins a name a harness's own server also took (as claude's config does)
+    _agy_mcp_config(home, [*(mcp_servers or []), *([_ask_user_server()] if input_requests else [])],
+                    tools_disabled)
     off = set(_tool_names_off(tools_disabled))
     withheld = sorted({n for switch, names in AGY_WITHHELD_BY_ANSWER.items() if switch in off for n in names})
     known = bool(resume_session_id) and _agy_session_present(cwd, None, resume_session_id or "")
@@ -16465,6 +16471,9 @@ _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
 # `input_required` and the question beside it, which the gateway turns into the response's
 # `input_request` item.
 _ASK_SERVER_NAME = "harnessrouter"
+# The bases served `ask_user` when a turn asks for input requests (the gateway's _INPUT_REQUEST_BASES):
+# claude through its --mcp-config, agy through its mcp_config.json (_build_agy).
+_ASK_BASES = frozenset({"claude", "agy"})
 
 
 def _ask_user_server() -> dict:
@@ -18640,7 +18649,7 @@ class TurnReq(BaseModel):
                                            # which knows it when the base here is a broker's; unset = read it off the base
     traceparent: str | None = None          # the caller's W3C trace context (#473); unset = the turn has none
     tracestate: str | None = None           # its vendor state for that trace; never `baggage`
-    input_requests: bool = False            # claude: serve `ask_user`, and end the turn at its call (#476)
+    input_requests: bool = False            # _ASK_BASES: serve `ask_user`, and end the turn at its call (#476)
 
 
 def _session_tree_refused(e: OSError, ws: str) -> bool:
@@ -19085,7 +19094,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             model = model or AGY_DEFAULT_MODEL
             cmd = _build_agy(req.provider, auth, model, req.prompt, cwd, env,
                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                             tools_disabled=req.tools_disabled)
+                             tools_disabled=req.tools_disabled, input_requests=bool(req.input_requests))
         elif backend == "zeroclaw":
             model = model or ZEROCLAW_DEFAULT_MODEL
             cmd = _build_zeroclaw(req.provider, auth, model, req.prompt, cwd, env,
@@ -19132,7 +19141,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                            # the values the record may not carry (see get_turn)
                            "secrets": _turn_secrets(req.env or {}, req.env_secret),
                            # served `ask_user` on this turn, so its result ends the turn (#476)
-                           "asks": bool(req.input_requests) and backend == "claude"}
+                           "asks": bool(req.input_requests) and backend in _ASK_BASES}
         if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
             _turns[turn_id]["events"].append({"type": "assistant", "_ts": time.time(),
                                               "message": {"content": [{"type": "text", "text": codex_note}]}})

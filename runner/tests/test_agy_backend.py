@@ -420,6 +420,77 @@ def test_a_one_step_budget_answers_the_tool_once_and_stops_at_the_next_call(tmp_
     assert read["not_a_step"] is True and read["id"] in answered           # in the record, spending nothing
 
 
+# ── a question for the person (#476) ──────────────────────────────────────────────────────────
+ASK_SCRIPT = str(pathlib.Path(rs.__file__).with_name("ask_user_mcp.py"))
+QUESTION = {"kind": "choice", "prompt": "Which language?",
+            "options": [{"id": "en", "label": "English"}, {"id": "zh", "label": "Chinese"}]}
+
+
+def test_the_ask_server_is_in_the_clis_mcp_config_only_when_the_turn_takes_input_requests(tmp_path):
+    servers = [{"name": "plugs", "url": "http://127.0.0.1:41000/hr-mcp-" + "a" * 32 + "/mcp"}]
+    path = tmp_path / ".harness/home/.gemini/config/mcp_config.json"
+    _build(cwd=str(tmp_path), mcp_servers=servers, input_requests=True)
+    cfg = json.loads(path.read_text())["mcpServers"]
+    assert cfg["harnessrouter"] == {"command": sys.executable, "args": [ASK_SCRIPT]}
+    assert cfg["plugs"] == {"serverUrl": servers[0]["url"]}                 # the harness's own beside it
+    # the name the CLI will give its call is the one the runner ends the turn at
+    assert rs._is_ask_tool(D.tool_name({"name": "call_mcp_tool", "rawInput": {
+        "Arguments": QUESTION, "ServerName": "harnessrouter", "ToolName": "ask_user"}}))
+    _build(cwd=str(tmp_path), mcp_servers=servers)
+    cfg = json.loads(path.read_text())["mcpServers"]
+    assert "harnessrouter" not in cfg and "plugs" in cfg
+
+
+def _wait_done(tid, seconds=30):
+    t0 = time.time()
+    while time.time() - t0 < seconds:
+        if rs._turns.get(tid, {}).get("done"):
+            return rs._turns[tid]
+        time.sleep(0.05)
+    raise AssertionError(f"turn {tid} did not finish in {seconds}s")
+
+
+def test_a_turn_that_takes_input_requests_ends_on_the_question_and_the_answer_continues_it(tmp_path, monkeypatch):
+    """Through /turn, the driver and the fake agy: the turn is served ask_user, ends `incomplete` with reason
+    `input_required` at the tool's answer, and the answer's turn resumes the same conversation with a secret
+    answer in the CLI's environment."""
+    from fastapi.testclient import TestClient
+    wrapper = tmp_path / "agy"
+    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
+    wrapper.chmod(0o755)
+    monkeypatch.setattr(rs, "AGY_BIN", str(wrapper))
+    monkeypatch.setattr(rs, "_SESSION_UIDS", False, raising=False)
+    monkeypatch.setattr(rs, "WORKSPACE_ROOT", str(tmp_path / "root"), raising=False)
+    log = tmp_path / "asked.ndjson"
+    monkeypatch.setenv("FAKE_AGY_LOG", str(log))
+    monkeypatch.setenv("FAKE_AGY_MODE", "ask")
+    client = TestClient(rs.app)
+    body = {"backend": "agy", "provider": "google", "model": "gemini-3.8-flash", "prompt": "ask me",
+            "auth": {"api_key": KEY}, "input_requests": True}
+    r = client.post("/turn", params={"identifier": "hsess-agy-ask"}, json=body)
+    assert r.status_code == 200, r.text
+    rec = _wait_done(r.json()["turn_id"])
+    assert rec["asks"] is True
+    assert rec["status"] == "incomplete" and rec["reason"] == "input_required", (rec["status"], rec.get("error"))
+    assert rec["input_request"] == QUESTION
+    asked = [b for b in _blocks(rec["events"], "tool_use") if b["name"] == "mcp__harnessrouter__ask_user"]
+    assert asked and asked[0]["input"] == QUESTION
+    ws = pathlib.Path(rs._ws("hsess-agy-ask"))
+    cfg = json.loads((ws / ".harness/home/.gemini/config/mcp_config.json").read_text())["mcpServers"]
+    assert cfg["harnessrouter"] == {"command": sys.executable, "args": [ASK_SCRIPT]}
+    # the answer: the next turn's prompt on the same conversation, a secret one in the turn's environment
+    secret = "secret-answer-" + os.urandom(8).hex()
+    monkeypatch.setenv("FAKE_AGY_MODE", "thinking")
+    r = client.post("/turn", params={"identifier": "hsess-agy-ask"}, json={
+        **body, "prompt": "The answer is in HR_INPUT_INREQ_1.", "resume_session_id": rec["session_id"],
+        "env": {"HR_INPUT_INREQ_1": secret}, "env_secret": ["HR_INPUT_INREQ_1"]})
+    nxt = _wait_done(r.json()["turn_id"])
+    assert nxt["status"] == "done" and nxt["session_id"] == rec["session_id"]
+    methods = [json.loads(ln).get("method") for ln in log.read_text().splitlines() if ln.strip()]
+    assert "session/load" in methods and "session/new" not in methods
+    assert json.loads(pathlib.Path(str(log) + ".env").read_text())["HR_INPUT_INREQ_1"] == secret
+
+
 # ── the install: opt-in, pinned by version and digest ──────────────────────────────────────────
 ENTRY = (ROOT / "docker" / "entrypoint.sh").read_text()
 

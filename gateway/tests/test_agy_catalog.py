@@ -247,3 +247,15 @@ def test_the_ask_is_in_the_same_words_in_the_notes_and_the_guide():
     assert ASK in A._BASE_CATALOG["agy"]["notes"]
     guide = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "self-hosting-guide.md").read_text()
     assert ASK in " ".join(guide.replace("`", "").split())             # the same words, as the guide wraps them
+
+
+def test_a_task_on_this_base_can_end_on_a_question_for_the_person(monkeypatch):
+    """Tasks §3.2: the runner serves `ask_user` to this base, so the runner's job says so and the bases document
+    says so; a base without the wiring still says it does not."""
+    assert "agy" in A._INPUT_REQUEST_BASES and A._INPUT_REQUEST_BASES == R._ASK_BASES
+    # one answer, in both places the gateway reads it
+    assert {b["backend"] for b in A._BASE_CATALOG.values() if b.get("input_requests")} == A._INPUT_REQUEST_BASES
+    monkeypatch.delenv("HR_BACKENDS_INSTALLED", raising=False)
+    bases = _bases(monkeypatch)
+    assert bases["agy"]["takesInputRequests"] is True and bases["claude-code"]["takesInputRequests"] is True
+    assert bases["codex"]["takesInputRequests"] is False

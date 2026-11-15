@@ -5808,9 +5808,10 @@ UHP_CAPABILITIES = {
     "resume": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
-# The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
-# One base end to end is the reference; the others ask in prose until each gets its own wiring.
-_INPUT_REQUEST_BASES = {"claude"}
+# The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py; the
+# runner's _ASK_BASES), each with `input_requests` in its _BASE_CATALOG entry. The others ask in prose
+# until each gets its own wiring.
+_INPUT_REQUEST_BASES = {"claude", "agy"}
 # How long a question's claim record lives (control_store.resp_set_pending_input): a question
 # stands until it is answered, voided by another turn, or expires by its own `expires_at`; a
 # claim older than this is decided by the response record alone.
@@ -21611,6 +21612,8 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("edit_file", "Edit"), ("search_web", "Web Search"), ("invoke_subagent", "Subagents")],
         "tool_enforcement": "instruction",
         "hard_tools": ("run_command",),
+        # the runner serves `ask_user` here as one more MCP server of the CLI's (Tasks §3.2, #476)
+        "input_requests": True,
         # The thinking levels each model takes on this CLI (runner AGY_MODEL_LEVELS), which differ from
         # the same model's on another base's channel (no "none" here).
         "model_levels": {"gemini-4-argon": ("low", "medium", "high"),
