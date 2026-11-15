@@ -1149,6 +1149,9 @@ it:
 - Only its shell can be switched off for real: the CLI asks before every command, and the answer is no.
   Its file, search and subagent tools never ask, so switching one off asks the agent not to use it. A
   command the agent tries while the shell is off ends the turn, and the turn says why.
+- A task on it can stop to ask you a question, as on Claude Code: the agent is given a tool to ask with,
+  the task ends on the question, and your answer continues the same conversation. A secret you give in
+  answer reaches the agent for that one turn and appears in nothing read back from the task.
 
 A backend that fails to install is not fatal: the others still work. A base this instance has not
 installed (one left out of `HR_BACKENDS`, or one whose install failed) reads "not installed": the
