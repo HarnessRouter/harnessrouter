@@ -7,6 +7,7 @@ of the conformance suite measures, without a live turn: create, read, files, exp
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -233,6 +234,21 @@ def test_export_is_a_package_that_installs_again_without_credentials(api):
     assert got["name"] == "plugged"
     assert [s["name"] for s in got["mcpServers"]] == ["vault"]
     assert [s["name"] for s in got["skills"]] == ["own-skill"]
+
+
+def test_export_leaves_out_a_tool_this_instance_serves_itself(api, monkeypatch):
+    """An agent's memory (and any server this instance hosts) is at this instance's own address: an
+    instance that installs the package gives its own, so it is left out and said, never exported."""
+    monkeypatch.setattr(app, "_own_origins", lambda: ["http://127.0.0.1:8080"])
+    v = {"id": "chrn_exp", "name": "Plugged", "mcp_servers": json.dumps([
+        {"name": "vault", "url": "https://mcp.example.invalid/mcp", "transport": "http", "enabled": True},
+        {**app._MEMORIES_ENTRY, "url": "http://127.0.0.1:8080/v1/mcp/memories", "transport": "http", "enabled": True}])}
+    pl = asyncio.run(app._harness_export_plugin(v))
+    files = {f["path"]: f for f in pl["files"]}
+    assert list(json.loads(files["mcp.json"]["content"])["mcpServers"]) == ["vault"]
+    assert {"path": "mcp.json#/mcpServers/memories", "reason": "a tool this instance serves itself is not exported"} in pl["skipped"]
+    (got,) = _create(api, plugins=[{"files": pl["files"]}])["plugins"]
+    assert [s["name"] for s in got["mcpServers"]] == ["vault"]
 
 
 def test_a_missing_plugin_is_plugin_not_found(api):
