@@ -6036,6 +6036,27 @@ def _refused_top_level_field(refused: bytes) -> str:
 _GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
 _GOOGLE_HOST = "generativelanguage.googleapis.com"
 
+# Google refuses a call whose deadline is under its minimum: 400 "Manually set deadline 8s is too short. Minimum
+# allowed deadline is 10s." The Antigravity CLI (1.5.8) asks 8 s, in x-server-timeout, for its helper model's call
+# (gemini-3.1-flash-lite-preview), and every one was refused, once a step (sslip, 2026-11-16). A shorter deadline
+# is raised to the minimum on Google's endpoint; the client still waits only as long as it chooses.
+_GOOGLE_MIN_DEADLINE_S = 10
+
+
+def _google_deadline(headers: dict, base: str) -> None:
+    """Raise a deadline under Google's minimum to it, on Google's own endpoint; a value that is not a number is
+    left for Google to judge, and any other provider's header is its own."""
+    if _GOOGLE_HOST not in base:
+        return
+    for k in list(headers):
+        if k.lower() == "x-server-timeout":
+            try:
+                asked = float(str(headers[k]).strip())
+            except ValueError:
+                continue
+            if asked < _GOOGLE_MIN_DEADLINE_S:
+                headers[k] = str(_GOOGLE_MIN_DEADLINE_S)
+
 # A signature belongs to the model that made it. A conversation that moves from one Gemini model to another
 # replays the first model's calls, and Google refuses the second model's request when they carry the first
 # one's signatures: 400 "Corrupted thought signature." (hosted, 2026-10-27: a fast-agent deck conversation,
@@ -7123,6 +7144,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
         _relay_trace_headers(headers, flags)
+        _google_deadline(headers, base)
         if flags.get("passthrough"):
             self._passthrough(base, key, tail, headers, body)
             return
