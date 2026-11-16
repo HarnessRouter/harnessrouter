@@ -326,6 +326,11 @@ class Provider:
 PROPERTY_TYPES = ("text", "choice", "date", "number", "yesno")
 
 
+# The prefix of the fields this server keeps on a provider's own records (hr_stated, hr_text, ...): a schema never names
+# one, so nothing a provider extracts into a schema's types can carry one.
+OWN_FIELDS = "hr_"
+
+
 def schema_clean(raw: dict | None) -> dict:
     """A memory's schema as stored: {types: [{name, description, properties: [{name, type, description, options}]}],
     relations: [{name, description, from, to}]}. Refused in words, whole."""
@@ -335,6 +340,8 @@ def schema_clean(raw: dict | None) -> dict:
         name = str((t or {}).get("name") or "").strip()
         if not name.isidentifier():
             raise MemoryError(422, "memory_invalid", f"A type's name must be one word of letters and digits: {name!r}.", "types")
+        if name.lower().startswith(OWN_FIELDS):
+            raise MemoryError(422, "memory_invalid", f"Names starting with {OWN_FIELDS} are reserved for HarnessRouter's own fields: {name!r}.", "types")
         if name in seen:
             raise MemoryError(422, "memory_invalid", f"Two types are called {name}.", "types")
         seen.add(name)
@@ -344,6 +351,8 @@ def schema_clean(raw: dict | None) -> dict:
             pt = str((p or {}).get("type") or "text")
             if not pn.isidentifier() or pt not in PROPERTY_TYPES:
                 raise MemoryError(422, "memory_invalid", f"{name}: a property needs a one-word name and a type of {', '.join(PROPERTY_TYPES)}.", "types")
+            if pn.lower().startswith(OWN_FIELDS):
+                raise MemoryError(422, "memory_invalid", f"{name}: names starting with {OWN_FIELDS} are reserved for HarnessRouter's own fields: {pn!r}.", "types")
             props.append({"name": pn, "type": pt, "description": str(p.get("description") or ""), **({"options": [str(x) for x in p["options"]]} if p.get("options") else {})})
         types.append({"name": name, "description": str(t.get("description") or ""), "properties": props, **({k: t[k] for k in ("color", "icon", "x", "y", "caption") if k in t})})
     rels = []

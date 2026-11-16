@@ -77,6 +77,14 @@ def _now() -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%S.") + f"{d.microsecond // 1000:03d}Z"
 
 
+# Whether a Graphiti server leaves a record we stated standing when an episode that mentions it is removed: its
+# /healthz says keeps_stated_records (deploy/memories/graphiti/server.py, keep_stated). One that predates it deletes a
+# node only the removed episode mentions, and extraction links a record's node to the copy of it Graphiti read, so
+# replacing or dropping that copy deleted the record. Read once in a while per server address.
+KEEPS_TTL_S = 300
+_KEEPS: dict[str, tuple[float, bool]] = {}
+
+
 class Graphiti(mp.Provider):
     id = "graphiti"
 
@@ -245,11 +253,33 @@ class Graphiti(mp.Provider):
             pass
         self._copies_at.pop(mid, None)
 
-    async def _drop_copies(self, mid: str, node: str) -> None:
+    async def _keeps_stated(self) -> bool:
+        hit = _KEEPS.get(self.base)
+        if hit and time.time() - hit[0] < KEEPS_TTL_S:
+            return hit[1]
+        try:
+            r = await self._call("GET", "/healthz")
+            keeps = r.status_code == 200 and (r.json() or {}).get("keeps_stated_records") is True
+        except (mp.MemoryError, ValueError):
+            keeps = False
+        _KEEPS[self.base] = (time.time(), keeps)
+        return keeps
+
+    async def _drop_copies(self, mid: str, node: str, keep_record: bool = True) -> None:
+        """What Graphiti read from a record leaves with its copies. `keep_record` (a revision, a forget): the record
+        itself stays, so on a server that would delete it with its copy (_keeps_stated is false) each copy is
+        forgotten instead, which clears its words and keeps the record; what it taught then stays until the server
+        is rebuilt. An erase deletes the copies either way: the record goes too, and a forgotten copy keeps the
+        words beside it."""
+        delete = not keep_record or await self._keeps_stated()
         for ep, rid in (await self._copies(mid, episodes=await self._episodes(mid))).items():
             if rid == NODE + node:
-                await self._call("DELETE", f"/groups/{mid}/episodes/{ep}")
+                if delete:
+                    await self._call("DELETE", f"/groups/{mid}/episodes/{ep}")
+                else:
+                    await self._call("POST", f"/groups/{mid}/episodes/{ep}/forget", body={"at": _now()})
         self._copies_at.pop(mid, None)
+        self._eps_at.pop(mid, None)
 
     async def _schema(self, mid: str) -> dict:
         m = await mp._load(self.org, mid) if self.org else None
@@ -399,7 +429,7 @@ class Graphiti(mp.Provider):
                 if any(x["rel"] == "derived_from" for x in cur["references"]):
                     unreachable.append(rid)      # its words can still be in the episode it came from
             elif rid.startswith(NODE):
-                await self._drop_copies(mid, rid[len(NODE):])
+                await self._drop_copies(mid, rid[len(NODE):], keep_record=False)
                 r = await self._call("DELETE", f"/groups/{mid}/nodes/{rid[len(NODE):]}")
             else:
                 r = await self._call("DELETE", f"/groups/{mid}/episodes/{rid[len(EPISODE):]}")

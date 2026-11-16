@@ -38,6 +38,8 @@ Mem0 and Hindsight share one Postgres (pgvector), which `up.sh` gives a generate
 
 **Models.** The engines read and search with two models, `MEMORY_MODEL` and `EMBEDDING_MODEL` in `.env` (`gpt-4o-mini` and `text-embedding-3-small` unless changed; those are what the conformance suite ran with). They call them through HarnessRouter's model relay with a credential `up.sh` gets for each engine (`MEM0_MODEL_KEY` and the like), so the call goes out on the model keys your instance already has. A credential reaches only the relay, only for its engine's two models, and HarnessRouter can withdraw it; `up.sh` then makes a new one. To use a key of your own instead, put it in `OPENAI_API_KEY` with `MEMORY_BASE_URL` set to where it works. On an instance shared by several organizations, every organization's memory work (extraction and embeddings) runs on the operator's own model keys, through the memory relay; organizations' own connections are never used for it.
 
+**Rebuild Graphiti after upgrading.** A Graphiti server built before this release deletes a record when the record is revised or forgotten after Graphiti has read it. Run `./up.sh` again to rebuild the server; the data in its volume stays. Until you do, HarnessRouter forgets Graphiti's old copy of a revised or forgotten record instead of deleting it, so the record is kept, but Graphiti may still recall what that copy said.
+
 **Files.** `.env` (mode 600) holds every secret here; keep it, because the database keeps the password it was first given. The data is in Docker volumes named after the stack: `harnessrouter-memories_postgres`, `_graphiti`, `_reme`, `_mem0-history` and `_hindsight-cache`. Back those up, with `.env`.
 
 ## Running them by hand
