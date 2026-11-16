@@ -244,7 +244,7 @@ def test_the_driver_maps_agys_updates_to_the_record(tmp_path):
     evs, asked, _ = _drive(tmp_path)
     calls = _blocks(evs, "tool_use")
     assert [c["name"] for c in calls] == ["write_file", "run_command", "mcp__probe_http__lucky_number"]
-    assert calls[1]["input"]["CommandLine"] == "cat a.txt"
+    assert calls[1]["input"]["command"] == "cat a.txt"
     results = _blocks(evs, "tool_result")
     assert "alpha" in results[0]["content"]                            # the write's diff, as text
     assert "alpha" in results[1]["content"] and results[2]["content"] == "4711"
@@ -358,6 +358,36 @@ def test_an_mcp_calls_input_is_the_tools_own_arguments():
                   "args": MCP_CALL["rawInput"]})
     (use,) = _blocks(evs, "tool_use")
     assert use["name"] == "mcp__conformance_fixture__uhp_steps" and use["input"] == {"nonce": "n1"}
+
+
+def test_a_calls_input_is_given_in_the_names_every_other_base_uses():
+    """agy names its arguments its own way (measured on 1.5.8 in a real turn: run_command CommandLine and
+    toolSummary, read_file Path, write_file Path and Content, edit_file Path, Target and Replacement). The record
+    gives them the names it gives every other base's, so the command, the file and the change are shown."""
+    seen = {
+        "run_command": ({"CommandLine": "ls -la", "WaitMsBeforeAsync": 5000, "toolSummary": "List files"},
+                        {"command": "ls -la", "WaitMsBeforeAsync": 5000, "description": "List files"}),
+        "read_file": ({"Path": "/w/a.txt"}, {"file_path": "/w/a.txt"}),
+        "write_file": ({"Path": "/w/a.txt", "Content": "alpha", "Overwrite": True},
+                       {"file_path": "/w/a.txt", "content": "alpha", "Overwrite": True}),
+        "edit_file": ({"Path": "/w/a.txt", "Target": "alpha", "Replacement": "beta"},
+                      {"file_path": "/w/a.txt", "old_string": "alpha", "new_string": "beta"}),
+    }
+    for name, (raw, want) in seen.items():
+        evs, calls = _calls()
+        calls.update({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": name, "status": "in_progress",
+                      "kind": "other", "title": name, "rawInput": raw})
+        (use,) = _blocks(evs, "tool_use")
+        assert use["name"] == name and use["input"] == want, name
+    # a name the record already uses is never overwritten, and Target alone is not an edit
+    assert D.record_input({"Path": "/a", "file_path": "/b"}) == {"Path": "/a", "file_path": "/b"}
+    assert D.record_input({"Target": "x", "Query": "y"}) == {"Target": "x", "Query": "y"}
+    assert D.record_input("not an object") == "not an object"
+    # an MCP call's input stays the tool's own arguments, untouched
+    evs, calls = _calls()
+    calls.update({**MCP_CALL, "rawInput": {**MCP_CALL["rawInput"], "Arguments": {"Path": "p", "CommandLine": "c"}}})
+    (use,) = _blocks(evs, "tool_use")
+    assert use["input"] == {"Path": "p", "CommandLine": "c"}
 
 
 def _read(cid, path):

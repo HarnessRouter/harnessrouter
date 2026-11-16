@@ -62,6 +62,23 @@ def mcp_arguments(raw):
     return args if isinstance(args, dict) else raw
 
 
+# agy's own names for a built-in call's arguments, measured on 1.5.8 in a real turn (run_command: CommandLine,
+# WaitMsBeforeAsync, toolSummary; read_file: Path; write_file: Path, Content, Overwrite; edit_file: Path, Target,
+# Replacement), and the names the record gives the same thing for every other base. A reader of the record (the
+# console's step list) finds the command, the file and the change under those; under agy's it showed none.
+_RECORD_NAMES = {"CommandLine": "command", "toolSummary": "description", "Path": "file_path", "Content": "content"}
+_EDIT_NAMES = {"Target": "old_string", "Replacement": "new_string"}     # only as a pair: an edit's text and its new text
+
+
+def record_input(raw):
+    """A built-in call's input with agy's argument names given as the record's. A name the input already uses is
+    never overwritten (the argument keeps agy's name then), and an argument with no counterpart keeps its own."""
+    if not isinstance(raw, dict):
+        return raw
+    names = {**_RECORD_NAMES, **(_EDIT_NAMES if "Target" in raw and "Replacement" in raw else {})}
+    return {(names[k] if k in names and names[k] not in raw else k): v for k, v in raw.items()}
+
+
 class _Definitions:
     """agy reads an MCP tool's definition before its first call to the tool: a read_file of
     <HOME>/.gemini/antigravity-cli/mcp/<server>/<tool>.json (1.5.8), or, some turns, a shell listing of that
@@ -80,7 +97,7 @@ class _Definitions:
 
     def definition(self, args) -> str:
         """The resolved path a read_file's input names, if it is a tool definition under the CLI's home."""
-        p = args.get("Path") if isinstance(args, dict) else None
+        p = args.get("file_path") if isinstance(args, dict) else None       # agy's Path, as the record names it
         p = self.inside(p) if isinstance(p, str) else ""
         return p if p.endswith(".json") and p not in {r.rstrip(os.sep) for r in self.roots} else ""
 
@@ -109,7 +126,7 @@ class _Definitions:
         `find` with only -maxdepth/-mindepth N and -type f|d, every path inside the folder, and at most an exact
         trailing `2>/dev/null`. Anything else a shell would act on (an operator, quote, glob, variable, another
         redirect, a newline) refuses it."""
-        cmd = args.get("CommandLine") if isinstance(args, dict) else None
+        cmd = args.get("command") if isinstance(args, dict) else None       # agy's CommandLine, as the record names it
         if not isinstance(cmd, str) or len(cmd) > 1000:
             return ""
         words = cmd.split()
@@ -182,8 +199,8 @@ def usage(u) -> dict:
 
 
 class _Calls:
-    """What the record shows of a call: agy's own name for it, put where acp_turn's Stream reads one, and an
-    MCP call's input as the tool's own arguments."""
+    """What the record shows of a call: agy's own name for it, put where acp_turn's Stream reads one, an MCP
+    call's input as the tool's own arguments, and a built-in call's arguments under the record's names."""
 
     def __init__(self, stream: Stream) -> None:
         self.stream = stream
@@ -198,6 +215,8 @@ class _Calls:
                 # the call is named mcp__<server>__<tool> above, so its input is that tool's: a watcher that
                 # reads a tool's arguments (the runner's ask_user) reads them as any other base gives them
                 u["rawInput"] = mcp_arguments(u.get("rawInput"))
+            else:
+                u["rawInput"] = record_input(u.get("rawInput"))
             diffs = [c for c in u.get("content") or [] if isinstance(c, dict) and c.get("type") == "diff"]
             if diffs:
                 # A file write reports what it wrote as a diff, which has no text block of its own.
