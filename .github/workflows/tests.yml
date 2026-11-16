@@ -28,6 +28,16 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/test-star-badge.py
 
+  # The release's secret-canary gate: the scan it makes while turns run never opens a prompt file the runner
+  # handed a CLI, which could make the runner remove it before the CLI reads it and blind the gate.
+  canary-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-secret-canary-gate.py
+
   # What a fresh volume installs at first start is pinned: no `releases/latest`, no npm or pip
   # install without an exact version (or a hashed lock), no sums file fetched beside its asset, no
   # curl | sh (#623). The self-test first, so a check that can no longer fail fails here.
