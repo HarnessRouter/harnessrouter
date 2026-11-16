@@ -79,19 +79,28 @@ class _Definitions:
         self.out = out
 
     def definition(self, args) -> str:
-        """The normalised path a read_file's input names, if it is a tool definition under the CLI's home."""
+        """The resolved path a read_file's input names, if it is a tool definition under the CLI's home."""
         p = args.get("Path") if isinstance(args, dict) else None
-        if not isinstance(p, str) or not os.path.isabs(p):
-            return ""
-        p = os.path.normpath(p)
-        return p if p.endswith(".json") and any(p.startswith(r) for r in self.roots) else ""
+        p = self.inside(p) if isinstance(p, str) else ""
+        return p if p.endswith(".json") and p not in {r.rstrip(os.sep) for r in self.roots} else ""
 
     def inside(self, p: str) -> str:
-        """`p` normalised when it is the definitions folder itself or anything under it, else ''."""
-        if not os.path.isabs(p):
+        """`p` resolved when it is the definitions folder itself or anything under it, else ''. A path with a `..`
+        in it is never inside, and neither is one that passes through a symbolic link below the folder."""
+        if not isinstance(p, str) or not os.path.isabs(p) or ".." in p.split("/"):
             return ""
-        p = os.path.normpath(p)
-        return p if any(p == r.rstrip(os.sep) or p.startswith(r) for r in self.roots) else ""
+        norm = os.path.normpath(p)
+        root = next((r for r in self.roots if norm == r.rstrip(os.sep) or norm.startswith(r)), "")
+        if not root:
+            return ""
+        here = root.rstrip(os.sep)
+        for part in norm[len(here):].split(os.sep):
+            if part:
+                here = os.path.join(here, part)
+                if os.path.islink(here):
+                    return ""
+        real = os.path.realpath(norm)
+        return real if any(real == r.rstrip(os.sep) or real.startswith(r) for r in self.roots) else ""
 
     def listing(self, args) -> str:
         """The command, normalised, when a run_command only lists or prints the definitions folder: `ls` or
@@ -105,7 +114,9 @@ class _Definitions:
             return ""
         flags = [w for w in words[1:] if w.startswith("-")]
         paths = [w for w in words[1:] if not w.startswith("-")]
-        if not paths or any(not w[1:].isalnum() for w in flags):
+        # plain listing flags only (one per line, long, all, human sizes); cat with none
+        allowed = set("laA1h") if words[0] == "ls" else set()
+        if not paths or any(len(w) < 2 or not set(w[1:]) <= allowed for w in flags):
             return ""
         norm = [self.inside(w) for w in paths]
         return " ".join([words[0], *flags, *norm]) if all(norm) else ""

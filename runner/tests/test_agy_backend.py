@@ -397,6 +397,28 @@ def test_the_first_listing_of_the_definitions_folder_is_not_a_step(tmp_path):
     assert [bool(u.get("not_a_step")) for u in uses] == [True, True, True] + [False] * 7
 
 
+def test_a_link_out_of_the_definitions_folder_a_dotdot_or_a_flag_beyond_a_plain_listing_is_a_step(tmp_path):
+    """The lookup that spends nothing is only ever inside the CLI's own definitions folder: a symbolic link in it
+    that leads elsewhere, a path with `..`, a recursive or numbered listing, and a cat with flags all count."""
+    home = tmp_path / ".harness" / "home"
+    mcp = home / ".gemini" / "antigravity-cli" / "mcp"
+    (mcp / "conformance_fixture").mkdir(parents=True)
+    (mcp / "conformance_fixture" / "uhp_steps.json").write_text("{}")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "secret.json").write_text("{}")
+    (mcp / "evil").symlink_to(outside)
+    evs, calls = _calls(home)
+    calls.update(_read("r1", mcp / "evil" / "secret.json"))                        # through a link out
+    calls.update(_read("r2", f"{mcp}/conformance_fixture/../conformance_fixture/uhp_steps.json"))   # a ..
+    calls.update(_read("r3", mcp / "conformance_fixture" / "uhp_steps.json"))     # the real one: free
+    for i, c in enumerate([f"ls -la {mcp}/evil", f"cat {mcp}/evil/secret.json", f"ls -R {mcp}",
+                           f"cat -n {mcp}/conformance_fixture/uhp_steps.json", f"ls -la {mcp}/conformance_fixture"]):
+        calls.update(_shell(f"s{i}", c))
+    marks = {u["id"]: bool(u.get("not_a_step")) for u in _blocks(evs, "tool_use")}
+    assert marks == {"r1": False, "r2": False, "r3": True, "s0": False, "s1": False, "s2": False, "s3": False, "s4": True}
+
+
 def test_the_first_read_of_a_tools_definition_is_not_a_step_and_a_second_one_is(tmp_path):
     home = tmp_path / ".harness" / "home"
     mcp = home / ".gemini" / "antigravity-cli" / "mcp"
