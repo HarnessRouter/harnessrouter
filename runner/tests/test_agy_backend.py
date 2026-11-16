@@ -365,6 +365,38 @@ def _read(cid, path):
             "kind": "read", "title": "Read", "rawInput": {"Path": str(path)}}
 
 
+def _shell(cid, command):
+    return {"sessionUpdate": "tool_call", "toolCallId": cid, "name": "run_command", "status": "in_progress",
+            "kind": "execute", "title": "Run", "rawInput": {"CommandLine": command, "WaitMsBeforeAsync": 5000}}
+
+
+def test_the_first_listing_of_the_definitions_folder_is_not_a_step(tmp_path):
+    """Some turns agy lists its MCP definitions folder before it calls a tool (measured on 1.5.8: `ls -la
+    <HOME>/.gemini/antigravity-cli/mcp/`, then a server's folder), which spent a one-step budget before the
+    tool was called. A plain ls or cat inside that folder is the same lookup: free the first time each, and
+    nothing else is."""
+    home = tmp_path / ".harness" / "home"
+    mcp = home / ".gemini" / "antigravity-cli" / "mcp"
+    evs, calls = _calls(home)
+    commands = [
+        f"ls -la {mcp}/",                                    # the folder itself
+        f"ls -la {mcp}/conformance_fixture",                 # a server's folder
+        f"cat {mcp}/conformance_fixture/uhp_steps.json",     # a definition
+        f"ls -la {mcp}/",                                    # the same listing again
+        f"ls -la {mcp}/ ; rm -rf {tmp_path}",                # more than a listing
+        f"ls -la {mcp}/../..",                               # leaves the folder
+        f"ls -la {tmp_path}",                                # the workspace
+        f"cat {mcp}/*.json",                                 # a glob
+        f"echo {mcp}",                                       # not ls or cat
+        f'ls "{mcp}"',                                       # quoted
+    ]
+    for i, c in enumerate(commands):
+        calls.update(_shell(f"s{i}", c))
+    uses = _blocks(evs, "tool_use")
+    assert len(uses) == len(commands)                                            # every command stays in the record
+    assert [bool(u.get("not_a_step")) for u in uses] == [True, True, True] + [False] * 7
+
+
 def test_the_first_read_of_a_tools_definition_is_not_a_step_and_a_second_one_is(tmp_path):
     home = tmp_path / ".harness" / "home"
     mcp = home / ".gemini" / "antigravity-cli" / "mcp"

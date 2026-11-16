@@ -64,10 +64,13 @@ def mcp_arguments(raw):
 
 class _Definitions:
     """agy reads an MCP tool's definition before its first call to the tool: a read_file of
-    <HOME>/.gemini/antigravity-cli/mcp/<server>/<tool>.json (1.5.8). That read is part of calling the tool,
-    not a step of the turn's own, so the first read of each such file is marked `not_a_step`, which the
-    runner's step budget passes over (server._count_tool_calls); the call stays in the record. A second
-    read of the same file counts as any other call."""
+    <HOME>/.gemini/antigravity-cli/mcp/<server>/<tool>.json (1.5.8), or, some turns, a shell listing of that
+    folder first (`ls -la <HOME>/.gemini/antigravity-cli/mcp/`, then a server's folder). That lookup is part of
+    calling the tool, not a step of the turn's own, so the first of each such read or listing is marked
+    `not_a_step`, which the runner's step budget passes over (server._count_tool_calls); the call stays in the
+    record. A listing counts only when it is a plain `ls` or `cat` whose every path is inside that folder and
+    which carries nothing a shell would act on. A second read of the same file, or the same command again,
+    counts as any other call."""
 
     def __init__(self, home: str, out=emit) -> None:
         self.roots = {os.path.join(os.path.normpath(h), ".gemini", "antigravity-cli", "mcp") + os.sep
@@ -83,14 +86,40 @@ class _Definitions:
         p = os.path.normpath(p)
         return p if p.endswith(".json") and any(p.startswith(r) for r in self.roots) else ""
 
+    def inside(self, p: str) -> str:
+        """`p` normalised when it is the definitions folder itself or anything under it, else ''."""
+        if not os.path.isabs(p):
+            return ""
+        p = os.path.normpath(p)
+        return p if any(p == r.rstrip(os.sep) or p.startswith(r) for r in self.roots) else ""
+
+    def listing(self, args) -> str:
+        """The command, normalised, when a run_command only lists or prints the definitions folder: `ls` or
+        `cat`, its flags, and paths that are all inside the folder; '' for anything else, a shell operator,
+        quote, glob, variable or newline included."""
+        cmd = args.get("CommandLine") if isinstance(args, dict) else None
+        if not isinstance(cmd, str) or len(cmd) > 1000 or any(c in cmd for c in ";&|$`<>(){}[]*?~!\\'\"\n\r\t"):
+            return ""
+        words = cmd.split()
+        if len(words) < 2 or words[0] not in ("ls", "cat"):
+            return ""
+        flags = [w for w in words[1:] if w.startswith("-")]
+        paths = [w for w in words[1:] if not w.startswith("-")]
+        if not paths or any(not w[1:].isalnum() for w in flags):
+            return ""
+        norm = [self.inside(w) for w in paths]
+        return " ".join([words[0], *flags, *norm]) if all(norm) else ""
+
     def __call__(self, ev: dict) -> None:
         blocks = (ev.get("message") or {}).get("content") if ev.get("type") == "assistant" else None
         for b in blocks if isinstance(blocks, list) else []:
-            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "read_file":
-                path = self.definition(b.get("input"))
-                if path and path not in self.read:
-                    self.read.add(path)
-                    b["not_a_step"] = True
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                continue
+            seen = (self.definition(b.get("input")) if b.get("name") == "read_file"
+                    else self.listing(b.get("input")) if b.get("name") == "run_command" else "")
+            if seen and seen not in self.read:
+                self.read.add(seen)
+                b["not_a_step"] = True
         self.out(ev)
 
 
