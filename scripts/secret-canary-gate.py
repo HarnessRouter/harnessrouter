@@ -149,10 +149,21 @@ def scan_git(git_dir: str, table: Table, where: str) -> None:
     table.scan(r.stdout, f"{where} (git objects)")
 
 
-def scan_tree(root: str, table: Table, where: str, *, skip: tuple[str, ...] = (), skip_files: tuple[str, ...] = ()) -> int:
+# The runner hands some CLIs their prompt as a file in the session's tmp/.hr-prompt/ and removes it at the first close
+# that follows the CLI's own read (runner _prompt_watch). A scan that opens it while the CLI holds it makes that
+# close look like the CLI's, the file goes before the CLI reads it, and the turn fails before it runs: the harness
+# is BLIND to this gate on that run, which could hide its leak (vibe, release 0.41.17, first attempt). So the scan
+# that runs WHILE the turns run never opens one; the scan after the turns still reads everything.
+PROMPT_DIR = ".hr-prompt"
+
+
+def scan_tree(root: str, table: Table, where: str, *, skip: tuple[str, ...] = (), skip_files: tuple[str, ...] = (),
+              skip_names: tuple[str, ...] = ()) -> int:
+    """Every file under `root`, read and scanned. `skip` drops whole paths, `skip_files` single files, and
+    `skip_names` any folder of that name wherever it is."""
     n = 0
     for dp, dns, fns in os.walk(root, followlinks=False):
-        dns[:] = [d for d in dns if not os.path.join(dp, d).startswith(skip or ("\0",))]
+        dns[:] = [d for d in dns if not os.path.join(dp, d).startswith(skip or ("\0",)) and d not in skip_names]
         if os.path.basename(dp) == ".git" or (os.path.isdir(os.path.join(dp, "objects")) and os.path.isfile(os.path.join(dp, "HEAD"))):
             scan_git(dp, table, f"{where}:{os.path.relpath(dp, root)}")
         for fn in fns:
@@ -495,7 +506,7 @@ def main() -> int:
 
     def watch_folders() -> None:
         while not stop.is_set():
-            scan_tree("/data/workspaces", table, "session folder")
+            scan_tree("/data/workspaces", table, "session folder", skip_names=(PROMPT_DIR,))
             stop.wait(2)
     watchers = [threading.Thread(target=watch_processes, daemon=True), threading.Thread(target=watch_folders, daemon=True)]
     for w in watchers:
