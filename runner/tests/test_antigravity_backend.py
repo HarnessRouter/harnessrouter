@@ -452,6 +452,77 @@ def test_the_stream_maps_to_the_canonical_events(tmp_path, stub, relay):
     assert "model" not in res                                # the configured model is not the one that served
 
 
+# Each tool and its arguments as the agent gave them in a real turn (2026-11-16, gemini-4-hydrogen), and the record's
+# name for it with the arguments the console reads.
+MEASURED_CALLS = [
+    ({"type": "code_execution_call", "arguments": {"code": "date", "language": "bash"}},
+     "Bash", {"command": "date", "language": "bash"}),
+    ({"type": "google_search_call", "arguments": {"queries": ["Apache License 2.0"]}, "search_type": "web_search"},
+     "WebSearch", {"queries": ["Apache License 2.0"]}),
+    ({"type": "url_context_call", "arguments": {"urls": ["https://www.apache.org/licenses/LICENSE-2.0.txt"]}},
+     "WebFetch", {"urls": ["https://www.apache.org/licenses/LICENSE-2.0.txt"]}),
+    ({"type": "function_call", "name": "write_to_file", "arguments": {
+        "CodeContent": "a\nb", "Description": "Create notes", "Overwrite": False, "TargetFile": "/workspace/notes.md"}},
+     "Write", {"content": "a\nb", "description": "Create notes", "Overwrite": False, "file_path": "/workspace/notes.md"}),
+    ({"type": "function_call", "name": "view_file", "arguments": {"AbsolutePath": "/workspace/notes.md", "StartLine": 1, "EndLine": 1}},
+     "Read", {"file_path": "/workspace/notes.md", "StartLine": 1, "EndLine": 1}),
+    ({"type": "function_call", "name": "list_dir", "arguments": {"DirectoryPath": "/workspace"}},
+     "LS", {"path": "/workspace"}),
+    ({"type": "function_call", "name": "replace_file_content", "arguments": {
+        "AllowMultiple": False, "Description": "Line 2", "EndLine": 2, "Instruction": "Replace line 2",
+        "ReplacementContent": "B", "StartLine": 2, "TargetContent": "b", "TargetFile": "/workspace/notes.md"}},
+     "Edit", {"AllowMultiple": False, "description": "Line 2", "EndLine": 2, "Instruction": "Replace line 2",
+              "new_string": "B", "StartLine": 2, "old_string": "b", "file_path": "/workspace/notes.md"}),
+    ({"type": "function_call", "name": "find_by_name", "arguments": {"Pattern": "*.md", "SearchDirectory": "/workspace"}},
+     "Glob", {"pattern": "*.md", "path": "/workspace"}),
+]
+
+
+def test_each_call_is_recorded_as_the_tool_that_does_the_same_thing(tmp_path, stub, relay):
+    """The console showed these as "Used Code execution" with no command, files with no name and an edit with no
+    change: the record names each the way it names the same tool for every other base (as codex's command_execution
+    is Bash), and an argument with no counterpart keeps its own name."""
+    calls = []
+    for i, (step, _, _) in enumerate(MEASURED_CALLS):
+        calls += [ev("step.start", index=20 + i, step={**step, "id": f"c{i}"}), ev("step.stop", index=20 + i)]
+    stub.script = [text_turn("done", extra=calls)]
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "go"}, relay)
+    events, _ = normalise(lines)
+    uses = [c for e in events if e["type"] == "assistant" for c in e["message"]["content"] if c["type"] == "tool_use"]
+    assert [(u["name"], u["input"]) for u in uses] == [(name, args) for _, name, args in MEASURED_CALLS], proc.stderr
+
+
+def test_code_in_another_language_a_tool_not_known_and_a_taken_name_keep_their_own():
+    assert drv.record_call("code_execution", {"code": "print(1)", "language": "python"}) == \
+        ("code_execution", {"code": "print(1)", "language": "python"})
+    assert drv.record_call("code_execution", {"code": "ls"}) == ("Bash", {"command": "ls"})      # no language: the shell
+    assert drv.record_call("grep_search", {"Query": "x", "SearchPath": "/workspace"}) == \
+        ("grep_search", {"Query": "x", "SearchPath": "/workspace"})
+    assert drv.record_call("view_file", {"AbsolutePath": "/a", "file_path": "/b"}) == \
+        ("Read", {"AbsolutePath": "/a", "file_path": "/b"})
+    assert drv.record_call("write_to_file", {"TargetFile": "/a", "AbsolutePath": "/b"}) == \
+        ("Write", {"file_path": "/a", "AbsolutePath": "/b"})
+
+
+WIDGET = ('<style>\n.container { display: flex; }\n.chip { border-radius: 16px; }\n</style>\n<div class="container">'
+          '<div class="headline"><svg class="logo-light" viewBox="0 0 48 48"><path d="M1 1"></path></svg></div>'
+          '<div class="carousel"><a class="chip" href="https://www.google.com/search?q=Apache+License+2.0&amp;client=app">'
+          'Apache License 2.0</a><a class="chip" href="javascript:alert(1)">not a link</a></div></div>')
+
+
+def test_a_search_and_a_page_read_say_what_came_back():
+    """Measured: a search's result is Google's suggestion widget (HTML), a page read's is each address with its status;
+    both reached the record empty. The widget's links come back as text, a page read as address and status."""
+    assert drv.result_text([{"search_suggestions": WIDGET}]) == \
+        "Apache License 2.0: https://www.google.com/search?q=Apache+License+2.0&client=app"
+    assert drv.result_text([{"url": "https://www.apache.org/licenses/LICENSE-2.0.txt", "status": "success"},
+                            {"url": "https://example.com/x", "status": "unsafe"}]) == \
+        "https://www.apache.org/licenses/LICENSE-2.0.txt (success)\nhttps://example.com/x (unsafe)"
+    assert drv.result_text([{"type": "text", "text": "found"}]) == "found"
+    assert drv.result_text("1\n") == "1\n" and drv.result_text({"a": 1}) == '{"a": 1}' and drv.result_text(None) == ""
+    assert drv.result_text([{"search_suggestions": "<div>no links</div>"}, {"type": "image", "data": "AAAA"}]) == ""
+
+
 def test_usage_counts_tool_prompts_with_the_input_and_reasoning_never_exceeds_output():
     u = drv.usage_of({"total_input_tokens": 50, "total_cached_tokens": 20, "total_tool_use_tokens": 5,
                       "total_output_tokens": 7, "total_thought_tokens": 11, "total_tokens": 73})
@@ -470,9 +541,9 @@ def test_the_recorded_live_stream_maps_step_for_step(tmp_path, stub, relay):
     events, _ = normalise(lines)
     blocks = [c for e in events if e["type"] in ("assistant", "user") for c in e["message"]["content"]]
     uses = [b for b in blocks if b["type"] == "tool_use"]
-    assert [u["name"] for u in uses] == ["code_execution", "write_to_file"]
-    assert uses[0]["input"] == {"language": "bash", "code": "pwd && ls -la /workspace"}
-    assert uses[1]["input"]["TargetFile"] == "/workspace/out.txt"
+    assert [u["name"] for u in uses] == ["Bash", "Write"]
+    assert uses[0]["input"] == {"command": "pwd && ls -la /workspace", "language": "bash"}
+    assert uses[1]["input"]["file_path"] == "/workspace/out.txt"
     results = {b["tool_use_id"]: b for b in blocks if b["type"] == "tool_result"}
     assert results[uses[0]["id"]]["content"].startswith("[STDOUT]\n/workspace")
     assert results[uses[1]["id"]]["content"] == "Created file file:///workspace/out.txt"

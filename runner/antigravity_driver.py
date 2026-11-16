@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html.parser
 import http.client
 import json
 import mimetypes
@@ -91,6 +92,87 @@ TOOLS = ("code_execution", "google_search", "url_context")
 TOOL_STEPS = {"code_execution": ("code_execution_call", "code_execution_result"),
               "google_search": ("google_search_call", "google_search_result"),
               "url_context": ("url_context_call", "url_context_result")}
+
+# How a call is recorded: as the tool that does the same thing for every other base, the way server._codex_to_claude
+# records codex's command_execution as Bash, so a reader of the record (the console's step list) shows the command,
+# the file and the change. Measured 2026-11-16 (gemini-4-hydrogen): the console showed "Used Code execution" with no
+# command, reads and writes with no file, "Used Replace file content" with no change. An argument with no counterpart
+# keeps its own name, a name the arguments already use is never overwritten, a tool not here keeps its own name, and
+# code in a language other than the shell stays code_execution.
+RECORD_TOOLS = {"code_execution": "Bash", "google_search": "WebSearch", "url_context": "WebFetch",
+                "write_to_file": "Write", "view_file": "Read", "list_dir": "LS",
+                "replace_file_content": "Edit", "find_by_name": "Glob"}
+RECORD_ARGS = {"TargetFile": "file_path", "AbsolutePath": "file_path", "CodeContent": "content",
+               "DirectoryPath": "path", "SearchDirectory": "path", "Pattern": "pattern", "Description": "description",
+               "TargetContent": "old_string", "ReplacementContent": "new_string"}
+SHELLS = ("", "bash", "sh", "shell", "zsh")
+
+
+def record_call(name: str, args: dict) -> tuple[str, dict]:
+    """A built-in call's name and arguments as the record gives them (RECORD_TOOLS, RECORD_ARGS)."""
+    if name == "code_execution":
+        if str(args.get("language") or "").strip().lower() not in SHELLS or not isinstance(args.get("code"), str) \
+                or "command" in args:
+            return name, args
+        return RECORD_TOOLS[name], {"command": args["code"], **{k: v for k, v in args.items() if k != "code"}}
+    out: dict = {}
+    for k, v in args.items():
+        new = RECORD_ARGS.get(k)
+        out[new if new and new not in args and new not in out else k] = v
+    return RECORD_TOOLS.get(name, name), out
+
+
+class _Links(html.parser.HTMLParser):
+    """The links of an HTML fragment, as (text, address): an address only when it is http(s)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            href = dict(attrs).get("href") or ""
+            self._href = href if href.lower().startswith(("https://", "http://")) else None
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._href is not None:
+            text = " ".join("".join(self._text).split())
+            self.links.append((text, self._href))
+            self._href = None
+
+
+def result_text(res) -> str:
+    """A tool step's result as text. Measured: a shell's is text; a search's is Google's suggestion widget, HTML, whose
+    links are what it carries (the answer's sources are not in the step); a page read's is each address with its
+    status. Both of those reached the record empty."""
+    if isinstance(res, list):
+        parts = []
+        for c in res:
+            if not isinstance(c, dict):
+                parts.append(str(c))
+            elif c.get("text"):
+                parts.append(str(c["text"]))
+            elif isinstance(c.get("url"), str):
+                parts.append(f"{c['url']} ({c['status']})" if c.get("status") else c["url"])
+            elif isinstance(c.get("search_suggestions"), str):
+                links = _Links()
+                try:
+                    links.feed(c["search_suggestions"])
+                    links.close()
+                except Exception:  # noqa: BLE001 — a widget that will not parse says nothing, as before
+                    pass
+                parts += [f"{t}: {h}" if t else h for t, h in links.links]
+        return "\n".join(p for p in parts if p)
+    if isinstance(res, (dict, int, float, bool)):
+        return json.dumps(res)[:20000]
+    return str(res or "")
 
 # The question for the person: the function declared to Google when the turn may ask, from the one
 # definition every base asks through (ask_user_mcp); the name its call is emitted under, which is the
@@ -1139,20 +1221,17 @@ class Turn:
                 self.ask_call = {"id": str(step.get("id") or ""), "input": args}
                 return
             name = str(step.get("name") or stype.removesuffix("_call") or "tool")
-            if stype == "mcp_server_tool_call" and step.get("server_name"):
-                name = f"mcp__{step['server_name']}__{step.get('name') or 'tool'}"
+            if stype == "mcp_server_tool_call":
+                if step.get("server_name"):
+                    name = f"mcp__{step['server_name']}__{step.get('name') or 'tool'}"
+            else:
+                name, args = record_call(name, args)
             _emit("tool_use", {"id": str(step.get("id") or ""), "name": name, "input": args})
             return
         if stype.endswith("_result"):
             if stype == "function_result" and self.answering and str(step.get("call_id") or "") == self.answering:
                 return                          # this message itself (answer_input), not a tool's result
-            res = step.get("result")
-            if isinstance(res, list):
-                text = "\n".join(str(c.get("text") or "") if isinstance(c, dict) else str(c) for c in res)
-            elif isinstance(res, (dict, int, float, bool)):
-                text = json.dumps(res)[:20000]
-            else:
-                text = str(res or "")
+            text = result_text(step.get("result"))
             _emit("tool_result", {"tool_use_id": str(step.get("call_id") or ""), "text": text[:20000],
                                   "is_error": bool(step.get("is_error"))})
 
