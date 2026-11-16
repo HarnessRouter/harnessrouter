@@ -103,23 +103,42 @@ class _Definitions:
         return real if any(real == r.rstrip(os.sep) or real.startswith(r) for r in self.roots) else ""
 
     def listing(self, args) -> str:
-        """The command, normalised, when a run_command only lists or prints the definitions folder: `ls` or
-        `cat`, its flags, and paths that are all inside the folder; '' for anything else, a shell operator,
-        quote, glob, variable or newline included."""
+        """The command, normalised, when a run_command only lists or prints the definitions folder; '' for anything
+        else. Measured on 1.5.8: `ls -la <folder>/`, `ls -la <folder>/<server>`, `find <folder>/ -maxdepth 3
+        2>/dev/null`, `cat <definition>`. Taken: `ls` with plain listing flags (-l -a -A -1 -h), `cat` with none,
+        `find` with only -maxdepth/-mindepth N and -type f|d, every path inside the folder, and at most an exact
+        trailing `2>/dev/null`. Anything else a shell would act on (an operator, quote, glob, variable, another
+        redirect, a newline) refuses it."""
         cmd = args.get("CommandLine") if isinstance(args, dict) else None
-        if not isinstance(cmd, str) or len(cmd) > 1000 or any(c in cmd for c in ";&|$`<>(){}[]*?~!\\'\"\n\r\t"):
+        if not isinstance(cmd, str) or len(cmd) > 1000:
             return ""
         words = cmd.split()
-        if len(words) < 2 or words[0] not in ("ls", "cat"):
+        if words and words[-1] == "2>/dev/null":
+            words = words[:-1]
+        if any(c in " ".join(words) for c in ";&|$`<>(){}[]*?~!\\'\"\n\r\t"):
             return ""
-        flags = [w for w in words[1:] if w.startswith("-")]
-        paths = [w for w in words[1:] if not w.startswith("-")]
-        # plain listing flags only (one per line, long, all, human sizes); cat with none
-        allowed = set("laA1h") if words[0] == "ls" else set()
-        if not paths or any(len(w) < 2 or not set(w[1:]) <= allowed for w in flags):
+        if len(words) < 2 or words[0] not in ("ls", "cat", "find"):
             return ""
+        paths, opts, i = [], [], 1
+        while i < len(words):
+            w = words[i]
+            if words[0] == "find" and w in ("-maxdepth", "-mindepth") and i + 1 < len(words) and words[i + 1].isdigit():
+                opts += [w, words[i + 1]]
+                i += 2
+                continue
+            if words[0] == "find" and w == "-type" and i + 1 < len(words) and words[i + 1] in ("f", "d"):
+                opts += [w, words[i + 1]]
+                i += 2
+                continue
+            if w.startswith("-"):
+                if words[0] != "ls" or len(w) < 2 or not set(w[1:]) <= set("laA1h"):
+                    return ""
+                opts.append(w)
+            else:
+                paths.append(w)
+            i += 1
         norm = [self.inside(w) for w in paths]
-        return " ".join([words[0], *flags, *norm]) if all(norm) else ""
+        return " ".join([words[0], *opts, *norm]) if paths and all(norm) else ""
 
     def __call__(self, ev: dict) -> None:
         blocks = (ev.get("message") or {}).get("content") if ev.get("type") == "assistant" else None

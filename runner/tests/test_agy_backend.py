@@ -382,6 +382,7 @@ def test_the_first_listing_of_the_definitions_folder_is_not_a_step(tmp_path):
         f"ls -la {mcp}/",                                    # the folder itself
         f"ls -la {mcp}/conformance_fixture",                 # a server's folder
         f"cat {mcp}/conformance_fixture/uhp_steps.json",     # a definition
+        f"find {mcp}/ -maxdepth 3 2>/dev/null",              # measured too: find, with its errors dropped
         f"ls -la {mcp}/",                                    # the same listing again
         f"ls -la {mcp}/ ; rm -rf {tmp_path}",                # more than a listing
         f"ls -la {mcp}/../..",                               # leaves the folder
@@ -394,7 +395,13 @@ def test_the_first_listing_of_the_definitions_folder_is_not_a_step(tmp_path):
         calls.update(_shell(f"s{i}", c))
     uses = _blocks(evs, "tool_use")
     assert len(uses) == len(commands)                                            # every command stays in the record
-    assert [bool(u.get("not_a_step")) for u in uses] == [True, True, True] + [False] * 7
+    assert [bool(u.get("not_a_step")) for u in uses] == [True, True, True, True] + [False] * 7
+    # find only as a listing: no -exec, no -name, no other redirect
+    evs2, calls2 = _calls(home)
+    for i, c in enumerate([f"find {mcp} -exec cat {{}} +", f"find {mcp} -name x.json", f"find {mcp} -maxdepth 3 > /tmp/x",
+                           f"find {mcp} -maxdepth 3 2>&1", f"find {tmp_path} -maxdepth 1"]):
+        calls2.update(_shell(f"f{i}", c))
+    assert not any(u.get("not_a_step") for u in _blocks(evs2, "tool_use"))
 
 
 def test_a_link_out_of_the_definitions_folder_a_dotdot_or_a_flag_beyond_a_plain_listing_is_a_step(tmp_path):
