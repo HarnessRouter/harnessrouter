@@ -349,3 +349,18 @@ def test_the_bound_can_be_set_for_a_slower_server(monkeypatch):
     assert mg._settle_s() == 300.0
     monkeypatch.setenv("HR_GRAPHITI_SETTLE_S", "soon")
     assert mg._settle_s() == 120.0
+
+
+def test_changes_owed_at_once_on_one_memory_are_all_kept(monkeypatch):
+    class Slow(_Graph):
+        async def get(self, vid, label=None):
+            v = await super().get(vid, label)
+            await asyncio.sleep(0)               # another request runs between the read and the write
+            return {**v} if v else v
+    g = Slow()
+    monkeypatch.setattr(mp, "GRAPH", g)
+
+    async def owe_all():
+        await asyncio.gather(*(mp._owe("hmem_x", {"op": "close", "mid": "hmem_x", "rid": f"rec_{i}"}) for i in range(8)))
+    run(owe_all())
+    assert sorted(o["rid"] for o in _owed(g)) == sorted(f"rec_{i}" for i in range(8))

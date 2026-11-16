@@ -29,6 +29,7 @@ import os
 import re
 import time
 import uuid
+import weakref
 
 from memory_live import Announced
 from memory_tools import REFUSE_STANDING, STANDING_IS_A_PERSONS, set_by_a_person
@@ -1246,6 +1247,16 @@ OWED = "owed"
 # (503, nothing written) rather than an owed change dropped.
 OWED_CAP = 50
 OWED_FULL = "This memory has changes it couldn't make yet, so nothing was written. Ask again in a moment."
+# The list is read, changed and written back on the memory's node, so changes to one memory's list take turns (this
+# process serves every request of an instance). A change being made is never waited on under it.
+_OWED_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _owed_lock(mid: str) -> asyncio.Lock:
+    lock = _OWED_LOCKS.get(mid)
+    if lock is None:
+        lock = _OWED_LOCKS[mid] = asyncio.Lock()
+    return lock
 
 
 async def owed_room(mid: str) -> None:
@@ -1268,10 +1279,11 @@ async def _set_owed(mid: str, ops: list[dict]) -> None:
 
 
 async def _owe(mid: str, op: dict) -> None:
-    ops = await _owed_of(mid)
-    if op not in ops:
-        await _set_owed(mid, [*ops, op])
-        print(f"[memory] owed: 1 added, {len(ops) + 1} on the memory", flush=True)
+    async with _owed_lock(mid):
+        ops = await _owed_of(mid)
+        if op not in ops:
+            await _set_owed(mid, [*ops, op])
+            print(f"[memory] owed: 1 added, {len(ops) + 1} on the memory", flush=True)
 
 
 async def pay_owed(prov: Provider, mid: str) -> None:
@@ -1311,8 +1323,11 @@ async def pay_owed(prov: Provider, mid: str) -> None:
             else:
                 dropped += 1
     if left != ops:
-        await _set_owed(mid, left)
-        print(f"[memory] owed: {paid} paid, {dropped} dropped, {len(left)} still owed", flush=True)
+        async with _owed_lock(mid):
+            # what was owed meanwhile, while these were being made, stays owed
+            meanwhile = [o for o in await _owed_of(mid) if o not in ops]
+            await _set_owed(mid, [*left, *meanwhile])
+        print(f"[memory] owed: {paid} paid, {dropped} dropped, {len(left) + len(meanwhile)} still owed", flush=True)
 
 
 async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
