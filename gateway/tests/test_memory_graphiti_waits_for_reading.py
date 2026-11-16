@@ -175,8 +175,10 @@ class _Kept(mp.Provider):
     `write_fails`: the write itself fails; `refuse`: how many changes to records already kept it refuses with a 503."""
     id = "stub"
 
-    def __init__(self, busy: bool = False, write_fails: bool = False, refuse: int = 0, gone: bool = False):
+    def __init__(self, busy: bool = False, write_fails: bool = False, refuse: int = 0, gone: bool = False,
+                 refuse_all: bool = False, closed_meanwhile: bool = False):
         self.busy, self.write_fails, self.refuse, self.gone, self.calls = busy, write_fails, refuse, gone, []
+        self.refuse_all, self.closed_meanwhile = refuse_all, closed_meanwhile
         self.refs: dict[str, list] = {"rec_old": []}
 
     def capabilities(self) -> dict:
@@ -202,15 +204,19 @@ class _Kept(mp.Provider):
         self.calls.append(f"revise {rid}")
         if self.gone and rid == "rec_old":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
-        if self.refuse > 0 and rid == "rec_old":
-            self.refuse -= 1
+        if self.refuse_all or (self.refuse > 0 and rid == "rec_old"):
+            self.refuse = max(0, self.refuse - 1)
             raise mp.MemoryError(503, "memory_unavailable", mg.BUSY)
         if "references" in patch:
             self.refs[rid] = patch["references"]
         return {"id": rid, "version": 2}
 
     async def get(self, mid, rid, as_of=None):
-        return {"id": rid, "type": "fact", "attributes": {}, "references": list(self.refs.get(rid, []))}
+        self.calls.append(f"get {rid}")
+        if self.gone and rid == "rec_old":
+            return None
+        t = {"valid_to": "2026-05-01T00:00:00Z"} if self.closed_meanwhile and rid == "rec_old" else {}
+        return {"id": rid, "type": "fact", "status": "active", "attributes": {}, "references": list(self.refs.get(rid, [])), "time": t}
 
 
 FACT = {"type": "fact", "content": [{"type": "text", "text": "Acct 1 is in the west region."}],
@@ -227,6 +233,10 @@ def graph(monkeypatch):
     return g
 
 
+def _steps(p) -> list[str]:
+    return [c for c in p.calls if not c.startswith("get ")]
+
+
 def _owed(graph) -> list[dict]:
     return json.loads((graph.props.get("hmem_x") or {}).get(mp.OWED) or "[]")
 
@@ -235,21 +245,21 @@ def test_a_fact_that_closes_an_older_value_waits_before_it_is_written(graph):
     p = _Kept()
     out = run(mp.remember(p, "hmem_x", FACT, WRITER))
     assert out["closed"] == ["rec_old"] and "owed" not in out
-    assert p.calls == ["ready", "remember", "revise rec_old"]       # wait, write, then close: never close first
+    assert _steps(p) == ["ready", "remember", "revise rec_old"]     # wait, write, then close: never close first
 
 
 def test_a_memory_still_reading_refuses_the_fact_with_nothing_written(graph):
     p = _Kept(busy=True)
     with pytest.raises(mp.MemoryError) as e:
         run(mp.remember(p, "hmem_x", FACT, WRITER))
-    assert e.value.status == 503 and p.calls == ["ready"]          # refused before the write, never after it
+    assert e.value.status == 503 and _steps(p) == ["ready"]        # refused before the write, never after it
 
 
 def test_a_write_that_fails_leaves_the_older_value_open(graph):
     p = _Kept(write_fails=True)
     with pytest.raises(mp.MemoryError):
         run(mp.remember(p, "hmem_x", FACT, WRITER))
-    assert p.calls == ["ready", "remember"] and _owed(graph) == []   # the older value stays open: it has no successor
+    assert _steps(p) == ["ready", "remember"] and _owed(graph) == []   # the older value stays open: it has no successor
 
 
 def test_a_close_that_cant_be_made_yet_is_owed_and_the_write_stands(graph):
@@ -264,7 +274,7 @@ def test_what_is_owed_is_made_at_the_memorys_next_change(graph):
     run(mp.remember(p, "hmem_x", FACT, WRITER))
     p.calls.clear()
     run(mp.revise(p, "hmem_x", "rec_other", {"title": "x"}, WRITER))
-    assert p.calls[:2] == ["revise rec_old", "revise rec_other"] and _owed(graph) == []
+    assert _steps(p)[:2] == ["revise rec_old", "revise rec_other"] and _owed(graph) == []
 
 
 def test_what_still_cant_be_made_stays_owed(graph):
@@ -294,7 +304,42 @@ def test_a_contradiction_that_cant_be_kept_on_the_other_record_yet_is_owed_then_
 def test_a_plain_fact_never_waits(graph):
     p = _Kept(busy=True)
     plain = {"type": "fact", "content": [{"type": "text", "text": "Acct 1 likes email."}]}
-    assert run(mp.remember(p, "hmem_x", plain, WRITER))["id"] == "rec_new" and p.calls == ["remember"]
+    assert run(mp.remember(p, "hmem_x", plain, WRITER))["id"] == "rec_new" and _steps(p) == ["remember"]
+
+
+def test_a_memory_that_owes_as_much_as_it_may_refuses_another_with_nothing_written(graph):
+    graph.props["hmem_x"] = {mp.OWED: json.dumps([{"op": "close", "mid": "hmem_x", "rid": f"rec_{i}", "valid_to": "2026-06-01T00:00:00Z"}
+                                                  for i in range(mp.OWED_CAP)])}
+    p = _Kept(refuse_all=True)
+    with pytest.raises(mp.MemoryError) as e:
+        run(mp.remember(p, "hmem_x", FACT, WRITER))
+    assert e.value.status == 503 and e.value.message == mp.OWED_FULL
+    assert "remember" not in p.calls and len(_owed(graph)) == mp.OWED_CAP      # nothing written, nothing owed dropped
+
+
+def test_an_owed_change_reaches_only_its_own_memorys_records(graph):
+    graph.props["hmem_x"] = {mp.OWED: json.dumps([{"op": "close", "mid": "hmem_other", "rid": "rec_old", "valid_to": "2026-06-01T00:00:00Z"}])}
+    p = _Kept()
+    run(mp.revise(p, "hmem_x", "rec_other", {"title": "x"}, WRITER))
+    assert "revise rec_old" not in p.calls and _owed(graph) == []
+
+
+def test_a_value_closed_meanwhile_keeps_its_own_end(graph):
+    p = _Kept(refuse=1)
+    run(mp.remember(p, "hmem_x", FACT, WRITER))
+    p.closed_meanwhile = True
+    p.calls.clear()
+    run(mp.revise(p, "hmem_x", "rec_other", {"title": "x"}, WRITER))
+    assert "revise rec_old" not in p.calls and _owed(graph) == []
+
+
+def test_what_is_owed_is_logged_as_counts_only(graph, capsys):
+    p = _Kept(refuse=1)
+    run(mp.remember(p, "hmem_x", FACT, WRITER))
+    run(mp.revise(p, "hmem_x", "rec_other", {"title": "x"}, WRITER))
+    out = capsys.readouterr().out
+    assert "[memory] owed: 1 added, 1 on the memory" in out and "[memory] owed: 1 paid, 0 dropped, 0 still owed" in out
+    assert "rec_" not in out and "hmem_" not in out and "Acct" not in out
 
 
 def test_the_bound_can_be_set_for_a_slower_server(monkeypatch):

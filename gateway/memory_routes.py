@@ -516,6 +516,8 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
         patch["references"] = stated + kept
     # `If-Match` is the version the writer read: named, a write that crossed another is refused rather than losing it
     match = (request.headers.get("if-match") or "").strip().strip('"')
+    if any(isinstance(r, dict) and r.get("rel") == "contradicts" for r in patch.get("references") or []):
+        await mp.owed_room(mid)      # it may owe a change to the other record once revised: refused before, never after
     try:
         made = await mp.revise(prov, mid, rid, patch, _writer(request), expected=int(match) if match.isdigit() else None)
     except memory_live.VersionMoved as e:

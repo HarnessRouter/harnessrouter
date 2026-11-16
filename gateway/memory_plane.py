@@ -1214,6 +1214,7 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
         # memory that can't take the change yet refuses before anything is written, never after
         await prov.ready_to_change(mid)
         await pay_owed(prov, mid)
+        await owed_room(mid)
     made = await prov.remember(mid, record, writer)
     by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
     owed: list[str] = []
@@ -1224,7 +1225,7 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
         except MemoryError as e:
             if e.status < 500:
                 raise
-            await _owe(mid, {"op": "close", "rid": str(o["id"]), "valid_to": valid_to, "by": by_server})
+            await _owe(mid, {"op": "close", "mid": mid, "rid": str(o["id"]), "valid_to": valid_to, "by": by_server})
             owed.append(str(o["id"]))
     owed += await keep_on_both_ends(prov, mid, made, by_server)
     if placing:
@@ -1241,6 +1242,16 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
 # client would retry into a duplicate. The change is kept on the memory, out of any client's view, and made at the
 # memory's next change.
 OWED = "owed"
+# A memory whose provider keeps refusing could owe without end: past this many, a write that would owe more is refused
+# (503, nothing written) rather than an owed change dropped.
+OWED_CAP = 50
+OWED_FULL = "This memory has changes it couldn't make yet, so nothing was written. Ask again in a moment."
+
+
+async def owed_room(mid: str) -> None:
+    """503, before anything is written, when this memory owes as many changes as it may."""
+    if len(await _owed_of(mid)) >= OWED_CAP:
+        raise MemoryError(503, "memory_unavailable", OWED_FULL)
 
 
 async def _owed_of(mid: str) -> list[dict]:
@@ -1260,6 +1271,7 @@ async def _owe(mid: str, op: dict) -> None:
     ops = await _owed_of(mid)
     if op not in ops:
         await _set_owed(mid, [*ops, op])
+        print(f"[memory] owed: 1 added, {len(ops) + 1} on the memory", flush=True)
 
 
 async def pay_owed(prov: Provider, mid: str) -> None:
@@ -1268,22 +1280,39 @@ async def pay_owed(prov: Provider, mid: str) -> None:
     ops = await _owed_of(mid)
     if not ops:
         return
-    left = []
+    left, paid, dropped = [], 0, 0
     for op in ops:
+        # only a record of this memory, read now: an owed change never reaches another memory's records
+        if str(op.get("mid") or "") != mid:
+            dropped += 1
+            continue
         try:
+            cur = await prov.get(mid, str(op["rid"]))
+            if not cur or (cur.get("status") or "active") != "active":
+                dropped += 1         # gone, closed, or not this memory's
+                continue
             if op.get("op") == "close":
+                if (cur.get("time") or {}).get("valid_to"):
+                    dropped += 1     # closed meanwhile: its end is someone's, not ours to move
+                    continue
                 await prov.revise(mid, str(op["rid"]), {"time": {"valid_to": op.get("valid_to") or _now_iso()}}, op.get("by") or {})
             elif op.get("op") == "contradicts":
-                o = await prov.get(mid, str(op["rid"]))
                 with_ = str(op.get("with") or "")
-                if o and with_ and not any(x.get("rel") == "contradicts" and str(x.get("record_id")) == with_ for x in o.get("references") or []):
-                    await prov.revise(mid, str(op["rid"]), {"references": [*(o.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": with_}]},
+                if with_ and not any(x.get("rel") == "contradicts" and str(x.get("record_id")) == with_ for x in cur.get("references") or []):
+                    await prov.revise(mid, str(op["rid"]), {"references": [*(cur.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": with_}]},
                                       op.get("by") or {})
+            else:
+                dropped += 1
+                continue
+            paid += 1
         except MemoryError as e:
             if e.status >= 500:
                 left.append(op)
+            else:
+                dropped += 1
     if left != ops:
         await _set_owed(mid, left)
+        print(f"[memory] owed: {paid} paid, {dropped} dropped, {len(left)} still owed", flush=True)
 
 
 async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
@@ -1325,7 +1354,7 @@ async def keep_on_both_ends(prov: Provider, mid: str, record: dict, writer: dict
         except MemoryError as e:
             if e.status < 500:
                 raise
-            await _owe(mid, {"op": "contradicts", "rid": other, "with": rid, "by": writer})
+            await _owe(mid, {"op": "contradicts", "mid": mid, "rid": other, "with": rid, "by": writer})
             owed.append(other)
     return owed
 
