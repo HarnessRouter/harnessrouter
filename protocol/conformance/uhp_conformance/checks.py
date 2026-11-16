@@ -2355,8 +2355,6 @@ def en06(ctx):
     return f"{len(ids)} harness(es) read it"
 
 
-@check("EN-07", "A task reads the environment at its mount path, read-only, and its session names it", "full",
-       f"{SPEC}/environments.md#6-what-a-session-sees")
 def _en07_task(ctx, hid: str, mount: str, model: str):
     body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
                       f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
@@ -2377,6 +2375,8 @@ def _supported_bases(ctx) -> list[str]:
     return ctx.state["_bases"]
 
 
+@check("EN-07", "A task reads the environment at its mount path, read-only, and its session names it", "full",
+       f"{SPEC}/environments.md#6-what-a-session-sees")
 def en07(ctx):
     _environments_supported(ctx)
     e = _built_environment(ctx)
