@@ -39,7 +39,7 @@ def _engine(monkeypatch, pending, still_there: int = 0) -> list[tuple[str, str]]
     calls: list[tuple[str, str]] = []
     answers = list(pending)
     st = {"node": _node(), "gone": False, "back": still_there}
-    monkeypatch.setattr(mg, "SETTLE_S", 0.4, raising=False)
+    monkeypatch.setattr(mg, "SETTLE_S", 0.4, raising=False); monkeypatch.delenv("HR_GRAPHITI_SETTLE_S", raising=False)
     monkeypatch.setattr(mg, "SETTLE_NAP", 0.01, raising=False)
 
     def handle(req: httpx.Request) -> httpx.Response:
@@ -153,3 +153,154 @@ def test_nothing_to_erase_asks_nothing(monkeypatch):
     calls = _engine(monkeypatch, [1])
     assert run(_g().erase(MID, [])) == {"erased": [], "unreachable": []}
     assert calls == []
+
+
+# ── a write that changes records already kept waits before it writes, never after ───────────────────────────────────
+class _Graph:
+    """The plane's own store, for the memory node alone."""
+
+    def __init__(self):
+        self.props: dict[str, dict] = {}
+
+    async def get(self, vid, label=None):
+        return self.props.get(vid)
+
+    async def upsert(self, label, vid, props, raise_on_fail=False):
+        self.props.setdefault(vid, {}).update(props)
+        return True
+
+
+class _Kept(mp.Provider):
+    """A provider holding one fact about acct_1 (region = east). `busy`: it is still reading in the background;
+    `write_fails`: the write itself fails; `refuse`: how many changes to records already kept it refuses with a 503."""
+    id = "stub"
+
+    def __init__(self, busy: bool = False, write_fails: bool = False, refuse: int = 0, gone: bool = False):
+        self.busy, self.write_fails, self.refuse, self.gone, self.calls = busy, write_fails, refuse, gone, []
+        self.refs: dict[str, list] = {"rec_old": []}
+
+    def capabilities(self) -> dict:
+        return {"holds": True}
+
+    async def ready_to_change(self, mid):
+        self.calls.append("ready")
+        if self.busy:
+            raise mp.MemoryError(503, "memory_unavailable", mg.BUSY)
+
+    async def list(self, mid, req):
+        return {"records": [{"id": "rec_old", "type": "fact", "attributes": {"holds": "one", "predicate": "region", "value": "east"},
+                             "references": [{"rel": "subject", "record_id": "acct_1"}],
+                             "time": {"valid_from": "2026-01-01T00:00:00Z"}}]}
+
+    async def remember(self, mid, record, writer):
+        self.calls.append("remember")
+        if self.write_fails:
+            raise mp.MemoryError(502, "memory_unavailable", "Graphiti did not answer: ReadTimeout")
+        return {"id": "rec_new", **record}
+
+    async def revise(self, mid, rid, patch, writer):
+        self.calls.append(f"revise {rid}")
+        if self.gone and rid == "rec_old":
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        if self.refuse > 0 and rid == "rec_old":
+            self.refuse -= 1
+            raise mp.MemoryError(503, "memory_unavailable", mg.BUSY)
+        if "references" in patch:
+            self.refs[rid] = patch["references"]
+        return {"id": rid, "version": 2}
+
+    async def get(self, mid, rid, as_of=None):
+        return {"id": rid, "type": "fact", "attributes": {}, "references": list(self.refs.get(rid, []))}
+
+
+FACT = {"type": "fact", "content": [{"type": "text", "text": "Acct 1 is in the west region."}],
+        "attributes": {"holds": "one", "predicate": "region", "value": "west"},
+        "references": [{"rel": "subject", "memory_id": "", "record_id": "acct_1"}], "time": {"valid_from": "2026-06-01T00:00:00Z"}}
+DISPUTES = {"type": "fact", "content": [{"type": "text", "text": "Acct 1 never moved."}],
+            "references": [{"rel": "contradicts", "memory_id": "", "record_id": "rec_old"}]}
+
+
+@pytest.fixture
+def graph(monkeypatch):
+    g = _Graph()
+    monkeypatch.setattr(mp, "GRAPH", g)
+    return g
+
+
+def _owed(graph) -> list[dict]:
+    return json.loads((graph.props.get("hmem_x") or {}).get(mp.OWED) or "[]")
+
+
+def test_a_fact_that_closes_an_older_value_waits_before_it_is_written(graph):
+    p = _Kept()
+    out = run(mp.remember(p, "hmem_x", FACT, WRITER))
+    assert out["closed"] == ["rec_old"] and "owed" not in out
+    assert p.calls == ["ready", "remember", "revise rec_old"]       # wait, write, then close: never close first
+
+
+def test_a_memory_still_reading_refuses_the_fact_with_nothing_written(graph):
+    p = _Kept(busy=True)
+    with pytest.raises(mp.MemoryError) as e:
+        run(mp.remember(p, "hmem_x", FACT, WRITER))
+    assert e.value.status == 503 and p.calls == ["ready"]          # refused before the write, never after it
+
+
+def test_a_write_that_fails_leaves_the_older_value_open(graph):
+    p = _Kept(write_fails=True)
+    with pytest.raises(mp.MemoryError):
+        run(mp.remember(p, "hmem_x", FACT, WRITER))
+    assert p.calls == ["ready", "remember"] and _owed(graph) == []   # the older value stays open: it has no successor
+
+
+def test_a_close_that_cant_be_made_yet_is_owed_and_the_write_stands(graph):
+    p = _Kept(refuse=1)
+    out = run(mp.remember(p, "hmem_x", FACT, WRITER))
+    assert out["id"] == "rec_new" and out["closed"] == [] and out["owed"] == ["rec_old"]
+    assert [(o["op"], o["rid"], o["valid_to"]) for o in _owed(graph)] == [("close", "rec_old", "2026-06-01T00:00:00Z")]
+
+
+def test_what_is_owed_is_made_at_the_memorys_next_change(graph):
+    p = _Kept(refuse=1)
+    run(mp.remember(p, "hmem_x", FACT, WRITER))
+    p.calls.clear()
+    run(mp.revise(p, "hmem_x", "rec_other", {"title": "x"}, WRITER))
+    assert p.calls[:2] == ["revise rec_old", "revise rec_other"] and _owed(graph) == []
+
+
+def test_what_still_cant_be_made_stays_owed(graph):
+    p = _Kept(refuse=2)
+    run(mp.remember(p, "hmem_x", FACT, WRITER))
+    with pytest.raises(mp.MemoryError):
+        run(mp.forget(p, "hmem_x", "rec_old", WRITER))
+    assert [o["rid"] for o in _owed(graph)] == ["rec_old"]
+
+
+def test_a_change_owed_to_a_record_since_gone_is_owed_no_longer(graph):
+    p = _Kept(refuse=1)
+    run(mp.remember(p, "hmem_x", FACT, WRITER))
+    p.gone = True
+    run(mp.revise(p, "hmem_x", "rec_other", {"title": "x"}, WRITER))
+    assert _owed(graph) == []
+
+
+def test_a_contradiction_that_cant_be_kept_on_the_other_record_yet_is_owed_then_kept(graph):
+    p = _Kept(refuse=1)
+    out = run(mp.remember(p, "hmem_x", DISPUTES, WRITER))
+    assert out["owed"] == ["rec_old"] and [(o["op"], o["with"]) for o in _owed(graph)] == [("contradicts", "rec_new")]
+    run(mp.revise(p, "hmem_x", "rec_other", {"title": "x"}, WRITER))
+    assert p.refs["rec_old"] == [{"rel": "contradicts", "memory_id": "", "record_id": "rec_new"}] and _owed(graph) == []
+
+
+def test_a_plain_fact_never_waits(graph):
+    p = _Kept(busy=True)
+    plain = {"type": "fact", "content": [{"type": "text", "text": "Acct 1 likes email."}]}
+    assert run(mp.remember(p, "hmem_x", plain, WRITER))["id"] == "rec_new" and p.calls == ["remember"]
+
+
+def test_the_bound_can_be_set_for_a_slower_server(monkeypatch):
+    monkeypatch.delenv("HR_GRAPHITI_SETTLE_S", raising=False)
+    assert mg._settle_s() == mg.SETTLE_S == 120.0
+    monkeypatch.setenv("HR_GRAPHITI_SETTLE_S", "300")
+    assert mg._settle_s() == 300.0
+    monkeypatch.setenv("HR_GRAPHITI_SETTLE_S", "soon")
+    assert mg._settle_s() == 120.0

@@ -269,6 +269,12 @@ class Provider:
     async def forget(self, mid: str, rid: str, writer: dict) -> dict:
         self._no("forget a record")
 
+    async def ready_to_change(self, mid: str) -> None:
+        """Before a write that changes records already kept (a fact that closes an older value, a contradiction kept on
+        both ends): a provider that reads in the background waits here, or refuses with nothing written. Most read
+        nothing in the background, so nothing waits."""
+        return None
+
     async def close_episode(self, mid: str, rid: str, writer: dict) -> None:
         """A conversation closed because something it taught was forgotten, and nothing else with it. Where
         a provider's `forget` of an episode takes what it taught along too, it says otherwise here."""
@@ -1138,6 +1144,7 @@ async def revise(prov: Provider, mid: str, rid: str, patch: dict, writer: dict, 
     """A record changed. Every writer comes through here, a person's request and an agent's tool."""
     _no_agent_standing(writer, {k: v for k, v in (patch.get("attributes") or {}).items() if k == "standing"})
     await _not_a_persons_standing(prov, mid, rid, writer)
+    await pay_owed(prov, mid)
     if expected is None:
         return await prov.revise(mid, rid, patch, writer)
     return await prov.revise(mid, rid, patch, writer, expected=expected)
@@ -1202,14 +1209,81 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
             record = {**record, "time": {**(record.get("time") or {}), "valid_to": min(later)[1]}}
         if conflicts:
             record = {**record, "references": [*(record.get("references") or []), *[{"rel": "contradicts", "memory_id": "", "record_id": c} for c in conflicts]]}
+    if closes or conflicts or any(x.get("rel") == "contradicts" for x in record.get("references") or []):
+        # it changes records already kept once it is written, and that change can wait on the provider: wait now, so a
+        # memory that can't take the change yet refuses before anything is written, never after
+        await prov.ready_to_change(mid)
+        await pay_owed(prov, mid)
     made = await prov.remember(mid, record, writer)
     by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
+    owed: list[str] = []
     for o in closes:
-        await prov.revise(mid, str(o["id"]), {"time": {"valid_to": (record.get("time") or {}).get("valid_from") or _now_iso()}}, by_server)
-    await keep_on_both_ends(prov, mid, made, by_server)
+        valid_to = (record.get("time") or {}).get("valid_from") or _now_iso()
+        try:
+            await prov.revise(mid, str(o["id"]), {"time": {"valid_to": valid_to}}, by_server)
+        except MemoryError as e:
+            if e.status < 500:
+                raise
+            await _owe(mid, {"op": "close", "rid": str(o["id"]), "valid_to": valid_to, "by": by_server})
+            owed.append(str(o["id"]))
+    owed += await keep_on_both_ends(prov, mid, made, by_server)
     if placing:
-        made = {**made, "closed": [str(o["id"]) for o in closes], "conflicts": conflicts}
+        made = {**made, "closed": [str(o["id"]) for o in closes if str(o["id"]) not in owed], "conflicts": conflicts}
+    if owed:
+        made = {**made, "owed": owed}
     return made
+
+
+# ── what a write that stands still owes ──────────────────────────────────────────────────────────────────────────────
+# A write that changes records already kept (closing an older value, a contradiction kept on both ends) makes its own
+# record first, then the change. When the provider can't take the change just then (5xx, such as still reading at its
+# bound), the record stands and the answer is 200 with the change named `owed`, never an error after a write, which a
+# client would retry into a duplicate. The change is kept on the memory, out of any client's view, and made at the
+# memory's next change.
+OWED = "owed"
+
+
+async def _owed_of(mid: str) -> list[dict]:
+    v = await GRAPH.get(mid, label="Memory") if GRAPH is not None else None
+    try:
+        ops = json.loads((v or {}).get(OWED) or "[]")
+    except (TypeError, ValueError):
+        ops = []
+    return [o for o in ops if isinstance(o, dict) and o.get("rid")] if isinstance(ops, list) else []
+
+
+async def _set_owed(mid: str, ops: list[dict]) -> None:
+    await GRAPH.upsert("Memory", mid, {OWED: json.dumps(ops, separators=(",", ":"))}, raise_on_fail=True)
+
+
+async def _owe(mid: str, op: dict) -> None:
+    ops = await _owed_of(mid)
+    if op not in ops:
+        await _set_owed(mid, [*ops, op])
+
+
+async def pay_owed(prov: Provider, mid: str) -> None:
+    """What this memory still owes, made now. A change the provider still can't take stays owed; one whose record is
+    gone or closed is owed no longer."""
+    ops = await _owed_of(mid)
+    if not ops:
+        return
+    left = []
+    for op in ops:
+        try:
+            if op.get("op") == "close":
+                await prov.revise(mid, str(op["rid"]), {"time": {"valid_to": op.get("valid_to") or _now_iso()}}, op.get("by") or {})
+            elif op.get("op") == "contradicts":
+                o = await prov.get(mid, str(op["rid"]))
+                with_ = str(op.get("with") or "")
+                if o and with_ and not any(x.get("rel") == "contradicts" and str(x.get("record_id")) == with_ for x in o.get("references") or []):
+                    await prov.revise(mid, str(op["rid"]), {"references": [*(o.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": with_}]},
+                                      op.get("by") or {})
+        except MemoryError as e:
+            if e.status >= 500:
+                left.append(op)
+    if left != ops:
+        await _set_owed(mid, left)
 
 
 async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
@@ -1217,6 +1291,7 @@ async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
     taught are still in that conversation, and an agent asked to forget something can't be relied on to know
     that: real turns left exactly this behind. So the conversation closes with it. What else it taught stays."""
     await _not_a_persons_standing(prov, mid, rid, writer)
+    await pay_owed(prov, mid)
     before = await prov.get(mid, rid)
     out = await prov.forget(mid, rid, writer)
     by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
@@ -1233,17 +1308,26 @@ async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
     return out
 
 
-async def keep_on_both_ends(prov: Provider, mid: str, record: dict, writer: dict) -> None:
-    """`contradicts` says the same from either end, so it is kept on both records (§4.2)."""
+async def keep_on_both_ends(prov: Provider, mid: str, record: dict, writer: dict) -> list[str]:
+    """`contradicts` says the same from either end, so it is kept on both records (§4.2). Called once `record` is
+    written: a change the provider can't take just then is owed (pay_owed), and the ids it owes are answered."""
     rid = str(record.get("id") or "")
+    owed: list[str] = []
     for ref in record.get("references") or []:
         other = str(ref.get("record_id") or "")
         if ref.get("rel") != "contradicts" or str(ref.get("memory_id") or mid) != mid or not other or other == rid:
             continue
-        o = await prov.get(mid, other)
-        if not o or any(x.get("rel") == "contradicts" and str(x.get("record_id")) == rid for x in o.get("references") or []):
-            continue
-        await prov.revise(mid, other, {"references": [*(o.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": rid}]}, writer)
+        try:
+            o = await prov.get(mid, other)
+            if not o or any(x.get("rel") == "contradicts" and str(x.get("record_id")) == rid for x in o.get("references") or []):
+                continue
+            await prov.revise(mid, other, {"references": [*(o.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": rid}]}, writer)
+        except MemoryError as e:
+            if e.status < 500:
+                raise
+            await _owe(mid, {"op": "contradicts", "rid": other, "with": rid, "by": writer})
+            owed.append(other)
+    return owed
 
 
 def _now_iso() -> str:

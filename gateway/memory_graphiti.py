@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
+import os
 import time
 import uuid
 
@@ -44,7 +45,7 @@ LINK = "hr_link"     # on an edge made for a record's reference, not for a fact
 # Graphiti reads what a memory is given in the background. A revise, forget, erase or a memory's delete first waits for
 # the memory's readings (queued and being read) to finish, this long at most for the whole call, and is refused
 # untouched while any remain: asking again finishes it.
-SETTLE_S = 45.0
+SETTLE_S = 120.0     # HR_GRAPHITI_SETTLE_S sets another, for a server that reads more slowly
 SETTLE_NAP = 1.0
 BUSY = "It is still being read just now, so nothing was changed. Ask again in a moment."
 ERASE_LEFT = "It couldn't all be erased just now. Erase it again."
@@ -61,6 +62,13 @@ checked_transport = None
 
 def _transport():
     return transport if transport is not None else (checked_transport() if checked_transport else None)
+
+
+def _settle_s() -> float:
+    try:
+        return float(os.environ.get("HR_GRAPHITI_SETTLE_S") or SETTLE_S)
+    except ValueError:
+        return SETTLE_S
 
 
 class GraphitiUnavailable(mp.MemoryError):
@@ -311,6 +319,9 @@ class Graphiti(mp.Provider):
                 raise mp.MemoryError(503, code, left)
             await asyncio.sleep(SETTLE_NAP)
 
+    async def ready_to_change(self, mid):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
+
     async def _schema(self, mid: str) -> dict:
         m = await mp._load(self.org, mid) if self.org else None
         try:
@@ -320,7 +331,7 @@ class Graphiti(mp.Provider):
 
     # ── lifecycle ─────────────────────────────────────────────────────────────────────────────
     async def drop(self, mid):
-        await self._settled(mid, BUSY, time.monotonic() + SETTLE_S)
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         await self._call("DELETE", f"/groups/{mid}")
 
     async def count(self, mid):
@@ -388,7 +399,7 @@ class Graphiti(mp.Provider):
         return {"records": records, "job": None}
 
     async def revise(self, mid, rid, patch, writer):
-        await self._settled(mid, BUSY, time.monotonic() + SETTLE_S)
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         cur = await self.get(mid, rid)
         if not cur or cur["status"] != "active":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
@@ -429,7 +440,7 @@ class Graphiti(mp.Provider):
         return {**self._node_out(mid, r.json()), "supersedes": cur["version"]}
 
     async def forget(self, mid, rid, writer):
-        await self._settled(mid, BUSY, time.monotonic() + SETTLE_S)
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         cur = await self.get(mid, rid)
         if not cur or cur["status"] != "active":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
@@ -453,7 +464,7 @@ class Graphiti(mp.Provider):
 
     async def erase(self, mid, rids):
         erased, unreachable = [], []
-        until = time.monotonic() + SETTLE_S
+        until = time.monotonic() + _settle_s()
         if rids:
             await self._settled(mid, BUSY, until)
         for rid in rids:
