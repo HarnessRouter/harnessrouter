@@ -497,6 +497,34 @@ def grants_changed(org: str = "") -> None:
         _GRANTS.pop(k, None)
 
 
+# A key minted for no one (no member) owns what it creates as itself: created_by "key:<key id>", and its principal is
+# that same string (memory_routes.principals_of). A member's created_by is their bare id, matched as member:<id>. The
+# prefix is reserved: a member id that starts with it is no one (creator_of, principals_of), so a person can never be
+# named to hold what a key made. Before, such a key's memories were stamped created_by "" and reached by no caller, the
+# key that made them included (UHP conformance ME-01..13 on 0.41.16).
+KEY_PREFIX = "key:"
+
+
+def creator_of(caller: dict) -> str:
+    """Who a caller creates as: its member, or a key minted for no one as key:<key id>; '' when it is neither (a
+    member under the reserved prefix included), and create() refuses that."""
+    member = str(caller.get("member") or "")
+    if member:
+        return "" if member.startswith(KEY_PREFIX) else member
+    if caller.get("via") == "api_key" and caller.get("key_id"):
+        return KEY_PREFIX + str(caller["key_id"])
+    return ""
+
+
+def creator_principal(created_by) -> str:
+    """The principal a node's creator holds all four privileges as: key:<id> for a key, member:<id> for a member,
+    and no one for an empty creator (a node made before keys were creators is reached through grants only)."""
+    c = str(created_by or "")
+    if not c:
+        return ""
+    return c if c.startswith(KEY_PREFIX) else f"member:{c}"
+
+
 async def effective(org: str, memory: dict, principals: list[str]) -> list[str]:
     """The privileges these principals hold on the memory: every grant on it and on the ancestors
     the cutoff-aware chain reaches. The creator of a node holds all four on it, an implicit grant
@@ -507,7 +535,8 @@ async def effective(org: str, memory: dict, principals: list[str]) -> list[str]:
     ids = {str(m["id"]) for m in chain}
     privs: set[str] = set()
     for m in chain:
-        if f"member:{m.get('created_by') or ''}" in principals and m.get("created_by"):
+        creator = creator_principal(m.get("created_by"))
+        if creator and creator in principals:
             return list(PRIVILEGES)
     for g in await _org_grants(org):
         if str(g.get("memory_id") or "") in ids and str(g.get("principal") or "") in principals \
@@ -616,6 +645,9 @@ async def create(org: str, member: str, workspace: str, principals: list[str], *
                  parent_id=None, restricted=False, provider="", extra: dict | None = None) -> dict:
     """`extra`: the server's own properties for the memory (app.py's `provisioned_for`), never a caller's."""
     name, description = _clean(name, description)
+    if not member:
+        # a memory no caller could ever reach: refused, never made (creator_of says who can create)
+        raise MemoryError(403, "memory_forbidden", "This credential can't own a memory. Use a console session or an API key.")
     prov = str(provider or "").strip()
     parent = None
     if parent_id:

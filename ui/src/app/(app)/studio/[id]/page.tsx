@@ -231,7 +231,7 @@ export default function SetupPage() {
   if (missing) {
     return (
       <div className="scroll"><div className="list-wrap">
-        <p className="sub">This harness is not in this workspace. <a className="link-q inl" href="/studio">Back to Harness Studio</a></p>
+        <p className="sub">This harness is not in this workspace. <a className="link-q inl" href="/studio">Back to Harnesses</a></p>
       </div></div>
     );
   }

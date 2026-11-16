@@ -198,7 +198,7 @@ export function KeysPage() {
       <div className="list-wrap lw-n">
         <div className="list-top ph">
           <div>
-            <h1>API Keys</h1>
+            <h1>API Key</h1>
           </div>
           <PagePic kind="keys" />
         </div>

@@ -68,11 +68,11 @@ export function ExtensionsPage() {
       <div className="list-wrap lw-n">
         <div className="list-top ph">
           <div>
-            <h1>Add-ons</h1>
+            <h1>Add-on</h1>
           </div>
           <PagePic kind="ext" />
         </div>
-        <div className="tabs inline" role="tablist" aria-label="Add-ons" onKeyDown={(e) => tabKeys(e, TAB_KEYS, tab, pick)}>
+        <div className="tabs inline" role="tablist" aria-label="Add-on" onKeyDown={(e) => tabKeys(e, TAB_KEYS, tab, pick)}>
           {TABS.map(([k, label, fam]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>
               <Markup className="tab-brick" html={partIcon('built', fam)} />{label}{' '}

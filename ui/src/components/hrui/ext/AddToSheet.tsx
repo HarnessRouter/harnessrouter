@@ -77,7 +77,7 @@ export function AddToSheet({ item, targets, initial, onAdd, onBack, onDone }: {
               );
             })}
           </div>
-        ) : <p className="set-help">No harnesses yet. Make one in Harness Studio first.</p>}
+        ) : <p className="set-help">No harnesses yet. Make one in Harnesses first.</p>}
       </div>
       <div className="sheet-actions mcp-act">
         {added.length

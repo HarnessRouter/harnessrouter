@@ -243,7 +243,7 @@ export function McpSheet({ server, draft, next, keptAuth, headers, targets, init
                 );
               })}
             </div>
-          ) : <p className="set-help">No harnesses yet. Make one in Harness Studio first.</p>}
+          ) : <p className="set-help">No harnesses yet. Make one in Harnesses first.</p>}
           {dropping.length ? <p className="set-help mcp-warn">Saving removes it from {dropping.join(', ')}.</p> : null}
         </div>
       ) : null}

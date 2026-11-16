@@ -820,6 +820,15 @@ def _managed_harness(ctx, **cfg) -> dict:
 def _supported_base(ctx) -> str:
     if ctx.state.get("_base"):
         return ctx.state["_base"]
+    # A harness the suite makes for itself runs the model the caller named (--model), and that model is one the
+    # named harness's base serves; the first base the server lists may not serve it (a Gemini model was refused
+    # on Codex as model_unavailable, so EN-07 failed and F-09 skipped). So with --harness-id the suite's own
+    # harnesses are made on that harness's base.
+    if ctx.harness_id:
+        own = str(_harness(ctx).get("base") or "")
+        if own:
+            ctx.state["_base"] = own
+            return own
     probe = ctx.client.post("/v1/harnesses", body={"name": "uhp-conformance-probe",
                                                   "base": "uhp-conformance-unknown-base"})
     supported = (((probe.json or {}).get("error") or {}).get("detail") or {}).get("supported") or []

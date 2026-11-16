@@ -158,7 +158,7 @@ export function Handoff({ kind, onClose }: { kind: HandKind; onClose: () => void
           <div key={i} className={`hs${x[0] ? ' on' : i === cur ? ' busy' : ''}`}><i>{x[0] ? CHECK : null}</i><span>{x[1]}</span><small>{x[2]}</small></div>
         ))}
       </div>
-      {ok || !(d1 && d4) ? null : <div className="hx-wait"><button type="button" className="btn small primary" onClick={toList}>Go to Harness Studio →</button></div>}
+      {ok || !(d1 && d4) ? null : <div className="hx-wait"><button type="button" className="btn small primary" onClick={toList}>Go to Harnesses →</button></div>}
     </>
   );
 
@@ -180,7 +180,7 @@ export function Handoff({ kind, onClose }: { kind: HandKind; onClose: () => void
         </ol>
         <div className="hand-foot">
           {ok ? (mv
-            ? <><span className="grow ok-t">{CHECK}All {made.length} connected</span><button type="button" className="btn small primary" onClick={() => toStudio('/studio')}>Open Harness Studio</button></>
+            ? <><span className="grow ok-t">{CHECK}All {made.length} connected</span><button type="button" className="btn small primary" onClick={() => toStudio('/studio')}>Open Harnesses</button></>
             : <><span className="grow ok-t">{CHECK}Connected</span><button type="button" className="btn small primary" onClick={() => a && openMade(a.id)}>Open {a?.name}</button></>)
             : <span className="grow" />}
           <button type="button" className="link-q" onClick={onClose}>{ok ? 'Done' : 'Close'}</button>

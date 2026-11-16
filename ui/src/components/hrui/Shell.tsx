@@ -25,16 +25,17 @@ export const LINKS = {
   repo: 'https://github.com/HarnessRouter/harnessrouter',
 };
 
-// `nav` is the design's name for the place: its stylesheet keeps Add-ons and API Keys off the phone bar by
-// it (they are in More there)
+// `nav` is the design's name for the place: its stylesheet keeps Add-on and API Key off the phone bar by
+// it (they are in More there). The words are the hosted console's too, each in the singular (Richard, 11-14:
+// Studio is Harness, and every word singular)
 type Place = { key: string; href: string; label: string; icon: React.ReactNode; aria?: string; nav: string };
 const PLACES: Place[] = [
   { key: 'start', href: '/start', label: 'Start', icon: Ic.start, nav: 'start' },
-  { key: 'studio', href: '/studio', label: 'Studio', icon: Ic.studio, aria: 'Harness Studio', nav: 'agents' },
+  { key: 'studio', href: '/studio', label: 'Harness', icon: Ic.studio, nav: 'agents' },
   { key: 'memories', href: '/memories', label: 'Memory', icon: Ic.memories, nav: 'memories' },   // 'Memories' was too wide for the rail (Richard, 11-10)
-  { key: 'extensions', href: '/extensions', label: 'Add-ons', icon: Ic.extensions, nav: 'library' },   // 'Extensions' was too long for the rail (Richard, 10-21)
+  { key: 'extensions', href: '/extensions', label: 'Add-on', icon: Ic.extensions, nav: 'library' },   // 'Extensions' was too long for the rail (Richard, 10-21)
   { key: 'shop', href: '/shop', label: 'Shop', icon: Ic.shop, nav: 'harbor' },
-  { key: 'keys', href: '/keys', label: 'API Keys', icon: Ic.keys, nav: 'keys' },
+  { key: 'keys', href: '/keys', label: 'API Key', icon: Ic.keys, nav: 'keys' },
 ];
 
 /** Which rail place a path belongs to. */
