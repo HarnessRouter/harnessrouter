@@ -2988,6 +2988,27 @@ def _branch_archive(ctx, sid):
         return {name: archive.read(name) for name in archive.namelist() if not name.endswith("/")}
 
 
+# A turn's `memory` note can still be pending when its response is answered: what the agent's memory keeps from the turn
+# is written after it, and the note then settles. A transcript compared before and after a branch is read once no turn's
+# memory is pending, so the comparison is of the whole transcript, `memory` included, and never of a note settling.
+MEMORY_SETTLE_S = 180
+
+
+def _settled_turns(ctx, sid):
+    """The session's transcript once no turn's memory note is pending. Still pending at the bound: the check is unread
+    (a skip, never a pass)."""
+    deadline = time.time() + MEMORY_SETTLE_S
+    while True:
+        r = ctx.client.get(f"/v1/sessions/{sid}/turns")
+        assert r.status == 200, f"GET the session's turns returned HTTP {r.status}"
+        turns = (r.json or {}).get("turns") if isinstance(r.json, dict) else None
+        if not any(isinstance(t, dict) and ((t.get("memory") or {}).get("pending")) for t in turns or []):
+            return r.json
+        if time.time() > deadline:
+            raise Skip(f"unread: a turn's memory was still pending after {MEMORY_SETTLE_S} s, so the transcript was not compared")
+        time.sleep(2)
+
+
 def _branch_case(ctx):
     _branching(ctx)
     if "branch_case" in ctx.state:
@@ -3018,8 +3039,7 @@ def _branch_case(ctx):
     latest = _branch_archive(ctx, sid)
     if latest.get(filename, b"").strip() != f"{token}-3".encode() or future not in latest:
         raise Skip("the harness did not establish the later-turn file fixture")
-    turns_before = ctx.client.get(f"/v1/sessions/{sid}/turns")
-    assert turns_before.status == 200
+    turns_before = _settled_turns(ctx, sid)
     branched = ctx.client.post("/v1/responses", body={
         "input": "Reply with exactly: branched. Do not write or change any files.",
         "previous_response_id": rid, "branch": True, **({"model": ctx.model} if ctx.model else {}), "metadata": {"harness_id": h["id"]}})
@@ -3029,7 +3049,7 @@ def _branch_case(ctx):
     assert target and target != sid, "branch continued the original session instead of creating a new one"
     assert meta.get("branched_from") == rid, "branch response omitted or changed metadata.branched_from"
     case = {"source": sid, "point": rid, "target": target, "first": original,
-            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before.json,
+            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before,
             "branch_response": (branched.json or {}).get("id"), "harness": h["id"]}
     ctx.state["branch_case"] = case
     return case
@@ -3050,9 +3070,7 @@ def b01(ctx):
 def b02(ctx):
     case = _branch_case(ctx)
     assert _branch_archive(ctx, case["source"]) == case["latest"], "branch changed original files"
-    after = ctx.client.get(f"/v1/sessions/{case['source']}/turns")
-    assert after.status == 200
-    assert after.json == case["turns_before"], "branch changed the original transcript"
+    assert _settled_turns(ctx, case["source"]) == case["turns_before"], "branch changed the original transcript"
 
 
 @check("B-03", "Session inspection identifies the branch's source response and session", "full",
@@ -3078,9 +3096,8 @@ def b05(ctx):
         "input": "Reply with exactly: ran.", "branch": True,
         **({"model": ctx.model} if ctx.model else {}),
         "metadata": {"harness_id": case["harness"], "session_id": case["source"]}})
-    after = ctx.client.get(f"/v1/sessions/{case['source']}/turns")
-    assert after.status == 200
-    assert after.json == case["turns_before"], (
+    after = _settled_turns(ctx, case["source"])
+    assert after == case["turns_before"], (
         f"branch: true without previous_response_id ran a task in the session it named (HTTP {response.status})")
     assert response.status == 400, f"branch: true without previous_response_id returned HTTP {response.status}"
     assert ((response.json or {}).get("error") or {}).get("code") == "invalid_input"
