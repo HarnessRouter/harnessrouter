@@ -480,7 +480,7 @@ async def remember(mid: str, request: Request) -> dict:
             await mp.mark(org, mid, e.message)
             raise
         await mp.mark(org, mid)
-        return 200, {**await mp.present(org, mid, made, pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
+        return 200, {**await mp.present(org, mid, made, pr), **{k: made[k] for k in ("closed", "conflicts", "owed") if k in made}}
     return _answer_of(*await _once(request, org, member, mid, "remember", write))
 
 
@@ -516,13 +516,15 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
         patch["references"] = stated + kept
     # `If-Match` is the version the writer read: named, a write that crossed another is refused rather than losing it
     match = (request.headers.get("if-match") or "").strip().strip('"')
+    if any(isinstance(r, dict) and r.get("rel") == "contradicts" for r in patch.get("references") or []):
+        await mp.owed_room(mid)      # it may owe a change to the other record once revised: refused before, never after
     try:
         made = await mp.revise(prov, mid, rid, patch, _writer(request), expected=int(match) if match.isdigit() else None)
     except memory_live.VersionMoved as e:
         raise mp.MemoryError(412, "memory_version_moved", f"Someone else changed this record: it is at version {e.version} now.", "version")
     w = _writer(request)
-    await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"{w['kind']}:{w['id']}"})
-    return await mp.present(org, mid, made, pr)
+    owed = await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"{w['kind']}:{w['id']}"})
+    return {**await mp.present(org, mid, made, pr), **({"owed": owed} if owed else {})}
 
 
 @router.delete("/v1/memories/{mid}/records/{rid}")
@@ -541,7 +543,9 @@ async def erase(mid: str, request: Request) -> dict:
     ids = (await _json(request)).get("record_ids")
     if not isinstance(ids, list) or not ids:
         raise _uhp_error(422, "memory_invalid", "`record_ids` names what to erase.", "record_ids")
-    res = await (await mp.provider_of(m)).erase(mid, [str(i) for i in ids])
+    prov = await mp.provider_of(m)
+    await mp.pay_owed(prov, mid)
+    res = await prov.erase(mid, [str(i) for i in ids])
     return {"object": "memory.erasure", "erased": res.get("erased") or [], "unreachable": res.get("unreachable") or []}
 
 

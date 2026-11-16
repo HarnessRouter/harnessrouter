@@ -26,8 +26,10 @@ against that server on 2026-11-04.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
+import os
 import time
 import uuid
 
@@ -40,6 +42,17 @@ NODE, EDGE, EPISODE = "node_", "edge_", "ep_"
 SESSION = " session:"   # how an episode's source names the task it came from (observe), after who sent it
 READ = "hr_read:"    # the name of the episode Graphiti reads a stated record as, followed by the node's uuid
 LINK = "hr_link"     # on an edge made for a record's reference, not for a fact
+# Graphiti reads what a memory is given in the background. A revise, forget, erase or a memory's delete first waits for
+# the memory's readings (queued and being read) to finish, this long at most for the whole call, and is refused
+# untouched while any remain: asking again finishes it.
+SETTLE_S = 120.0     # HR_GRAPHITI_SETTLE_S sets another, for a server that reads more slowly
+SETTLE_NAP = 1.0
+BUSY = "It is still being read just now, so nothing was changed. Ask again in a moment."
+ERASE_LEFT = "It couldn't all be erased just now. Erase it again."
+# A server that can't say how much it has still to read (built before /groups/{group}/pending) is never taken for one
+# with nothing to read: the change is refused until the server is rebuilt.
+REBUILD = ("Your Graphiti server can't say whether it is still reading this memory, so nothing was changed. "
+           "Rebuild it with deploy/memories/up.sh, then ask again.")
 # Tests set an httpx transport here so every call is exercised without a server.
 transport: httpx.BaseTransport | None = None
 # Every other call opens its connections through the gateway's checked network (app.py sets this), so an address
@@ -49,6 +62,13 @@ checked_transport = None
 
 def _transport():
     return transport if transport is not None else (checked_transport() if checked_transport else None)
+
+
+def _settle_s() -> float:
+    try:
+        return float(os.environ.get("HR_GRAPHITI_SETTLE_S") or SETTLE_S)
+    except ValueError:
+        return SETTLE_S
 
 
 class GraphitiUnavailable(mp.MemoryError):
@@ -281,6 +301,27 @@ class Graphiti(mp.Provider):
         self._copies_at.pop(mid, None)
         self._eps_at.pop(mid, None)
 
+    async def _settled(self, mid: str, left: str, until: float, code: str = "memory_unavailable") -> None:
+        """Waits until the memory's background readings (queued and being read) are done, until `until`; still reading
+        then: 503 in `left`'s words. A count that can't be read, or a server without it (404), is a 503 too, never
+        taken for none."""
+        while True:
+            r = await self._call("GET", f"/groups/{mid}/pending")
+            if r.status_code == 404:
+                raise mp.MemoryError(503, code, REBUILD)
+            try:
+                n = int((r.json() or {})["pending"])
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise mp.MemoryError(503, code, left) from None
+            if n <= 0:
+                return
+            if time.monotonic() >= until:
+                raise mp.MemoryError(503, code, left)
+            await asyncio.sleep(SETTLE_NAP)
+
+    async def ready_to_change(self, mid):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
+
     async def _schema(self, mid: str) -> dict:
         m = await mp._load(self.org, mid) if self.org else None
         try:
@@ -290,6 +331,7 @@ class Graphiti(mp.Provider):
 
     # ── lifecycle ─────────────────────────────────────────────────────────────────────────────
     async def drop(self, mid):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         await self._call("DELETE", f"/groups/{mid}")
 
     async def count(self, mid):
@@ -357,6 +399,7 @@ class Graphiti(mp.Provider):
         return {"records": records, "job": None}
 
     async def revise(self, mid, rid, patch, writer):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         cur = await self.get(mid, rid)
         if not cur or cur["status"] != "active":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
@@ -397,6 +440,7 @@ class Graphiti(mp.Provider):
         return {**self._node_out(mid, r.json()), "supersedes": cur["version"]}
 
     async def forget(self, mid, rid, writer):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         cur = await self.get(mid, rid)
         if not cur or cur["status"] != "active":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
@@ -420,6 +464,9 @@ class Graphiti(mp.Provider):
 
     async def erase(self, mid, rids):
         erased, unreachable = [], []
+        until = time.monotonic() + _settle_s()
+        if rids:
+            await self._settled(mid, BUSY, until)
         for rid in rids:
             cur = await self.get(mid, rid)
             if not cur:
@@ -429,8 +476,20 @@ class Graphiti(mp.Provider):
                 if any(x["rel"] == "derived_from" for x in cur["references"]):
                     unreachable.append(rid)      # its words can still be in the episode it came from
             elif rid.startswith(NODE):
-                await self._drop_copies(mid, rid[len(NODE):], keep_record=False)
-                r = await self._call("DELETE", f"/groups/{mid}/nodes/{rid[len(NODE):]}")
+                uid = rid[len(NODE):]
+                await self._drop_copies(mid, uid, keep_record=False)
+                r = await self._call("DELETE", f"/groups/{mid}/nodes/{uid}")
+                # said erased only once it reads gone after the memory's readings; otherwise deleted once more, then a
+                # 503, and asking again finishes it
+                for last in (False, True):
+                    await self._settled(mid, ERASE_LEFT, until, "memory_cleanup_incomplete")
+                    await self._drop_copies(mid, uid, keep_record=False)
+                    if (await self._call("GET", f"/groups/{mid}/nodes/{uid}")).status_code == 404:
+                        r = httpx.Response(200)
+                        break
+                    if last:
+                        raise mp.MemoryError(503, "memory_cleanup_incomplete", ERASE_LEFT)
+                    r = await self._call("DELETE", f"/groups/{mid}/nodes/{uid}")
             else:
                 r = await self._call("DELETE", f"/groups/{mid}/episodes/{rid[len(EPISODE):]}")
                 self._eps_at.pop(mid, None)
