@@ -2355,6 +2355,26 @@ def en06(ctx):
     return f"{len(ids)} harness(es) read it"
 
 
+def _en07_task(ctx, hid: str, mount: str, model: str):
+    body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
+                      f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
+            "metadata": {"harness_id": hid}, "stream": False}
+    if model:
+        body["model"] = model
+    return ctx.client.post("/v1/responses", body=body)
+
+
+def _supported_bases(ctx) -> list[str]:
+    """Every base the server says it supports, as its refusal of an unknown one lists them (the same probe
+    _supported_base reads the first of)."""
+    if "_bases" not in ctx.state:
+        probe = ctx.client.post("/v1/harnesses", body={"name": "uhp-conformance-probe", "base": "uhp-conformance-unknown-base"})
+        if probe.status == 200:
+            ctx.client.delete(f"/v1/harnesses/{(probe.json or {}).get('id')}")
+        ctx.state["_bases"] = [str(b) for b in ((((probe.json or {}).get("error") or {}).get("detail") or {}).get("supported") or [])]
+    return ctx.state["_bases"]
+
+
 @check("EN-07", "A task reads the environment at its mount path, read-only, and its session names it", "full",
        f"{SPEC}/environments.md#6-what-a-session-sees")
 def en07(ctx):
@@ -2362,12 +2382,24 @@ def en07(ctx):
     e = _built_environment(ctx)
     h = _managed_harness(ctx, environment=e["id"])
     mount = e["mount"]
-    body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
-                      f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
-            "metadata": {"harness_id": h["id"]}, "stream": False}
-    if ctx.model:
-        body["model"] = ctx.model
-    r = ctx.client.post("/v1/responses", body=body)
+    r = _en07_task(ctx, h["id"], mount, ctx.model)
+    if r.status == 400 and _error_code(r) == "environment_unsupported":
+        # The named harness's base cannot mount an environment (one that runs elsewhere), and the server says
+        # so before the task starts, which is an answer, not a defect. An environment is the server's, so it
+        # is read on a base that can: each other base the server lists, on that base's own default model,
+        # since the model the caller named is one the named harness's base serves.
+        own = str(h.get("base") or "")
+        for base in [b for b in _supported_bases(ctx) if b != own]:
+            try:
+                h = _managed_harness(ctx, base=base, environment=e["id"])
+            except Skip:
+                continue
+            r = _en07_task(ctx, h["id"], mount, "")
+            if not (r.status in (400, 422) and _error_code(r) in ("environment_unsupported", "model_unavailable")):
+                break
+        else:
+            raise Skip("no base on this server mounts an environment for a task (each said environment_unsupported "
+                       "or had no model to run), so nothing was read")
     assert r.status == 200, f"the task did not start: HTTP {r.status} {r.text[:200]}"
     resp = r.json or {}
     text = " ".join(str(c.get("text") or "") for it in resp.get("output") or [] for c in it.get("content") or [] if isinstance(c, dict))

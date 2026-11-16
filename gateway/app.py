@@ -24279,6 +24279,13 @@ async def _harness_export_plugin(v: dict) -> dict:
             continue
         sname = str(s.get("name") or s.get("id") or "mcp")
         url = str(s["url"])
+        if _hosted_mcp_path(url):
+            # A tool this instance serves itself (an agent's memory, media) is this instance's, at its own
+            # address: an instance that installs the package gives its own, and this one's address is
+            # nothing there. Left out, and said, so the importer knows what to add.
+            skipped.append({"path": f"mcp.json#/mcpServers/{sname}",
+                            "reason": "a tool this instance serves itself is not exported"})
+            continue
         try:
             u = urllib.parse.urlsplit(url)
             if u.username or u.password:
