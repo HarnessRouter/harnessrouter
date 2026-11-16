@@ -41,6 +41,9 @@ class Wire:
     def __call__(self, req: httpx.Request) -> httpx.Response:
         body = json.loads(req.content) if req.content else None
         self.calls.append({"method": req.method, "path": req.url.path, "params": dict(req.url.params), "body": body, "headers": dict(req.headers)})
+        if req.url.path.startswith("/groups/") and req.url.path.endswith("/pending"):
+            # our Graphiti server always says how much it still has to read in the background; here it has read it all
+            return httpx.Response(200, json={"pending": 0})
         out = self.answer(req.method, req.url.path, dict(req.url.params), body)
         return out if isinstance(out, httpx.Response) else httpx.Response(200, json=out if out is not None else {})
 
@@ -261,9 +264,11 @@ def _reads_its_copy(monkeypatch):
         if method == "GET" and path == "/groups/m/edges":
             return [{"uuid": "e1", "name": "ATTENDED", "fact": "Caroline went to a support group.", "source": "n_c", "target": "n_c", "episodes": ["ep_c"], "attributes": {}}]
         if method == "DELETE" and path == "/groups/m/nodes/n_s":
+            state["nodes"].pop("n_s", None)
             return {"deleted": "n_s"}
         if method == "GET" and path == "/groups/m/nodes/n_s":
-            return state["nodes"]["n_s"]
+            # a deleted node reads gone, as on our server
+            return state["nodes"]["n_s"] if "n_s" in state["nodes"] else httpx.Response(404, json={"detail": "no such node"})
         return {}
     return state, answer
 
