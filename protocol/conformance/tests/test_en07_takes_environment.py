@@ -89,3 +89,21 @@ def test_no_base_that_mounts_is_a_skip_not_a_pass(stub):
     STATE["local_can_mount"] = False
     with pytest.raises(Skip):
         checks.en07(_ctx(stub))
+
+
+def test_en07_is_registered_as_the_check_itself_and_passes_through_the_registry(stub):
+    """The suite runs a check through its registry, not by name: EN-07's entry is en07, and it passes there."""
+    from uhp_conformance.registry import REGISTRY, Outcome
+    (c,) = [c for c in REGISTRY if c.id == "EN-07"]
+    assert c.fn is checks.en07
+    STATE["sent"].clear()
+    STATE["local_can_mount"] = True
+    assert c.run(_ctx(stub)).outcome is Outcome.PASS
+
+
+def test_every_check_is_a_function_of_the_context_alone():
+    import inspect
+    from uhp_conformance.registry import REGISTRY
+    wrong = [c.id for c in REGISTRY if len([p for p in inspect.signature(c.fn).parameters.values()
+                                            if p.default is inspect.Parameter.empty]) != 1]
+    assert wrong == []
