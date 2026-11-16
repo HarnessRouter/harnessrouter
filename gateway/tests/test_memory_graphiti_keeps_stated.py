@@ -47,10 +47,17 @@ def _engine(monkeypatch, keeps: bool) -> list[tuple[str, str]]:
         calls.append((m, path))
         if path.endswith("/healthz"):
             return httpx.Response(200, json={"ok": True, **({"keeps_stated_records": True} if keeps else {})})
+        if path.endswith(f"/groups/{MID}/pending"):
+            return httpx.Response(200, json={"pending": 0})      # nothing left to read in the background
         if path.endswith(f"/groups/{MID}/episodes") and m == "GET":
             return httpx.Response(200, json=[{"uuid": EP, "name": mg.READ + U, "content": "Quillon Freight renews its contract every March.",
                                               "created_at": "2026-11-15T08:00:01Z", "group_id": MID}])
         if path.endswith(f"/groups/{MID}/nodes/{U}"):
+            if m == "DELETE":
+                state["gone"] = True
+                return httpx.Response(200, json={"deleted": U})
+            if state.get("gone"):
+                return httpx.Response(404, json={"detail": "no such node"})     # a deleted node reads gone, as on our server
             if m == "PUT":
                 b = json.loads(req.content)
                 state["node"] = {**state["node"], "name": b.get("name"), "summary": b.get("summary"), "attributes": b.get("attributes")}

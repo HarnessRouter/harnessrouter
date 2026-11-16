@@ -40,6 +40,8 @@ Mem0 and Hindsight share one Postgres (pgvector), which `up.sh` gives a generate
 
 **Rebuild Graphiti after upgrading.** A Graphiti server built before this release deletes a record when the record is revised or forgotten after Graphiti has read it. Run `./up.sh` again to rebuild the server; the data in its volume stays. Until you do, HarnessRouter forgets Graphiti's old copy of a revised or forgotten record instead of deleting it, so the record is kept, but Graphiti may still recall what that copy said.
 
+**Graphiti changes wait for its reading.** Graphiti reads what a memory is given in the background. Revising, forgetting or erasing a record, and deleting a memory, wait for that reading to finish, for up to 45 seconds; if it is still reading then, nothing is changed and the request answers `503`, so ask again. A Graphiti server built before 0.40.0 can't say whether it is still reading, so these are refused with a `503` until you rebuild it with `./up.sh`.
+
 **Files.** `.env` (mode 600) holds every secret here; keep it, because the database keeps the password it was first given. The data is in Docker volumes named after the stack: `harnessrouter-memories_postgres`, `_graphiti`, `_reme`, `_mem0-history` and `_hindsight-cache`. Back those up, with `.env`.
 
 ## Running them by hand
