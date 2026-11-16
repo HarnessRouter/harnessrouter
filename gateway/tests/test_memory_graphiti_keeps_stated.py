@@ -113,3 +113,28 @@ def test_our_server_cuts_a_stated_records_links_before_it_removes_an_episode():
     keep = ast.get_source_segment(src, fns["keep_stated"])
     assert "hr_stated" in keep and "MENTIONS" in keep and "DELETE r" in keep
     assert '"keeps_stated_records": True' in ast.get_source_segment(src, fns["healthz"])
+
+
+# ── a field of our own is never something extraction fills ──────────────────────────────────────────────────────────
+import memory_plane as mp  # noqa: E402
+
+
+@pytest.mark.parametrize("schema", [
+    {"types": [{"name": "Account", "properties": [{"name": "hr_stated", "type": "text"}]}]},
+    {"types": [{"name": "Account", "properties": [{"name": "HR_text", "type": "text"}]}]},
+    {"types": [{"name": "hr_Account", "properties": []}]},
+])
+def test_a_schema_never_names_one_of_our_own_fields(schema):
+    with pytest.raises(mp.MemoryError) as e:
+        mp.schema_clean(schema)
+    assert e.value.status == 422 and "reserved for HarnessRouter's own fields" in e.value.message
+    ok = mp.schema_clean({"types": [{"name": "Account", "properties": [{"name": "region", "type": "text"}]}]})
+    assert ok["types"][0]["properties"][0]["name"] == "region"
+
+
+def test_our_server_never_extracts_into_one_of_our_fields_and_keeps_only_records_we_stated():
+    src = open(os.path.join(ROOT, "deploy", "memories", "graphiti", "server.py")).read()
+    tree = ast.parse(src)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert 'fname.lower().startswith("hr_")' in ast.get_source_segment(src, fns["models_of"])   # a schema stored before
+    assert '.get("hr_stated") == "1"' in ast.get_source_segment(src, fns["keep_stated"])

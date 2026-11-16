@@ -237,7 +237,9 @@ def models_of(types: list[dict], key: str = "properties") -> dict[str, type[Base
         fields: dict[str, Any] = {}
         for p in t.get(key) or []:
             fname = str(p.get("name") or "")
-            if not fname.isidentifier() or fname in RESERVED:
+            # hr_ names are HarnessRouter's own fields (hr_stated, hr_text, ...): extraction never fills one, whatever a
+            # schema stored before they were refused says
+            if not fname.isidentifier() or fname in RESERVED or fname.lower().startswith("hr_"):
                 continue
             fields[fname] = (_TYPES.get(str(p.get("type") or "text"), str) | None, Field(default=None, description=str(p.get("description") or fname)))
         m = create_model(name, **fields)
@@ -566,7 +568,7 @@ async def keep_stated(g: Graphiti, uid: str) -> None:
     except Exception:  # noqa: BLE001 -- graphiti raises its own error for a miss, and remove_episode says so next
         return
     for n in await get_mentioned_nodes(g.driver, [ep]):
-        if (n.attributes or {}).get("hr_stated"):
+        if (n.attributes or {}).get("hr_stated") == "1":
             await g.driver.execute_query("MATCH (e:Episodic {uuid: $ep})-[r:MENTIONS]->(n:Entity {uuid: $n}) DELETE r",
                                          ep=uid, n=n.uuid)
 
