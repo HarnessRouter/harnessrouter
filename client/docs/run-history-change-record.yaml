@@ -22,4 +22,6 @@ verification:
     result: passed; covered by Chromium run-history UI regression and refreshed local Vite page
   - behavior: desktop run properties collapse to a narrow rail and restore all tabs
     result: passed; covered by Chromium run-history UI regression
+  - behavior: canvas toolbar replay, horizontal/vertical layout switch and wheel zoom
+    result: passed; covered by Chromium run-history UI regression with real mouse wheel input
 remaining: [Edge visual regression and real FastAPI run-history data]
