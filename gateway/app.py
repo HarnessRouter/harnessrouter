@@ -8252,10 +8252,31 @@ _RESUME_WORKSPACE = {
 }
 
 
+_RESUME_REQUEST_MAX = 4000      # characters of the cut turn's request repeated in a resume's instruction
+
+
+def _interrupted_request(rec: dict) -> str:
+    """The words of the request the cut turn was running, from its own record (`_input`, the way a
+    branch reads its history). A harness whose conversation did not survive needs them to know what it
+    was doing: a session's first turn cut before its CLI kept any of it (seen live: the runner could not
+    restore the session and said so), or a `lost` workspace, which takes the CLI's conversation with it."""
+    parts: list[str] = []
+    for item in rec.get("_input") or []:
+        content = item.get("content") if isinstance(item, dict) else None
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            parts.extend(str(p.get("text") or "") for p in content
+                         if isinstance(p, dict) and p.get("type") == "input_text")
+    text = "\n".join(x for x in parts if x.strip()).strip()
+    return text if len(text) <= _RESUME_REQUEST_MAX else text[:_RESUME_REQUEST_MAX].rstrip() + " …"
+
+
 def _resume_prompt(rec: dict, note: str | None) -> str:
     """The server's own instruction for a resumed turn, for a base that has no native resume to say
-    it for it: that the last turn was cut off, what survived, and that the step that was running may
-    run again. The person's note follows as theirs."""
+    it for it: that the last turn was cut off, what survived, that the step that was running may run
+    again, and the request it was running, since the conversation may not have survived with it. The
+    person's note follows as theirs."""
     detail = ((rec.get("error") or {}).get("detail") or {}) if isinstance(rec.get("error"), dict) else {}
     lines = ["Your previous turn was cut off before it finished, because the service running it restarted.",
              _RESUME_WORKSPACE.get(str(detail.get("workspace") or ""), "")]
@@ -8264,6 +8285,9 @@ def _resume_prompt(rec: dict, note: str | None) -> str:
                      "repeat anything with an outside effect.")
     lines.append("Carry on from where you stopped.")
     text = " ".join(x for x in lines if x)
+    request = _interrupted_request(rec)
+    if request:
+        text += f'\n\nThe request you were working on was: "{request}"'
     return f'{text}\n\nThe person says: "{note}"' if note else text
 
 
