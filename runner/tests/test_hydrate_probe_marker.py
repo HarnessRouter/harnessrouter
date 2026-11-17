@@ -176,3 +176,21 @@ def test_a_fresh_marker_over_an_emptied_folder_claims_nothing(runner, tmp_path):
     shutil.rmtree(tmp_path / "ws" / "s1" / ".git")          # the folder holds nothing a start made
     assert runner.post("/hydrate?identifier=s1&probe=fresh", content=b"").json()["skipped"] is False
     assert not server._ws_marker_path("s1").exists()
+
+
+@pytest.mark.parametrize("asked", ["", "_default", "s 1", "s/1", "s:1", " s_1", "s_1 ", "x" * 121])
+def test_the_fresh_probe_is_never_answered_for_an_identifier_that_is_not_one_folder(runner, tmp_path, asked):
+    """`fresh` claims a folder on the marker's name alone. An identifier that is empty, the fallback
+    `_default`, or one that sanitising would fold onto another session's name, could hand one session
+    another's workspace, so it is never answered held, even when the folder it maps to started fresh."""
+    target = server._SID_SAFE.sub("_", asked.strip())[:120] or "_default"
+    runner.post(f"/hydrate?identifier={target}", content=b"")         # that folder started fresh
+    (tmp_path / "ws" / target / "theirs.txt").write_text("another session's file")
+    r = runner.post("/hydrate", params={"identifier": asked, "probe": "fresh"}, content=b"")
+    assert r.json()["skipped"] is False
+    assert (tmp_path / "ws" / target / "theirs.txt").is_file()        # the probe itself touched nothing
+
+
+def test_an_identifier_that_is_its_own_folder_is_answered(runner, tmp_path):
+    runner.post("/hydrate?identifier=hsess0123abcd", content=b"")
+    assert runner.post("/hydrate?identifier=hsess0123abcd&probe=fresh", content=b"").json()["skipped"] is True

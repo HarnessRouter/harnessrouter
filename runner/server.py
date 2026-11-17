@@ -17474,6 +17474,15 @@ def _ws_marker_clear(identifier: str) -> None:
 _WS_PROBE_FRESH = "fresh"
 
 
+def _ws_fresh_identifier(identifier: str) -> bool:
+    """Whether `fresh` may be answered for this identifier at all. The sha probe also needs the
+    session's own checkpoint sha; `fresh` claims a folder on the marker's name alone, so it holds only
+    while one identifier is one marker and one folder: not empty, not the `_default` they fall back to,
+    and not one that sanitising (_SID_SAFE, the 120-character cut) would fold onto another session's."""
+    raw = identifier or ""
+    return bool(raw) and raw != "_default" and _SID_SAFE.sub("_", raw.strip())[:120] == raw
+
+
 def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     """Whether this session's workspace still holds checkpoint `sha`: the marker says so AND the
     folder is there to back it. The marker lives outside the workspace on purpose (it has to
@@ -17666,7 +17675,9 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         if probe and nbytes == 0:
             # `fresh` asks about a session that never saved a checkpoint: does this runner still hold
             # the workspace it started empty for it (#712)? A sha is hex, so the word is never one.
-            if _ws_holds(identifier, ws_path, "" if probe == _WS_PROBE_FRESH else probe):
+            held = (_ws_fresh_identifier(identifier) and _ws_holds(identifier, ws_path, "")
+                    if probe == _WS_PROBE_FRESH else _ws_holds(identifier, ws_path, probe))
+            if held:
                 return {"ok": True, "skipped": True, "restored": False}
             return {"ok": True, "skipped": False}
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
