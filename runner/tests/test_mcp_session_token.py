@@ -32,23 +32,23 @@ def _token(url):
 
 
 def test_openhands_gets_the_same_address_on_every_turn_of_its_session():
-    a1, held1 = _turn("/data/workspaces/hsessA")
+    a1, held1 = _turn(("hsessA", "/data/workspaces/hsessA"))
     server._relay_forget(held1)                                   # turn 1 ends
-    a2, held2 = _turn("/data/workspaces/hsessA")
+    a2, held2 = _turn(("hsessA", "/data/workspaces/hsessA"))
     assert a1 == a2, "the frozen agent's address must still route on turn 2"
     assert _token(a2) in server._MCP_RELAY["routes"]              # registered again by turn 2
     server._relay_forget(held2)
 
 
 def test_between_turns_the_address_opens_nothing():
-    a, held = _turn("/data/workspaces/hsessB")
+    a, held = _turn(("hsessB", "/data/workspaces/hsessB"))
     server._relay_forget(held)
     assert _token(a) not in server._MCP_RELAY["routes"]
 
 
 def test_another_session_gets_another_address():
-    a, ha = _turn("/data/workspaces/hsessC")
-    b, hb = _turn("/data/workspaces/hsessD")
+    a, ha = _turn(("hsessC", "/data/workspaces/hsessC"))
+    b, hb = _turn(("hsessD", "/data/workspaces/hsessD"))
     assert a != b
     server._relay_forget(ha + hb)
 
@@ -61,7 +61,7 @@ def test_every_other_base_still_gets_a_token_per_turn():
 
 
 def test_the_token_is_the_relays_shape_and_names_nothing():
-    t = server._mcp_session_token("/data/workspaces/hsessE", "memories", SRV[0]["url"])
+    t = server._mcp_session_token(("hsessE", "/data/workspaces/hsessE"), "memories", SRV[0]["url"])
     assert re.fullmatch(r"hr-mcp-[0-9a-f]{32}", t)
     assert "hsessE" not in t and "memories" not in t
 
@@ -69,4 +69,14 @@ def test_the_token_is_the_relays_shape_and_names_nothing():
 def test_only_openhands_asks_for_it():
     assert server._MCP_STABLE_FOR == frozenset({"openhands"})
     src = pathlib.Path(server.__file__).read_text()
-    assert "stable_for=os.path.realpath(cwd) if backend in _MCP_STABLE_FOR else None" in src
+    assert "stable_for=((identifier or \"\", os.path.realpath(cwd))" in src
+
+
+def test_two_sessions_in_one_folder_get_different_addresses():
+    """Under HR_SANDBOX_PER_SESSION every session's folder is the workspace root; with the same server
+    name and address (the platform's memory) the folder alone gave two sessions one token, and a
+    process left in a reused sandbox could have called the relay during the next session's turn."""
+    a, ha = _turn(("hsessF", "/workspace"))
+    b, hb = _turn(("hsessG", "/workspace"))
+    assert a != b
+    server._relay_forget(ha + hb)
