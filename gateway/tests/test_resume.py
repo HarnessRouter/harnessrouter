@@ -124,6 +124,26 @@ def test_a_resume_continues_the_session_and_tells_the_harness_it_was_cut_off(api
     assert {"type": "resume", "note": "carry on, but skip the tests"} in (items.get("data") or items.get("items") or items)
 
 
+def test_a_resume_repeats_the_request_the_turn_was_cut_on(api, monkeypatch):
+    """A session's first turn cut before its CLI kept any of it left the resumed harness with
+    "carry on" and no idea what it had been asked (seen on the test instance); a lost workspace takes
+    the CLI's conversation with it too. The cut turn's own request travels in the instruction."""
+    fake, _, first = _first(api, monkeypatch, "lost")
+    assert _resume(api, first["id"], {"type": "resume", "note": "go on"}).status_code == 200
+    prompt = fake.calls[1]["prompt"]
+    assert 'The request you were working on was: "build it"' in prompt
+    assert prompt.index("working on was") < prompt.index("The person says")
+
+
+def test_a_long_request_is_repeated_up_to_a_bound():
+    rec = {"_input": [{"role": "user", "content": [{"type": "input_text", "text": "x" * 9000},
+                                                   {"type": "input_file", "file_id": "f1"}]}]}
+    got = gw._interrupted_request(rec)
+    assert got.startswith("x" * 100) and got.endswith(" …") and len(got) <= gw._RESUME_REQUEST_MAX + 2
+    assert gw._interrupted_request({"_input": [{"type": "resume"}]}) == ""     # a resume of a resume
+    assert "working on was" not in gw._resume_prompt({"error": gw._interrupted_error("kept")}, None)
+
+
 def test_a_resume_needs_no_note(api, monkeypatch):
     fake, _, first = _first(api, monkeypatch, "kept")
     assert _resume(api, first["id"]).status_code == 200
