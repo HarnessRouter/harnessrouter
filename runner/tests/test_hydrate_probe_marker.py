@@ -139,3 +139,58 @@ def test_a_restore_cut_short_leaves_no_marker_vouching_for_it(runner, tmp_path, 
     with pytest.raises(RuntimeError):
         runner.post("/hydrate?identifier=s1", content=body)
     assert not server._ws_marker_path("s1").exists()
+
+
+# ── a session that never saved a checkpoint (#712) ──────────────────────────────────────────────
+
+def test_a_first_turn_cut_before_any_checkpoint_is_kept_for_the_follow_up(runner, tmp_path):
+    """The first turn started from an empty restore, wrote a file and its CLI's conversation, and a
+    restart cut it before the end-of-turn checkpoint. The follow-up asked about nothing, restored
+    nothing over the folder and wiped both: the agent answered "this is the start of our
+    conversation" and the file was gone (#712). Asked about the fresh start, the runner keeps it."""
+    assert runner.post("/hydrate?identifier=s1", content=b"").json()["restored"] is False   # a new session
+    ws = tmp_path / "ws" / "s1"
+    (ws / "step0.txt").write_text("written by the cut turn")
+    conv = ws / ".harness" / "home" / ".claude" / "projects" / "p" / "a2207f59.jsonl"
+    conv.parent.mkdir(parents=True)
+    conv.write_text('{"type": "user"}\n')
+    fresh = TestClient(server.app)                          # a new process, same volume
+    assert fresh.post("/hydrate?identifier=s1&probe=fresh", content=b"").json()["skipped"] is True
+    assert (ws / "step0.txt").read_text() == "written by the cut turn"
+    assert conv.is_file()
+
+
+def test_the_fresh_probe_claims_nothing_without_a_fresh_marker(runner, tmp_path):
+    # never started here: no marker file, so no claim
+    assert runner.post("/hydrate?identifier=s9&probe=fresh", content=b"").json()["skipped"] is False
+    # restored from a checkpoint: the marker names it, so the fresh start is not what the folder holds
+    body, sha = _checkpoint()
+    runner.post("/hydrate?identifier=s2", content=body)
+    assert runner.post("/hydrate?identifier=s2&probe=fresh", content=b"").json()["skipped"] is False
+    assert runner.post(f"/hydrate?identifier=s2&probe={sha}", content=b"").json()["skipped"] is True
+
+
+def test_a_fresh_marker_over_an_emptied_folder_claims_nothing(runner, tmp_path):
+    runner.post("/hydrate?identifier=s1", content=b"")
+    import shutil
+    shutil.rmtree(tmp_path / "ws" / "s1" / ".git")          # the folder holds nothing a start made
+    assert runner.post("/hydrate?identifier=s1&probe=fresh", content=b"").json()["skipped"] is False
+    assert not server._ws_marker_path("s1").exists()
+
+
+@pytest.mark.parametrize("asked", ["", "_default", "s 1", "s/1", "s:1", " s_1", "s_1 ", "x" * 121])
+def test_the_fresh_probe_is_never_answered_for_an_identifier_that_is_not_one_folder(runner, tmp_path, asked):
+    """`fresh` claims a folder on the marker's name alone. An identifier that is empty, the fallback
+    `_default`, or one that sanitising would fold onto another session's name, could hand one session
+    another's workspace, so it is never answered held, even when the folder it maps to started fresh."""
+    target = server._SID_SAFE.sub("_", asked.strip())[:120] or "_default"
+    runner.post(f"/hydrate?identifier={target}", content=b"")         # that folder started fresh
+    (tmp_path / "ws" / target / "theirs.txt").write_text("another session's file")
+    r = runner.post("/hydrate", params={"identifier": asked, "probe": "fresh"}, content=b"")
+    assert r.json()["skipped"] is False
+    assert (tmp_path / "ws" / target / "theirs.txt").is_file()        # the probe itself touched nothing
+
+
+def test_an_identifier_that_is_its_own_folder_is_answered(runner, tmp_path):
+    runner.post("/hydrate?identifier=hsess0123abcd", content=b"")
+    assert runner.post("/hydrate?identifier=hsess0123abcd&probe=fresh", content=b"").json()["skipped"] is True
