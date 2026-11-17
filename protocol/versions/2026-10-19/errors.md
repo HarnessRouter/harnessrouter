@@ -76,6 +76,7 @@ Rules:
 | `plugin_conflict` | 409 | Two plugins share a name, or a component name collides across the harness and its plugins. `detail.component`, `detail.name` and `detail.between` say which. |
 | `idempotency_key_reused` | 409 | An `Idempotency-Key` came back with a different request than the one it was first sent with ([Harnesses §5.1](harnesses.md#51-create)). |
 | `input_not_pending` | 409 | An `input_response` names a request the response has no pending one for: unknown, already answered, or passed over by a later task ([Tasks §3.2](tasks.md#32-asking-the-person)). |
+| `resume_not_pending` | 409 | A `resume` names a response that is not interrupted, or one a later task has already resumed or passed over ([Tasks §3.3](tasks.md#33-resuming-an-interrupted-turn)). |
 | `input_request_expired` | 410 | The answer came after the request's `expires_at`. The harness has to ask again. |
 | `precondition_failed` | 412 | An update's `If-Match` names no current version of the harness: it changed since the client read it ([Harnesses §5.2](harnesses.md#52-update)). Nothing was written. |
 | `header_not_allowed` | 400, 422 | A harness declares, or references as `$headers.<name>`, a header that can't be passed to its tools, or a declared header's value carries the caller's own credential. Use a header name of the harness's own. |
@@ -139,6 +140,7 @@ to fix the harness, the second to send the task with another model.
 | `quota_exhausted` | No — nothing will change until the quota does |
 | `session_busy` | Yes, once the in-flight task is terminal |
 | `input_response_invalid` | Yes, with an answer that fits the request |
+| `resume_not_pending` | No — read the session: the turn was resumed already, or it was not interrupted |
 | `input_request_expired` | No — the question is gone; send a new task and the harness asks again |
 | `precondition_failed` | Yes, after reading the harness again and redoing the change on what was read |
 | Any other `invalid_request_error` | No — fix the request |
