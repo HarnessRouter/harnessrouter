@@ -6,6 +6,24 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## GPT-6.2 Astra and Sol (2026-11-17, the day OpenAI released them)
+
+**Which connections serve them.** On the test instance (main 8b204a6a plus the 6.2 placement), a real turn per pair on codex and pi (both models) and qwen (Sol, chat-only). A turn passed only if the served model was the one asked for and the turn echoed a unique codeword.
+
+| Connection | codex · Astra | codex · Sol | pi · Astra | pi · Sol | qwen · Sol |
+|---|---|---|---|---|---|
+| OpenAI | pass | pass | pass | pass | pass |
+| OpenRouter | pass | pass | pass | pass | pass |
+| Vercel AI Gateway | pass | pass | pass | pass | pass |
+| Azure OpenAI | `DeploymentNotFound` | `DeploymentNotFound` | `DeploymentNotFound` | `DeploymentNotFound` | n/a |
+| TokenRouter | `404 model_not_found` | `404 model_not_found` | `404 model_not_found` | `404 model_not_found` | n/a |
+
+**The Vercel column.** All five scenarios on every base that offers each model: Sol on the 25 bases that offer gpt-6.1-sol, Astra on the 8 that offer gpt-6-astra. 32 of 33 pairs pass. Two notes:
+- **cline** passes every scenario, and its record is `unlabelled`. cline's turns don't report a served model, and gpt-6.1-sol's Vercel row reads the same.
+- **openhands** passes its first turn. Every later turn fails with `401` from the runner's MCP relay, and gpt-6.1-sol fails the same way on the same day. The cause is the base, not the model: OpenHands keeps its first turn's relay address for the whole session (#714).
+
+The chat-only bases keep gpt-6.1-sol's channel refusals for 6.2-sol until that path is measured on its own. No default changed.
+
 ## dsh on the runner's relay (2026-10-27, #382)
 
 #382 takes the DeepSeek Harness driver's own relay away: every model call dsh makes now goes through a
