@@ -961,18 +961,41 @@ chromium_libs() {
   "$TOOLS/systemone-venv/bin/playwright" install-deps chromium >/dev/null 2>&1 || return 1
   mkdir -p "$(dirname "$CHROMIUM_LIBS_MARK")" && : > "$CHROMIUM_LIBS_MARK"
 }
+# The Chromium builds the venv's Playwright launches, from its own browsers.json, read as text (nothing
+# of the venv runs here), as their directory names under PLAYWRIGHT_BROWSERS_PATH. Checking for any
+# chromium-* was not enough: a pin change installs a new Playwright beside the old build, the new build
+# was never downloaded, and every volume that came through the 1.64.1 pin (#646) had a System One
+# browser that failed at launch ("Executable doesn't exist at .../chromium_headless_shell-1248/...").
+chromium_builds() {
+  python3 -I -c '
+import glob, json, re, sys
+for f in glob.glob(sys.argv[1] + "/lib/python3*/site-packages/playwright/driver/package/browsers.json"):
+    for b in json.load(open(f, encoding="utf-8")).get("browsers", []):
+        n, r = str(b.get("name") or ""), str(b.get("revision") or "")
+        if n in ("chromium", "chromium-headless-shell") and re.fullmatch(r"[0-9]{1,8}", r):
+            print(n.replace("-", "_") + "-" + r)
+' "$TOOLS/systemone-venv" 2>/dev/null
+}
+# Every one of them there and downloaded to the end: Playwright writes INSTALLATION_COMPLETE last.
+chromium_current() {
+  local want d
+  want="$(chromium_builds)"; [ -n "$want" ] || return 1
+  for d in $want; do [ -f "$PLAYWRIGHT_BROWSERS_PATH/$d/INSTALLATION_COMPLETE" ] || return 1; done
+}
+# Playwright's driver downloads them, as the install uid, into a directory that uid holds meanwhile;
+# the builds an earlier Playwright left go with the directory.
+chromium_download() {
+  echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
+  rm -rf "$PLAYWRIGHT_BROWSERS_PATH"; mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && iu_take "$PLAYWRIGHT_BROWSERS_PATH" \
+    && iu "$TOOLS/systemone-venv/bin/playwright" install chromium && iu_give "$PLAYWRIGHT_BROWSERS_PATH" \
+    || { iu_drop "$PLAYWRIGHT_BROWSERS_PATH"; return 1; }
+}
 install_systemone() {
   # A failed install leaves NO venv behind: the executable is the definition of installed, and a
   # venv whose pip step failed reported the base as available on a box where it could not run.
   install_pinned_venv systemone "${HR_SYSTEMONE_BASE_PYTHON:-python3}" "$TOOLS/systemone-venv" systemone-harness "${SYSTEMONE_REQS[@]}" \
     || { rm -rf "$TOOLS/systemone-venv"; return 1; }
-  if ! ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
-    echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
-    # Playwright's driver downloads it, as the install uid, into a directory that uid holds meanwhile.
-    rm -rf "$PLAYWRIGHT_BROWSERS_PATH"; mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && iu_take "$PLAYWRIGHT_BROWSERS_PATH" \
-      && iu "$TOOLS/systemone-venv/bin/playwright" install chromium && iu_give "$PLAYWRIGHT_BROWSERS_PATH" \
-      || { iu_drop "$PLAYWRIGHT_BROWSERS_PATH"; rm -rf "$TOOLS/systemone-venv"; return 1; }
-  fi
+  chromium_current || chromium_download || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   chromium_libs || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   # Prove the loop imports and the version is the pin, the way every other installer here proves
   # its executable: an install that cannot import is a base that dies on its first turn.
@@ -2029,6 +2052,12 @@ install_backends() {
     install_base systemone "System One Harness" install_systemone || true
   fi
   if wanted systemone && [ -x "$TOOLS/systemone-venv/bin/playwright" ]; then
+    # A volume whose Playwright moved on without its browser (a pin change before chromium_current) gets
+    # the build it launches here, on the next start; a current one costs one read of browsers.json.
+    chromium_current || chromium_download \
+      || echo "[harnessrouter]   WARNING: the System One base's Chromium could not be downloaded; its browser environments will not start until it is (retried on the next start)"
+    # Root runs apt-get here, so it must resolve on the base PATH: this block stays above the line that
+    # puts $TOOLS/bin, a tree the install uids fill, ahead of it (export PATH="$TOOLS/bin:$PATH").
     chromium_libs || echo "[harnessrouter]   WARNING: Chromium's system libraries could not be installed; the System One base's browser environments will not start until they are (retried on the next start)"
   fi
   if wanted cheetahclaws && ! current cheetahclaws "$(pinned_ident cheetahclaws "${CHEETAHCLAWS_REQS[@]}")"; then
