@@ -5237,7 +5237,12 @@ def _provider_refused(err: str) -> bool:
     the first line only: that is the line the runner chose as the provider's answer, and a
     diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex
     compaction failure or a bad request into "your key was refused"."""
-    return bool(_PROVIDER_REFUSAL_RE.search((err or "").split("\n", 1)[0]))
+    first = (err or "").split("\n", 1)[0]
+    # A 401 from the runner's own MCP relay (an address under /hr-mcp-) is not the provider refusing the
+    # key: OpenHands' follow-ups read "Your vercel key was refused" over the relay's "unknown relay token" (#714).
+    if "/hr-mcp-" in first:
+        return False
+    return bool(_PROVIDER_REFUSAL_RE.search(first))
 
 
 # A Responses provider refusing a replayed history: OpenAI's encrypted reasoning items are opened
