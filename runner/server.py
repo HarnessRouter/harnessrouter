@@ -4816,10 +4816,31 @@ def _mcp_same_server(base: str, url: str) -> bool:
     return a.scheme == "http" and b.scheme == "https"
 
 
-def _mcp_through_relay(servers: list[dict] | None) -> list[dict]:
+# OpenHands freezes its agent, MCP addresses included, when the conversation is first created, and no
+# endpoint updates it (openhands_driver._conversation_id). So the relay address turn 1 gave it is the one
+# every later turn calls, and a token minted per turn was forgotten by then: every follow-up failed with the
+# relay's 401 (#714). These bases get a token that is the same for the session and the server on every
+# turn. Each turn registers it again and forgets it when it ends, as every route is forgotten, so between
+# turns it opens nothing; and it is keyed on the runner's internal key, so no other session can make it.
+_MCP_STABLE_FOR = frozenset({"openhands"})
+_MCP_STABLE_FALLBACK = uuid.uuid4().hex + uuid.uuid4().hex    # a runner with no internal key: stable per process
+
+
+def _mcp_session_token(session: tuple[str, str], name: str, url: str) -> str:
+    """The relay token of one MCP server in one session, the same on every turn of that session.
+    `session` is the gateway's session id AND the session's folder: under HR_SANDBOX_PER_SESSION every
+    session's folder is the workspace root, so the folder alone would give two sessions one token, and
+    a process left in a reused sandbox could call the relay during the next session's turn."""
+    key = (_INTERNAL_KEY or _MCP_STABLE_FALLBACK).encode()
+    msg = "\0".join(("hr-mcp-relay", session[0], session[1], name, url)).encode()
+    return "hr-mcp-" + hmac.new(key, msg, hashlib.sha256).hexdigest()[:32]
+
+
+def _mcp_through_relay(servers: list[dict] | None, stable_for: tuple[str, str] | None = None) -> list[dict]:
     """Every remote server, as the session will see it: a relay address and no credential. Runs before
     any writer or bridge reads the list, so all of them get this without knowing about it. A stdio
-    server runs as the session and is left as it is."""
+    server runs as the session and is left as it is. With `stable_for` (the session, for a base in
+    _MCP_STABLE_FOR) the address is the same on every turn of that session (_mcp_session_token)."""
     out: list[dict] = []
     for s in servers or []:
         s = s or {}
@@ -4836,7 +4857,8 @@ def _mcp_through_relay(servers: list[dict] | None) -> list[dict]:
                 srv = _QuietHTTPServer(("127.0.0.1", 0), _McpRelayHandler)
                 threading.Thread(target=srv.serve_forever, daemon=True).start()
                 _MCP_RELAY["server"], _MCP_RELAY["port"] = srv, srv.server_address[1]
-            tok = "hr-mcp-" + uuid.uuid4().hex
+            tok = (_mcp_session_token(stable_for, str(s.get("name") or ""), url) if stable_for
+                   else "hr-mcp-" + uuid.uuid4().hex)
             _MCP_RELAY["routes"][tok] = {"url": url, "headers": _mcp_headers(s), "endpoints": {}}
             port = _MCP_RELAY["port"]
         sse = str(s.get("transport") or "").lower() == "sse" or parts.path.rstrip("/").endswith("/sse")
@@ -18470,7 +18492,10 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # Installed plugin packages, whole, at their roots; then every stdio server a plugin declares
         # becomes a launcher every backend writer below already knows how to hand to its CLI.
         plugin_roots = _write_plugins(cwd, req.plugins)
-        servers = req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else _mcp_through_relay(req.mcp_servers)
+        servers = (req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else
+                   _mcp_through_relay(req.mcp_servers,
+                                      stable_for=((identifier or "", os.path.realpath(cwd))
+                                                  if backend in _MCP_STABLE_FOR else None)))
         # whether the platform's memory is attached, from the address the gateway sent (only its path is read): the
         # base's own memory tools are then withheld (_own_memory_off; hermes in its config, below)
         platform_memory = _has_platform_memory(req.mcp_servers)

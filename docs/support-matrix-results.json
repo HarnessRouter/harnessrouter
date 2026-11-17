@@ -119763,33 +119763,36 @@
   "provider": "vercel",
   "harness": "openhands",
   "model": "gpt-6.1-sol",
-  "at": "2026-10-02T09:48:08.156Z",
+  "at": "2026-11-17T23:21:37.798Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 17.18,
-   "tail": "Reply with exactly: M1-gpt-6.1-sol OPENHANDS M1-gpt-6.1-sol",
+   "s": 17.14,
+   "tail": "Reply with exactly: M1-gpt-6.1-sol M1-gpt-6.1-sol OpenHands \u00b7 gpt-6.1-sol \u00b7 Done in 13.3 s",
+   "answer": "M1-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessbdc1c17c53fe4ef4a53afbcdc96f949b",
+  "sid": "hsess61073f0cac7949a4beb0893c15a10161",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 14.27,
-   "tail": "Reply with exactly: M2-gpt-6.1-sol OPENHANDS M2-gpt-6.1-sol",
+   "s": 17.29,
+   "tail": "Reply with exactly: M2-gpt-6.1-sol M2-gpt-6.1-sol OpenHands \u00b7 gpt-6.1-sol \u00b7 Done in 13.5 s \u00b7 Recalled 1 thing",
+   "answer": "M2-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-sol",
+   "to": "gpt-6.2-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 17.39,
-   "tail": "Reply with exactly: M3-gpt-6-sol OPENHANDS M3-gpt-6-sol",
+   "s": 17.31,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol OpenHands \u00b7 gpt-6.2-sol \u00b7 Done in 13.0 s \u00b7 Recalled 1 thing",
+   "answer": "M3-gpt-6.2-sol",
    "turn_files": [],
    "why": ""
   },
@@ -119797,8 +119800,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 20.74,
-   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. OPENHANDS Used a tool DONE txt hello-openhands.txt TXT \u00b7 output Preview",
+   "s": 20.72,
+   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. Ran printf 'HELLO' > /data/workspaces/hsess61073f0cac7949a4beb0893c15a10161/hello-openhands.txt DONE txt hello-openhands.txt TXT OpenHands \u00b7 gpt-6.1-sol \u00b7 Done in 16.5 s \u00b7 Recalled 1 thing",
+   "answer": "DONE",
    "turn_files": [
     "hello-openhands.txt"
    ],
@@ -119815,13 +119819,14 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 14.52,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENHANDS M1-gpt-6.1-sol",
+   "s": 17.3,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6.1-sol OpenHands \u00b7 gpt-6.1-sol \u00b7 Done in 13.6 s \u00b7 Recalled 1 thing",
+   "answer": "M1-gpt-6.1-sol",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessbdc1c17c53fe4ef4a53afbcdc96f949b\",\"checkpoint_sha\":\"68b992b1da50c9e4819ccdee644f2063358fde15655913deb2e7710b4318958c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess61073f0cac7949a4beb0893c15a10161\",\"checkpoint_sha\":\"24a2b42e7d4c2124bdc684b74b7bb1154b111728b6be95c556f9c3962e968d4d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Vercel AI Gateway",
@@ -119830,16 +119835,16 @@
   ],
   "served": [
    "openai/gpt-6.1-sol",
-   "openai/gpt-6-sol"
+   "openai/gpt-6.2-sol"
   ],
-  "substituted": [
-   "openai/gpt-6.1-sol"
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
   ],
-  "foreign": [],
   "unlabelled": 0,
   "tokens": {
-   "input": 15519,
-   "cache_read": 30156,
+   "input": 20014,
+   "cache_read": 39159,
    "turns_with_usage": 5
   },
   "deleted": 200
@@ -227116,64 +227121,70 @@
   "provider": "vercel",
   "harness": "openhands",
   "model": "gpt-6.2-sol",
-  "at": "2026-11-17T22:48:40.581Z",
+  "at": "2026-11-17T23:19:52.029Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 24.22,
+   "s": 23.36,
    "tail": "Reply with exactly: M1-gpt-6.2-sol M1-gpt-6.2-sol OpenHands \u00b7 gpt-6.2-sol \u00b7 Done in 21.1 s",
    "answer": "M1-gpt-6.2-sol",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess3401435e1d0b4f3a980de5ebd3aba7b0",
+  "sid": "hsessa581e46236c246a6816eb259aefc316c",
   "followup": {
-   "ok": false,
-   "status": "failed",
-   "pill": "failed",
-   "s": 33.68,
-   "tail": "10/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 Failed after 29s Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 OpenHands \u00b7 gpt-6.2-sol",
-   "answer": "agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.28,
+   "tail": "Reply with exactly: M2-gpt-6.2-sol M2-gpt-6.2-sol OpenHands \u00b7 gpt-6.2-sol \u00b7 Done in 13.2 s",
+   "answer": "M2-gpt-6.2-sol",
    "turn_files": [],
-   "why": "Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401"
+   "why": ""
   },
   "switch": {
    "to": "gpt-6.1-sol",
-   "ok": false,
-   "status": "failed",
-   "pill": "failed",
-   "s": 33.36,
-   "tail": "10/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 Failed after 31s Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 OpenHands \u00b7 gpt-6.1-sol",
-   "answer": "agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.36,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol OpenHands \u00b7 gpt-6.1-sol \u00b7 Done in 12.8 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
-   "why": "Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401"
+   "why": ""
   },
   "artifact": {
-   "ok": false,
-   "status": "failed",
-   "pill": "failed",
-   "s": 67.79,
-   "tail": "10/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 Failed after 32s Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 OpenHands \u00b7 gpt-6.2-sol",
-   "answer": "agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
-   "turn_files": [],
-   "why": "Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
-   "files": [],
-   "record_files": [],
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.39,
+   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. Ran pwd && ls -ld . && printf '%s' HELLO > hello-openhands.txt && printf '%s' HELLO | cmp -s - hello-openhands.txt DONE txt hello-openhands.txt TXT OpenHands \u00b7 gpt-6.2-sol \u00b7 Done in 16.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-openhands.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-openhands.txt"
+   ],
+   "record_files": [
+    "hello-openhands.txt"
+   ],
    "cards_agree": true
   },
   "recycle": {
-   "ok": false,
-   "status": "failed",
-   "pill": "failed",
-   "s": 33.27,
-   "tail": "10/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 Failed after 28s Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401 OpenHands \u00b7 gpt-6.2-sol",
-   "answer": "agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.38,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6.2-sol OpenHands \u00b7 gpt-6.2-sol \u00b7 Done in 13.6 s",
+   "answer": "M1-gpt-6.2-sol",
    "turn_files": [],
-   "why": "Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e334b27471a49a495b37b63afafb910/mcp' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
+   "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess3401435e1d0b4f3a980de5ebd3aba7b0\",\"checkpoint_sha\":\"03dc7fa9788b94274d3ef47cc19ab9ebbc4879ffda92a4a372fde72a355913f9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessa581e46236c246a6816eb259aefc316c\",\"checkpoint_sha\":\"f506cc8fb61137552cbe96afd86d4be504af9aca906c9b36302755a4cc2a4b34\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Vercel AI Gateway",
@@ -227181,18 +227192,20 @@
    "integration:Vercel AI Gateway"
   ],
   "served": [
-   "openai/gpt-6.2-sol"
+   "openai/gpt-6.2-sol",
+   "openai/gpt-6.1-sol"
   ],
   "substituted": [],
-  "switch_served": [],
-  "unlabelled": 3,
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
   "tokens": {
-   "input": 9733,
-   "cache_read": 0,
-   "turns_with_usage": 1
+   "input": 20042,
+   "cache_read": 39184,
+   "turns_with_usage": 5
   },
-  "kept": "hsess3401435e1d0b4f3a980de5ebd3aba7b0",
-  "deleted": 0
+  "deleted": 200
  },
  "vercel|qwen|gpt-6.2-sol": {
   "provider": "vercel",

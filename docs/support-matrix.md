@@ -6975,8 +6975,8 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | openhands | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 69% of input |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
-| openhands | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 66% of input |
-| openhands | gpt-6.2-sol | pass | FAIL | FAIL (gpt-6.1-sol) | FAIL | FAIL | Vercel AI Gateway | 3 turn(s) unlabelled (finding below) ; followup: Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e33 ; switch: Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e33 ; artifact: Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e33 ; recycle: Your vercel key was refused: agent-server said: HTTPStatusError: Client error '401 Unauthorized' for url 'http://127.0.0.1:33931/hr-mcp-7e33 ; cache 0% of input |
+| openhands | gpt-6.1-sol | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 66% of input |
+| openhands | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 66% of input |
 | pi | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 83% of input |
 | pi | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
 | pi | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
@@ -7085,7 +7085,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 32% of input |
 | zeroclaw | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 17% of input |
 
-401 pairs, 1888 of 1906 scenario runs passed; 11 pairs served by another connection or as another model are findings, not counted.
+401 pairs, 1893 of 1911 scenario runs passed; 10 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -7118,7 +7118,6 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - minimax x claude-haiku-5.5: no prompt cache reads over 83965 input tokens (every call paid full price)
 - omp x gpt-6.1-sol: 1 turn(s) report no served model, so rule 2 could not judge them
 - opencode x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
-- openhands x gpt-6.2-sol: 3 turn(s) report no served model, so rule 2 could not judge them
 - pi x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 - qwen x claude-haiku-5.5: no prompt cache reads over 569929 input tokens (every call paid full price)
 - qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
