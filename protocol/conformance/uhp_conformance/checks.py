@@ -2431,6 +2431,26 @@ def en06(ctx):
     return f"{len(ids)} harness(es) read it"
 
 
+def _en07_task(ctx, hid: str, mount: str, model: str):
+    body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
+                      f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
+            "metadata": {"harness_id": hid}, "stream": False}
+    if model:
+        body["model"] = model
+    return ctx.client.post("/v1/responses", body=body)
+
+
+def _supported_bases(ctx) -> list[str]:
+    """Every base the server says it supports, as its refusal of an unknown one lists them (the same probe
+    _supported_base reads the first of)."""
+    if "_bases" not in ctx.state:
+        probe = ctx.client.post("/v1/harnesses", body={"name": "uhp-conformance-probe", "base": "uhp-conformance-unknown-base"})
+        if probe.status == 200:
+            ctx.client.delete(f"/v1/harnesses/{(probe.json or {}).get('id')}")
+        ctx.state["_bases"] = [str(b) for b in ((((probe.json or {}).get("error") or {}).get("detail") or {}).get("supported") or [])]
+    return ctx.state["_bases"]
+
+
 @check("EN-07", "A task reads the environment at its mount path, read-only, and its session names it", "full",
        f"{SPEC}/environments.md#6-what-a-session-sees")
 def en07(ctx):
@@ -2438,12 +2458,24 @@ def en07(ctx):
     e = _built_environment(ctx)
     h = _managed_harness(ctx, environment=e["id"])
     mount = e["mount"]
-    body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
-                      f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
-            "metadata": {"harness_id": h["id"]}, "stream": False}
-    if ctx.model:
-        body["model"] = ctx.model
-    r = ctx.client.post("/v1/responses", body=body)
+    r = _en07_task(ctx, h["id"], mount, ctx.model)
+    if r.status == 400 and _error_code(r) == "environment_unsupported":
+        # The named harness's base cannot mount an environment (one that runs elsewhere), and the server says
+        # so before the task starts, which is an answer, not a defect. An environment is the server's, so it
+        # is read on a base that can: each other base the server lists, on that base's own default model,
+        # since the model the caller named is one the named harness's base serves.
+        own = str(h.get("base") or "")
+        for base in [b for b in _supported_bases(ctx) if b != own]:
+            try:
+                h = _managed_harness(ctx, base=base, environment=e["id"])
+            except Skip:
+                continue
+            r = _en07_task(ctx, h["id"], mount, "")
+            if not (r.status in (400, 422) and _error_code(r) in ("environment_unsupported", "model_unavailable")):
+                break
+        else:
+            raise Skip("no base on this server mounts an environment for a task (each said environment_unsupported "
+                       "or had no model to run), so nothing was read")
     assert r.status == 200, f"the task did not start: HTTP {r.status} {r.text[:200]}"
     resp = r.json or {}
     text = " ".join(str(c.get("text") or "") for it in resp.get("output") or [] for c in it.get("content") or [] if isinstance(c, dict))
@@ -3032,6 +3064,27 @@ def _branch_archive(ctx, sid):
         return {name: archive.read(name) for name in archive.namelist() if not name.endswith("/")}
 
 
+# A turn's `memory` note can still be pending when its response is answered: what the agent's memory keeps from the turn
+# is written after it, and the note then settles. A transcript compared before and after a branch is read once no turn's
+# memory is pending, so the comparison is of the whole transcript, `memory` included, and never of a note settling.
+MEMORY_SETTLE_S = 180
+
+
+def _settled_turns(ctx, sid):
+    """The session's transcript once no turn's memory note is pending. Still pending at the bound: the check is unread
+    (a skip, never a pass)."""
+    deadline = time.time() + MEMORY_SETTLE_S
+    while True:
+        r = ctx.client.get(f"/v1/sessions/{sid}/turns")
+        assert r.status == 200, f"GET the session's turns returned HTTP {r.status}"
+        turns = (r.json or {}).get("turns") if isinstance(r.json, dict) else None
+        if not any(isinstance(t, dict) and ((t.get("memory") or {}).get("pending")) for t in turns or []):
+            return r.json
+        if time.time() > deadline:
+            raise Skip(f"unread: a turn's memory was still pending after {MEMORY_SETTLE_S} s, so the transcript was not compared")
+        time.sleep(2)
+
+
 def _branch_case(ctx):
     _branching(ctx)
     if "branch_case" in ctx.state:
@@ -3062,8 +3115,7 @@ def _branch_case(ctx):
     latest = _branch_archive(ctx, sid)
     if latest.get(filename, b"").strip() != f"{token}-3".encode() or future not in latest:
         raise Skip("the harness did not establish the later-turn file fixture")
-    turns_before = ctx.client.get(f"/v1/sessions/{sid}/turns")
-    assert turns_before.status == 200
+    turns_before = _settled_turns(ctx, sid)
     branched = ctx.client.post("/v1/responses", body={
         "input": "Reply with exactly: branched. Do not write or change any files.",
         "previous_response_id": rid, "branch": True, **({"model": ctx.model} if ctx.model else {}), "metadata": {"harness_id": h["id"]}})
@@ -3073,7 +3125,7 @@ def _branch_case(ctx):
     assert target and target != sid, "branch continued the original session instead of creating a new one"
     assert meta.get("branched_from") == rid, "branch response omitted or changed metadata.branched_from"
     case = {"source": sid, "point": rid, "target": target, "first": original,
-            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before.json,
+            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before,
             "branch_response": (branched.json or {}).get("id"), "harness": h["id"]}
     ctx.state["branch_case"] = case
     return case
@@ -3094,9 +3146,7 @@ def b01(ctx):
 def b02(ctx):
     case = _branch_case(ctx)
     assert _branch_archive(ctx, case["source"]) == case["latest"], "branch changed original files"
-    after = ctx.client.get(f"/v1/sessions/{case['source']}/turns")
-    assert after.status == 200
-    assert after.json == case["turns_before"], "branch changed the original transcript"
+    assert _settled_turns(ctx, case["source"]) == case["turns_before"], "branch changed the original transcript"
 
 
 @check("B-03", "Session inspection identifies the branch's source response and session", "full",
@@ -3122,9 +3172,8 @@ def b05(ctx):
         "input": "Reply with exactly: ran.", "branch": True,
         **({"model": ctx.model} if ctx.model else {}),
         "metadata": {"harness_id": case["harness"], "session_id": case["source"]}})
-    after = ctx.client.get(f"/v1/sessions/{case['source']}/turns")
-    assert after.status == 200
-    assert after.json == case["turns_before"], (
+    after = _settled_turns(ctx, case["source"])
+    assert after == case["turns_before"], (
         f"branch: true without previous_response_id ran a task in the session it named (HTTP {response.status})")
     assert response.status == 400, f"branch: true without previous_response_id returned HTTP {response.status}"
     assert ((response.json or {}).get("error") or {}).get("code") == "invalid_input"

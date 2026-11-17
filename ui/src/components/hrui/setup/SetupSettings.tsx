@@ -412,7 +412,8 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const inv = (fid: string) => (bad === fid ? true : undefined);
 
   // ── the model's options and thinking levels ────────────────────────────────────────────────
-  const keyOf = (m: string) => !!providers.connectionFor(m);
+  // a key this harness's base can run the model through, not any key the instance has for it (#696)
+  const keyOf = (m: string) => !!providers.connectionFor(m, oob?.backend ?? undefined);
   const modelIds = oobModels(oob);
   // the models that can run now, and the one chosen (said when it has no provider); one that can't is
   // left out, never listed disabled (Richard 10-19). A setup with no model of its own has the harness

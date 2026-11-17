@@ -16,8 +16,11 @@ def answer(body, status=200, raw=None):
 
 
 class BranchServer:
-    def __init__(self, defect=""):
+    def __init__(self, defect="", memory=""):
         self.defect = defect
+        # memory: "" (turns are ids), "settles" (each turn's memory note is pending at the first read of the
+        # transcript, right after the last turn, then settles, which changes the turn), "never" (it stays pending)
+        self.memory, self.turn_reads = memory, 0
         self.number = 0
         self.filename = self.future = self.token = ""
         self.source = {}
@@ -71,7 +74,13 @@ class BranchServer:
                     archive.writestr(name, body)
             return answer({}, raw=stream.getvalue())
         if path.endswith("/turns"):
-            return answer({"turns": ["r1", "r2", "r3"] + self.extra})
+            ids = ["r1", "r2", "r3"] + self.extra
+            if not self.memory:
+                return answer({"turns": ids})
+            self.turn_reads += 1
+            pending = self.memory == "never" or self.turn_reads == 1      # the first read: right after the last turn
+            return answer({"turns": [{"id": i, "memory": {"pending": True} if pending else {"pending": False, "remembered": 1}}
+                                     for i in ids]})
         if path.endswith("/target"):
             origin = {"response_id": "r1", "session_id": "source"}
             if self.defect == "with_turn":
@@ -84,10 +93,10 @@ class BranchServer:
         raise AssertionError(path)
 
 
-def run(check, defect="", capabilities=None):
+def run(check, defect="", capabilities=None, memory=""):
     if capabilities is None:
         capabilities = {"session_branching": True}
-    ctx = Context(BranchServer(defect), state={"harness": {"id": "fixture"},
+    ctx = Context(BranchServer(defect, memory), state={"harness": {"id": "fixture"},
                                                "discovery": {"capabilities": capabilities}})
     item = next(item for item in REGISTRY if item.id == check)
     return item.run(ctx)
@@ -141,3 +150,28 @@ def test_specific_defects_fail(check, defect):
 
 def test_refusing_a_fresh_fixtures_branch_fails_a_server_that_reports_branching():
     assert run("B-01", "unavailable").outcome is Outcome.FAIL
+
+
+# ── a turn's memory note settles after its response: the transcript is compared once it has ──────────────────────
+@pytest.fixture
+def quick(monkeypatch):
+    monkeypatch.setattr(checks, "MEMORY_SETTLE_S", 0.05, raising=False)
+    monkeypatch.setattr(checks.time, "sleep", lambda s: None)
+
+
+@pytest.mark.parametrize("check", ["B-02", "B-05"])
+def test_a_memory_note_settling_is_not_a_changed_transcript(quick, check):
+    result = run(check, memory="settles")
+    assert result.outcome is Outcome.PASS, result.detail
+
+
+@pytest.mark.parametrize("check", ["B-02", "B-05"])
+def test_a_memory_note_that_never_settles_leaves_the_check_unread_never_passed(quick, check):
+    result = run(check, memory="never")
+    assert result.outcome is Outcome.SKIP and result.detail.startswith("unread:"), result.detail
+
+
+@pytest.mark.parametrize("check,defect", [("B-02", "mutates_source"), ("B-05", "runs_unbranched")])
+def test_a_real_change_still_fails_while_memory_settles(quick, check, defect):
+    result = run(check, defect, memory="settles")
+    assert result.outcome is Outcome.FAIL, result.detail

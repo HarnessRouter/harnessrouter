@@ -51,6 +51,7 @@ from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerCli
 from graphiti_core.driver.driver import GraphProvider  # noqa: E402
 from graphiti_core.driver.kuzu_driver import KuzuDriver  # noqa: E402
 from graphiti_core.edges import EntityEdge  # noqa: E402
+from graphiti_core.search.search_utils import get_mentioned_nodes  # noqa: E402
 from graphiti_core.embedder import OpenAIEmbedder  # noqa: E402
 from graphiti_core.embedder.openai import OpenAIEmbedderConfig  # noqa: E402
 from graphiti_core.errors import GroupsEdgesNotFoundError, GroupsNodesNotFoundError  # noqa: E402
@@ -236,7 +237,9 @@ def models_of(types: list[dict], key: str = "properties") -> dict[str, type[Base
         fields: dict[str, Any] = {}
         for p in t.get(key) or []:
             fname = str(p.get("name") or "")
-            if not fname.isidentifier() or fname in RESERVED:
+            # hr_ names are HarnessRouter's own fields (hr_stated, hr_text, ...): extraction never fills one, whatever a
+            # schema stored before they were refused says
+            if not fname.isidentifier() or fname in RESERVED or fname.lower().startswith("hr_"):
                 continue
             fields[fname] = (_TYPES.get(str(p.get("type") or "text"), str) | None, Field(default=None, description=str(p.get("description") or fname)))
         m = create_model(name, **fields)
@@ -553,9 +556,27 @@ async def del_node(group: str, uid: str) -> dict:
     return {"deleted": uid}
 
 
+async def keep_stated(g: Graphiti, uid: str) -> None:
+    """A node HarnessRouter wrote itself (attribute hr_stated) is a record, not something an episode taught. Graphiti
+    reads a copy of each record as an episode, and its extraction can link the record's own node to that copy
+    (MENTIONS). remove_episode deletes a node that only the removed episode mentions and rewrites the summary of one
+    that stays, so replacing a record's copy (a revision) or dropping it (forget) deleted the record. The links from
+    this episode to stated nodes are cut first: the record keeps itself and its words, and what the episode taught
+    goes as before."""
+    try:
+        ep = await EpisodicNode.get_by_uuid(g.driver, uid)
+    except Exception:  # noqa: BLE001 -- graphiti raises its own error for a miss, and remove_episode says so next
+        return
+    for n in await get_mentioned_nodes(g.driver, [ep]):
+        if (n.attributes or {}).get("hr_stated") == "1":
+            await g.driver.execute_query("MATCH (e:Episodic {uuid: $ep})-[r:MENTIONS]->(n:Entity {uuid: $n}) DELETE r",
+                                         ep=uid, n=n.uuid)
+
+
 @app.delete("/groups/{group}/episodes/{uid}", dependencies=[Depends(auth)])
 async def del_episode(group: str, uid: str) -> dict:
     g = await ready(group)
+    await keep_stated(g, uid)
     await g.remove_episode(uid)
     return {"deleted": uid}
 
@@ -585,4 +606,6 @@ async def check() -> dict:
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"ok": True}
+    # keeps_stated_records: removing an episode never deletes or rewrites a record HarnessRouter stated (keep_stated);
+    # the gateway deletes a record's old copies only on a server that says so, and forgets them otherwise
+    return {"ok": True, "keeps_stated_records": True}

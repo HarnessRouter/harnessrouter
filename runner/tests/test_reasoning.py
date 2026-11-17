@@ -352,7 +352,8 @@ def test_the_providers_count_of_thinking_tokens_is_read_in_every_shape_and_apart
     assert rs._thinking_in_sse_line(b"data: [DONE]") is None
     # the usage that prices a turn carries what it carried before
     assert rs._usage_fields(chat["usage"]) == {"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 0}
-    assert rs._usage_fields(google["usageMetadata"]) == {"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 0}
+    # Google's candidatesTokenCount leaves the thoughts out, and Google bills them as output (#690)
+    assert rs._usage_fields(google["usageMetadata"]) == {"input_tokens": 5, "output_tokens": 12, "cache_read_tokens": 0}
 
 
 def test_a_streamed_calls_usage_is_on_the_route_before_the_client_has_the_bytes():
