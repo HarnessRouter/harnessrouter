@@ -8542,6 +8542,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-haiku-4.5":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     },
     "openai": {
+        "gpt-6.2-astra": "gpt-6.2-astra",
+        "gpt-6.2-sol":   "gpt-6.2-sol",
         "gpt-6-astra":   "gpt-6-astra",
         "gpt-6.1-sol":     "gpt-6.1-sol",
         "gpt-6-sol":     "gpt-6-sol",
@@ -8556,6 +8558,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex": "gpt-5.3-codex",
     },
     "azure-foundry": {
+        "gpt-6.2-astra": "gpt-6.2-astra",
+        "gpt-6.2-sol":   "gpt-6.2-sol",
         "gpt-6-astra":   "gpt-6-astra",
         "gpt-6.1-sol":     "gpt-6.1-sol",
         "gpt-6-sol":     "gpt-6-sol",
@@ -8570,6 +8574,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex": "gpt-5.3-codex",
     },
     "openrouter": {
+        "gpt-6.2-astra":      "openai/gpt-6.2-astra",
+        "gpt-6.2-sol":        "openai/gpt-6.2-sol",
         "gpt-6-astra":        "openai/gpt-6-astra",
         "gpt-6.1-sol":          "openai/gpt-6.1-sol",
         "gpt-6-sol":          "openai/gpt-6-sol",
@@ -8718,6 +8724,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     # and reachable through openrouter, tokenrouter and vercel. Left alone here rather than
     # worked around in one vendor's table.
     "llmtr": {
+        "gpt-6.2-astra":      "openai/gpt-6.2-astra",
+        "gpt-6.2-sol":        "openai/gpt-6.2-sol",
         "gpt-6-astra":        "openai/gpt-6-astra",
         "gpt-6.1-sol":          "openai/gpt-6.1-sol",
         "gpt-6-sol":          "openai/gpt-6-sol",
@@ -9036,8 +9044,8 @@ _VENDOR_MODELS["google"] = {m: m for m in ("gemini-4-argon", "gemini-3.8-flash",
 # order it was written. Add a new model to its family here, not at the end of a catalog.
 _MODEL_ORDER: tuple[str, ...] = (
     # OpenAI
-    "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-    "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
+    "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
     # Anthropic
     "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
     "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
@@ -9196,6 +9204,19 @@ _MODEL_CATALOG: dict[str, dict] = {
     # of twelve); aider (no function tools) and goose run it on every connection. As with the gpt-5.6 line on
     # qwen and cline, a row measured working on a path stays listed and the comment names the
     # channel; no base refused it on every connection. Not RESPONSES_ONLY: aider runs it.
+    #
+    # gpt-6.2-astra and gpt-6.2-sol (both released 2026-11-17: OpenAI's pricing page, Vercel's
+    # changelog and OpenRouter's model pages, read the same day): astra is the line's most capable
+    # model, for hard projects; sol is the everyday one. openai and azure-foundry name them
+    # `gpt-6.2-astra` and `gpt-6.2-sol`, openrouter, tokenrouter, vercel and llmtr `openai/<id>`; the
+    # -fast variants are not offered. List prices, no markup (OpenAI's pricing page, read 2026-11-17,
+    # Standard; per 1M tokens, 30-minute cache write): gpt-6.2-astra $8 in / $40 out, cached $0.40,
+    # cache write $10, and above 272k prompt tokens $16 / $60, cached $0.80, cache write $20;
+    # gpt-6.2-sol $2 in / $10 out, cached $0.10, cache write $2.50, and above 272k prompt tokens
+    # $4 / $15, cached $0.20, cache write $5, as gpt-6.1-sol. NOT YET MEASURED: each is a candidate placed exactly
+    # where its predecessor is, gpt-6.2-astra beside gpt-6-astra (the Responses bases,
+    # RESPONSES_ONLY_MODELS) and gpt-6.2-sol beside gpt-6.1-sol (every base that offers it, the same
+    # channel refusals and exclusions), newest first; no default changed. Real turns prune them.
     # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
     # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
     # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
@@ -9207,7 +9228,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # $0.20; luna $0.10 / $0.50, cached $0.01; astra $10 / $50, cached $1; all doubled above
     # 272k prompt tokens as the gpt-5.x line is.
     "codex":  {"default": "gpt-6.1-sol",
-               "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
                           # OpenAI's most capable agentic coding model, there is no 5.6-codex).
@@ -9224,7 +9245,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
     "hermes": {"default": "gpt-6.1-sol",
-               "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
                           "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -9258,7 +9279,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # and the frontier set was probed per-model through the dsh driver (2026-08-20).
     "dsh": {"default": "deepseek-v4-pro",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash",
-                       "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                       "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
@@ -9274,7 +9295,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
     "opencode": {"default": "gpt-6.1-sol",
-                 "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                 "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
@@ -9309,7 +9330,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # was never asked for), while every other base held the conversation. Re-measure before adding it.
     "aider": {"default": "gpt-6.1-sol",
               "models": [
-                  "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                  "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                   "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                   "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -9335,7 +9356,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # a stub), so the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
-                 "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -9366,7 +9387,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     "minimax": {"default": "minimax-m3",
                 "models": [
                     "minimax-m3.1-flash", "minimax-m3",
-                    "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                    "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                     "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                     "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -9387,7 +9408,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     "grok": {"default": "grok-4.6",
              "models": [
                  "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
-                 "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -9409,7 +9430,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # and was refused; the gpt-6 tokenrouter column found it (runner/server.py, _build_openhands).
     "openhands": {"default": "gpt-5.4",
                   "models": [
-                      "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                      "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                       "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -9428,7 +9449,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (the runner sends `custom/<id>`, and providers.py strips the prefix before the request).
     "cheetahclaws": {"default": "gpt-5.4",
                      "models": [
-                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                         "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                          "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
                          "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
@@ -9460,7 +9481,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     "agentzero": {"default": "gpt-6.1-sol", "models": []},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
-                        "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                        "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
@@ -9482,7 +9503,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # see every agent turn fail, not an edge case. Same trap class as _TOKENROUTER_NO_CHANNEL:
     # the CHANNEL decides, not the model.
     "cline": {"default": "gpt-5.4",
-              "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+              "models": ["gpt-5.4", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
@@ -9492,7 +9513,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     "pi": {"default": "gpt-6.1-sol",
-           "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+           "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
@@ -9562,7 +9583,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               # 2026-09-12; the aggregators forward that answer unchanged, so every column showed it (0 of 8
               # artifact/recall checks). The other Claude ids continue such a history. The Responses-only
               # ids stay out: goose is chat-only.
-              "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+              "models": ["gpt-5.4", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
@@ -9631,7 +9652,7 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # chat-completions-only channel is what would fail here. MEASURED (2026-10-19, the Vercel
 # connection through the runner's own relay, five scenarios): claude-haiku-5.5 and gemini-3-flash,
 # each asked for and each served as itself over /v1/responses, across a mid-session switch its
-# session had pinned. The two Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6-astra) are
+# session had pinned. The Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6.2-astra, gpt-6-astra) are
 # NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
            "vibe", "docker-agent", "fast-agent", "dcode"):
@@ -9644,7 +9665,7 @@ for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
 _MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
 # Bases still qualifying their wider catalog. Each offers only the models measured on it so far, and
 # its default was chosen for that start rather than measured across every provider column, so the
-# catalog-wide rules for a measured base (gpt-6.1-sol leads the gpt-6 family wherever it is offered,
+# catalog-wide rules for a measured base (gpt-6.1-sol leads the measured gpt-6 family wherever it is offered,
 # and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
 # place that exception is written; a base leaves the set when its live column is in.
 _STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
@@ -9745,7 +9766,9 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview",
                         "nemotron-3-super", "llama-3.3-70b", "muse-glimmer-30b", "muse-spark-1.1"}),
     "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview",
-                              "nemotron-3-super", "gpt-6.1-sol"}),
+                              "nemotron-3-super", "gpt-6.1-sol",
+                              # as gpt-6.1-sol; the 6.2 line's own measurement follows
+                              "gpt-6.2-sol"}),
     "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super",
                           "gpt-5.6-luna"}),
     "qoder": frozenset({"qfmodel", "efficient", "kmodel", "qmodel_latest"}),
@@ -9872,7 +9895,8 @@ for _b, _e in _MODEL_CATALOG.items():
 # 2026-09-05/07), and the harnesses that speak chat/completions and nothing else. A limitation, not
 # an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
 # test forbids listing such an id for such a harness.
-RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
+# gpt-6.2-astra: as gpt-6-astra; the 6.2 line's own measurement follows.
+RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6.2-astra", "gpt-6-astra"})
 # kimi speaks chat/completions only: the runner defines its model with provider type `openai`
 # through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
 # sets), so a Responses-API-only id would be a picker row that fails on send.
@@ -9950,7 +9974,9 @@ _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROP
 # sorts first. When nothing on the instance serves one, hermes keeps its default (the main
 # model), which is today's behaviour and the honest answer: we cannot route to a model that no
 # integration here can reach.
-_VISION_CAPABLE = ("claude-haiku-5.5", "claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
+# gpt-6.2-sol: as gpt-6.1-sol; the 6.2 line's own measurement follows. (gpt-6.2-astra is not here,
+# as gpt-6-astra is not.)
+_VISION_CAPABLE = ("claude-haiku-5.5", "claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.2-sol", "gpt-6.1-sol",
                    "gpt-5.4", "claude-sonnet-4.6", "claude-opus-5.5", "claude-opus-5", "gpt-5.5")
 
 
@@ -9994,8 +10020,10 @@ async def _vision_auth(sid: str, backend: str) -> dict | None:
 # neither offers a row that fails on send. Keyed by the provider in both vocabularies (the
 # integrations' and the runner-native names a chain connection may carry).
 _CHAT_PASSTHROUGH = ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure", "harnessrouter")
+# gpt-6.2-sol rides every pair below as gpt-6.1-sol; the 6.2 line's own measurement follows.
+_SOL_PASSTHROUGH_REFUSED = frozenset({"gpt-6.1-sol", "gpt-6.2-sol"})
 _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
-    (p, b): frozenset({"gpt-6.1-sol"}) for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
+    (p, b): _SOL_PASSTHROUGH_REFUSED for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
 # The older chat-completions bases, the same refusal, measured the same way (2026-10-25, one tool turn
 # each, 0.37.0-rc.13): kimi, qwen and cline fail on My TokenRouter, OpenAI and Azure OpenAI; openhands
 # and cheetahclaws on My TokenRouter (openhands reaches OpenAI and Azure through litellm's Responses
@@ -10003,13 +10031,13 @@ _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
 # beside the catalog recorded on 2026-10-02 and left listed.
 for _p in ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure"):
     for _b in ("kimi", "qwen", "cline"):
-        _CHANNEL_REFUSES[(_p, _b)] = _CHANNEL_REFUSES.get((_p, _b), frozenset()) | {"gpt-6.1-sol"}
+        _CHANNEL_REFUSES[(_p, _b)] = _CHANNEL_REFUSES.get((_p, _b), frozenset()) | _SOL_PASSTHROUGH_REFUSED
 for _b in ("openhands", "cheetahclaws"):
-    _CHANNEL_REFUSES[("tokenrouter", _b)] = _CHANNEL_REFUSES.get(("tokenrouter", _b), frozenset()) | {"gpt-6.1-sol"}
+    _CHANNEL_REFUSES[("tokenrouter", _b)] = _CHANNEL_REFUSES.get(("tokenrouter", _b), frozenset()) | _SOL_PASSTHROUGH_REFUSED
 # And on the HarnessRouter API, measured once it had credit (0.37.0-rc.15, one tool turn each): kimi, qwen,
 # cline and cheetahclaws fail the same way; openhands completed (DONE, a Shell call).
 for _b in ("kimi", "qwen", "cline", "cheetahclaws"):
-    _CHANNEL_REFUSES[("harnessrouter", _b)] = _CHANNEL_REFUSES.get(("harnessrouter", _b), frozenset()) | {"gpt-6.1-sol"}
+    _CHANNEL_REFUSES[("harnessrouter", _b)] = _CHANNEL_REFUSES.get(("harnessrouter", _b), frozenset()) | _SOL_PASSTHROUGH_REFUSED
 # TokenRouter's route for claude-fable-5-1 declines docker-agent's first turn before a word is written
 # (finish_reason content_filter, 3 of 3, 2026-10-25), while on the same route vibe passes with it and
 # docker-agent passes with claude-fable-5, claude-opus-5.5 and claude-sonnet-5.5, and docker-agent
