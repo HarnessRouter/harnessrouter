@@ -20,7 +20,7 @@ The run started on v0.13.5 and finished on v0.13.13. Every release between them 
 
 **The Vercel column.** All five scenarios on every base that offers each model: Sol on the 25 bases that offer gpt-6.1-sol, Astra on the 8 that offer gpt-6-astra. 32 of 33 pairs pass. Two notes:
 - **cline** passes every scenario, and its record is `unlabelled`. cline's turns don't report a served model, and gpt-6.1-sol's Vercel row reads the same.
-- **openhands** passes its first turn. Every later turn fails with `401` from the runner's MCP relay, and gpt-6.1-sol fails the same way on the same day. The cause is the base, not the model: OpenHands keeps its first turn's relay address for the whole session (#714).
+- **openhands** passed its first turn, then every later turn failed with `401` from the runner's MCP relay, and gpt-6.1-sol failed the same way on the same day. The cause was the base, not the model: OpenHands keeps its first turn's relay address for the whole session (#714). With #716 the address stays the same for the session, and openhands passes all five scenarios on gpt-6.2-sol and gpt-6.1-sol (re-measured the same evening).
 
 The chat-only bases keep gpt-6.1-sol's channel refusals for 6.2-sol until that path is measured on its own. No default changed.
 
