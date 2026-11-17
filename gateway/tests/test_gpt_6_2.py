@@ -50,10 +50,11 @@ def test_the_prices_read_on_release_day_are_written_beside_the_catalog():
     """There is no price table in this tree (billing reads the engine's); the list prices live in the
     catalog's comment, as every line's do. Changing them here has to be a decision made there too."""
     src = re.sub(r"\s*\n\s*#\s*", " ", APP_PY.read_text())
-    assert "gpt-6.2-astra $8 in / $40 out, cached $0.40" in src
-    assert "gpt-6.2-sol $2 in / $10 out, cached $0.10, as gpt-6.1-sol" in src
-    assert "gpt-6.2-sol's cache write $2.50 and, above 272k prompt tokens, $4 / $15, cached $0.20" in src
-    assert "gpt-6.2-astra no cache-write price and doubled above 272k prompt tokens" in src
+    assert ("gpt-6.2-astra $8 in / $40 out, cached $0.40, cache write $10, and above 272k prompt tokens "
+            "$16 / $60, cached $0.80, cache write $20") in src
+    assert ("gpt-6.2-sol $2 in / $10 out, cached $0.10, cache write $2.50, and above 272k prompt tokens "
+            "$4 / $15, cached $0.20, cache write $5, as gpt-6.1-sol") in src
+    assert "doubled above 272k" not in src.split("gpt-6.2-astra $8", 1)[1][:400]   # 1.5x on output, not 2x
 
 
 def test_the_line_leads_the_openai_family_newest_first():

@@ -9204,11 +9204,11 @@ _MODEL_CATALOG: dict[str, dict] = {
     # changelog and OpenRouter's model pages, read the same day): astra is the line's most capable
     # model, for hard projects; sol is the everyday one. openai and azure-foundry name them
     # `gpt-6.2-astra` and `gpt-6.2-sol`, openrouter, tokenrouter, vercel and llmtr `openai/<id>`; the
-    # -fast variants are not offered. List prices, no markup: gpt-6.2-astra $8 in / $40 out, cached
-    # $0.40; gpt-6.2-sol $2 in / $10 out, cached $0.10, as gpt-6.1-sol. Not on the pages read and
-    # taken from each predecessor's row: gpt-6.2-sol's cache write $2.50 and, above 272k prompt
-    # tokens, $4 / $15, cached $0.20 (gpt-6.1-sol's); gpt-6.2-astra no cache-write price and doubled
-    # above 272k prompt tokens (gpt-6-astra's). NOT YET MEASURED: each is a candidate placed exactly
+    # -fast variants are not offered. List prices, no markup (OpenAI's pricing page, read 2026-11-17,
+    # Standard; per 1M tokens, 30-minute cache write): gpt-6.2-astra $8 in / $40 out, cached $0.40,
+    # cache write $10, and above 272k prompt tokens $16 / $60, cached $0.80, cache write $20;
+    # gpt-6.2-sol $2 in / $10 out, cached $0.10, cache write $2.50, and above 272k prompt tokens
+    # $4 / $15, cached $0.20, cache write $5, as gpt-6.1-sol. NOT YET MEASURED: each is a candidate placed exactly
     # where its predecessor is, gpt-6.2-astra beside gpt-6-astra (the Responses bases,
     # RESPONSES_ONLY_MODELS) and gpt-6.2-sol beside gpt-6.1-sol (every base that offers it, the same
     # channel refusals and exclusions), newest first; no default changed. Real turns prune them.
