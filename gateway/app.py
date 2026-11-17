@@ -2866,10 +2866,15 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         # checkpoint (sha marker kept by the runner), skip the blob download and the full
         # wipe+untar — the dominant cost of every follow-up turn on a big workspace.
         want_sha = str(v.get("ws_sha") or "")
-        if want_sha and not force:
+        if not force:
+            # A session that never saved a checkpoint is asked about its fresh start (#712): its first
+            # turn, cut by a restart before the end-of-turn checkpoint, left files and the CLI's
+            # conversation in a workspace the restart kept (its error says `kept`), and restoring
+            # "nothing" over them wiped both. A new session has no such workspace, so the probe misses
+            # and the empty restore below starts it as before.
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
-                                    params={"probe": want_sha})
+                                    params={"probe": want_sha or "fresh"})
                 pj = pr.json() if pr.headers.get("content-type", "").startswith("application/json") else {}
                 if pr.status_code < 400 and pj.get("skipped"):
                     rec["hydrated"] = True

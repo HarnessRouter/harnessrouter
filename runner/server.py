@@ -17471,6 +17471,9 @@ def _ws_marker_clear(identifier: str) -> None:
             path.unlink()
 
 
+_WS_PROBE_FRESH = "fresh"
+
+
 def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     """Whether this session's workspace still holds checkpoint `sha`: the marker says so AND the
     folder is there to back it. The marker lives outside the workspace on purpose (it has to
@@ -17481,8 +17484,14 @@ def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     no session to resume and the conversation started over (#194). A workspace
     restored from a checkpoint always carries its .git (the tarball does, and _git_ensure runs
     after every restore), so a folder without one holds nothing, whatever the marker says; the
-    marker that vouched for it is dropped so the full hydrate that follows starts clean."""
-    if _ws_marker_get(identifier) != sha:
+    marker that vouched for it is dropped so the full hydrate that follows starts clean.
+
+    `sha` empty is the fresh start (probe `fresh`, #712): a workspace this runner started empty and
+    no checkpoint has replaced since. Only a marker FILE that says so counts; no marker is no claim.
+    A session whose first turn was cut before any checkpoint had its folder wiped by the follow-up's
+    restore from nothing: its files and the CLI's conversation both, though the cut turn's error said
+    the workspace was kept."""
+    if not _ws_marker_path(identifier).is_file() or _ws_marker_get(identifier) != sha:
         return False
     if (ws_path / ".git").is_dir():
         return True
@@ -17655,7 +17664,9 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # answers yes — making follow-up turns start instantly instead of paying wipe + untar.
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
-            if _ws_holds(identifier, ws_path, probe):
+            # `fresh` asks about a session that never saved a checkpoint: does this runner still hold
+            # the workspace it started empty for it (#712)? A sha is hex, so the word is never one.
+            if _ws_holds(identifier, ws_path, "" if probe == _WS_PROBE_FRESH else probe):
                 return {"ok": True, "skipped": True, "restored": False}
             return {"ok": True, "skipped": False}
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
