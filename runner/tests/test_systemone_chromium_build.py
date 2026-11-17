@@ -10,9 +10,11 @@ lays them out.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -27,7 +29,7 @@ def _function(name: str) -> str:
 
 
 def _run(tools: pathlib.Path, call: str) -> subprocess.CompletedProcess:
-    script = (f'TOOLS="{tools}"; PLAYWRIGHT_BROWSERS_PATH="{tools}/ms-playwright"\n'
+    script = (f'PY="{sys.executable}"; TOOLS="{tools}"; PLAYWRIGHT_BROWSERS_PATH="{tools}/ms-playwright"\n'
               + _function("chromium_builds") + _function("chromium_current") + call)
     return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
 
@@ -100,12 +102,56 @@ def test_a_revision_that_is_not_a_number_names_no_path(tmp_path):
     assert _run(tmp_path, "chromium_builds").stdout.split() == ["chromium_headless_shell-1248"]
 
 
+def _browsers_json(tools: pathlib.Path) -> pathlib.Path:
+    pkg = tools / "systemone-venv/lib/python3.12/site-packages/playwright/driver/package"
+    pkg.mkdir(parents=True)
+    return pkg / "browsers.json"
+
+
+def test_a_browsers_json_that_is_a_link_is_not_read(tmp_path):
+    """During a first install the venv is the install uid's while root reads it: a link there could
+    make root read another file."""
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(json.dumps({"browsers": PW_1641}))
+    _browsers_json(tmp_path).symlink_to(elsewhere)
+    assert _run(tmp_path, "chromium_builds").stdout.split() == []
+
+
+def test_a_link_on_the_way_to_browsers_json_is_not_followed(tmp_path):
+    real = tmp_path / "real-playwright"
+    (real / "driver/package").mkdir(parents=True)
+    (real / "driver/package/browsers.json").write_text(json.dumps({"browsers": PW_1641}))
+    sp = tmp_path / "systemone-venv/lib/python3.12/site-packages"
+    sp.mkdir(parents=True)
+    (sp / "playwright").symlink_to(real)
+    assert _run(tmp_path, "chromium_builds").stdout.split() == []
+
+
+def test_a_fifo_in_its_place_does_not_hang_the_start(tmp_path):
+    os.mkfifo(_browsers_json(tmp_path))
+    r = _run(tmp_path, "chromium_builds")                   # the run's own 30 s timeout is the failure
+    assert r.stdout.split() == []
+
+
+def test_a_browsers_json_over_a_megabyte_is_not_read(tmp_path):
+    _browsers_json(tmp_path).write_text(json.dumps({"browsers": PW_1641, "pad": "x" * (1 << 20)}))
+    assert _run(tmp_path, "chromium_builds").stdout.split() == []
+
+
+def test_root_reads_it_with_the_images_own_interpreter():
+    assert '"$PY" -I -c' in _function("chromium_builds")
+    assert re.search(r"^PY=/usr/local/bin/python3$", SRC, flags=re.M)
+
+
 def test_install_and_every_start_download_a_build_that_is_not_current():
     inst = _function("install_systemone")
     assert "chromium_current || chromium_download" in inst
     assert 'ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*' not in SRC, "any chromium-* is not the build this Playwright launches"
     start = SRC[SRC.index('if wanted systemone && [ -x "$TOOLS/systemone-venv/bin/playwright" ]; then'):]
-    assert start.index("chromium_current || chromium_download") < start.index("chromium_libs ||")
+    # at start there is no install_base around it, so the download needs its own install uid: iu alone
+    # refuses ("no install uid here") and the old build was dropped for nothing (seen on the test VM)
+    assert start.index("chromium_current || try_install \"System One's Chromium\" install_as_uid systemone "
+                       "chromium_download") < start.index("chromium_libs ||")
 
 
 def test_root_runs_apt_before_the_tools_tree_is_on_its_path():

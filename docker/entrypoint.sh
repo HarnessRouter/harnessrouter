@@ -998,12 +998,30 @@ chromium_libs() {
 # chromium-* was not enough: a pin change installs a new Playwright beside the old build, the new build
 # was never downloaded, and every volume that came through the 1.64.1 pin (#646) had a System One
 # browser that failed at launch ("Executable doesn't exist at .../chromium_headless_shell-1248/...").
+# Root reads it, during a first install while the venv is still the install uid's: so the image's own
+# interpreter by its path, and only a regular file of at most 1 MB reached through no link (not a
+# FIFO that would hang the start, not a link to another file); what it prints is names, never content.
 chromium_builds() {
-  python3 -I -c '
-import glob, json, re, sys
+  "$PY" -I -c '
+import glob, json, os, re, stat, sys
 for f in glob.glob(sys.argv[1] + "/lib/python3*/site-packages/playwright/driver/package/browsers.json"):
-    for b in json.load(open(f, encoding="utf-8")).get("browsers", []):
-        n, r = str(b.get("name") or ""), str(b.get("revision") or "")
+    if os.path.realpath(f) != os.path.join(os.path.realpath(sys.argv[1]), os.path.relpath(f, sys.argv[1])):
+        continue                                   # a link somewhere inside the venv on the way to it
+    try:
+        fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        continue
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_size > 1 << 20:
+            continue
+        data = fh.read(1 << 20)
+    try:
+        doc = json.loads(data)
+    except ValueError:
+        continue
+    for b in doc.get("browsers") or [] if isinstance(doc, dict) else []:
+        n, r = (str(b.get("name") or ""), str(b.get("revision") or "")) if isinstance(b, dict) else ("", "")
         if n in ("chromium", "chromium-headless-shell") and re.fullmatch(r"[0-9]{1,8}", r):
             print(n.replace("-", "_") + "-" + r)
 ' "$TOOLS/systemone-venv" 2>/dev/null
@@ -2085,8 +2103,10 @@ install_backends() {
   fi
   if wanted systemone && [ -x "$TOOLS/systemone-venv/bin/playwright" ]; then
     # A volume whose Playwright moved on without its browser (a pin change before chromium_current) gets
-    # the build it launches here, on the next start; a current one costs one read of browsers.json.
-    chromium_current || chromium_download \
+    # the build it launches here, on the next start; a current one costs one read of browsers.json. The
+    # download runs as System One's install uid (install_as_uid), outside install_base: a failure here
+    # leaves the base and its stamp as they are, and the next start tries again.
+    chromium_current || try_install "System One's Chromium" install_as_uid systemone chromium_download \
       || echo "[harnessrouter]   WARNING: the System One base's Chromium could not be downloaded; its browser environments will not start until it is (retried on the next start)"
     # Root runs apt-get here, so it must resolve on the base PATH: this block stays above the line that
     # puts $TOOLS/bin, a tree the install uids fill, ahead of it (export PATH="$TOOLS/bin:$PATH").
