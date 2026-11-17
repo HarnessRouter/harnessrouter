@@ -4826,14 +4826,17 @@ _MCP_STABLE_FOR = frozenset({"openhands"})
 _MCP_STABLE_FALLBACK = uuid.uuid4().hex + uuid.uuid4().hex    # a runner with no internal key: stable per process
 
 
-def _mcp_session_token(session: str, name: str, url: str) -> str:
-    """The relay token of one MCP server in one session, the same on every turn of that session."""
+def _mcp_session_token(session: tuple[str, str], name: str, url: str) -> str:
+    """The relay token of one MCP server in one session, the same on every turn of that session.
+    `session` is the gateway's session id AND the session's folder: under HR_SANDBOX_PER_SESSION every
+    session's folder is the workspace root, so the folder alone would give two sessions one token, and
+    a process left in a reused sandbox could call the relay during the next session's turn."""
     key = (_INTERNAL_KEY or _MCP_STABLE_FALLBACK).encode()
-    msg = "\0".join(("hr-mcp-relay", session, name, url)).encode()
+    msg = "\0".join(("hr-mcp-relay", session[0], session[1], name, url)).encode()
     return "hr-mcp-" + hmac.new(key, msg, hashlib.sha256).hexdigest()[:32]
 
 
-def _mcp_through_relay(servers: list[dict] | None, stable_for: str | None = None) -> list[dict]:
+def _mcp_through_relay(servers: list[dict] | None, stable_for: tuple[str, str] | None = None) -> list[dict]:
     """Every remote server, as the session will see it: a relay address and no credential. Runs before
     any writer or bridge reads the list, so all of them get this without knowing about it. A stdio
     server runs as the session and is left as it is. With `stable_for` (the session, for a base in
@@ -18491,7 +18494,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         plugin_roots = _write_plugins(cwd, req.plugins)
         servers = (req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else
                    _mcp_through_relay(req.mcp_servers,
-                                      stable_for=os.path.realpath(cwd) if backend in _MCP_STABLE_FOR else None))
+                                      stable_for=((identifier or "", os.path.realpath(cwd))
+                                                  if backend in _MCP_STABLE_FOR else None)))
         # whether the platform's memory is attached, from the address the gateway sent (only its path is read): the
         # base's own memory tools are then withheld (_own_memory_off; hermes in its config, below)
         platform_memory = _has_platform_memory(req.mcp_servers)
