@@ -20,6 +20,8 @@ import platform
 import re
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,7 +61,31 @@ def playwright_pin(text: str) -> str:
     m = re.search(r'^SYSTEMONE_PLAYWRIGHT_PIN="\$\{HR_SYSTEMONE_PLAYWRIGHT_VERSION:-([^}]+)\}"$', text, re.M)
     if not m:
         sys.exit("docker/entrypoint.sh has no SYSTEMONE_PLAYWRIGHT_PIN default")
-    return m.group(1)
+    pin = m.group(1)
+    m = re.search(r'^CHROMIUM_LIBS_PLAYWRIGHT=(\S+)$', text, re.M)
+    if not m:
+        sys.exit("docker/entrypoint.sh has no CHROMIUM_LIBS_PLAYWRIGHT")
+    if m.group(1) != pin:
+        sys.exit(f"docker/entrypoint.sh: CHROMIUM_LIBS_PLAYWRIGHT={m.group(1)} is not the default Playwright pin {pin}; "
+                 "the override warning would then name the wrong version")
+    return pin
+
+
+def fetch_text(url: str, tries: int = 3) -> str:
+    """Playwright's source at the pin, from GitHub: a few tries, then one line saying what failed."""
+    err: Exception | None = None
+    for i in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                return r.read().decode("utf-8")
+        except (urllib.error.URLError, OSError) as e:  # HTTPError and timeouts are both here
+            err = e
+            if isinstance(e, urllib.error.HTTPError) and e.code < 500:
+                break  # a 404 is a wrong pin or path, not a passing outage
+            if i + 1 < tries:
+                time.sleep(5 * (i + 1))
+    sys.exit(f"could not read Playwright's dependency table from {url}: {err} "
+             f"(a GitHub outage fails this check; re-run the job)")
 
 
 def table_libs(text: str, distro: str, key: str, _seen: frozenset = frozenset()) -> list[str]:
@@ -175,8 +201,7 @@ def main(argv: list[str]) -> int:
             sys.exit("--distro is needed when the table comes from a file or from GitHub")
         if fetch:
             url = NATIVE_DEPS_SRC.format(pin=pin)
-            with urllib.request.urlopen(url, timeout=60) as r:
-                text = r.read().decode("utf-8")
+            text = fetch_text(url)
             where = f"source at v{pin}"
         else:
             with open(path, encoding="utf-8") as f:

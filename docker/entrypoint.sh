@@ -964,7 +964,10 @@ export PLAYWRIGHT_BROWSERS_PATH="$TOOLS/ms-playwright"
 # scripts/check-chromium-libs.py holds the list to the pinned Playwright's: in the tests job against
 # Playwright's source at that tag, and in the release gate against the driver the venv installed, on
 # the Debian the container runs, where it also reads that every package is installed. A Playwright
-# bump that changes its list fails there until this list moves with it.
+# bump that changes its list fails there until this list moves with it. The list holds for the default
+# pin only: an operator who sets HR_SYSTEMONE_PLAYWRIGHT_VERSION gets a warning, since another
+# Playwright can ask for other packages and its Chromium would then fail at launch, not at install.
+CHROMIUM_LIBS_PLAYWRIGHT=1.64.1
 CHROMIUM_LIBS=(
   # tools
   xvfb fonts-noto-color-emoji fonts-unifont libfontconfig1 libfreetype6 xfonts-scalable fonts-liberation
@@ -977,6 +980,8 @@ CHROMIUM_LIBS=(
 CHROMIUM_LIBS_MARK=/var/lib/harnessrouter/chromium-libs
 chromium_libs() {
   [ -f "$CHROMIUM_LIBS_MARK" ] && return 0
+  [ "$SYSTEMONE_PLAYWRIGHT_PIN" = "$CHROMIUM_LIBS_PLAYWRIGHT" ] \
+    || echo "[harnessrouter]   WARNING: HR_SYSTEMONE_PLAYWRIGHT_VERSION=$SYSTEMONE_PLAYWRIGHT_PIN, but the browser library list is Playwright $CHROMIUM_LIBS_PLAYWRIGHT's; if that version asks for other packages, its Chromium will fail at launch until CHROMIUM_LIBS in docker/entrypoint.sh is updated"
   echo "[harnessrouter]   installing the system libraries Chromium links against (this container: ${#CHROMIUM_LIBS[@]} Debian packages, by apt)…"
   # apt's lists are fetched for this and removed after, as the image's own apt steps do; its output
   # is shown only when it fails, the way try_install shows an installer's.

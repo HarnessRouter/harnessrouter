@@ -129,6 +129,7 @@ CHROMIUM_LIBS=(
 )
 CHROMIUM_LIBS_MARK=/var/lib/harnessrouter/chromium-libs
 SYSTEMONE_PLAYWRIGHT_PIN="${HR_SYSTEMONE_PLAYWRIGHT_VERSION:-1.64.1}"
+CHROMIUM_LIBS_PLAYWRIGHT=1.64.1
 """
 assert ccl.committed_libs(EP) == DEBIAN13, ccl.committed_libs(EP)
 assert ccl.playwright_pin(EP) == "1.64.1"
@@ -136,6 +137,11 @@ assert "more than once" in exits(ccl.committed_libs, EP.replace("  libnss3\n", "
 assert "not a Debian package name" in exits(ccl.committed_libs, EP.replace("  libnss3\n", '  "$X"\n'))
 assert "no CHROMIUM_LIBS" in exits(ccl.committed_libs, "TOOLS=x\n")
 assert "no SYSTEMONE_PLAYWRIGHT_PIN" in exits(ccl.playwright_pin, "TOOLS=x\n")
+# The version the override warning names is the default pin, or the check fails.
+assert "no CHROMIUM_LIBS_PLAYWRIGHT" in exits(ccl.playwright_pin, EP.replace("CHROMIUM_LIBS_PLAYWRIGHT=1.64.1\n", ""))
+assert "is not the default Playwright pin" in exits(ccl.playwright_pin, EP.replace("CHROMIUM_LIBS_PLAYWRIGHT=1.64.1", "CHROMIUM_LIBS_PLAYWRIGHT=1.63.0"))
+# A fetch that cannot be read ends in one line naming the URL, not a traceback.
+assert "could not read Playwright's dependency table from file:///nonexistent" in exits(ccl.fetch_text, "file:///nonexistent/nativeDeps.ts", 1)
 
 # The committed list itself: it parses, and against a table that holds it, main passes; one that does not, fails.
 with open(os.path.join(ccl.ROOT, "docker", "entrypoint.sh"), encoding="utf-8") as f:

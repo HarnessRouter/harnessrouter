@@ -17,7 +17,10 @@ manager on a base's tree, unpacks a downloaded archive, or runs a file out of an
 ci, npm rebuild, npm install, pip install, tar -x, node loading a package, and any command that is a
 path into the tools tree or a venv run as the base's own install uid, written `iu <command>`.
 
-The check reads the source, so it runs in the tests job with nothing installed. ALLOWED and ROOT_RUNS
+The check reads the source, so it runs in the tests job with nothing installed. It is a set of line
+patterns, not a shell parser: a command reached through a variable (a path or a venv name held in one),
+`sh -c "..."`, or another spelling it has no pattern for goes past it, so a review still reads what
+root runs, and a form found that way is added as a pattern with a ROOT_BAD case in its self-test. ALLOWED and ROOT_RUNS
 name the lines that are known and accepted for now; each PR that fixes one removes it, and an entry
 that no longer matches anything fails too, so the lists can only shrink.
 
