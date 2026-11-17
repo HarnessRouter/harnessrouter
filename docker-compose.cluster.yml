@@ -67,6 +67,7 @@ services:
     env_file: ${HR_ENV_FILE:-.env}
     environment:
       HR_ROLE: gateway
+      HARNESS_STREAM_PARTIAL: ${HARNESS_STREAM_PARTIAL:-1}
       HARNESS_INTERNAL_KEY: ${HARNESS_INTERNAL_KEY:?Set HARNESS_INTERNAL_KEY in .env}
       POOL_MGMT_ENDPOINT: http://session-router:8090
       HARNESS_GATEWAY_URL: http://gateway:8080

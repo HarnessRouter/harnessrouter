@@ -31,7 +31,7 @@ def test_the_tools_that_cannot_run_here_are_not_offered():
 
 def test_it_is_driven_through_the_relay_on_the_openai_shape():
     for provider in ("anthropic", "openai", "openrouter", "tokenrouter", "vercel", "google",
-                     "custom", "harnessrouter"):
+                     "custom"):
         assert A._INTEGRATION_WIRING.get((provider, "agentzero")), provider
     assert "agentzero" in A._CUSTOM_FORMAT_BACKENDS["openai"]
     assert "agentzero" not in A._CUSTOM_FORMAT_BACKENDS["anthropic"]

@@ -1,0 +1,44 @@
+.hx-client {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  background: var(--hr-bg, #f7f8fa);
+  color: var(--hr-fg, #17202a);
+}
+
+.hx-client button,
+.hx-client input,
+.hx-client textarea,
+.hx-client select {
+  font: inherit;
+}
+
+.hx-sidebar {
+  border-right: 1px solid #e2e6eb;
+  background: #fff;
+}
+
+.hx-main,
+.hx-content,
+.hx-client main {
+  min-width: 0;
+}
+
+.hx-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgb(15 23 42 / 32%);
+}
+
+@media (max-width: 800px) {
+  .hx-client {
+    grid-template-columns: 1fr;
+  }
+
+  .hx-sidebar {
+    display: none;
+  }
+}

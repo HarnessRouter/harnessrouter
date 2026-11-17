@@ -364,9 +364,9 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   );
   // folded: a slim rail at the right, as a setup's Agent stack folds, with the toggle that opens it and its name
   const rail = (
-    <aside className="mm-conn mm-rail" aria-label="Graph">
-      <button type="button" className="icon-btn mm-rail-tog" aria-expanded={false} aria-label="Show graph" title="Show graph" onClick={() => fold(false)}>{CHEV_L}</button>
-      <span className="mm-rail-l" aria-hidden="true">Graph</span>
+    <aside className="mm-conn mm-rail" aria-label="图谱">
+      <button type="button" className="icon-btn mm-rail-tog" aria-expanded={false} aria-label="显示图谱" title="显示图谱" onClick={() => fold(false)}>{CHEV_L}</button>
+      <span className="mm-rail-l" aria-hidden="true">图谱</span>
     </aside>
   );
   // A memory that holds nothing at all (no records, no sub memories) is said once, in the middle: what it will hold,
@@ -378,15 +378,15 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
       <div className="mm-data mm-data-none">
         <div className="mm-none">
           <span className="mm-none-pic"><KindArt kind={shapeOf(provider)} /></span>
-          <h2>Nothing kept yet</h2>
-          <p>{`Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
+          <h2>还没有记录</h2>
+          <p>{`添加第一条记录，或将${memory.name}交给 Agent，让它自动写入。`}</p>
           {write || create ? (
             <div className="mm-none-acts">
-              {write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
-              {create ? <button type="button" className="btn small" onClick={() => setSubSheet(true)}>New sub memory</button> : null}
+              {write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}新建记录</button> : null}
+              {create ? <button type="button" className="btn small" onClick={() => setSubSheet(true)}>新建子记忆</button> : null}
             </div>
           ) : null}
-          {schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
+          {schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>先设置需要关注的内容</button></p> : null}
         </div>
         {subSheet ? <NewSubMemorySheet parent={memory} onClose={() => setSubSheet(false)} onDone={(m) => { setSubSheet(false); toast(`${m.name} created`); onChanged(); }} /> : null}
       </div>
@@ -395,9 +395,9 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   return (
     <div className="mm-data">
       <ResizableColumns storageKey={showGraph ? 'hr.memory.columns' : 'hr.memory.columns.nograph'} tab={tab} panes={[
-        { id: 'tree', label: 'Records', min: 220, initial: 280, node: tree },
-        { id: 'doc', label: 'Record', min: 380, initial: 640, grow: true, node: doc },
-        ...(showGraph ? [folded && !tabbed ? { id: 'graph', label: 'Graph', min: RAIL, initial: RAIL, fixed: RAIL, node: rail } : { id: 'graph', label: 'Graph', min: 280, initial: 440, node: right }] : []),
+        { id: 'tree', label: '记录', min: 220, initial: 280, node: tree },
+        { id: 'doc', label: '记录详情', min: 380, initial: 640, grow: true, node: doc },
+        ...(showGraph ? [folded && !tabbed ? { id: 'graph', label: '图谱', min: RAIL, initial: RAIL, fixed: RAIL, node: rail } : { id: 'graph', label: '图谱', min: 280, initial: 440, node: right }] : []),
       ]} onTab={pickTab} onNarrow={(n) => { narrow.current = n; setTabbed(n); }} />
     </div>
   );

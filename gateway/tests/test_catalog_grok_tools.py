@@ -33,7 +33,7 @@ def test_grok_registration():
     assert "grok" in A.CHAT_ONLY_BACKENDS
     assert "grok" in A._CUSTOM_FORMAT_BACKENDS["openai"]
     assert "grok" not in A._CUSTOM_FORMAT_BACKENDS["anthropic"]
-    for prov in ("vercel", "google", "custom", "openrouter", "tokenrouter", "harnessrouter"):
+    for prov in ("vercel", "google", "custom", "openrouter", "tokenrouter"):
         assert (prov, "grok") in A._INTEGRATION_WIRING
     cat = A._MODEL_CATALOG["grok"]
     assert cat["default"] in cat["models"] and cat["default"].startswith("grok-")

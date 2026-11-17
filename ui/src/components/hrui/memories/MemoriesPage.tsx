@@ -181,31 +181,31 @@ export function MemoriesPage() {
   const top = (
     <div className="list-top mm-top">
       <div>
-        <h1>Memories</h1>
-        {L.length ? null : <p className="sub">What your agents remember from one task to the next.</p>}
+        <h1>记忆</h1>
+        {L.length ? null : <p className="sub">保存 Agent 在不同任务之间需要延续的知识。</p>}
       </div>
       {loading || failed ? null : (
         <div className="top-actions">
           {L.length ? (
-            <div className="seg vm-seg" role="group" aria-label="View">
-              <button type="button" className={vm === 'cards' ? 'on' : ''} aria-pressed={vm === 'cards'} onClick={() => pick('cards')}>{GRID_IC}Cards</button>
-              <button type="button" className={vm === 'list' ? 'on' : ''} aria-pressed={vm === 'list'} onClick={() => pick('list')}>{LIST_IC}List</button>
+            <div className="seg vm-seg" role="group" aria-label="显示方式">
+              <button type="button" className={vm === 'cards' ? 'on' : ''} aria-pressed={vm === 'cards'} onClick={() => pick('cards')}>{GRID_IC}卡片</button>
+              <button type="button" className={vm === 'list' ? 'on' : ''} aria-pressed={vm === 'list'} onClick={() => pick('list')}>{LIST_IC}列表</button>
             </div>
           ) : null}
-          {noneConnected && !L.length ? null : <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>}
+          {noneConnected && !L.length ? null : <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}新建记忆</button>}
         </div>
       )}
     </div>
   );
   const tools = L.length && !loading && !failed ? (
     <div className="mm-ltools">
-      <label className="mm-find mm-lfind">{SEARCH}<input type="search" value={q} placeholder={`Search ${L.length} ${L.length === 1 ? 'memory' : 'memories'}`} aria-label="Search memories" autoComplete="off" spellCheck={false} onChange={(e) => setQ(e.target.value)} />
-        {q ? <button type="button" className="mt-clear" aria-label="Clear" onClick={() => setQ('')}>{X}</button> : null}</label>
+      <label className="mm-find mm-lfind">{SEARCH}<input type="search" value={q} placeholder={`搜索 ${L.length} 条记忆`} aria-label="搜索记忆" autoComplete="off" spellCheck={false} onChange={(e) => setQ(e.target.value)} />
+        {q ? <button type="button" className="mt-clear" aria-label="清除" onClick={() => setQ('')}>{X}</button> : null}</label>
       {dated ? (
-        <label className="mm-sort"><span>Sort</span>
-          <select className="set-in slim" value={sort} aria-label="Sort memories" onChange={(e) => setSort(e.target.value as Sort)}>
-            <option value="recent">Recently used</option>
-            <option value="name">Name</option>
+        <label className="mm-sort"><span>排序</span>
+          <select className="set-in slim" value={sort} aria-label="排序记忆" onChange={(e) => setSort(e.target.value as Sort)}>
+            <option value="recent">最近使用</option>
+            <option value="name">名称</option>
           </select>
         </label>
       ) : null}
@@ -214,18 +214,18 @@ export function MemoriesPage() {
 
   let body: React.ReactNode;
   if (failed) {
-    body = <div className="empty-list ws-fail" role="alert">Your memories could not be read just now. <button type="button" className="link-q inl" onClick={read}>Try again</button></div>;
+    body = <div className="empty-list ws-fail" role="alert">暂时无法读取记忆。<button type="button" className="link-q inl" onClick={read}>重试</button></div>;
   } else if (loading) {
-    body = <Skel label="Loading memories"><div className="cards mm-cards"><SkCards n={3} /></div></Skel>;
+    body = <Skel label="正在加载记忆"><div className="cards mm-cards"><SkCards n={3} /></div></Skel>;
   } else if (noneConnected && !L.length) {
     body = (
       <div className="mm-empty-list">
         <div className="mm-art big"><Ghost /></div>
-        <h2>Connect a memory engine</h2>
-        <p>Your agents remember through an engine. Connect one to start.</p>
+        <h2>连接记忆引擎</h2>
+        <p>Agent 通过记忆引擎保存知识。连接一个引擎后即可开始。</p>
         {found ? <p className="mm-found" role="status">{found}</p> : null}
         <div className="mm-none-acts">
-          <button type="button" className="btn primary" onClick={() => setOpen({ k: 'choose' })}>Connect an engine</button>
+          <button type="button" className="btn primary" onClick={() => setOpen({ k: 'choose' })}>连接引擎</button>
         </div>
       </div>
     );
@@ -233,14 +233,14 @@ export function MemoriesPage() {
     body = (
       <div className="mm-empty-list">
         <div className="mm-art big"><Ghost /></div>
-        <h2>No memories yet</h2>
+        <h2>还没有记忆</h2>
         {found ? <p className="mm-found" role="status">{found}</p> : null}
-        <p>A memory is where your agents keep what should outlast one task: who your customers are, the rules they follow, what happened last time. A new setup gets one of its own.</p>
-        <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
+        <p>记忆用于保存跨任务的客户信息、业务规则和历史经验。每个新建的 Agent 都可以拥有自己的记忆。</p>
+        <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}新建记忆</button>
       </div>
     );
   } else if (!shown.length) {
-    body = <p className="empty-list" role="status">No memory matches that. <button type="button" className="link-q inl" onClick={() => setQ('')}>Clear the search</button></p>;
+    body = <p className="empty-list" role="status">没有匹配的记忆。<button type="button" className="link-q inl" onClick={() => setQ('')}>清除搜索</button></p>;
   } else if (vm === 'list') {
     body = (
       <>

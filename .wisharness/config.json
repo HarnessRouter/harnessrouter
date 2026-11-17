@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "gitlab": {
+    "requireIssueForMr": true
+  },
+  "capabilities": {
+    "selected": [
+      "team-collaboration",
+      "ui-visual-contract",
+      "cross-platform",
+      "git-collaboration"
+    ],
+    "routes": {},
+    "settings": {}
+  },
+  "workflows": {
+    "backfill": true,
+    "gitlab": true
+  }
+}

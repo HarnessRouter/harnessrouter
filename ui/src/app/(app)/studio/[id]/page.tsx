@@ -1,6 +1,6 @@
 'use client';
 // One setup (docs/uxuidesign/console-91, view `agent`: agentView, agentHead, tasksBody, newPane,
-// taskPane, setSide, sideTog). One bar on top (back, name, Deploy to Cloud and Connect your app, then
+// taskPane, setSide, sideTog). One bar on top (back, name, Connect your app, then
 // Tasks · Settings at its right end); the rest of the window is work, every column starting with a 56 px
 // bar on one hairline.
 // Tasks: the task list, the open task (or New task), the Agent stack. Settings: the layers, the open
@@ -41,6 +41,7 @@ import { seededSetup } from '@/components/hrui/start/seed';
 import { useBuildStack } from '@/components/hrui/start/buildStack';
 import { useRecordedRunState } from '@/components/hrui/start/replay';
 import { toast } from '@/components/hrui/toast';
+import { uhpHealth } from '@/components/hrui/uhp-health';
 
 const enc = encodeURIComponent;
 // at and below this width the list and the open task take turns (hrui.css: the 860 px rules)
@@ -124,6 +125,7 @@ export default function SetupPage() {
     setSlot({ key: sid, resume: sid }); setTestSid(sid); router.replace(pgHref(sid), { scroll: false });
   };
   const newTest = () => {
+    if (row && uhpHealth(row.h)?.ready === false) return;
     setPreview(null); setPicked(true);
     setSlot({ key: `n${Date.now()}`, resume: null }); setTestSid(null);
     router.replace(pgHref(null), { scroll: false });
@@ -132,6 +134,7 @@ export default function SetupPage() {
   // a reply's Branch: a new conversation holding its task up to that reply. No task exists until its
   // first message, so the address is a new task's until then, as for New task
   const branchTest = (branch: BranchDraft) => {
+    if (row && uhpHealth(row.h)?.ready === false) return;
     setPreview(null); setPicked(true);
     setSlot({ key: `b${Date.now()}`, resume: null, branch }); setTestSid(null);
     router.replace(pgHref(null), { scroll: false });
@@ -310,7 +313,7 @@ export default function SetupPage() {
     <div className="tk-page" style={docked ? ({ '--pv-w': `${pv.width}px` } as CSSProperties) : undefined}>
       {head}
       <div ref={splitRef} className={`tk-split${docked ? ' previewing' : ' has-side'}${picked ? ' show-d' : ''}`}>
-        <TaskList setupName={row.h.name} list={list} f={f} setF={setF} current={testSid} isNew={isNew && !recOn} newOpen={!!slot && !slot.resume && !recOn}
+        <TaskList setupName={row.h.name} list={list} f={f} setF={setF} current={testSid} isNew={isNew && !recOn} newDisabled={uhpHealth(row.h)?.ready === false} newOpen={!!slot && !slot.resume && !recOn}
           recorded={recShown ? { title: recShown.request, at: madeAt, on: recOn, running: recRunning, onOpen: openRecorded } : null}
           recordedRetry={rec.failed ? rec.retry : undefined}
           onOpen={openTest} onNew={() => newTest()} onGone={gone} />

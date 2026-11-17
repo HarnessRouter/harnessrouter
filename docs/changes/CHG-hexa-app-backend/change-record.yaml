@@ -1,0 +1,153 @@
+id: CHG-hexa-app-backend
+status: verifying
+status_reason: client 已收敛为唯一 FastAPI App 模式；2026-11-17 修复对话历史与会话恢复共享序列导致的竞态，并按当前 4174 参考版重排右侧检查器。生产 PostgreSQL 和真实 Provider 实测仍待验收；当前用户要求保留本地热更新，不部署 Docker。
+owner: Codex
+source: 用户确认的前后端拆分计划（2026-11-16）
+goal: 为 Hexa 建立不暴露 Gateway Key 的 Python 应用后端，并逐步承接会话、上下文和 Agent 能力。
+non_goals: [修改 gateway/, 修改 Gateway API/CORS/Compose/Dockerfile, 恢复 Cloud 能力, 新增 Go 服务, 后端化 Memory/Template/Workflow]
+behavior:
+  before: client 直接持有配置并调用 Gateway；没有独立 Hexa App API。
+  after: client 通过 HttpOnly 会话访问 hexa-api，hexa-api 服务端调用现有 Gateway。
+acceptance:
+  - id: AC-1
+    entry: GET /healthz
+    action: 启动 FastAPI 应用并探测健康接口
+    expected: 返回可探测的健康状态
+    verification: hexa-api/tests/test_health.py
+  - id: AC-2
+    entry: POST /api/hexa/auth/login
+    action: 使用正确和错误管理员凭据登录
+    expected: 正确凭据设置 HttpOnly Cookie，错误凭据返回 401
+    verification: hexa-api/tests/test_auth.py
+  - id: AC-3
+    entry: 受保护 API
+    action: 无 Cookie、伪造 Cookie 和有效 Cookie 分别访问
+    expected: 未认证为 401，有效会话可访问
+    verification: hexa-api/tests/test_auth.py
+  - id: AC-4
+    entry: auth_sessions 数据
+    action: 登录后读取测试数据库记录
+    expected: 只保存 Token 哈希，不保存原始 Token
+    verification: hexa-api/tests/test_auth.py
+  - id: AC-5
+    entry: GET /api/hexa/agents
+    action: 通过 fake Gateway 读取 Agent 列表
+    expected: Gateway Key 不出现在响应、异常或日志中
+    verification: hexa-api/tests/test_gateway_agents.py
+  - id: AC-7
+    entry: app 模式 Agent 页面与对话 Agent/模型选择
+    action: 创建、失败重试、删除确认、列表重读、切换 Agent 和模型加载
+    expected: 只展示 Gateway 返回的真实列表；失败保留原状态；过期模型响应不能覆盖当前 Agent；模型不可用时禁止发送
+    verification: client/tests/app-api.test.mjs; client/tests/app-ui/agents.spec.ts; client/tests/integration-ui/backend.spec.ts
+baseline: 脏工作树；保留既有 Gateway、UI、client 和 Cloud 删除改动。
+reuse_decision: new
+discovery_evidence: [历史 client/src/api.ts 的 Gateway 直接调用, gateway/app.py 的 /v1/harnesses 和 /v1/responses, 用户确认的 FastAPI/PostgreSQL/HttpOnly Cookie 决策, 本轮移除静态版本的要求]
+references: [spec.md, plan.md, visual-contract.md, platform-matrix.md, ../../AGENTS.md]
+impact:
+  direct: [hexa-api/, client/src/app-api.ts, client/src/AppBackendClient.tsx, client/src/AppModules.tsx, client/src/ChatInspector.tsx, client/src/styles.css, client/vite.config.ts]
+  transitive: [client 后续 app API 适配]
+  unknown: [生产部署编排与外部反向代理]
+dependencies: [Python 3.13, FastAPI, SQLAlchemy, PostgreSQL]
+test_scope:
+  selection_reason: 新增 API 服务先覆盖健康、认证、秘密边界和 Gateway 代理；client/Gateway 既有回归不因本 Change 重复执行。
+  selected: [python -X utf8 -m pytest -q hexa-api/tests, npm test --prefix client, npm run typecheck --prefix client, npm run build --prefix client, app/integration Playwright configs]
+  excluded: [Gateway 全量测试, Docker/Compose deployment, real third-party Provider]
+  full_suite_trigger: null
+  evidence_reuse: []
+verification:
+  - acceptance_ids: [AC-2, AC-3, AC-6, AC-7]
+    status: passed
+    command_or_steps: npm test --prefix client; npm run typecheck --prefix client; npx playwright test --config playwright.app.config.ts --workers=1; npx playwright test --config playwright.integration.config.ts --project=chromium backend.spec.ts --workers=1; python -X utf8 -m pytest -q hexa-api/tests/test_auth.py
+    exit_code: 0
+    revision: dirty-worktree; 2026-11-16 real login integration repair
+    environment: localhost/127.0.0.1 Vite 4173/4174; FastAPI 4010; Chromium and Edge; temporary integration FastAPI/Gateway fixture
+    evidence: 40 client unit tests; typecheck passed; app UI 12 passed across Chromium/Edge; real integration 3 passed including localhost login with wrong-password rejection, HttpOnly localhost cookie, reload expiry recovery, relogin, draft preservation, logout and reload; FastAPI auth 5 passed. Protected 401 now triggers session-expiry handling, clears visible authenticated state, opens login, and does not resubmit messages. Gateway API Key remains server-only.
+    reason: 接入登录并修复用户反馈的登录不可用路径。
+    next_action: 继续保持 4173/4174/4010 热更新；后续再做生产数据库和部署验收。
+  - acceptance_ids: [AC-6, AC-7]
+    status: passed
+    command_or_steps: npm test --prefix client; npm run typecheck --prefix client; npm run build:app --prefix client; Playwright app navigation on Chromium/Edge; direct gateway-settings/workspace regression; Chromium integration backend.spec.ts
+    exit_code: 0
+    revision: dirty-worktree; 2026-11-16 navigation regression repair
+    environment: Windows; Chromium and Edge; 1440x900 and 390x844; shared UI from live 4174 Vite client
+    evidence: 39 unit tests; typecheck/build passed (bundle size advisory); direct UI 19 passed; app Chat/Agent Chromium+Edge 6 passed; final navigation and real-session logout contract 4 passed; Chromium FastAPI/HTTP Gateway fixture integration 2 passed. Initial navigation Red reproduced missing menu; intermediate test selector mismatches corrected against existing editor and Ant Design accessible names. Shared user slot change triggered typecheck failure, fixed by reusing UserMenu with server-session logout.
+    reason: 复用实时参考源码与共享组件，避免 app/direct 导航继续分叉。
+    next_action: 对话检查器与工作空间弹窗后续继续复用参考 UI；远端 Workflow 不在本次接入范围。共享导航新增 user 插槽后复用 session UserMenu，最终 Chromium/Edge 导航及注销 4 passed；39 单测、类型检查和 app 构建通过。收尾时发现本机服务进程已退出（原因未确定），撤销 1 个遗留临时 Key（200）并恢复 4173/4174/4010，三个入口 200，重新登录 200、真实 Agent 列表 200/4 项；运行 Key 仍只保留在后端进程。
+    screenshots:
+      - path: C:/Users/Administrator/AppData/Local/Temp/hexa-restored-navigation-desktop.png
+        sha256: 772ed093b28fd4311d92c783c1e0c0980a8a6da7c100a47a35f9a34011978cf8
+      - path: C:/Users/Administrator/AppData/Local/Temp/hexa-restored-navigation-mobile.png
+        sha256: 3fe2837d03893e01f36a96f21183934daf9cbbe1326254f25c10119803671c25
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-5, AC-6, AC-7]
+    status: passed
+    command_or_steps: 本机 Vite app 模式 4173 + Uvicorn reload 4010；HTTP 健康/登录/Agent/模型探测；浏览器登录、选择 Agent、发送首轮、追问、刷新及检查器操作
+    exit_code: 0
+    revision: dirty-worktree; runtime-only startup, no production source edits
+    environment: Windows; in-app Chromium; temporary SQLite outside repository; existing Docker Gateway 3000; configured ordinary BYOK
+    evidence: /healthz 200；未登录 Agent 请求 401；登录 200 且 Cookie HttpOnly；读取真实 4 个 Agent 和模型；数据分析结论 Agent / deepseek/deepseek-v4.1-flash 首轮回复“已记住青禾”，追问回复“青禾”；response ID 更新且 completed；刷新保留四条消息、两轮和 response ID；检查器会话/产物/审批标签和收起展开通过；产物/审批显示真实空状态。
+    reason: 用户授权本地运行并接通对话，保留前后端服务供继续测试。
+    next_action: 当前运行凭据仅在后端进程环境；本机 supervisor 正常停止时撤销 Gateway 运行 Key；后续补真实文件任务、PostgreSQL、其他浏览器及中断恢复验收。
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5]
+    status: passed
+    command_or_steps: python -X utf8 -m pytest -q hexa-api/tests
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows Python 3.13.3; isolated SQLite; temporary HTTP Gateway fixture
+    evidence: 35 passed; covers HMAC session, auth boundary, SSE UTF-8/terminal/truncation, workspaces, Agent mutations, recovery, files, restart persistence and real HTTP adapter.
+    reason: null
+    next_action: PostgreSQL migration and production deployment validation
+  - acceptance_ids: [AC-7]
+    status: passed
+    command_or_steps: node --experimental-strip-types --test tests/app-api.test.mjs; npx playwright test --config playwright.app.config.ts --workers=1; npx playwright test --config playwright.integration.config.ts --project=chromium --workers=1
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows 11; Chromium and Edge; Vite; FastAPI; temporary HTTP Gateway fixture
+    evidence: client API tests 39 passed; app mode Chromium and Edge 6 passed; integration Chromium 2 passed; Agent create/delete/reload, failure retention, confirmation, model retry and stale model protection covered.
+    reason: null
+    next_action: PostgreSQL and approved real Provider validation
+  - acceptance_ids: [AC-6, AC-7]
+    status: passed
+    command_or_steps: npm test; npm run typecheck; npm run build:app; npx playwright test --config playwright.app.config.ts --workers=1; npx playwright test --config playwright.config.ts chat-agents.spec.ts --workers=1; npx playwright test --config playwright.integration.config.ts --project=chromium backend.spec.ts --workers=1
+    exit_code: 0
+    revision: dirty-worktree; 2026-11-17 conversation history and inspector alignment
+    environment: Windows; Chromium and Edge; 1440x900 and 390x844; local Vite app/direct, FastAPI integration fixture
+    evidence: 41 client unit tests; typecheck and app build passed; app UI 18 passed across Chromium/Edge including history visibility when Agent loading fails, history retry with draft preservation, 320px full-height inspector, four tabs, Agent/model selection, desktop collapse, mobile drawer, dark mode and no horizontal overflow; direct Chat 4 passed; Chromium FastAPI integration 3 passed including login, continuation, refresh, files and Agent management. Shared ChatInspector component now matches current 4174 inspector header, rounded selected tabs, sections and KV rows. No Gateway files changed by this pass.
+    reason: 修复用户反馈的二级历史缺失和右侧边栏布局与静态版不一致。
+    next_action: 保持 4173/4174 热更新；配置本机 FastAPI 管理凭据后进行真实本地服务回归，并补真实 Provider/生产数据库验收。
+  - acceptance_ids: [AC-6, AC-7]
+    status: passed
+    command_or_steps: npm test --prefix client; npm run typecheck --prefix client; npm run build --prefix client; npx playwright test --config client/playwright.app.config.ts --workers=1; npx playwright test --config client/playwright.integration.config.ts --project=chromium --workers=1
+    exit_code: 0
+    revision: dirty-worktree; 2026-11-17 remove static client
+    environment: Windows; Chromium and Edge; 1440x900 and 390x844; unique FastAPI App client entry and HTTP Gateway fixture
+    evidence: 14 retained client unit tests; typecheck and production build passed; App UI 18 passed across Chromium/Edge; FastAPI integration 3 passed. main.tsx always renders AppBackendClient; static Workbench, GatewaySettings, browser Gateway API, /v1 Vite proxy, static configuration and static-only tests were removed. App build output was 575.99 kB JS and contains no client Gateway credential configuration.
+    reason: 用户明确要求移除前端静态版本，保留 FastAPI App 模式作为唯一客户端。
+    next_action: 保持 4173 热更新；App-only 客户端回归已完成，后续仅补真实 Provider/生产数据库验收。
+  - acceptance_ids: [AC-6]
+    status: passed
+    command_or_steps: npm test --prefix client; npm run typecheck --prefix client; npm run build --prefix client; direct/app/integration Playwright configs
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows Chromium; Vite direct/app; FastAPI and temporary HTTP Gateway fixture
+    evidence: 39 client tests, build/typecheck, direct UI full 32, app UI Chromium/Edge 6, integration Chromium 2 passed; HttpOnly cookie and no /v1 app requests asserted. Workspace geometry wait fixed.
+    reason: null
+    next_action: Edge integration environment rerun and real configured Provider acceptance
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7]
+    status: not_evaluated
+    command_or_steps: PostgreSQL migration execution, Docker/Compose deployment, real BYOK Provider, Edge integration Agent-management context stability
+    exit_code: null
+    revision: dirty-worktree
+    environment: local Windows; no production database or real Provider credential used
+    evidence: SQL migration and environment configuration are present; app Edge UI passed, while the second Edge integration case exited during browser context creation twice; no deployment or real Provider claim made.
+    reason: external runtime and credentials are outside this local implementation pass.
+    next_action: configure approved PostgreSQL/Provider and run production-shaped validation.
+remaining: [PostgreSQL migration and production-shaped FastAPI deployment, app mode production rollout decision, Memory/Template/Workflow backend APIs deferred outside current chat scope, full Edge integration suite rerun after browser context instability, real file input/output and stream interruption acceptance, local runtime Gateway key cleanup when services are stopped, local FastAPI hot reload restart because current shell has no HEXA_* credentials]
+review: self_review_pending_external_runtime
+handoff: null
+rollback: 停止独立 hexa-api 服务并移除本 Change 新增文件；保留 Gateway Cloud 删除契约。
+closure:
+  outcome: implementation verified locally; production readiness pending external runtime/provider gates
+  merge_commit: null
+  release_evidence: []
+  superseded_by: null
+document_exit: Keep spec, plan, visual-contract and platform-matrix as current app-backend contract; update this record when PostgreSQL, Edge and real Provider evidence exists.

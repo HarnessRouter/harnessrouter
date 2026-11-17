@@ -17228,6 +17228,8 @@ def healthz() -> dict:
 
 
 def _runner_state() -> dict:
+    if not os.environ.get("HR_RUNNER_STATE"):
+        return {"phase": "ready", "ready": True, "accepting": True}
     path = os.environ.get("HR_RUNNER_STATE", "/data/runner-state.json")
     try:
         with open(path, encoding="utf-8") as f:

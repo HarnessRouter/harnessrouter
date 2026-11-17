@@ -64,6 +64,7 @@ services:
       - .env
     environment:
       HR_ROLE: gateway
+      HARNESS_STREAM_PARTIAL: ${HARNESS_STREAM_PARTIAL:-1}
       # The runner is a compose service, not a process in this container.
       POOL_MGMT_ENDPOINT: http://runner:8081
       # The address the RUNNER reaches the gateway on: the model broker (/v1/llm) and the hosted

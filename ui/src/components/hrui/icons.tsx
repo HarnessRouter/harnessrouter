@@ -9,7 +9,6 @@ function Svg({ children, cap = true }: { children: ReactNode; cap?: boolean }) {
 }
 
 export const Ic = {
-  start: <Svg><circle cx="12" cy="12" r="8.5" /><path d="M10.2 8.9l5 3.1-5 3.1z" /></Svg>,
   studio: <Svg cap={false}><rect x="3.5" y="9" width="17" height="10.5" rx="2" /><rect x="6.5" y="5" width="4" height="4" rx="1" /><rect x="13.5" y="5" width="4" height="4" rx="1" /></Svg>,
   memories: <Svg><circle cx="6" cy="7" r="2.4" /><circle cx="18" cy="7" r="2.4" /><circle cx="12" cy="17.5" r="2.4" /><path d="M8.4 7h7.2M7.3 9.1l3.4 6.2M16.7 9.1l-3.4 6.2" /></Svg>,
   arena: <Svg cap={false}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M15 4v16" /></Svg>,
@@ -17,9 +16,9 @@ export const Ic = {
   extensions: <Svg cap={false}><rect x="3" y="10" width="8" height="10" rx="1.5" /><rect x="13" y="10" width="8" height="10" rx="1.5" /><path d="M5 10V8M9 10V8M15 10V8M19 10V8" /></Svg>,
   keys: <Svg cap={false}><circle cx="8" cy="15" r="4" /><path d="M11 12l9-9M17 6l3 3" /></Svg>,
   usage: <Svg><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></Svg>,
-  letter: <Svg><rect x="3" y="5.5" width="18" height="13" rx="2" /><path d="M3.5 7l8.5 6 8.5-6" /></Svg>,
   billing: <Svg><rect x="3" y="5.5" width="18" height="13" rx="2.2" /><path d="M3 10h18M7 15h4" /></Svg>,
   byok: <Svg><path d="M9 3v4M15 3v4M6.5 7h11v4a5.5 5.5 0 0 1-11 0V7zM12 16.5V21" /></Svg>,
+  uhp: <Svg><path d="M5 8.5h14M5 15.5h14" /><circle cx="5" cy="8.5" r="2" /><circle cx="19" cy="15.5" r="2" /><path d="M7 8.5h5a3 3 0 0 1 3 3v1a3 3 0 0 0 3 3h0" /></Svg>,
   plans: <Svg><path d="M3 6l2 2 3-3M3 13l2 2 3-3M12 7h9M12 14h9M3 20h18" /></Svg>,
   docs: <Svg><path d="M6 3h9l4 4v14H6z" /><path d="M14 3v5h5M9 13h7M9 17h5" /></Svg>,
   discord: <Svg><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z" /></Svg>,

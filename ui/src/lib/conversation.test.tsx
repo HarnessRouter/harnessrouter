@@ -60,8 +60,8 @@ let root: Root;
 let el: HTMLDivElement;
 let n = 0;
 let missing: jest.Mock;
-function Conv({ sid, harness = 'h1' }: { sid: string | null; harness?: string }) {
-  api = C.useConversationTurn({ harnessId: harness, sessionId: sid, target: { name: 'Helper', backend: 'claude' }, onRan: () => {}, onMissing: missing });
+function Conv({ sid, harness = 'h1', external = false }: { sid: string | null; harness?: string; external?: boolean }) {
+  api = C.useConversationTurn({ harnessId: harness, sessionId: sid, target: { name: 'Helper', backend: external ? null : 'claude', external }, onRan: () => {}, onMissing: missing });
   return null;
 }
 function Bus({ harness, onActivity }: { harness: string; onActivity?: () => void }) { C.useHarnessBus(harness, onActivity); return null; }
@@ -90,6 +90,16 @@ afterEach(async () => {
   await act(async () => { root.unmount(); });
   el.remove();
   jest.useRealTimers();
+});
+
+test('UHP external target sends by Harness alias without a local backend', async () => {
+  mockChat.stream.mockImplementation(async (_opts: StreamOpts, handlers: StreamHandlers) => {
+    handlers.onCreated?.('remote-r1'); handlers.onDone?.('completed', {}); return 'remote-r1';
+  });
+  await render(<Conv sid={null} harness="harn_uhp_test" external />);
+  await act(async () => { await api.send('hello external'); });
+  expect(mockChat.stream).toHaveBeenCalledTimes(1);
+  expect(mockChat.stream.mock.calls[0][0]).toMatchObject({ harnessId: 'harn_uhp_test', backend: null });
 });
 
 describe('a branch (issue #477)', () => {

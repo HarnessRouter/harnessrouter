@@ -23,7 +23,11 @@ const nextConfig: NextConfig = {
   // slot boots fully before nginx flips — zero 502s during rollout.
   distDir: process.env.NEXT_DIST_DIR || ".next",
   // Self-hosted ships as one container: emit a server bundle with only the modules it needs.
-  output: "standalone",
+  // Windows cannot create the standalone tracer's symlink for the local no-sharp package without
+  // Developer Mode or elevation. Docker builds run on Linux and keep the production standalone
+  // bundle; local Windows builds use the normal .next output so type/build acceptance remains
+  // reproducible on an operator workstation.
+  output: process.platform === "win32" ? undefined : "standalone",
   // V1C02-007: baseline browser security headers on every response — clickjacking defense
   // (frame-ancestors 'none' + X-Frame-Options DENY), HSTS, MIME-sniff off, tight referrer,
   // and a locked-down permissions policy. The console renders no third-party iframes and is

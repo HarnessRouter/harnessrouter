@@ -48,7 +48,7 @@ Eight harness × model configurations on the same task. Each metric compares its
 **31 harness bases today:** Codex, Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Aider, OpenHands, CheetahClaws, Grok Build, Agent Zero, System One, Qoder Cloud Agent, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Mistral Vibe, Docker Agent, fast-agent, Deep Agents Code and Roder. The [support matrix](docs/support-matrix.md) shows which run on which provider.
 
 > [!TIP]
-> **Get started:** [Run locally](#quickstart) · [Integrate into your product](#use-the-api-directly) · [Starter kits](#starter-kits) · [Use managed Cloud](https://harnessrouter.ai)
+> **Get started:** [Run locally](#quickstart) · [Integrate into your product](#use-the-api-directly) · [Starter kits](#starter-kits)
 
 <a id="install"></a>
 
@@ -139,7 +139,7 @@ These credentials sign you into the Console. You do not need a HarnessRouter API
 
 Open the account menu at the bottom of the rail and choose **Bring your own key**. Find your provider, press **Add key**, and paste its API key. Its supported models become available in the Console.
 
-This provider key authorizes model requests. It is separate from the HarnessRouter API key used for product integration below.
+This provider key authorizes model requests. API keys created in this Console are used by your applications to call this instance.
 
 <details>
 <summary>See the provider setup screen</summary>
@@ -330,22 +330,6 @@ Power agentic features in your product with agent harnesses, including knowledge
 - **Real workspaces.** Native filesystem, shell, and Git workflows, with separate session workspaces.
 - **No Console product analytics.** Community Edition disables the Console analytics pipeline.
 
-<a id="local-to-cloud"></a>
-
-<a id="cloud-heading"></a>
-
-### Choose your path to Cloud
-
-Choose **HarnessRouter Cloud** for managed deployment, maintenance, and scaling, with tasks running in serverless, isolated sandboxes through the same API contract.
-
-| Local → Cloud | Start directly in Cloud |
-|---|---|
-| Bring a custom harness you’ve configured locally.<br>[Follow the upload guide →](docs/self-hosting-guide.md#moving-to-the-hosted-service) | Create and run harnesses without a local deployment.<br>[Open HarnessRouter Cloud →](https://harnessrouter.ai) |
-
-**For local uploads:** save your custom harness in **Settings**, select **Upload to Cloud**, then connect a destination using its Cloud workspace API key. The saved destination key is encrypted at rest like every stored credential (set `HR_SECRET_KEY` to keep the key apart from the data volume).
-
-Uploads copy harness configuration, not provider keys, sessions, or generated files. Uploading again replaces that destination’s hosted copy.
-
 <a id="architecture"></a>
 
 ### Inside Community Edition
@@ -376,7 +360,7 @@ See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and bac
 
 ## The Unified Harness Protocol
 
-[Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Community Edition and HarnessRouter Cloud. Its task surface is deliberately compatible with the **OpenAI Responses API**, so existing Responses SDKs, streaming parsers, and UI components can work with a UHP server. UHP defines harness execution semantics for harness selection, persistent sessions, files, cancellation, and harness-managed tools and skills.
+[Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Hexa. Its task surface is deliberately compatible with the **OpenAI Responses API**, so existing Responses SDKs, streaming parsers, and UI components can work with a UHP server. UHP defines harness execution semantics for harness selection, persistent sessions, files, cancellation, and harness-managed tools and skills.
 
 This repository contains the Apache 2.0 reference implementation, machine-readable schemas, and the conformance suite.
 
@@ -397,8 +381,8 @@ This repository contains the Apache 2.0 reference implementation, machine-readab
 
 | Goal | Resources |
 |---|---|
-| **Build** | [Cloud & integration docs](https://harnessrouter.ai/docs) · [API guide](#use-the-api-directly) · [Starter kits](https://github.com/HarnessRouter/starter-kit) |
-| **Deploy** | [Setup & operations](docs/self-hosting-guide.md) · [Local → Cloud](#local-to-cloud) · [HarnessRouter Cloud](https://harnessrouter.ai) |
+| **Build** | [Integration and self-hosting docs](docs/self-hosting-guide.md) · [API guide](#use-the-api-directly) · [Starter kits](https://github.com/HarnessRouter/starter-kit) |
+| **Deploy** | [Setup & operations](docs/self-hosting-guide.md) |
 | **Protocol** | [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) |
 | **Community** | [Join the community (Discord)](https://discord.gg/nPcbwqVPb2) · [Contribute](CONTRIBUTING.md) · [LinkedIn](https://linkedin.com/company/harnessrouter/) · [X](https://x.com/HARNESSROUTER) · [Security](SECURITY.md) |
 

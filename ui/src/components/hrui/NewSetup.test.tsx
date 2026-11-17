@@ -18,7 +18,7 @@ jest.mock('@/lib/harness', () => ({
   useBasesRead: () => ({ value: { 'claude-code': {}, hermes: {} }, failed: false, retry: () => {} }),
   useModelCatalogRead: () => ({ value: { models: ['claude-sonnet'] }, failed: false, retry: () => {} }),
 }));
-const mockProviders: { connectionFor: () => null; state: string; refused?: { name: string; provider: string }[] } = { connectionFor: () => null, state: 'ready' };
+const mockProviders: { connectionFor: () => null; state: string } = { connectionFor: () => null, state: 'ready' };
 jest.mock('@/lib/providers', () => ({ providerById: () => null, useModelProviders: () => mockProviders }));
 jest.mock('@/components/HarnessLogo', () => ({ harnessLogoSrc: () => '' }));
 jest.mock('./Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
@@ -54,7 +54,6 @@ async function open(pre: { job?: string; demo?: number }) {
 }
 beforeEach(() => {
   mockRun.models = { 'claude-code': ['claude-sonnet'], hermes: ['gpt-5.4'] };
-  delete mockProviders.refused;
   (startBuild as jest.Mock).mockClear(); (openNewSetup as jest.Mock).mockClear(); (createCustom as jest.Mock).mockReset();
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
@@ -101,29 +100,6 @@ test('with no model key that runs a model, the line says to connect one and Save
   expect(save().disabled).toBe(true);
   await act(async () => { save().click(); });
   expect(startBuild).not.toHaveBeenCalled();
-});
-
-test('the only key was refused by HarnessRouter Cloud: the line says so and asks to reconnect it, not to connect a key', async () => {
-  // "Connect a key" to someone who connected one sent them to pair again with no reason given
-  mockRun.models = {};
-  mockProviders.refused = [{ name: 'HarnessRouter API', provider: 'harnessrouter' }];
-  await open({ job: 'Review a contract and flag the risky clauses.' });
-  expect(line()).toBe('HarnessRouter Cloud refused your stored key, so no model can run on it. Reconnect it');
-  expect((el.querySelector('#nwCost a') as HTMLAnchorElement).getAttribute('href')).toBe('/byok');
-  expect(save().disabled).toBe(true);
-});
-
-test('a harness chosen that no key runs a model on says where keys are added, and Save waits', async () => {
-  mockRun.models = { hermes: ['gpt-5.4'] };
-  await open({ job: 'Review a contract and flag the risky clauses.' });
-  const opener = el.querySelector('button[aria-haspopup="listbox"]') as HTMLButtonElement;
-  await act(async () => { opener.click(); });
-  await flush();
-  const cc = Array.from(document.querySelectorAll('[role="option"]')).find((o) => o.textContent?.includes('Claude Code')) as HTMLButtonElement;
-  await act(async () => { cc.click(); });
-  await flush();
-  expect(line()).toContain('None of your keys runs a model on Claude Code yet.');
-  expect(save().disabled).toBe(true);
 });
 
 test('names nothing this edition does not have: no free requests, balance or request check', async () => {

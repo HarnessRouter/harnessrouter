@@ -51,8 +51,7 @@ test('the bar no longer carries the Harness ID: it lives in Settings', () => {
   expect(el.querySelector('[aria-label="Connect your app"]')).not.toBeNull();
 });
 
-// the hosted console's setup page redesign: Tasks · Settings at the bar's right end, each with its icon; this edition's two
-// actions (Deploy to Cloud, Connect your app) sit just before them
+// Hexa's setup page: Tasks · Settings at the bar's right end, each with its icon; Connect your app sits just before them.
 test('Tasks · Settings carry their icons and end the bar, after its actions', () => {
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
   draw('tasks', () => {});

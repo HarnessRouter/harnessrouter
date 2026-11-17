@@ -56,7 +56,7 @@ def test_a_name_that_rebinds_to_an_internal_address_is_never_connected_to(monkey
         srv, port, seen = await _server()
         resolve, calls = _answers("140.82.112.3", "127.0.0.1")       # public to the check, then internal
         monkeypatch.setattr(gw, "_resolve", resolve)
-        assert await gw._cloud_base_refused(f"https://rebind.test:{port}") is None
+        assert await gw._internal_target("rebind.test", port) is None
         with pytest.raises(httpx.ConnectError) as e:
             await gw._checked_http().get(f"https://rebind.test:{port}/v1/me")
         srv.close()

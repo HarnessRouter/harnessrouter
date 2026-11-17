@@ -55,27 +55,27 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
   };
   return (
     <Sheet onClose={onClose} labelledBy="mmCn" className="small-sheet mm-sheet" busy={busy}>
-      <SheetTop id="mmCn" title={own ? `Change ${name}` : inherited ? `Connect ${name} for this workspace` : `Connect ${name}`} sub={VENDORS[id]?.line} onClose={onClose} />
+      <SheetTop id="mmCn" title={own ? `修改${name}` : inherited ? `为当前工作区连接${name}` : `连接${name}`} sub={VENDORS[id]?.line} onClose={onClose} />
       <form noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
-        {inherited ? <p className="set-help mm-inherited" role="note">{inherited} Connect one here to use it in this workspace instead.</p> : null}
+        {inherited ? <p className="set-help mm-inherited" role="note">{inherited} 可在此处单独连接，以便当前工作区使用。</p> : null}
         <div className="set-f">
-          <label htmlFor="mmCnBase">Server address</label>
+          <label htmlFor="mmCnBase">服务地址</label>
           <input id="mmCnBase" className="set-in" type="url" inputMode="url" value={base} autoComplete="off" placeholder="https://memory.example.com" onChange={(e) => setBase(e.target.value)} />
           <p className="set-help">
-            {addressOptional ? `Leave it empty to use ${name}’s own cloud. A key is needed then. ` : null}
-            <a className="link-q inl" href={GUIDE} target="_blank" rel="noopener noreferrer">How to run a server</a>
+            {addressOptional ? `留空表示使用${name}云端服务，此时需要填写密钥。` : null}
+            <a className="link-q inl" href={GUIDE} target="_blank" rel="noopener noreferrer">如何运行服务</a>
           </p>
         </div>
         <div className="set-f">
-          <label htmlFor="mmCnKey">{needsKey ? 'Key' : 'Key (optional)'}</label>
-          <input id="mmCnKey" className="set-in" type="password" value={key} autoComplete="off" placeholder={keptKey ? 'Keep the key already saved' : undefined} onChange={(e) => setKey(e.target.value)} />
-          <p className="set-help">Stored securely. It is never shown again.</p>
+          <label htmlFor="mmCnKey">{needsKey ? '密钥' : '密钥（可选）'}</label>
+          <input id="mmCnKey" className="set-in" type="password" value={key} autoComplete="off" placeholder={keptKey ? '保留已保存的密钥' : undefined} onChange={(e) => setKey(e.target.value)} />
+          <p className="set-help">密钥会安全保存，之后不会再次显示。</p>
         </div>
         {err ? <p className="mm-err" role="alert">{err}</p> : null}
         <div className="sheet-actions">
           <span className="grow" />
-          <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn primary" disabled={!ready || busy}>{busy ? 'Connecting…' : own ? 'Save' : 'Connect'}</button>
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>取消</button>
+          <button type="submit" className="btn primary" disabled={!ready || busy}>{busy ? '连接中…' : own ? '保存' : '连接'}</button>
         </div>
       </form>
     </Sheet>
@@ -93,14 +93,14 @@ export function NameFields({ nameId, descId, name, desc, onName, onDesc, focus, 
   return (
     <div className="mm-nf">
       <div className="set-f">
-        <label htmlFor={nameId}>Name</label>
+        <label htmlFor={nameId}>名称</label>
         <input id={nameId} className="set-in" value={name} placeholder="Brand kits" autoComplete="off" autoFocus={focus} onChange={(e) => onName(e.target.value)} />
       </div>
       <div className="set-f">
-        <label htmlFor={descId}>{optional ? <>Description <span className="mm-opt">optional</span></> : 'Description'}</label>
+        <label htmlFor={descId}>{optional ? <>描述 <span className="mm-opt">可选</span></> : '描述'}</label>
         <textarea id={descId} className="set-in" rows={2} value={desc} placeholder="What is kept here, in a sentence." aria-describedby={`${descId}H`} onChange={(e) => onDesc(e.target.value)} />
       </div>
-      <p className="set-help mm-nf-h" id={`${descId}H`}>Agents read the description to decide whether to look inside.</p>
+      <p className="set-help mm-nf-h" id={`${descId}H`}>Agent 会根据描述判断是否需要读取这里的内容。</p>
     </div>
   );
 }
@@ -131,16 +131,16 @@ export function ChooseServiceSheet({ providers, onClose, onConnected }: { provid
   if (picked) return <ConnectSheet id={picked.id} connected={picked.connected} onClose={() => setPicked(null)} onConnected={onConnected} />;
   return (
     <Sheet onClose={onClose} labelledBy="mmCh" className="mm-sheet mm-new-sheet">
-      <SheetTop id="mmCh" title="Connect a memory engine" sub="Your agents keep what they learn in an engine. Each keeps it its own way." onClose={onClose} />
+      <SheetTop id="mmCh" title="连接记忆引擎" sub="Agent 将学习到的内容保存在引擎中，每种引擎的保存方式不同。" onClose={onClose} />
       <div className="mm-prov mm-sv mm-sv-cn">
         {providers.map((p) => (
           <div key={p.id} className="mm-pv-o cn">
             <ServiceBody p={p} />
-            <button type="button" className="btn small" onClick={() => setPicked({ id: p.id, connected: !!p.connected })}>{p.connected ? 'Change' : 'Connect'}</button>
+            <button type="button" className="btn small" onClick={() => setPicked({ id: p.id, connected: !!p.connected })}>{p.connected ? '修改' : '连接'}</button>
           </div>
         ))}
       </div>
-      <p className="set-help mm-sv-guide">Each runs as its own server. <a className="link-q inl" href={GUIDE} target="_blank" rel="noopener noreferrer">How to run them</a></p>
+      <p className="set-help mm-sv-guide">每个引擎都作为独立服务运行。<a className="link-q inl" href={GUIDE} target="_blank" rel="noopener noreferrer">如何运行引擎</a></p>
     </Sheet>
   );
 }
@@ -208,17 +208,17 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
   };
   return (
     <Sheet onClose={onClose} labelledBy="mmCrT" className="mm-sheet mm-nd-sheet mm-new-mem" busy={busy}>
-      <SheetTop id="mmCrT" title="New memory" onClose={onClose} />
+      <SheetTop id="mmCrT" title="新建记忆" onClose={onClose} />
       <form className="mm-new-f" noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
         <NameFields nameId="mmCrName" descId="mmCrDesc" name={name} desc={desc} onName={setName} onDesc={setDesc} focus optional />
         <div className="set-f mm-eng">
-          <span className="set-lb" id="mmCrEng">Engine</span>
+          <span className="set-lb" id="mmCrEng">引擎</span>
           {failed ? (
-            <p className="mm-err" role="alert">The engines could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
+            <p className="mm-err" role="alert">暂时无法读取引擎。<button type="button" className="link-q inl" onClick={retry}>重试</button></p>
           ) : !providers ? (
-            <Skel label="Reading the engines">{[0, 1, 2, 3].map((i) => <SkLine key={i} w="100%" h={52} r={12} style={{ marginTop: i ? 6 : 0 }} />)}</Skel>
+            <Skel label="正在读取引擎">{[0, 1, 2, 3].map((i) => <SkLine key={i} w="100%" h={52} r={12} style={{ marginTop: i ? 6 : 0 }} />)}</Skel>
           ) : !all.length ? (
-            <p className="set-help mm-eng-none">No engine is connected yet. {onConnect ? <button type="button" className="link-q inl" onClick={() => onConnect()}>Connect an engine</button> : null}</p>
+            <p className="set-help mm-eng-none">还没有连接引擎。{onConnect ? <button type="button" className="link-q inl" onClick={() => onConnect()}>连接引擎</button> : null}</p>
           ) : (
             <>
               <div className="mm-engs" role="radiogroup" aria-labelledby="mmCrEng" onKeyDown={onKey}>
@@ -234,7 +234,7 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
                           <span className="mm-eng-n"><b>{vendorName(p.id)}</b><span className="mm-eng-nr">Not running here</span></span>
                           {line ? <small>{line}</small> : null}
                         </span>
-                        {onConnect ? <button type="button" className="link-q inl mm-eng-cn" onClick={() => onConnect(p.id)}>Connect</button> : null}
+                        {onConnect ? <button type="button" className="link-q inl mm-eng-cn" onClick={() => onConnect(p.id)}>连接</button> : null}
                       </div>
                     );
                   }
@@ -245,7 +245,7 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
                       <i className="mm-eng-dot" aria-hidden="true" />
                       <span className="mm-eng-t">
                         <span className="mm-eng-n"><b>{vendorName(p.id)}</b>
-                          {rec ? <span className="pill run mm-eng-rec">Recommended</span> : null}
+                          {rec ? <span className="pill run mm-eng-rec">推荐</span> : null}
                           {can ? null : <span className="mm-eng-nr">Not running here</span>}
                         </span>
                         {line ? <small>{line}</small> : null}
@@ -256,7 +256,7 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
                 })}
               </div>
               {choiceFailed ? (
-                <p className="mm-err" role="alert">The engine couldn’t be chosen just now. <button type="button" className="link-q inl" onClick={chooseAgain}>Try again</button></p>
+                <p className="mm-err" role="alert">暂时无法选择引擎。<button type="button" className="link-q inl" onClick={chooseAgain}>重试</button></p>
               ) : auto && !auto.engine && auto.reason ? (
                 // nothing answering here to recommend: the service says why, and the connected ones can still be picked
                 <p className="set-help mm-eng-none" role="status">{auto.reason}</p>

@@ -19,7 +19,6 @@ jest.mock('@/lib/harness', () => ({
   modelAvailability: jest.fn((b: string, m: string) => jest.requireActual('@/lib/harness').modelAvailability(b, m)),
 }));
 jest.mock('@/lib/plugs', () => ({ listPlugs: jest.fn(async () => ({ workspace: 'ws', plugs: [] })), plugAttachments: jest.fn() }));
-jest.mock('@/lib/cloud-upload', () => ({ statusOne: jest.fn(async () => ({ uploaded: false })), listTargets: jest.fn(), addTarget: jest.fn(), uploadOne: jest.fn() }));
 jest.mock('@/lib/environments', () => ({ listEnvironments: jest.fn(async () => []) }));
 jest.mock('@/lib/providers', () => ({ useModelProviders: () => ({ connectionFor: () => null }) }));
 jest.mock('@/lib/workspace', () => ({
@@ -49,7 +48,6 @@ import { StackPanel } from './parts';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const hx = harness as jest.Mocked<typeof harness>;
 const plugsLib = jest.requireMock('@/lib/plugs') as { listPlugs: jest.Mock };
-const cloudLib = jest.requireMock('@/lib/cloud-upload') as { statusOne: jest.Mock; listTargets: jest.Mock };
 const envs = jest.requireMock('@/lib/environments') as { listEnvironments: jest.Mock };
 const said = (jest.requireMock('../toast') as { toast: jest.Mock }).toast;
 
@@ -106,8 +104,8 @@ describe('a setup whose only plugin is a package installed on it', () => {
     expect(rows()[0].querySelector('small')?.textContent).toBe('The brand’s colours and type');
     expect(rows()[0].querySelector('[role=switch]')?.getAttribute('aria-checked')).toBe('true');
     // nothing connected in the workspace: said, with the way to connect one, never a dead end
-    expect(el.textContent).toContain('No plugins are connected in this workspace yet.');
-    expect(button('Connect a plugin')).toBeTruthy();
+    expect(el.textContent).toContain('当前工作区尚未连接插件。');
+    expect(button('连接插件')).toBeTruthy();
   });
   test('the layers list and the Agent stack count what was added', async () => {
     await settings(setup());
@@ -178,7 +176,7 @@ describe('only what a person needs', () => {
     expect(Array.from(el.querySelectorAll('.lg-sub h3')).map((h) => h.textContent)).toEqual(['Environment variables', 'Request headers', 'Limits']);
     await settings(setup({ environment: 'env_old' } as Partial<CustomHarness>), 'runtime');
     expect(el.querySelector('.lg-sub h3')?.textContent).toBe('Environment');
-    expect(el.textContent).toContain('Hermes can’t use an environment. Remove it, or every task on this setup is refused.');
+    expect(el.textContent).toContain('Hermes 不支持执行环境，请移除环境后再运行任务。');
   });
   test('the limits are steps and a timeout: no cost cap (nothing on this instance applies one), no reason codes', async () => {
     await settings(setup(), 'runtime');
@@ -218,8 +216,8 @@ describe('no fallbacks', () => {
     const retry = jest.fn();
     hx.useModelCatalogRead.mockReturnValue({ value: null, failed: true, retry });
     await settings(setup(), 'harness');
-    expect(el.textContent).toContain('The models could not be read just now.');
-    await act(async () => { button('Try again')!.click(); });
+    expect(el.textContent).toContain('暂时无法读取模型。');
+    await act(async () => { button('重试')!.click(); });
     expect(retry).toHaveBeenCalled();
     expect(el.querySelector<HTMLSelectElement>('#setModel')!.value).toBe('deepseek-v4.1-flash');
     hx.useModelCatalogRead.mockReturnValue({ value: null, failed: false, retry: jest.fn() });
@@ -227,10 +225,10 @@ describe('no fallbacks', () => {
   test('environments that could not be read never read as "Not found"', async () => {
     envs.listEnvironments.mockRejectedValueOnce(new Error('502'));
     await settings(setup({ environment: 'env_1' } as Partial<CustomHarness>), 'runtime');
-    expect(el.textContent).toContain('Your environments could not be read just now.');
+    expect(el.textContent).toContain('暂时无法读取环境。');
     expect(el.textContent).not.toContain('Not found');
     envs.listEnvironments.mockResolvedValueOnce([{ id: 'env_1', name: 'Python data', status: 'ready', description: '' }]);
-    await act(async () => { button('Try again')!.click(); });
+    await act(async () => { button('重试')!.click(); });
     await flush();
     expect(el.textContent).toContain('Python data');
   });
@@ -240,10 +238,10 @@ describe('no fallbacks', () => {
     await settings(setup({ mcpServers: [PLUGS] } as Partial<CustomHarness>));
     await act(async () => { await new Promise((r) => setTimeout(r, 1100)); });   // the read's quiet second try
     await flush();
-    expect(el.textContent).toContain('Your plugins could not be loaded just now.');
+    expect(el.textContent).toContain('暂时无法加载插件。');
     expect(el.textContent).not.toContain('Not connected in this workspace');
     plugsLib.listPlugs.mockResolvedValue({ workspace: 'ws', plugs: [P('github', 'GitHub')] });
-    await act(async () => { button('Try again')!.click(); });
+    await act(async () => { button('重试')!.click(); });
     await flush();
     expect(el.textContent).not.toContain('could not be loaded');
     expect(names()).toContain('GitHub');
@@ -297,18 +295,19 @@ describe('the Plugins tab: the workspace’s connected plugins, a switch each', 
   test('Connect another plugin opens Add plugin at what can still be connected', async () => {
     await open();
     mockSheet.mockClear();
-    await act(async () => { button('Connect another plugin')!.click(); });
+    await act(async () => { button('连接其他插件')!.click(); });
     await flush();
     expect(mockSheet.mock.calls[mockSheet.mock.calls.length - 1][0]).toMatchObject({ focus: 'available', setup: 'Product images 2', binding: { plugs: ['browser'] } });
   });
 });
 
-describe('Deploy to Cloud lives in the page bar, not here', () => {
+describe('Hexa setup settings omit Cloud deployment', () => {
   test('the settings end with Delete harness and, under it, Duplicate harness alone', async () => {
     await settings(setup(), 'harness');
     expect(el.querySelector('.lg-rows .ly-n.lg-up')).toBeNull();
-    expect([...el.querySelectorAll('.lg-rows .lg-dz .ly-n')].map((b) => b.textContent)).toEqual(['Delete harness', 'Duplicate harness']);
+    expect([...el.querySelectorAll('.lg-rows .lg-dz .ly-n')].map((b) => b.textContent)).toEqual(['删除配置', '创建副本']);
     expect(el.textContent).not.toContain('Upload to cloud');
+    expect(el.textContent).not.toContain('上传到云端');
   });
 });
 
@@ -345,10 +344,10 @@ describe('the Harness ID', () => {
   test('Agent harness shows it first, read-only, with Copy', async () => {
     await settings(setup(), 'harness');
     const f = el.querySelector('.lg-col .set-f');
-    expect(f?.querySelector('.set-lb')?.textContent).toBe('Harness ID');
+    expect(f?.querySelector('.set-lb')?.textContent).toBe('智能体 ID');
     expect(f?.querySelector('.set-hid code')?.textContent).toBe('chrn_p2');
     expect(f?.querySelector('input')).toBeNull();
-    expect(f?.querySelector('button[aria-label="Copy Harness ID"]')).not.toBeNull();
+    expect(f?.querySelector('button[aria-label="复制智能体 ID"]')).not.toBeNull();
   });
 });
 
@@ -358,8 +357,8 @@ describe('Duplicate', () => {
     await settings(setup(), 'harness');
     const rows = Array.from(el.querySelectorAll('.lg-dz'));
     expect(rows.length).toBe(2);                                             // the rail's and the open layer's foot
-    for (const row of rows) expect(Array.from(row.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Delete harness', 'Duplicate harness']);
+    for (const row of rows) expect(Array.from(row.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['删除配置', '创建副本']);
     expect(el.textContent).not.toContain('Duplicate with another agent harness');
-    expect(el.querySelector('.lg-dup')?.getAttribute('title')).toBe('Duplicate with another agent harness');
+    expect(el.querySelector('.lg-dup')?.getAttribute('title')).toBe('使用其他运行环境创建副本');
   });
 });

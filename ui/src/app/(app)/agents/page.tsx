@@ -44,7 +44,7 @@ export default function AgentsPage() {
             agent get the 智能体网关 Skill, through its plugin manager or by loading the Skill files directly, and follow
             it: the Skill carries the whole integration. The agent builds the feature into your product: your app&apos;s UI
             and server routes at build time, a configured 智能体网关 agent for the end-user tasks at runtime, then tests
-            the whole thing through your app. <Link href="/start">开始</Link> 引导你与编程智能体完成配置。</p>
+            the whole thing through your app. <Link href="/studio">工作台</Link> 引导你与编程智能体完成配置。</p>
         </div>
         <div className="hr-doc-actions">
           <button className="hr-btn" onClick={copy}>{copied ? 'Copied ✓' : 'Copy'}</button>

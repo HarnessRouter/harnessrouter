@@ -29,6 +29,7 @@ import { fetchHarnessTasks, p95Of, RUNNING, TERMINAL_BAD, TERMINAL_OK, type Trac
 import { withDeadline } from '@/lib/settle';
 import { towerOf, type Tower } from './tower';
 import { madeHere, seededSetup } from './start/seed';
+import { useUhpHealthRefresh } from './uhp-health';
 import {
   countOn, hasPlugsEntry, setupPlugins, setupSkills, setupTools, type PlugBinding, type SetupPlugin, type SetupSkill, type SetupTool,
 } from './setup/setupParts';
@@ -561,6 +562,18 @@ export function useSetups(opts: { live?: boolean; scope?: string } = {}): {
     },
   });
 
+  const healthNow = useUhpHealthRefresh(!!rows?.some(row => row.h.external || row.h.base === 'external_uhp'), scope, async signal => {
+    if (loading.current) return;
+    const generation = gen.current;
+    const agents = await listCustom(signal);
+    if (signal.aborted || generation !== gen.current || !src.current) return;
+    const byId = new Map(agents.map(agent => [agent.id, agent]));
+    src.current = { list: src.current.list.map(item => item.h.external || item.h.base === 'external_uhp'
+      ? { ...item, h: byId.get(item.h.id) || { ...item.h, available: false, health: { status: 'unknown' } } } : item) };
+    draw();
+  });
+  useEffect(() => { draw(); }, [healthNow, draw]);
+
   return { rows, error, reload: load, refresh, paused, reconnect };
 }
 
@@ -627,5 +640,11 @@ export function useSetup(id: string): { row: SetupRow | null; cards: TraceCard[]
   }, [id]);
   useEffect(() => { loadRef.current = load; }, [load]);
   useEffect(() => { void load(); }, [load]);
+  useUhpHealthRefresh(!!row && (row.h.external === true || row.h.base === 'external_uhp'), id, async signal => {
+    const agent = await readCustom(id, signal);
+    if (signal.aborted) return;
+    setRow(current => current?.h.id === id ? { ...current,
+      h: agent || { ...current.h, available: false, health: { status: 'unknown' } } } : current);
+  });
   return { row, cards, missing, failed, reload: load };
 }

@@ -200,11 +200,7 @@ async def _refresh_pricing_table() -> None:
 
 
 def _price_of(metric: str) -> float:
-    """Credits-per-unit for a metric: harnessrouter-scoped row wins, else the system table
-    (same fallback the harvest's price() uses)."""
-    hr = _pricing_table.get("harnessrouter", {})
-    if metric in hr:
-        return float(hr[metric])
+    """Credits-per-unit for a metric from the local system price table."""
     return float(_pricing_table.get("system", {}).get(metric, 0.0))
 
 
@@ -1475,16 +1471,19 @@ _MEDIA_POLICY_KEY = "harness-media-policy"
 _IMAGE_MODEL_MAP_PREV_KEY = "harness-image-model-map.prev"
 _INTEGRATION_SECRET_FIELDS = ("api_key", "aws_bearer_token", "aws_secret_access_key", "aws_session_token",
                               "client_secret")   # an Entra application's secret (see _entra_token)
-# The hosted HarnessRouter service as a model provider. One origin, three routes: the provider
-# front door the runners call (OpenAI and Anthropic shapes and Gemini's native path, all under one
-# base), the model list it serves, and the connect flow that hands a key to this instance.
-HR_HOSTED_BASE = os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai").rstrip("/")
-HR_HOSTED_PROVIDER_BASE = f"{HR_HOSTED_BASE}/v1/provider"
-# The hosted console, where a HarnessRouter API key's credit is bought and topped up.
-HR_HOSTED_CONSOLE = os.environ.get("HR_HOSTED_CONSOLE", "https://app.harnessrouter.ai").rstrip("/")
-HR_HOSTED_MODELS_URL = f"{HR_HOSTED_BASE}/v1/models"
-HR_HOSTED_BALANCE_URL = f"{HR_HOSTED_BASE}/v1/balance"
-HR_HOSTED_CONNECT_URL = f"{HR_HOSTED_BASE}/v1/connect"
+
+# External UHP runtimes (for example xred-bc) are execution targets, not model-provider
+# integrations. Their bearer keys live in the encrypted vault and are never returned to the
+# console. The console keeps a stable local id for each remote harness so clients do not depend
+# on a runtime's opaque identifiers.
+_UHP_CONNECTIONS_KEY = "uhp-connections"
+_UHP_CONNECTIONS_PREV_KEY = "uhp-connections.prev"
+_UHP_SECRET_FIELDS = ("api_key",)
+_UHP_RESPONSES_KEY = "uhp-responses"
+_UHP_HEALTH_EVERY_S = 30
+_UHP_HEALTH_FRESH_S = 90
+_UHP_CHECKS: dict[str, asyncio.Task] = {}
+_UHP_HEALTH_LOOP: asyncio.Task | None = None
 # integration provider type × runner backend -> the runner-side provider that carries it.
 # Absent pair = that backend can't use the integration (mapping falls through to the chain).
 _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
@@ -1553,7 +1552,6 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "kilo"): "tokenrouter",    ("vercel", "kilo"): "tokenrouter",
     ("llmtr", "kilo"): "tokenrouter",
     ("custom", "kilo"): "tokenrouter",         ("google", "kilo"): "openai-api",
-    ("harnessrouter", "kilo"): "tokenrouter",
     # kimi reaches every provider the same way qwen does — one OpenAI-compatible surface through
     # the loopback relay — so these rows are qwen's, verbatim, with the backend renamed.
     ("anthropic", "aider"): "anthropic",       ("openai", "aider"): "openai",
@@ -1582,7 +1580,6 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # which is what that surface serves; dcode has no row here for the opposite reason (it speaks
     # the Responses API, which that surface answers with a 404).
     ("google", "fast-agent"): "openai-api",
-    ("harnessrouter", "fast-agent"): "tokenrouter",
     # docker-agent, the same reach again: one OpenAI shape through the relay, named in the YAML
     # this runner writes per turn.
     ("anthropic", "docker-agent"): "anthropic",   ("openai", "docker-agent"): "openai",
@@ -1591,7 +1588,6 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "docker-agent"): "tokenrouter", ("vercel", "docker-agent"): "tokenrouter",
     ("llmtr", "docker-agent"): "tokenrouter",
     ("custom", "docker-agent"): "openai-api",
-    ("harnessrouter", "docker-agent"): "tokenrouter",
     # PROBED rather than assumed, which is this table's own rule (see the same row on vibe): a
     # pair on v1.150.0 against generativelanguage.googleapis.com/v1beta/openai passed all five
     # matrix scenarios on gemini-3.5-flash, with the mid-session switch served as gemini-4-argon
@@ -1623,14 +1619,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # so the turn failed with "Error code: 404" and the terse reason is the endpoint's own (it
     # sends no body with the 404). A gemini model reaches this base through an aggregator that
     # serves /responses instead — which the Vercel column did, on nine gemini ids.
-    ("harnessrouter", "dcode"): "tokenrouter",
     # Roder drives the same Responses endpoints through its custom provider, so its rows are
     # dcode's: OpenRouter and a custom Responses endpoint on `openai-api`, the aggregators on
     # `tokenrouter`. No Anthropic or Google row, for dcode's reason.
     ("openai", "roder"): "openai",             ("azure-foundry", "roder"): "azure",
     ("openrouter", "roder"): "openai-api",     ("custom", "roder"): "openai-api",
     ("tokenrouter", "roder"): "tokenrouter",   ("vercel", "roder"): "tokenrouter",
-    ("llmtr", "roder"): "tokenrouter",         ("harnessrouter", "roder"): "tokenrouter",
+    ("llmtr", "roder"): "tokenrouter",
     # No vtcode rows: VT Code is not in this tree. It was built, measured (a column of 55 green
     # rows out of 56) and then taken out whole, because in `vtcode exec` a harness's MCP servers
     # cannot reach the model — the CLI spawns the server its config names and never sends
@@ -1649,7 +1644,6 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # reported (2026-10-15). The id matters — `gemini-3-flash`, which that endpoint does not serve,
     # came back as a 404 the CLI reported as an infrastructure_failure, not as a silent fallback.
     ("google", "vibe"): "openai-api",
-    ("harnessrouter", "vibe"): "tokenrouter",
     ("anthropic", "kimi"): "anthropic",        ("openai", "kimi"): "openai",
     ("azure-foundry", "kimi"): "azure",
     ("openrouter", "kimi"): "openai-api",
@@ -1765,26 +1759,6 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # the gemini backend too; the runner still builds gemini as provider google and routes the CLI
     # through its relay when the connection is TokenRouter.
     ("tokenrouter", "gemini"): "google",
-    # The hosted service serves the same shapes from one base and one key as TokenRouter does
-    # ("tokenrouter" on the runner means OpenAI/Anthropic-compatible, api by model family, base on
-    # the connection), so its rows mirror TokenRouter's row for row.
-    ("harnessrouter", "claude"): "tokenrouter", ("harnessrouter", "codex"): "tokenrouter",
-    ("harnessrouter", "hermes"): "openai-api",  ("harnessrouter", "pi"): "tokenrouter",
-    ("harnessrouter", "omp"): "tokenrouter",    ("harnessrouter", "dsh"): "tokenrouter",
-    ("harnessrouter", "opencode"): "tokenrouter", ("harnessrouter", "qwen"): "tokenrouter",
-    ("harnessrouter", "kimi"): "tokenrouter",
-    ("harnessrouter", "minimax"): "tokenrouter",
-    ("harnessrouter", "grok"): "tokenrouter",
-    ("harnessrouter", "aider"): "tokenrouter",
-    ("harnessrouter", "openhands"): "tokenrouter",
-    ("harnessrouter", "cheetahclaws"): "tokenrouter",
-    ("harnessrouter", "agentzero"): "tokenrouter",
-    ("harnessrouter", "cline"): "tokenrouter",  ("harnessrouter", "gemini"): "google",
-    ("harnessrouter", "goose"): "tokenrouter",
-    # The hosted service serves the open-weight System One models (laya, openthai-systemone,
-    # system-one-phase2) on its own GPU behind TypeSafe's wire, so a HarnessRouter key drives the
-    # systemone base too: decisions at <base>/systemone, billed to the key's credits (2026-09-24).
-    ("harnessrouter", "systemone"): "typesafe",
     # ── this batch ────────────────────────────────────────────────────────────────────────────
     # mimo is an opencode FORK that kept opencode's provider model (an ai-sdk package name plus a
     # baseURL), so it reaches what opencode reaches and is wired row for row with it. No new
@@ -1796,7 +1770,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "mimo"): "openai-api",
     ("tokenrouter", "mimo"): "tokenrouter",    ("vercel", "mimo"): "tokenrouter",
     ("llmtr", "mimo"): "tokenrouter",          ("custom", "mimo"): "tokenrouter",
-    ("google", "mimo"): "openai-api",          ("harnessrouter", "mimo"): "tokenrouter",
+    ("google", "mimo"): "openai-api",
     # jcode, opensquilla and nanobot each speak ONE OpenAI shape, chat/completions, through the
     # loopback relay, which is exactly cline's and goose's reach, so they are wired as those are.
     # jcode and opensquilla also have an Anthropic-Messages provider, used only for a connection
@@ -1807,19 +1781,19 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "jcode"): "openai-api",
     ("tokenrouter", "jcode"): "tokenrouter",   ("vercel", "jcode"): "tokenrouter",
     ("llmtr", "jcode"): "tokenrouter",         ("custom", "jcode"): "openai-api",
-    ("google", "jcode"): "openai-api",         ("harnessrouter", "jcode"): "tokenrouter",
+    ("google", "jcode"): "openai-api",
     ("anthropic", "opensquilla"): "anthropic", ("openai", "opensquilla"): "openai",
     ("azure-foundry", "opensquilla"): "azure",
     ("openrouter", "opensquilla"): "openai-api",
     ("tokenrouter", "opensquilla"): "tokenrouter", ("vercel", "opensquilla"): "tokenrouter",
     ("llmtr", "opensquilla"): "tokenrouter",   ("custom", "opensquilla"): "openai-api",
-    ("google", "opensquilla"): "openai-api",   ("harnessrouter", "opensquilla"): "tokenrouter",
+    ("google", "opensquilla"): "openai-api",
     ("anthropic", "nanobot"): "anthropic",     ("openai", "nanobot"): "openai",
     ("azure-foundry", "nanobot"): "azure",
     ("openrouter", "nanobot"): "openai-api",
     ("tokenrouter", "nanobot"): "tokenrouter", ("vercel", "nanobot"): "tokenrouter",
     ("llmtr", "nanobot"): "tokenrouter",       ("custom", "nanobot"): "openai-api",
-    ("google", "nanobot"): "openai-api",       ("harnessrouter", "nanobot"): "tokenrouter",
+    ("google", "nanobot"): "openai-api",
     # zeroclaw speaks ONE OpenAI shape too — its `custom` provider posts chat/completions — through
     # the loopback relay, so it is wired row for row with nanobot.
     ("anthropic", "zeroclaw"): "anthropic",    ("openai", "zeroclaw"): "openai",
@@ -1827,7 +1801,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("openrouter", "zeroclaw"): "openai-api",
     ("tokenrouter", "zeroclaw"): "tokenrouter", ("vercel", "zeroclaw"): "tokenrouter",
     ("llmtr", "zeroclaw"): "tokenrouter",      ("custom", "zeroclaw"): "openai-api",
-    ("google", "zeroclaw"): "openai-api",      ("harnessrouter", "zeroclaw"): "tokenrouter",
+    ("google", "zeroclaw"): "openai-api",
 }
 
 
@@ -1838,6 +1812,371 @@ async def _integrations_doc() -> list[dict]:
         return doc if isinstance(doc, list) else []
     except Exception:  # noqa: BLE001
         return []
+
+
+async def _uhp_connections_doc() -> list[dict]:
+    v = await _vault_get(GLOBAL_TENANT, _UHP_CONNECTIONS_KEY)
+    try:
+        doc = json.loads(v) if v else []
+        rows = doc if isinstance(doc, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+    return [await _uhp_with_health(row) for row in rows]
+
+
+def _uhp_health_key(row: dict) -> str:
+    identity = json.dumps([row.get("id"), row.get("org"), row.get("workspace"), row.get("base_url"),
+                           (row.get("config") or {}).get("api_key"), row.get("updated_at")], sort_keys=True)
+    return "uhp-health-" + hashlib.sha256(identity.encode()).hexdigest()
+
+
+async def _uhp_with_health(row: dict) -> dict:
+    raw = await _vault_get(GLOBAL_TENANT, _uhp_health_key(row))
+    try:
+        observation = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        observation = {}
+    health = observation.get("health") or {"status": "unknown", "last_checked_at": None,
+        "last_success_at": None, "latency_ms": None, "last_error": "", "fresh_until": 0}
+    health = {**health, "stale": float(health.get("fresh_until") or 0) <= time.time()}
+    return {**row, "health": health, "harnesses": observation.get("harnesses", row.get("harnesses") or []),
+            "uhp": observation.get("uhp", row.get("uhp") or {})}
+
+
+class _UhpProbeError(HTTPException):
+    def __init__(self, status: str, message: str):
+        super().__init__(502, message)
+        self.health_status = status
+
+
+def _uhp_synced_harnesses(row: dict, remote: list[dict]) -> list[dict]:
+    previous = {item["remote_id"]: item for item in row.get("harnesses") or []}
+    synced = []
+    for item in remote:
+        remote_id = item["id"]
+        prior = previous.pop(remote_id, {})
+        synced.append({"id": prior.get("id") or "harn_uhp_" + hashlib.sha256(
+            (row["id"] + ":" + remote_id).encode()).hexdigest()[:20],
+            "remote_id": remote_id, "name": item.get("name") or remote_id,
+            "enabled": prior.get("enabled", True), "status": "healthy"})
+    return synced + [{**item, "status": "harness_missing"} for item in previous.values()]
+
+
+async def _uhp_observe(row: dict, status: str, error: str, *, started: float,
+                       info: dict | None = None, remote: list[dict] | None = None) -> dict:
+    current = await _uhp_with_health(row)
+    harnesses = _uhp_synced_harnesses(current, remote) if remote is not None else current["harnesses"]
+    if status == "healthy" and (not harnesses or any(item.get("status") == "harness_missing" for item in harnesses)):
+        status, error = "harness_missing", "部分或全部 Harness 已不可用。"
+    now = time.time()
+    observation = {"health": {"status": status, "last_checked_at": now,
+        "last_success_at": now if remote is not None else current["health"].get("last_success_at"),
+        "latency_ms": max(0, round((time.monotonic() - started) * 1000)),
+        "last_error": error, "fresh_until": now + _UHP_HEALTH_FRESH_S}, "harnesses": harnesses,
+        "uhp": {"version": info.get("version") or info.get("default_version"),
+                "capabilities": info.get("capabilities") or {}} if info is not None else current.get("uhp") or {}}
+    await _vault_put_credential(GLOBAL_TENANT, _uhp_health_key(row), json.dumps(observation), "uhp_health")
+    return {**row, **observation}
+
+
+async def _uhp_check_once(row: dict) -> dict:
+    started = time.monotonic()
+    owner = "uhp-check:" + uuid.uuid4().hex
+    lease_id = "uhp-health:" + row["id"]
+    org = str(row.get("org") or "")
+    fence = 0
+    try:
+        if control_store.enabled():
+            deadline = time.monotonic() + 17
+            while True:
+                admission = await control_store.lease_admit(org, lease_id, owner, 30,
+                    reject_on_conflict=True, fresh_s=30)
+                if not admission.get("rejected"):
+                    fence = int(admission.get("fence") or 0)
+                    if not fence:
+                        raise uhp_error(503, "uhp_health_unavailable", "无法读取 UHP 健康检查存储，请稍后重试。")
+                    break
+                if time.monotonic() >= deadline:
+                    raise uhp_error(503, "uhp_health_unavailable", "UHP 健康检查繁忙，请稍后重试。")
+                await asyncio.sleep(0.1)
+        try:
+            info, remote = await _uhp_probe(row["base_url"], str((row.get("config") or {}).get("api_key") or ""))
+            status, error = "healthy", ""
+        except _UhpProbeError as failure:
+            info, remote = None, None
+            status, error = failure.health_status, str(failure.detail)
+        if fence and not await control_store.lease_renew(org, lease_id, owner, fence, 30):
+            raise uhp_error(503, "uhp_health_unavailable", "无法保存 UHP 健康检查结果，请稍后重试。")
+        return await _uhp_observe(row, status, error, started=started, info=info, remote=remote)
+    finally:
+        if fence:
+            await control_store.lease_release(org, lease_id, owner, fence)
+
+
+async def _uhp_check(row: dict) -> dict:
+    key = _uhp_health_key(row)
+    task = _UHP_CHECKS.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(_uhp_check_once(row))
+        _UHP_CHECKS[key] = task
+        def forget(completed):
+            if _UHP_CHECKS.get(key) is completed:
+                _UHP_CHECKS.pop(key, None)
+            if not completed.cancelled():
+                completed.exception()
+        task.add_done_callback(forget)
+    try:
+        return await asyncio.shield(task)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise uhp_error(503, "uhp_health_unavailable", "UHP 健康检查存储不可用，请稍后重试。") from error
+
+
+async def _uhp_health_sweep() -> None:
+    rows = await _uhp_connections_doc()
+    semaphore = asyncio.Semaphore(4)
+    async def check(row):
+        async with semaphore:
+            try:
+                await _uhp_check(row)
+            except Exception:
+                print("[uhp-health] check unavailable", flush=True)
+    await asyncio.gather(*(check(row) for row in rows))
+
+
+async def _uhp_feedback(row: dict, status: str, message: str) -> None:
+    try:
+        task = _UHP_CHECKS.get(_uhp_health_key(row))
+        if task is not None and not task.done():
+            await asyncio.shield(task)
+        await _uhp_observe(row, status, message, started=time.monotonic())
+    except Exception:
+        print("[uhp-health] feedback persistence unavailable", flush=True)
+
+
+async def _uhp_require_ready(row: dict, harness: dict) -> tuple[dict, dict]:
+    checked = await _uhp_check(row)
+    current = next((item for item in checked["harnesses"] if item["id"] == harness["id"]), None)
+    status = checked["health"]["status"]
+    if status in ("healthy", "harness_missing") and current and current.get("status") == "healthy" and current.get("enabled", True):
+        return checked, current
+    raise uhp_error(503, "harness_unavailable", "UHP 目标不可用：" + status,
+                    "metadata.harness_id", {"status": status, "harness_id": harness["id"]})
+
+
+async def _uhp_response_map() -> dict[str, dict]:
+    raw = await _vault_get(GLOBAL_TENANT, _UHP_RESPONSES_KEY)
+    try:
+        value = json.loads(raw) if raw else {}
+        return value if isinstance(value, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def _uhp_response_get(rid: str) -> dict | None:
+    raw = await _vault_get(GLOBAL_TENANT, f"{_UHP_RESPONSES_KEY}-{hashlib.sha256(rid.encode()).hexdigest()}")
+    if raw:
+        return json.loads(raw)
+    return (await _uhp_response_map()).get(rid)  # mappings written before per-response storage
+
+
+async def _uhp_response_map_put(rid: str, value: dict) -> None:
+    # Independent records avoid lost updates when simultaneous pages finish tasks.
+    await _vault_put_credential(GLOBAL_TENANT, f"{_UHP_RESPONSES_KEY}-{hashlib.sha256(rid.encode()).hexdigest()}",
+                                json.dumps(value), "uhp_response_map")
+
+
+def _uhp_in_reach(row: dict, principal: dict) -> bool:
+    return (str(row.get("org") or "") == str(principal.get("org") or "")
+            and (not principal.get("workspace") or row.get("workspace") == principal.get("workspace"))
+            and (not principal.get("calibration") or
+                 row.get("harness_id") == (principal.get("calibration") or {}).get("inner")))
+
+
+async def _uhp_target(harness_id: str, principal: dict) -> tuple[dict, dict] | None:
+    """Find a locally exposed external UHP harness and its connection."""
+    for conn in await _uhp_connections_doc():
+        if not _uhp_in_reach({**conn, "harness_id": harness_id}, principal):
+            continue
+        for harness in conn.get("harnesses") or []:
+            if str(harness.get("id") or "") == harness_id and harness.get("enabled", True):
+                return conn, harness
+    return None
+
+
+async def _uhp_request_response(body: "CreateResponseBody", request: Request, conn: dict, harness: dict, principal: dict):
+    cfg = conn.get("config") or {}
+    key = str(cfg.get("api_key") or "")
+    if not key:
+        await _uhp_feedback(conn, "unauthorized", "UHP 连接没有可用的 Bearer 密钥。")
+        raise uhp_error(503, "xred_control_unavailable", "UHP 连接没有可用的 Bearer 密钥。")
+    metadata = dict(body.metadata or {})
+    metadata["harness_id"] = str(harness.get("remote_id") or "")
+    payload = body.model_dump(exclude_none=True, exclude_unset=True)
+    if body.previous_response_id:
+        previous = await _uhp_response_get(body.previous_response_id)
+        if (previous and _uhp_in_reach(previous, principal)
+                and previous.get("harness_id") == harness.get("id")
+                and str(previous.get("connection_id") or "") == str(conn.get("id") or "")):
+            payload["previous_response_id"] = str(previous.get("remote_id") or "")
+        else:
+            raise uhp_error(404, "response_not_found", "No response with that id.", "previous_response_id")
+    payload["metadata"] = metadata
+    base = str(conn.get("base_url") or "").rstrip("/")
+    headers = {"authorization": f"Bearer {key}", "content-type": "application/json", "accept": "text/event-stream" if body.stream else "application/json"}
+    if body.stream:
+        client = httpx.AsyncClient(timeout=None, follow_redirects=False)
+        try:
+            req = client.build_request("POST", f"{base}/v1/responses", json=payload, headers=headers)
+            upstream = await client.send(req, stream=True)
+            if upstream.status_code >= 400:
+                data = await upstream.aread()
+                await upstream.aclose()
+                await client.aclose()
+                if upstream.status_code in (401, 403, 404) or upstream.status_code >= 500:
+                    status = "unauthorized" if upstream.status_code in (401, 403) else "invalid" if upstream.status_code == 404 else "unreachable"
+                    await _uhp_feedback(conn, status, "UHP 任务接口不可用。")
+                    raise uhp_error(503, "harness_unavailable", "UHP 任务接口不可用：" + status)
+                return Response(data, status_code=upstream.status_code,
+                                media_type=upstream.headers.get("content-type", "application/json"))
+
+            # UHP event ids are opaque. Rewrite the response object id in the event stream so
+            # a client can safely use the Gateway id for follow-ups, status and cancellation.
+            local_id = f"resp_uhp_{uuid.uuid4().hex}"
+            remote_id = ""
+
+            async def mapped_relay():
+                nonlocal remote_id
+                try:
+                    async for line in upstream.aiter_lines():
+                        if line.startswith("data:"):
+                            try:
+                                event = json.loads(line[5:].lstrip())
+                            except (ValueError, TypeError):
+                                yield (line + "\n").encode("utf-8")
+                                continue
+                            response = event.get("response") if isinstance(event, dict) else None
+                            if isinstance(response, dict) and response.get("id"):
+                                remote_id = str(response["id"])
+                                response["id"] = local_id
+                                await _uhp_response_map_put(local_id, {"org": principal.get("org"), "workspace": principal.get("workspace"),
+                                    "connection_id": conn.get("id"), "remote_id": remote_id,
+                                    "harness_id": harness.get("id"), "created_at": time.time()})
+                            line = "data: " + json.dumps(event, ensure_ascii=False)
+                        yield (line + "\n").encode("utf-8")
+                    if remote_id:
+                        await _uhp_response_map_put(local_id, {"org": principal.get("org"), "workspace": principal.get("workspace"), "connection_id": conn.get("id"),
+                                                               "remote_id": remote_id, "harness_id": harness.get("id"),
+                                                               "created_at": time.time()})
+
+                except Exception:
+                    await _uhp_feedback(conn, "unreachable", "UHP 响应流意外断开。")
+                    raise
+                finally:
+                    await upstream.aclose()
+                    await client.aclose()
+
+            return StreamingResponse(mapped_relay(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        except HTTPException:
+            await client.aclose()
+            raise
+        except Exception as e:
+            await client.aclose()
+            await _uhp_feedback(conn, "unreachable", "无法连接 UHP 任务接口。")
+            raise uhp_error(503, "xred_control_unavailable", "外部 UHP Runtime 当前不可用。") from e
+    try:
+        async with httpx.AsyncClient(timeout=None, follow_redirects=False) as client:
+            upstream = await client.post(f"{base}/v1/responses", json=payload, headers=headers)
+    except Exception as e:  # noqa: BLE001
+        await _uhp_feedback(conn, "unreachable", "无法连接 UHP 任务接口。")
+        raise uhp_error(503, "xred_control_unavailable", "外部 UHP Runtime 当前不可用，请检查服务是否运行。") from e
+    if upstream.status_code in (401, 403, 404) or upstream.status_code >= 500:
+        status = "unauthorized" if upstream.status_code in (401, 403) else "invalid" if upstream.status_code == 404 else "unreachable"
+        await _uhp_feedback(conn, status, "UHP 任务接口不可用。")
+        raise uhp_error(503, "harness_unavailable", "UHP 任务接口不可用：" + status)
+    try:
+        answer = upstream.json()
+    except Exception:
+        answer = {"error": {"type": "server_error", "code": "xred_invalid_response", "message": "外部 UHP 返回了无效响应。"}}
+    if upstream.status_code >= 300:
+        return JSONResponse(answer, status_code=upstream.status_code)
+    remote_id = str(answer.get("id") or "") if isinstance(answer, dict) else ""
+    if not remote_id:
+        await _uhp_feedback(conn, "invalid", "UHP 任务接口返回了无效响应。")
+        raise uhp_error(502, "xred_invalid_response", "外部 UHP 返回了无效响应。")
+    if remote_id:
+        local_id = f"resp_uhp_{uuid.uuid4().hex}"
+        await _uhp_response_map_put(local_id, {"org": principal.get("org"), "workspace": principal.get("workspace"), "connection_id": conn.get("id"), "remote_id": remote_id,
+                                               "harness_id": harness.get("id"), "created_at": time.time()})
+        answer["id"] = local_id
+    return answer
+
+
+async def _uhp_remote_get(response_id: str, path: str = "", principal: dict | None = None):
+    """Resolve a Gateway response alias within the caller's organization and workspace."""
+    mapping = await _uhp_response_get(response_id)
+    if not mapping:
+        return None
+    if not principal or not _uhp_in_reach(mapping, principal):
+        return None
+    for conn in await _uhp_connections_doc():
+        if str(conn.get("id") or "") != str(mapping.get("connection_id") or ""):
+            continue
+        cfg = conn.get("config") or {}
+        key = str(cfg.get("api_key") or "")
+        base = str(conn.get("base_url") or "").rstrip("/")
+        if not key or not base:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+                r = await client.request("POST" if path == "/cancel" else "GET", f"{base}/v1/responses/{urllib.parse.quote(str(mapping.get('remote_id') or ''), safe='')}{path}",
+                                     headers={"authorization": f"Bearer {key}", "accept": "application/json"})
+            if r.status_code in (401, 403) or r.status_code >= 500:
+                status = "unauthorized" if r.status_code in (401, 403) else "unreachable"
+                await _uhp_feedback(conn, status, "UHP 响应管理接口不可用。")
+                raise uhp_error(503, "harness_unavailable", "UHP 响应管理接口不可用：" + status)
+            if r.status_code != 404:
+                try:
+                    payload = r.json()
+                    if isinstance(payload, dict):
+                        response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+                        if isinstance(response, dict) and response.get("id"):
+                            response["id"] = response_id
+                    return r.status_code, payload
+                except Exception:
+                    await _uhp_feedback(conn, "invalid", "UHP 响应管理接口返回了无效响应。")
+                    return r.status_code, {"error": {"type": "server_error", "code": "xred_invalid_response",
+                                                       "message": "外部 UHP 返回了无效响应。"}}
+        except HTTPException:
+            raise
+        except Exception as e:
+            await _uhp_feedback(conn, "unreachable", "无法连接 UHP 响应管理接口。")
+            raise uhp_error(503, "xred_control_unavailable", "外部 UHP Runtime 当前不可用。") from e
+    return None
+
+
+async def _uhp_harnesses(principal: dict) -> list[dict]:
+    items = []
+    for conn in await _uhp_connections_doc():
+        for harness in conn.get("harnesses") or []:
+            if harness.get("enabled", True) and _uhp_in_reach({**conn, "harness_id": harness.get("id")}, principal):
+                items.append({"id": harness["id"], "name": harness.get("name") or harness["id"],
+                              "base": "external_uhp", "baseLabel": conn.get("name") or "UHP Runtime",
+                              "defaultModel": "", "systemPrompt": "", "createdAt": conn.get("updated_at") or 0,
+                              "workspace": conn.get("workspace") or "", "external": True,
+                              "available": not conn["health"]["stale"] and
+                                  conn["health"]["status"] in ("healthy", "harness_missing") and harness.get("status") == "healthy",
+                              "health": {**conn["health"], "harness_status": harness.get("status", "unknown")}})
+    return items
+
+
+def _uhp_public(row: dict) -> dict:
+    cfg = dict(row.get("config") or {})
+    if cfg.get("api_key"):
+        cfg["api_key"] = _SECRET_SENTINEL
+    return {**row, "config": cfg}
 
 
 async def _model_map_doc() -> dict:
@@ -2856,7 +3195,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         if want_sha and not force:
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
-                                    params={"probe": want_sha})
+                                    params={**params, "probe": want_sha})
                 pj = pr.json() if pr.headers.get("content-type", "").startswith("application/json") else {}
                 if pr.status_code < 400 and pj.get("skipped"):
                     rec["hydrated"] = True
@@ -2876,7 +3215,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         for attempt, pause in enumerate(_HYDRATE_PAUSES):
             refused = False
             try:
-                r = await _hydrate_relay(sid, None)
+                r = await _hydrate_relay(sid, params)
             except Exception as e:  # noqa: BLE001
                 # The relay itself raised: the sandbox dropped the streaming POST under a burst, or
                 # the blob read failed. Twelve restores in two minutes went this way on hosted while
@@ -3920,6 +4259,40 @@ async def _start_reconcile() -> None:
     asyncio.create_task(loop())
 
 
+@app.on_event("startup")
+async def _start_uhp_health() -> None:
+    global _UHP_HEALTH_LOOP
+    async def loop():
+        while True:
+            try:
+                await _uhp_health_sweep()
+            except Exception:
+                print("[uhp-health] sweep unavailable", flush=True)
+            await asyncio.sleep(_UHP_HEALTH_EVERY_S)
+    _UHP_HEALTH_LOOP = asyncio.create_task(loop(), name="uhp-health")
+
+
+@app.on_event("shutdown")
+async def _stop_uhp_health() -> None:
+    global _UHP_HEALTH_LOOP
+    tasks = list(_UHP_CHECKS.values()) + ([_UHP_HEALTH_LOOP] if _UHP_HEALTH_LOOP else [])
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    _UHP_CHECKS.clear()
+    _UHP_HEALTH_LOOP = None
+
+
+@app.on_event("startup")
+async def _start_workflow_recovery() -> None:
+    try:
+        recovered = await _workflow_recover()
+        if recovered:
+            print(f"[workflow] recovered {recovered} durable running task(s)", flush=True)
+    except Exception as error:  # noqa: BLE001 - a later readiness/sweep can retry recovery
+        print(f"[workflow] recovery scan failed: {error}", flush=True)
+
+
 @app.on_event("shutdown")
 async def _drain_inflight() -> None:
     """HR-INF-019: on SIGTERM (deploy / autoscale scale-in) a replica must not instantly orphan its
@@ -3928,17 +4301,17 @@ async def _drain_inflight() -> None:
     in-flight turns to finish NATURALLY (checkpoint + metering happen on completion); then cancel any
     stragglers and await them HERE — while the loop is still alive — so each turn's CancelledError
     handler settles it 'failed', its error saying interrupted (honest), instead of leaving a 6h phantom 'running'."""
-    if not _inflight:
+    pending = list(_inflight) + list(_WORKFLOW_RUNS.values())
+    if not pending:
         return
-    pending = list(_inflight)
-    print(f"[drain] SIGTERM: waiting up to {_DRAIN_S}s for {len(pending)} in-flight turn(s)", flush=True)
+    print(f"[drain] SIGTERM: waiting up to {_DRAIN_S}s for {len(pending)} in-flight task(s)", flush=True)
     try:
         await asyncio.wait(pending, timeout=_DRAIN_S)
     except Exception:  # noqa: BLE001
         pass
     still = [t for t in pending if not t.done()]
     if still:
-        print(f"[drain] {len(still)} turn(s) still running at deadline — settling interrupted", flush=True)
+        print(f"[drain] {len(still)} task(s) still running at deadline — cancelling for durable recovery", flush=True)
         for t in still:
             t.cancel()
         # Await the cancellations so the CancelledError handlers' settle-writes complete before exit.
@@ -5137,10 +5510,6 @@ def _provider_base_url(provider: str, base_url: str) -> str:
     under /openai/v1, and a bare base forwarded as-is 404s on every call ("Resource not found",
     the matrix's Azure column, 2026-09-06). Any other provider's base is used as given."""
     base = (base_url or "").strip().rstrip("/")
-    if provider.lower() == "harnessrouter":
-        # The hand-off's payload names the endpoint and the console stores it; a connection
-        # without one (a pasted key) gets this gateway's constant. A person never types it.
-        return base if base.endswith("/v1/provider") else HR_HOSTED_PROVIDER_BASE
     if base and provider.lower() in ("azure", "azure-foundry") and "/openai/" not in base:
         base += "/openai/v1"
     return base
@@ -5548,6 +5917,8 @@ UHP_CAPABILITIES = {
     # _INPUT_REQUEST_BASES (GET /v1/bases says which).
     "input_requests": True,
     "memories": True,
+    # Client workflow orchestration: durable snapshots, server-side DAG execution and recovery.
+    "workflow_tasks": True,
     # Sessions §1.1: `branch: true` beside previous_response_id starts a new session from that
     # response's committed files and transcript (_branch_source, _branch_prepare). Optional at every
     # class (VERSIONING: within a version only optional things are added), so it is a capability.
@@ -5679,6 +6050,39 @@ def uhp_discovery() -> dict:
             # went stale and told every client 0.3.0 six releases later.
             "implementation": {"name": "智能体网关",
                                "version": os.environ.get("HR_VERSION") or "dev"}}
+
+
+async def _runner_admin_call(path: str, method: str = "GET", body: dict | None = None):
+    if not POOL_ENDPOINT:
+        raise HTTPException(503, "未配置 session-router 地址。")
+    try:
+        result = await _client().request(method, f"{POOL_ENDPOINT}/{path}",
+                                         headers={"X-Harness-Internal": INTERNAL_KEY},
+                                         json=body, timeout=10)
+    except httpx.HTTPError:
+        raise HTTPException(503, "暂时无法连接 session-router。")
+    try:
+        data = result.json()
+    except ValueError:
+        raise HTTPException(502, "session-router 返回了无效响应。")
+    if result.status_code >= 400:
+        raise HTTPException(result.status_code, data.get("detail", "Runner 操作失败。"))
+    return data
+
+
+@app.get("/internal/runners", dependencies=[Depends(_internal_only)])
+async def runner_admin_list():
+    data = await _runner_admin_call("runners")
+    if not isinstance(data, dict) or not isinstance(data.get("runners"), list):
+        raise HTTPException(503, "当前执行端未提供节点管理，请配置 session-router。")
+    return data
+
+
+@app.post("/internal/runners/{action}", dependencies=[Depends(_internal_only)])
+async def runner_admin_action(action: str, body: dict):
+    if action not in ("register", "drain", "deregister"):
+        raise HTTPException(404, "未知 Runner 操作。")
+    return await _runner_admin_call(action, "POST", body)
 
 
 @app.get("/healthz")
@@ -5922,6 +6326,354 @@ async def list_sessions(request: Request, limit: int = 20, cursor: str = "",
     return await _session_cards(org, limit, cursor, member, harness,
                                 workspace=str(p.get("workspace") or ""),
                                 ws_default=bool(p.get("workspace_default")))
+
+
+# ── /v1/workflow-tasks — durable client workflow snapshots ─────────────────────────
+# A workflow task is deliberately separate from a Responses session: each node may have its
+# own response/session, while this record owns the immutable template snapshot and orchestration
+# state that ties those responses together. The browser can therefore reconnect without treating
+# localStorage as the source of truth.
+class WorkflowNodeBody(BaseModel):
+    id: str
+    name: str
+    agent_id: str = ""
+    agent_name: str = ""
+    deps: list[str] = []
+    retry_limit: int = 1
+    attempts: int = 0
+    status: str = "pending"
+    output: str = ""
+    response_id: str | None = None
+
+
+class WorkflowSnapshotBody(BaseModel):
+    template_id: str = ""
+    template_version: int = 1
+    title: str
+    description: str = ""
+    nodes: list[WorkflowNodeBody]
+
+
+class WorkflowTaskCreateBody(BaseModel):
+    title: str
+    input: str = ""
+    snapshot: WorkflowSnapshotBody
+
+
+class WorkflowTaskPatchBody(BaseModel):
+    status: str | None = None
+    input: str | None = None
+    snapshot: WorkflowSnapshotBody | None = None
+
+
+_WORKFLOW_STATUSES = {"pending", "running", "completed", "failed"}
+_WORKFLOW_NODE_STATUSES = {"pending", "running", "done", "failed", "blocked"}
+_WORKFLOW_RUNS: dict[str, asyncio.Task] = {}
+
+
+class _WorkflowLeaseLost(RuntimeError):
+    """The durable worker lease moved to another replica; the old worker must stop silently."""
+
+
+def _workflow_validate(snapshot: WorkflowSnapshotBody) -> None:
+    ids = [node.id.strip() for node in snapshot.nodes]
+    if not snapshot.title.strip() or not ids or len(ids) != len(set(ids)):
+        raise uhp_error(422, "workflow_invalid", "A workflow needs a title and unique nodes.", "snapshot")
+    if len(ids) > 100:
+        raise uhp_error(422, "workflow_invalid", "A workflow may contain at most 100 nodes.", "snapshot.nodes")
+    by_id = set(ids)
+    edges = {node.id: list(dict.fromkeys(node.deps)) for node in snapshot.nodes}
+    if any(dep not in by_id or dep == node_id for node_id, deps in edges.items() for dep in deps):
+        raise uhp_error(422, "workflow_invalid", "Node dependencies must reference another node.", "snapshot.nodes")
+    if any(node.status not in _WORKFLOW_NODE_STATUSES for node in snapshot.nodes):
+        raise uhp_error(422, "workflow_invalid", "Unknown workflow node status.", "snapshot.nodes")
+    if any(node.retry_limit < 0 or node.retry_limit > 10 or node.attempts < 0 for node in snapshot.nodes):
+        raise uhp_error(422, "workflow_invalid", "Invalid node retry counters.", "snapshot.nodes")
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    def visit(node_id: str) -> None:
+        if node_id in visiting:
+            raise uhp_error(422, "workflow_invalid", "Workflow dependencies must be acyclic.", "snapshot.nodes")
+        if node_id in visited:
+            return
+        visiting.add(node_id)
+        for dep in edges[node_id]:
+            visit(dep)
+        visiting.remove(node_id)
+        visited.add(node_id)
+    for node_id in ids:
+        visit(node_id)
+
+
+def _workflow_public(row: dict) -> dict:
+    snap = _json_obj(row.get("snapshot"))
+    return {"id": str(row.get("id") or ""), "object": "workflow.task",
+            "org": str(row.get("org") or ""), "workspace": str(row.get("workspace") or ""),
+            "title": str(row.get("title") or ""), "input": str(row.get("input") or ""),
+            "status": str(row.get("status") or "pending"),
+            "created_at": int(row.get("created_at") or 0),
+            "updated_at": int(row.get("updated_at") or 0), "snapshot": snap}
+
+
+async def _workflow_principal(request: Request) -> dict:
+    p = await _principal(request)
+    if not p.get("org"):
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    return p
+
+
+@app.post("/v1/workflow-tasks")
+async def create_workflow_task(body: WorkflowTaskCreateBody, request: Request) -> dict:
+    p = await _workflow_principal(request)
+    _workflow_validate(body.snapshot)
+    idem_key = str(request.headers.get("idempotency-key") or "").strip()
+    request_hash = hashlib.sha256(json.dumps(body.model_dump(), sort_keys=True, default=str).encode()).hexdigest()
+    if idem_key:
+        idem_hash = _idem_sha(f"workflow\n{p['org']}\n{p.get('workspace') or ''}\n{idem_key}")
+        prior = await BACKING.graph.find("WorkflowTaskIdempotency", {"org": p["org"], "key_hash": idem_hash})
+        if prior:
+            if str(prior[0].get("request_hash") or "") != request_hash:
+                raise uhp_error(409, "idempotency_key_reused", "This Idempotency-Key was used with a different request.", "Idempotency-Key")
+            existing = await _vertex_get(str(prior[0].get("task_id") or ""))
+            if existing:
+                return _workflow_public(existing)
+    now = _now_ms()
+    wid = _rid("wtask")
+    props = {"org": p["org"], "workspace": str(p.get("workspace") or ""),
+             "member": str(p.get("member") or ""), "title": body.title.strip(),
+             "input": body.input, "status": "pending", "created_at": now,
+             "updated_at": now, "snapshot": body.snapshot.model_dump_json()}
+    await _vg_upsert("WorkflowTask", wid, props, raise_on_fail=True)
+    if idem_key:
+        await _vg_upsert("WorkflowTaskIdempotency", f"widem_{idem_hash}",
+                         {"org": p["org"], "workspace": str(p.get("workspace") or ""),
+                          "key_hash": idem_hash, "request_hash": request_hash, "task_id": wid},
+                         raise_on_fail=True)
+    return _workflow_public({"id": wid, **props})
+
+
+@app.get("/v1/workflow-tasks")
+async def list_workflow_tasks(request: Request, limit: int = 50) -> dict:
+    p = await _workflow_principal(request)
+    rows = await _vg_list_by_org("WorkflowTask", p["org"])
+    ws = str(p.get("workspace") or "")
+    if ws:
+        rows = [row for row in rows if _scope_keeps(p, row.get("workspace"))]
+    rows.sort(key=lambda row: int(row.get("updated_at") or 0), reverse=True)
+    return {"tasks": [_workflow_public(row) for row in rows[:max(1, min(limit, 200))]]}
+
+
+@app.get("/v1/workflow-tasks/{task_id}")
+async def get_workflow_task(task_id: str, request: Request) -> dict:
+    p = await _workflow_principal(request)
+    row = await _vertex_get(task_id)
+    if not row or row.get("label") not in (None, "WorkflowTask") or row.get("org") != p["org"] or not _scope_keeps(p, row.get("workspace")):
+        raise uhp_error(404, "workflow_task_not_found", "No workflow task with that id.", "task_id")
+    return _workflow_public(row)
+
+
+@app.patch("/v1/workflow-tasks/{task_id}")
+async def patch_workflow_task(task_id: str, body: WorkflowTaskPatchBody, request: Request) -> dict:
+    p = await _workflow_principal(request)
+    row = await _vertex_get(task_id)
+    if not row or row.get("label") not in (None, "WorkflowTask") or row.get("org") != p["org"] or not _scope_keeps(p, row.get("workspace")):
+        raise uhp_error(404, "workflow_task_not_found", "No workflow task with that id.", "task_id")
+    if body.status is not None and body.status not in _WORKFLOW_STATUSES:
+        raise uhp_error(422, "workflow_invalid", "Unknown workflow task status.", "status")
+    if body.snapshot is not None:
+        _workflow_validate(body.snapshot)
+        row["snapshot"] = body.snapshot.model_dump_json()
+    if body.status is not None:
+        row["status"] = body.status
+    if body.input is not None:
+        row["input"] = body.input
+    row["updated_at"] = _now_ms()
+    await _vg_upsert("WorkflowTask", task_id, {k: v for k, v in row.items() if k not in ("id", "pk", "label")}, raise_on_fail=True)
+    return _workflow_public(row)
+
+
+def _workflow_request(headers: dict[str, str]) -> Request:
+    raw = [(key.lower().encode(), value.encode()) for key, value in headers.items()]
+    return Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": raw,
+                    "query_string": b"", "client": ("workflow", 0), "server": ("gateway", 80)})
+
+
+def _workflow_response_text(value: object) -> str:
+    if not isinstance(value, dict):
+        return str(value or "")
+    chunks: list[str] = []
+    def walk(item: object) -> None:
+        if isinstance(item, dict):
+            if item.get("type") == "output_text" and isinstance(item.get("text"), str):
+                chunks.append(item["text"])
+            for child in item.values():
+                if isinstance(child, (dict, list)):
+                    walk(child)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child)
+    walk(value)
+    return "".join(chunks).strip()
+
+
+async def _workflow_call_response(headers: dict[str, str], node: dict, prompt: str) -> tuple[str, str | None]:
+    body = CreateResponseBody(input=prompt, stream=False, store=True,
+                              metadata={"harness_id": str(node.get("agent_id") or "")} if node.get("agent_id") else None)
+    result = await create_response(body, _workflow_request(headers))
+    if isinstance(result, dict):
+        payload = result
+    elif isinstance(result, JSONResponse):
+        payload = json.loads(result.body.decode("utf-8"))
+    else:
+        chunks = []
+        async for part in result.body_iterator:
+            chunks.append(part.decode() if isinstance(part, bytes) else str(part))
+        payload = json.loads("".join(chunks))
+    status = str(payload.get("status") or "")
+    if status not in ("completed", "done"):
+        error = payload.get("error") or {}
+        raise RuntimeError(str(error.get("message") or f"node response ended with {status or 'unknown'}"))
+    return _workflow_response_text(payload), str(payload.get("id") or "") or None
+
+
+async def _workflow_execute(task_id: str, headers: dict[str, str]) -> None:
+    row = await _vertex_get(task_id)
+    if not row:
+        return
+    org = str(row.get("org") or "")
+    owner = f"workflow:{uuid.uuid4().hex}"
+    fence = 0
+    lease_heartbeat: asyncio.Task | None = None
+    try:
+        if control_store.enabled():
+            admission = await control_store.lease_admit(org, task_id, owner, LEASE_TTL_S,
+                                                         reject_on_conflict=True,
+                                                         fresh_s=LEASE_FRESH_S)
+            if admission.get("rejected"):
+                return
+            fence = int(admission.get("fence") or 0)
+        async def renew() -> None:
+            while True:
+                await asyncio.sleep(max(1, LEASE_TTL_S // 3))
+                if control_store.enabled() and fence and not await control_store.lease_renew(org, task_id, owner, fence, LEASE_TTL_S):
+                    raise _WorkflowLeaseLost("workflow execution lease lost")
+        if fence:
+            lease_heartbeat = asyncio.create_task(renew(), name=f"workflow-lease:{task_id}")
+        async def assert_lease() -> None:
+            if lease_heartbeat and lease_heartbeat.done():
+                lease_heartbeat.result()
+            if control_store.enabled() and fence and not await control_store.lease_still_held(org, task_id, fence):
+                raise _WorkflowLeaseLost("workflow execution lease lost")
+        snapshot = _json_obj(row.get("snapshot"))
+        nodes = snapshot.get("nodes") if isinstance(snapshot.get("nodes"), list) else []
+        # A process can exit after the ready set was durably marked `running` but before its
+        # responses were committed. Those nodes belong to this durable task, but no live worker
+        # owns them anymore. Requeue them on adoption so restart recovery retries the interrupted
+        # work instead of treating the stale in-flight marker as an impossible DAG state.
+        for node in nodes:
+            if node.get("status") == "running":
+                node["status"] = "pending"
+        row["status"] = "running"
+        row["updated_at"] = _now_ms()
+        await assert_lease()
+        await _vg_upsert("WorkflowTask", task_id, {"status": row["status"], "updated_at": row["updated_at"]})
+        while True:
+            if lease_heartbeat and lease_heartbeat.done():
+                lease_heartbeat.result()
+            ready = [node for node in nodes if node.get("status", "pending") == "pending" and
+                     all(next((x for x in nodes if x.get("id") == dep), {}).get("status") == "done" for dep in node.get("deps", []))]
+            blocked = [node for node in nodes if node.get("status", "pending") == "pending" and
+                       any(next((x for x in nodes if x.get("id") == dep), {}).get("status") in ("failed", "blocked") for dep in node.get("deps", []))]
+            if blocked:
+                for node in blocked:
+                    node["status"] = "blocked"
+                row["status"] = "failed"
+                break
+            if not ready:
+                row["status"] = "completed" if all(node.get("status") == "done" for node in nodes) else "failed"
+                break
+            for node in ready:
+                node["status"] = "running"
+                node["attempts"] = int(node.get("attempts") or 0)
+            row["snapshot"] = json.dumps(snapshot, ensure_ascii=False)
+            row["updated_at"] = _now_ms()
+            await assert_lease()
+            await _vg_upsert("WorkflowTask", task_id, {"snapshot": row["snapshot"], "updated_at": row["updated_at"]})
+            async def execute(node: dict) -> tuple[dict, bool]:
+                prior = "\n".join(f"{item.get('name')}: {item.get('output', '')}" for item in nodes if item.get("id") in node.get("deps", []))
+                prompt = f"{row.get('input', '')}\n\n当前工作流节点：{node.get('name', '')}\n模板说明：{snapshot.get('description', '')}\n{prior}"
+                last = ""
+                limit = max(0, min(int(node.get("retry_limit") or 0), 10))
+                for _ in range(limit + 1):
+                    node["attempts"] = int(node.get("attempts") or 0) + 1
+                    try:
+                        output, response_id = await _workflow_call_response(headers, node, prompt)
+                        return {**node, "status": "done", "output": output, "response_id": response_id}, True
+                    except Exception as error:  # noqa: BLE001 - persisted as node failure
+                        last = str(error)
+                return {**node, "status": "failed", "output": last}, False
+            results = await asyncio.gather(*(execute(node) for node in ready))
+            await assert_lease()
+            for result, _ok in results:
+                for index, node in enumerate(nodes):
+                    if node.get("id") == result.get("id"):
+                        nodes[index] = result
+            row["snapshot"] = json.dumps(snapshot, ensure_ascii=False)
+            row["updated_at"] = _now_ms()
+            await assert_lease()
+            await _vg_upsert("WorkflowTask", task_id, {"snapshot": row["snapshot"], "updated_at": row["updated_at"]})
+            if any(not ok for _result, ok in results):
+                continue  # next pass marks dependent nodes blocked and persists the terminal state
+        row["snapshot"] = json.dumps(snapshot, ensure_ascii=False)
+        row["updated_at"] = _now_ms()
+        await assert_lease()
+        await _vg_upsert("WorkflowTask", task_id, {"status": row["status"], "snapshot": row["snapshot"], "updated_at": row["updated_at"]})
+    except _WorkflowLeaseLost:
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:  # noqa: BLE001 - durable failure is preferable to a stuck task
+        if not (control_store.enabled() and fence and not await control_store.lease_still_held(org, task_id, fence)):
+            await _vg_upsert("WorkflowTask", task_id, {"status": "failed", "error": str(error)[:1000], "updated_at": _now_ms()})
+    finally:
+        if lease_heartbeat:
+            lease_heartbeat.cancel()
+            await asyncio.gather(lease_heartbeat, return_exceptions=True)
+        if control_store.enabled() and fence:
+            await control_store.lease_release(org, task_id, owner, fence)
+        _WORKFLOW_RUNS.pop(task_id, None)
+
+
+@app.post("/v1/workflow-tasks/{task_id}/run", status_code=202)
+async def run_workflow_task(task_id: str, request: Request) -> dict:
+    p = await _workflow_principal(request)
+    row = await _vertex_get(task_id)
+    if not row or row.get("org") != p["org"] or not _scope_keeps(p, row.get("workspace")):
+        raise uhp_error(404, "workflow_task_not_found", "No workflow task with that id.", "task_id")
+    if task_id in _WORKFLOW_RUNS:
+        return {"accepted": True, "id": task_id, "status": "running"}
+    if str(row.get("status") or "") == "completed":
+        return {"accepted": True, "id": task_id, "status": "completed"}
+    headers = {key: value for key, value in request.headers.items() if key in ("authorization", "x-harness-internal", "x-harness-org", "x-harness-member", "x-harness-workspace", "x-harness-workspace-default")}
+    _WORKFLOW_RUNS[task_id] = asyncio.create_task(_workflow_execute(task_id, headers), name=f"workflow:{task_id}")
+    return {"accepted": True, "id": task_id, "status": "running"}
+
+
+async def _workflow_recover() -> int:
+    """Re-adopt durable running tasks after a process restart. The internal header is a
+    service credential, so no user API key is persisted in the task snapshot or control store."""
+    recovered = 0
+    for row in await BACKING.graph.find("WorkflowTask", {"status": "running"}):
+        task_id = str(row.get("id") or "")
+        if not task_id or task_id in _WORKFLOW_RUNS:
+            continue
+        headers = {"x-harness-internal": INTERNAL_KEY,
+                   "x-harness-org": str(row.get("org") or ""),
+                   "x-harness-member": str(row.get("member") or ""),
+                   "x-harness-workspace": str(row.get("workspace") or "")}
+        _WORKFLOW_RUNS[task_id] = asyncio.create_task(_workflow_execute(task_id, headers), name=f"workflow:{task_id}")
+        recovered += 1
+    return recovered
 
 
 def _key_scope(p: dict) -> str:
@@ -6534,6 +7286,145 @@ async def _require_integrations_admin(request: Request) -> dict:
     return p
 
 
+class UhpConnectionBody(BaseModel):
+    name: str
+    base_url: str
+    api_key: str = ""
+
+
+def _uhp_base(value: str) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+    raw = str(value or "").strip().rstrip("/")
+    parsed = urlsplit(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(400, "请输入有效的 UHP HTTP 或 HTTPS 地址。")
+    path = parsed.path.rstrip("/")
+    for suffix in ("/v1/uhp", "/v1/harnesses", "/v1/responses"):
+        if path.endswith(suffix):
+            path = path[:-len(suffix)].rstrip("/")
+            break
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", "")).rstrip("/")
+
+
+async def _uhp_probe(base_url: str, api_key: str) -> tuple[dict, list[dict]]:
+    base = _uhp_base(base_url)
+    blocked = await _ssrf_check(f"{base}/v1/uhp")
+    if blocked:
+        raise _UhpProbeError("invalid", "此 UHP 地址不可访问。")
+    headers = {"accept": "application/json", "authorization": f"Bearer {api_key}"} if api_key else {"accept": "application/json"}
+    try:
+        async with asyncio.timeout(15.0), httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False) as client:
+            info_response = await client.get(f"{base}/v1/uhp", headers={"accept": "application/json"})
+            if info_response.status_code in (401, 403):
+                raise _UhpProbeError("unauthorized", "UHP 发现接口拒绝访问。")
+            if info_response.status_code >= 300:
+                raise _UhpProbeError("unreachable" if info_response.status_code >= 500 else "invalid", f"UHP 发现接口返回 HTTP {info_response.status_code}。")
+            info = info_response.json()
+            if not isinstance(info, dict) or not isinstance(info.get("version") or info.get("default_version"), str) or not (info.get("version") or info.get("default_version")):
+                raise _UhpProbeError("invalid", "UHP 发现接口格式无效。")
+            harness_response = await client.get(f"{base}/v1/harnesses", headers=headers)
+            if harness_response.status_code in (401, 403):
+                raise _UhpProbeError("unauthorized", "UHP 密钥无效或权限不足。")
+            if harness_response.status_code >= 300:
+                raise _UhpProbeError("unreachable" if harness_response.status_code >= 500 else "invalid", f"UHP Harness 列表返回 HTTP {harness_response.status_code}。")
+            payload = harness_response.json()
+    except HTTPException:
+        raise
+    except (httpx.RequestError, TimeoutError) as error:
+        raise _UhpProbeError("unreachable", "无法连接 UHP 服务。") from error
+    except Exception as error:
+        raise _UhpProbeError("invalid", "UHP 服务返回了无效数据。") from error
+    rows = payload.get("data", payload.get("harnesses", [])) if isinstance(payload, dict) else payload
+    if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows):
+        raise _UhpProbeError("invalid", "UHP Harness 列表格式无效。")
+    if len({row["id"] for row in rows}) != len(rows):
+        raise _UhpProbeError("invalid", "UHP Harness 列表包含重复标识。")
+    return info, rows
+
+
+@app.get("/v1/admin/uhp-connections")
+async def admin_uhp_connections_get(request: Request) -> dict:
+    principal = await _require_integrations_admin(request)
+    rows = [r for r in await _uhp_connections_doc() if _uhp_in_reach(r, principal)]
+    checked = await asyncio.gather(*(_uhp_check(row) for row in rows), return_exceptions=True)
+    return {"connections": [_uhp_public(row if isinstance(result, BaseException) else result)
+                            for row, result in zip(rows, checked)]}
+
+
+@app.post("/v1/admin/uhp-connections/{name}/check")
+async def admin_uhp_connections_check(name: str, request: Request) -> dict:
+    principal = await _require_integrations_admin(request)
+    row = next((row for row in await _uhp_connections_doc() if row.get("name") == name and _uhp_in_reach(row, principal)), None)
+    if row is None:
+        raise HTTPException(404, "UHP 连接不存在。")
+    return {"ok": True, "connection": _uhp_public(await _uhp_check(row))}
+
+
+@app.post("/v1/admin/uhp-connections/probe")
+async def admin_uhp_connections_probe(body: UhpConnectionBody, request: Request) -> dict:
+    principal = await _require_integrations_admin(request)
+    key = body.api_key.strip()
+    if key == _SECRET_SENTINEL:
+        prior = next((r for r in await _uhp_connections_doc() if r.get("name") == body.name.strip()
+                      and _uhp_in_reach(r, principal)), None)
+        key = str(((prior or {}).get("config") or {}).get("api_key") or "")
+    info, harnesses = await _uhp_probe(body.base_url, key)
+    return {"ok": True, "uhp": info, "harnesses": harnesses}
+
+
+@app.put("/v1/admin/uhp-connections/{name}")
+async def admin_uhp_connections_put(name: str, body: UhpConnectionBody, request: Request) -> dict:
+    principal = await _require_integrations_admin(request)
+    name = (name or body.name).strip()
+    if not name or len(name) > 120:
+        raise HTTPException(400, "UHP 连接名称无效。")
+    rows = await _uhp_connections_doc()
+    prior = next((r for r in rows if r.get("name") == name and _uhp_in_reach(r, principal)), None)
+    key = body.api_key.strip()
+    if key == _SECRET_SENTINEL:
+        key = str(((prior or {}).get("config") or {}).get("api_key") or "")
+    connection_id = str((prior or {}).get("id") or f"uhpc_{uuid.uuid4().hex[:16]}")
+    started = time.monotonic()
+    probe_failure: tuple[str, str] | None = None
+    try:
+        info, harnesses = await _uhp_probe(body.base_url, key)
+    except _UhpProbeError as failure:
+        info, harnesses = (prior or {}).get("uhp") or {}, (prior or {}).get("harnesses") or []
+        probe_failure = (failure.health_status, str(failure.detail))
+    except HTTPException as failure:
+        info, harnesses = (prior or {}).get("uhp") or {}, (prior or {}).get("harnesses") or []
+        probe_failure = ("invalid", str(failure.detail))
+    row = {"id": connection_id, "name": name, "org": principal.get("org"), "workspace": principal.get("workspace") or "",
+           "kind": "external_uhp", "base_url": _uhp_base(body.base_url), "config": {"api_key": key},
+           "uhp": {"version": info.get("version") or info.get("default_version") or "", "capabilities": info.get("capabilities") or {}},
+            "harnesses": [{"id": f"harn_uhp_{hashlib.sha256((connection_id + ':' + str(h.get('id'))).encode()).hexdigest()[:20]}",
+                          "remote_id": str(h.get("id") or ""), "name": str(h.get("name") or h.get("id") or ""),
+                           "enabled": h.get("enabled", True), "status": h.get("status", "unknown")} for h in harnesses if h.get("id")],
+           "updated_at": int(time.time())}
+    if probe_failure is None:
+        row["harnesses"] = _uhp_synced_harnesses(row, harnesses)
+    rows = [{key: value for key, value in saved.items() if key != "health"}
+            for saved in rows if not (saved.get("name") == name and _uhp_in_reach(saved, principal))] + [row]
+    prior_doc = await _vault_get(GLOBAL_TENANT, _UHP_CONNECTIONS_KEY)
+    if prior_doc:
+        await _vault_put_credential(GLOBAL_TENANT, _UHP_CONNECTIONS_PREV_KEY, prior_doc, "uhp_connections")
+    await _vault_put_credential(GLOBAL_TENANT, _UHP_CONNECTIONS_KEY, json.dumps(rows), "uhp_connections")
+    observed = await _uhp_observe(row, *(probe_failure or ("healthy", "")),
+        started=started, info=info, remote=harnesses if probe_failure is None else None)
+    return {"ok": probe_failure is None, "connection": _uhp_public(observed)}
+
+
+@app.delete("/v1/admin/uhp-connections/{name}")
+async def admin_uhp_connections_delete(name: str, request: Request) -> dict:
+    principal = await _require_integrations_admin(request)
+    rows = await _uhp_connections_doc()
+    out = [r for r in rows if not (r.get("name") == name and _uhp_in_reach(r, principal))]
+    if len(out) == len(rows):
+        raise HTTPException(404, "UHP 连接不存在。")
+    await _vault_put_credential(GLOBAL_TENANT, _UHP_CONNECTIONS_KEY, json.dumps(out), "uhp_connections")
+    return {"ok": True, "connections": [_uhp_public(r) for r in out if _uhp_in_reach(r, principal)]}
+
+
 # ── provider catalog ─────────────────────────────────────────────────────────────────
 # What we already know about each vendor, so adding an integration asks for a key and nothing
 # else. A base_url we can look up ourselves is not a question worth putting to a user, and a
@@ -6602,17 +7493,6 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "fields": [],
         "secret": "api_key",
         "secret_label": "API Key",
-    },
-    # The hosted service as a provider: one key, every model on its list at listed prices, the
-    # endpoint fixed by this gateway (the person never types it). The key comes from the hosted
-    # "get a key" flow through /v1/admin/connect, or is pasted. Keys read sk-hr-<64 hex>.
-    "harnessrouter": {
-        "label": "HarnessRouter API",
-        "base_url": HR_HOSTED_PROVIDER_BASE,
-        "fields": [],
-        "secret": "api_key",
-        "secret_label": "API Key",
-        "key_hint": "sk-hr-…",
     },
     "vercel": {
         "label": "Vercel AI Gateway",
@@ -6862,8 +7742,6 @@ def _provider_catalog_public() -> list[dict]:
     """The catalog the console renders its Add-Integration form from."""
     out = []
     for pid, meta in _PROVIDER_CATALOG.items():
-        if pid == "harnessrouter":
-            continue
         backends = _provider_backends(pid)
         out.append({"id": pid,
                     "label": meta["label"],
@@ -6943,170 +7821,17 @@ async def _media_chains_public() -> list[dict]:
     return out
 
 
-def _hosted_key_of(integ: dict) -> str:
-    return str(((integ or {}).get("config") or {}).get("api_key") or "").strip()
-
-
-async def _hosted_connection_read(integrations: list[dict]) -> dict | None:
-    """The HarnessRouter API connection whose key reads Cloud's model list, after refreshing that list
-    with it; None when no connection holds a key Cloud takes. Only a connection that holds a key is
-    asked with (a pairing for Deploy to Cloud alone leaves none), and one Cloud refused last time is
-    asked after the others: the first one in the document was always the one asked, so a refused key
-    ahead of a good one kept the list empty however many times the person connected again."""
-    keyed = [i for i in integrations if str(i.get("provider") or "").lower() == "harnessrouter" and _hosted_key_of(i)]
-    for i in sorted(keyed, key=lambda x: _hosted_key_refused(_hosted_key_of(x))):   # stable: document order otherwise
-        await _hosted_models_refresh(_hosted_key_of(i), models_url=str((i.get("config") or {}).get("models_url") or ""))
-        if not _hosted_key_refused(_hosted_key_of(i)):
-            return i
-    return None
-
-
 @app.get("/v1/admin/integrations")
 async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
     integrations = await _integrations_doc()
-    hosted = await _hosted_connection_read(integrations)
-    hosted_cfg = (hosted or {}).get("config") or {}
-    public = [_integration_public(i) for i in integrations]
-    for row, i in zip(public, integrations):
-        # a key Cloud refused is said as that, on its own row: the console asks to reconnect THAT key,
-        # with the reason, instead of offering a new pairing that leaves the refused one in front
-        if str(i.get("provider") or "").lower() == "harnessrouter" and _hosted_key_refused(_hosted_key_of(i)):
-            row["key_state"] = "refused"
-    if hosted:
-        # What is left to spend on the hosted account, read here with the stored key so the key never
-        # reaches the browser; absent (never a stale or made-up figure) when the read fails.
-        bal = await _hosted_balance(str(hosted_cfg.get("api_key") or ""), str(hosted_cfg.get("balance_url") or ""))
-        if bal is not None:
-            for row in public:
-                if row.get("name") == hosted.get("name"):
-                    row["balance"] = bal
-    return {"integrations": public,
-            "hosted_console": HR_HOSTED_CONSOLE,
+    return {"integrations": [_integration_public(i) for i in integrations],
             "model_map": await _effective_model_map(),
             "image_model_map": await _effective_image_model_map(),
             "providers": sorted({p for p, _ in _INTEGRATION_WIRING}),
             "catalog": _provider_catalog_public(),
             "media_chains": await _media_chains_public(),
             "media_policy": await _media_policy_doc()}
-
-
-async def _hosted_balance(api_key: str, balance_url: str = "") -> dict | None:
-    """GET <balance_url> with the stored key → {"usd", "is_deficit", "as_of"} or None. The hosted side
-    holds the figure for up to a minute; 401 (bad key) and 503 (ledger not answering) both mean
-    "show nothing", so does any other failure."""
-    if not api_key or _hosted_key_refused(api_key):
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=6.0) as c:
-            r = await c.get(balance_url or HR_HOSTED_BALANCE_URL, headers={"authorization": f"Bearer {api_key}"})
-        if r.status_code in (401, 403):
-            _hosted_read_failed(api_key, r.status_code, f"the balance answered HTTP {r.status_code}")
-        if r.status_code != 200:
-            return None
-        j = r.json()
-        usd = j.get("balance_usd")
-        if not isinstance(usd, (int, float)):
-            return None
-        return {"usd": round(float(usd), 2), "is_deficit": bool(j.get("is_deficit")), "as_of": str(j.get("as_of") or "")}
-    except Exception:  # noqa: BLE001
-        return None
-
-
-# Codes this instance opened with the hosted service, and the secret each poll must carry. In
-# memory: a code lives thirty minutes and a ready key is readable once, so there is nothing to keep.
-_CONNECTS: dict[str, dict] = {}
-_CONNECT_TTL = 1800.0   # the hosted code's own lifetime; a delivered body is dropped with it
-
-
-def _connects_sweep() -> None:
-    now = time.time()
-    for c in [c for c, e in _CONNECTS.items() if now - float(e.get("at") or 0) > _CONNECT_TTL]:
-        _CONNECTS.pop(c, None)
-
-
-class ConnectBody(BaseModel):
-    instance: str = ""
-
-
-async def _connect_open(instance: str, purpose: str = "") -> dict:
-    """Open a key hand-off with the hosted service and keep its secret here: {code, url, expires_in}.
-    `purpose` marks a hand-off a route other than Bring your own key reads (Deploy to Cloud)."""
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.post(HR_HOSTED_CONNECT_URL, json={"instance": instance})
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
-    if r.status_code >= 400:
-        raise HTTPException(502, f"HarnessRouter refused to start the key hand-off (HTTP {r.status_code}).")
-    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-    code, secret = str(j.get("code") or ""), str(j.get("secret") or "")
-    if not code or not secret or not j.get("url"):
-        raise HTTPException(502, "HarnessRouter answered without a code, a secret or a url.")
-    now = time.time()
-    for k, v in list(_CONNECTS.items()):        # forget codes older than an hour
-        if now - v["at"] > 3600:
-            _CONNECTS.pop(k, None)
-    _connects_sweep()
-    _CONNECTS[code] = {"secret": secret, "at": now, **({"purpose": purpose} if purpose else {})}
-    return {"code": code, "url": str(j["url"]), "expires_in": j.get("expires_in")}
-
-
-@app.post("/v1/admin/connect")
-async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
-    """Open a key hand-off with the hosted service: the console opens the returned url in a new
-    tab and polls the code here; the secret never leaves this gateway."""
-    await _require_integrations_admin(request)
-    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
-    return await _connect_open(instance)
-
-
-async def _connect_fetch(code: str, entry: dict) -> dict | None:
-    """One read of an open hand-off from the hosted service: None while the person is still on its
-    page, the hosted answer once the key is ready. Raises 410 when the code expired or was used."""
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get(f"{HR_HOSTED_CONNECT_URL}/{code}", headers={"X-Connect-Secret": entry["secret"]})
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
-    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-    if r.status_code == 202:
-        return None
-    if r.status_code == 410:
-        _CONNECTS.pop(code, None)
-        raise HTTPException(410, "That key hand-off expired or was already used. Get a key again.")
-    if r.status_code >= 400:
-        raise HTTPException(502, f"HarnessRouter answered HTTP {r.status_code} on the key hand-off.")
-    return j if isinstance(j, dict) else {}
-
-
-@app.get("/v1/admin/connect/{code}")
-async def admin_connect_poll(code: str, request: Request):
-    """One poll of the hand-off: 202 while the person is still on the hosted page, 200 once with
-    the key and the endpoints (then the hosted model list is refreshed with that key), 410 when
-    the code expired or was already read."""
-    await _require_integrations_admin(request)
-    _connects_sweep()
-    entry = _CONNECTS.get(code)
-    if not entry or entry.get("purpose"):        # none, or another route's (Deploy to Cloud)
-        raise HTTPException(410, "That key hand-off is not open. Get a key again.")
-    if entry.get("ready"):
-        # The hosted side hands the key over once; this side answers every poll after that with the
-        # same body until the code expires, so a slow or dropped answer costs nothing.
-        return entry["ready"]
-    j = await _connect_fetch(code, entry)
-    if j is None:
-        return JSONResponse({"status": "pending"}, status_code=202)
-    key = str(j.get("api_key") or "")
-    endpoint = str(j.get("endpoint") or HR_HOSTED_PROVIDER_BASE)
-    models_url = str(j.get("models_url") or HR_HOSTED_MODELS_URL)
-    balance_url = str(j.get("balance_url") or HR_HOSTED_BALANCE_URL)
-    if key:
-        await _hosted_models_refresh(key, force=True, models_url=models_url)
-    entry["ready"] = {"status": "ready", "api_key": key, "endpoint": endpoint, "models_url": models_url,
-                      "balance_url": balance_url, "org": j.get("org") or "", "name": str(j.get("name") or ""),
-                      "models": list(_HOSTED_MODELS["ids"])}
-    return entry["ready"]
 
 
 class DiscoverModelsBody(BaseModel):
@@ -8513,108 +9238,6 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
 }
 
 
-# HarnessRouter serves canonical ids and its list is maintained there, not here: the gateway reads
-# it (on a connect that handed over a key, and hourly on the admin read), keeps the last good read,
-# and the vendor table is that read. An empty read is empty: nothing is listed unprobed.
-#
-# Cloud lists models for a key's organization only: GET /v1/models without a key is a 401, every
-# time. Through 0.39.0 this asked without one whenever no HarnessRouter API connection held a key
-# (an instance that never connected, or one that connected only to Deploy to Cloud, whose key is
-# the deploy destination's and is never a connection), and a failure was not remembered, so every
-# console page with a model picker asked again: one instance made 1010 such calls in four days
-# (hosted, 2026-11-08). Now the list is asked for with a key or not at all, a failed read is not
-# asked again for _HOSTED_MODELS_RETRY_S per key (logged once), and Cloud refusing a key is kept
-# as that key's state so the console can say so (_hosted_key_refused).
-_HOSTED_MODELS: dict = {"ids": [], "at": 0.0}
-_HOSTED_MODELS_TTL = 3600.0
-_HOSTED_MODELS_RETRY_S = float(os.environ.get("HR_HOSTED_MODELS_RETRY_S", "600"))
-_HOSTED_MODELS_FAILS: dict[str, dict] = {}   # key fingerprint -> {"at", "status", "why"}: the last failed read
-
-
-def _hosted_key_fp(api_key: str) -> str:
-    """A key named in memory and in a log line: 16 hex of its SHA-256, never the key."""
-    return hashlib.sha256(str(api_key or "").encode()).hexdigest()[:16]
-
-
-def _hosted_key_refused(api_key: str) -> bool:
-    """Cloud answered 401 or 403 to this key the last time it was asked (the model list or the
-    balance), and has not taken it since."""
-    f = _HOSTED_MODELS_FAILS.get(_hosted_key_fp(api_key)) if api_key else None
-    return bool(f) and f.get("status") in (401, 403)
-
-
-def _hosted_read_failed(api_key: str, status: int, why: str) -> None:
-    """Remember a failed read for this key, and say so once: a line when it starts failing or fails
-    differently, none while it keeps failing the same way."""
-    fp = _hosted_key_fp(api_key)
-    prev = _HOSTED_MODELS_FAILS.get(fp)
-    if not prev or prev.get("why") != why:
-        refused = " (Cloud refused the key)" if status in (401, 403) else ""
-        print(f"[hosted] key {fp[:8]}: {why}{refused}; the model list is asked again in "
-              f"{int(_HOSTED_MODELS_RETRY_S)} s at the earliest", flush=True)
-    if len(_HOSTED_MODELS_FAILS) > 256:
-        _HOSTED_MODELS_FAILS.clear()
-    _HOSTED_MODELS_FAILS[fp] = {"at": time.time(), "status": status, "why": why}
-
-
-def _hosted_models_parse(doc) -> list[str]:
-    """Canonical ids from either shape the hosted list may take: this gateway's own /v1/models
-    ({"backends": {b: {"models": [{"id": ...}]}}}) or a flat OpenAI-style {"data": [{"id": ...}]}."""
-    ids: list[str] = []
-    if isinstance(doc, dict) and isinstance(doc.get("backends"), dict):
-        for c in doc["backends"].values():
-            for m in (c or {}).get("models") or []:
-                if isinstance(m, dict):
-                    if m.get("id") and m.get("available", True):
-                        ids.append(str(m["id"]))
-                elif m:
-                    ids.append(str(m))
-    elif isinstance(doc, dict) and isinstance(doc.get("data"), list):
-        ids = [str(m.get("id")) for m in doc["data"] if isinstance(m, dict) and m.get("id")]
-    elif isinstance(doc, list):
-        ids = [str(m.get("id") if isinstance(m, dict) else m) for m in doc if m]
-    return sorted(set(ids))
-
-
-async def _hosted_models_refresh(api_key: str = "", force: bool = False, models_url: str = "") -> list[str]:
-    """Read the hosted model list (the union of every backend's available ids for this key's org)
-    and make it this provider's vendor table. Keeps the last good read on any failure. Never asked
-    without a key (Cloud answers that 401), and a read that failed for a key is not asked again for
-    _HOSTED_MODELS_RETRY_S, unless `force` (a key that was just handed over)."""
-    if not api_key:
-        return _HOSTED_MODELS["ids"]
-    now = time.time()
-    if not force and _HOSTED_MODELS["ids"] and now - _HOSTED_MODELS["at"] < _HOSTED_MODELS_TTL:
-        return _HOSTED_MODELS["ids"]
-    fp = _hosted_key_fp(api_key)
-    failed = _HOSTED_MODELS_FAILS.get(fp)
-    if not force and failed and now - float(failed.get("at") or 0) < _HOSTED_MODELS_RETRY_S:
-        return _HOSTED_MODELS["ids"]
-    status, ids = 0, []
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get(models_url or HR_HOSTED_MODELS_URL, headers={"authorization": f"Bearer {api_key}"})
-        status = r.status_code
-        if status >= 400:
-            _hosted_read_failed(api_key, status, f"the model list answered HTTP {status}")
-            return _HOSTED_MODELS["ids"]
-        ids = _hosted_models_parse(r.json())
-    except Exception as e:  # noqa: BLE001
-        _hosted_read_failed(api_key, status, f"the model list was not read ({type(e).__name__})")
-        return _HOSTED_MODELS["ids"]
-    if not ids:
-        _hosted_read_failed(api_key, status, "the model list came back empty")
-        return _HOSTED_MODELS["ids"]
-    if failed:
-        print(f"[hosted] key {fp[:8]}: the model list read again ({len(ids)} models)", flush=True)
-    _HOSTED_MODELS_FAILS.pop(fp, None)
-    _HOSTED_MODELS.update({"ids": ids, "at": time.time()})
-    _VENDOR_MODELS["harnessrouter"] = {m: m for m in ids}
-    return _HOSTED_MODELS["ids"]
-
-
-_VENDOR_MODELS["harnessrouter"] = {}     # filled by _hosted_models_refresh
-
 _SHARED_SLUGS = dict(_VENDOR_MODELS["openrouter"])   # the shared table before any aggregator's own edits
 _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _SHARED_SLUGS.items() if c not in _TOKENROUTER_NO_CHANNEL}
 
@@ -8801,8 +9424,8 @@ def _map_model(conn: dict, friendly: str) -> str | None:
     400 with 'invalid model identifier', failing the whole turn. So an unmappable/empty name falls
     back to the connection's configured default, then the provider's sonnet id — always something valid."""
     backend = (conn.get("backend") or "").lower()
-    # THE VENDOR, not the runner's name for it. A connection renamed for the runner (`vercel`,
-    # `llmtr` and `harnessrouter` all become `tokenrouter`; `google` becomes `openai-api`) would
+    # THE VENDOR, not the runner's name for it. A connection renamed for the runner (`vercel` or
+    # `llmtr` becomes `tokenrouter`; `google` becomes `openai-api`) would
     # otherwise be given another vendor's id table, and the id would be sent to an endpoint that
     # never published it. MEASURED on a Vercel connection while running this batch's first matrix
     # column (2026-10-19, the recording proxy in front of the gateway): `grok-4.20` went out as
@@ -9371,10 +9994,8 @@ _STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
 # _VENDOR_MODELS). A chat model is not offered here: this base asks typed questions and a text
 # model cannot answer them.
 _MODEL_CATALOG["systemone"] = {"default": "jev-latest",
-                               # jev: TypeSafe's, on both Jev providers; the last three are open-weight
-                               # models the hosted service serves, reachable with a HarnessRouter key
-                               "models": ["jev-latest", "jev-preview", "jev-1.13",
-                                          "laya", "openthai-systemone", "system-one-phase2"]}
+                               # jev: TypeSafe's, on both Jev providers
+                               "models": ["jev-latest", "jev-preview", "jev-1.13"]}
 # qoder: Qoder's own model ids (_VENDOR_MODELS["qoder"]), the ones its GET /models lists. Qoder
 # chooses what serves an id and reports neither the served model nor token counts on its public
 # API, so these rows read "the id completed a turn" (docs/harness-verification.md, remote runtimes);
@@ -9697,7 +10318,7 @@ async def _vision_auth(sid: str, backend: str) -> dict | None:
 # picker greys it, and a turn passes the connection by as one that does not serve the model, so
 # neither offers a row that fails on send. Keyed by the provider in both vocabularies (the
 # integrations' and the runner-native names a chain connection may carry).
-_CHAT_PASSTHROUGH = ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure", "harnessrouter")
+_CHAT_PASSTHROUGH = ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure")
 _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
     (p, b): frozenset({"gpt-6.1-sol"}) for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
 # The older chat-completions bases, the same refusal, measured the same way (2026-10-25, one tool turn
@@ -9710,14 +10331,6 @@ for _p in ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure"):
         _CHANNEL_REFUSES[(_p, _b)] = _CHANNEL_REFUSES.get((_p, _b), frozenset()) | {"gpt-6.1-sol"}
 for _b in ("openhands", "cheetahclaws"):
     _CHANNEL_REFUSES[("tokenrouter", _b)] = _CHANNEL_REFUSES.get(("tokenrouter", _b), frozenset()) | {"gpt-6.1-sol"}
-# And on the HarnessRouter API, measured once it had credit (0.37.0-rc.15, one tool turn each): kimi, qwen,
-# cline and cheetahclaws fail the same way; openhands completed (DONE, a Shell call).
-for _b in ("kimi", "qwen", "cline", "cheetahclaws"):
-    _CHANNEL_REFUSES[("harnessrouter", _b)] = _CHANNEL_REFUSES.get(("harnessrouter", _b), frozenset()) | {"gpt-6.1-sol"}
-# TokenRouter's route for claude-fable-5-1 declines docker-agent's first turn before a word is written
-# (finish_reason content_filter, 3 of 3, 2026-10-25), while on the same route vibe passes with it and
-# docker-agent passes with claude-fable-5, claude-opus-5.5 and claude-sonnet-5.5, and docker-agent
-# passes with it on OpenRouter and Vercel. The route decides, so the route does not offer it.
 _CHANNEL_REFUSES[("tokenrouter", "docker-agent")] |= {"claude-fable-5-1"}
 # dcode drives the Responses API (deepagents' built-in profile sets use_responses_api for every openai:*
 # model), and TokenRouter's /v1/responses does not reach every family it serves on chat completions:
@@ -9731,16 +10344,8 @@ _CHANNEL_REFUSES[("tokenrouter", "dcode")] = frozenset({"glm-5.3-flash",
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5",
     "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"})
-# The HarnessRouter API's Responses route reaches every family dcode is offered but Gemini's: one first turn
-# per id on 0.37.0-rc.15, every Claude, DeepSeek, GLM, Grok, Kimi, Llama, Mistral, Muse, Nemotron, Qwen and
-# Step id completed, and eight Gemini ids answered "Error code: 404" (gemini-3.7-flash completed, and stays).
-_CHANNEL_REFUSES[("harnessrouter", "dcode")] = frozenset({
-    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
-    "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview"})
-
-
 # Roder uses the same Responses routes; these are channel refusals, not Roder measurements.
-for _channel in ("tokenrouter", "harnessrouter"):
+for _channel in ("tokenrouter",):
     _CHANNEL_REFUSES[(_channel, "roder")] = _CHANNEL_REFUSES[(_channel, "dcode")]
 
 def _channel_refuses(provider: str, backend: str, model: str) -> bool:
@@ -12033,6 +12638,19 @@ async def create_response(body: CreateResponseBody, request: Request):
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
     # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
     harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
+    # External UHP harnesses own their agent, browser session and response lifecycle. Route them
+    # before local Harness/runner validation; the local id is only a stable Gateway alias.
+    if not harness_id and body.previous_response_id:
+        previous = await _uhp_response_get(body.previous_response_id)
+        if previous:
+            if not _uhp_in_reach(previous, principal):
+                raise uhp_error(404, "response_not_found", "No response with that id.", "previous_response_id")
+            harness_id = str(previous.get("harness_id") or "")
+    external = await _uhp_target(harness_id, principal) if harness_id else None
+    if external:
+        conn, remote_harness = external
+        conn, remote_harness = await _uhp_require_ready(conn, remote_harness)
+        return await _uhp_request_response(body, request, conn, remote_harness, principal)
     if not harness_id and body.previous_response_id:
         # A continuation belongs to its session's harness. A client that does not repeat harness_id
         # on a follow-up (the protocol asks only for previous_response_id) used to be routed by the
@@ -12799,6 +13417,10 @@ _RESPONSE_UNREADABLE = "This response could not be read just now. Try again in a
 @app.get("/v1/responses/{response_id}")
 async def get_response(response_id: str, request: Request):
     principal = await _principal(request)
+    remote = await _uhp_remote_get(response_id, principal=principal)
+    if remote is not None:
+        status, payload = remote
+        return JSONResponse(payload, status_code=status)
     # strict: this route is the ONLY completion signal a background poller has (see
     # `_reconcile_response`), so a record the store could not read must never be answered
     # response_not_found — a permanent answer to a transient failure. 503 says "ask again";
@@ -13400,6 +14022,10 @@ async def cancel_response(response_id: str, request: Request):
     monotonic cancellation that propagates to the sandbox — and it enforces
     object-level ownership so one org can't cancel another's response (LIVE-B)."""
     principal = await _principal(request)
+    remote = await _uhp_remote_get(response_id, "/cancel", principal)
+    if remote is not None:
+        status, payload = remote
+        return JSONResponse(payload, status_code=status)
     org = principal.get("org", "")
     rec = await _resp_get(response_id)
     if not rec:
@@ -19199,7 +19825,7 @@ async def _memory_round_trip(engine: str, key: str, base: str, org: str) -> str:
         made = await prov.remember(mid, memory_plane._record_in({
             "type": "note", "title": memory_plane.PROBE_PREFIX + " connection check",
             "content": "HarnessRouter checked that this engine keeps a record and reads it back."}),
-            {"kind": "provider", "id": "harnessrouter"}) or {}
+            {"kind": "provider", "id": "tokenrouter"}) or {}
         if not made.get("id") or not await prov.get(mid, str(made["id"])):
             return (f"{label} took a record but couldn't give it back, so it wasn't connected. Look at {label}'s own log, "
                     "then connect it again.")
@@ -23813,6 +24439,7 @@ async def list_harnesses(org: str, request: Request,
              if str(r.get("deleted")) not in ("1", "true", "True")]
     if workspace:
         items = [i for i in items if _workspace_keep(i.get("workspace") or "", workspace, bool(workspace_default))]
+    items.extend(await _uhp_harnesses(p))
     items.sort(key=lambda x: x["createdAt"], reverse=True)
     return {"harnesses": items}
 
@@ -24169,7 +24796,7 @@ async def _harness_idem_claim(org: str, sha: str, hid: str, req: str) -> dict | 
 
     While the first request is still creating, a repeat waits for it (Tasks §6: never a conflict
     or a not-found for work in progress). Once the key's harness is deleted the key names none, and
-    the repeat creates one, so a deploy whose Cloud copy was deleted makes it again."""
+    the repeat creates one, so a deploy whose deleted harness recreation was deleted makes it again."""
     if not control_store.enabled():     # no durable store: refuse rather than create blind
         raise HTTPException(503, "idempotency store unavailable; retry")
     deadline = time.time() + _HARNESS_IDEM_STALE + 30
@@ -25090,565 +25717,19 @@ async def list_harnesses_public(request: Request) -> dict:
     ws = str(p.get("workspace") or "")
     if ws:
         items = [i for i in items if _workspace_keep(i.get("workspace") or "", ws, bool(p.get("workspace_default")))]
+    items.extend(await _uhp_harnesses(p))
     items.sort(key=lambda x: x["createdAt"], reverse=True)
     return {"harnesses": items}
-
-
-# ── Cloud upload: a local harness, pushed to a hosted workspace ────────────────
-# One-way door. The self-hosted instance is the source of truth and the hosted copy is a
-# deployment target: an upload REPLACES it, nothing is pulled back, and the hosted copy is not
-# protected from the next upload. Upsert on the harness id, so the hosted id is the local id and
-# stays stable forever (API callers and links on the hosted side keep working across re-uploads).
-# The hosted workspace is whatever the API key was minted in; the operator pastes one key and
-# Test shows the destination name. Stored encrypted beside the provider keys, never handed to the
-# browser; this process does the upload. Not a UHP surface: a product feature, like plugins.
-_CLOUD_UPLOAD_KEY = "harness-cloud-upload"          # vault: {base_url, api_key}
-_CLOUD_UPLOAD_DEFAULT_BASE = os.environ.get("HR_CLOUD_API_BASE", "https://api.harnessrouter.ai").rstrip("/")
-_CLOUD_UPLOAD_RECORDS_KEY = "harness-cloud-upload-records"   # vault: {hid: {fingerprint, uploaded_at, target}}
-_HID_RE = re.compile(r"^chrn_[0-9a-f]{32}$")
-
-
-class CloudTargetBody(BaseModel):
-    api_key: str | None = None          # omitted or "" on PUT keeps the stored key
-    base_url: str | None = None
-
-
-async def _cloud_targets() -> dict:
-    """{targets: {tkey: {base_url, api_key, org, org_name, workspace, workspace_name}}, last: tkey}.
-
-    Several stored destinations: the operator uploads to wherever they hold a key, and the dialog
-    offers the stored ones in a picker. A v1 single-target doc (one key at the root) is wrapped
-    into the list rather than discarded, so a key pasted before this shape survives."""
-    v = await _vault_get(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY)
-    try:
-        doc = json.loads(v) if v else {}
-    except Exception:  # noqa: BLE001
-        doc = {}
-    if not isinstance(doc, dict):
-        return {"targets": {}, "last": ""}
-    if doc.get("api_key"):                      # v1: one target at the root
-        tkey = _cloud_tkey(doc)
-        return {"targets": {tkey: doc}, "last": tkey}
-    doc.setdefault("targets", {})
-    doc.setdefault("last", "")
-    return doc
-
-
-async def _cloud_targets_save(doc: dict) -> None:
-    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_KEY, json.dumps(doc), require_encryption=True)
-
-
-def _cloud_label(t: dict) -> str:
-    """What a person sees for a destination. Display names and the account email only: org and
-    workspace ids are internal and never shown (the harness id is the one deliberate exception
-    in the product)."""
-    ws = str(t.get("workspace_name") or "").strip()
-    member = str(t.get("member") or "").strip()
-    if ws and member:
-        return f"{ws} ({member})"
-    return ws or member or "Cloud workspace"
-
-
-def _cloud_target_public(t: dict) -> dict:
-    key = str(t.get("api_key") or "")
-    return {"id": _cloud_tkey(t), "base_url": t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE,
-            "key_hint": (key[:6] + "…" + key[-4:]) if len(key) >= 10 else ("…" if key else ""),
-            "member": t.get("member") or "", "workspace_name": t.get("workspace_name") or "",
-            "revoked": bool(t.get("revoked")), "label": _cloud_label(t)}
-
-
-def _cloud_tkey(target: dict) -> str:
-    """One hosted copy per (org, workspace): the record key a target owns."""
-    return f"{target.get('org') or ''}|{target.get('workspace') or ''}"
-
-
-async def _cloud_records() -> dict:
-    """{harness id: {target key: {remote_id, fingerprint, uploaded_at, target}}}.
-
-    Per harness AND per target: the same local harness uploads to as many workspaces as the
-    operator connects over time, each keeping its own hosted copy. A v1 flat record (one target,
-    implicit) predates that and is discarded rather than guessed at: it never shipped."""
-    v = await _vault_get(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY)
-    try:
-        doc = json.loads(v) if v else {}
-    except Exception:  # noqa: BLE001
-        doc = {}
-    if not isinstance(doc, dict) or (doc and doc.get("v") != 2):
-        return {"v": 2, "harnesses": {}}
-    if not doc:
-        return {"v": 2, "harnesses": {}}
-    return doc
-
-
-async def _cloud_base_refused(base: str) -> str | None:
-    """Why an upload destination's address will not be called, or None: the rule an MCP address
-    follows (_ssrf_check). On a self-hosted box any http(s) host, since the network is the operator's
-    own; on a shared deployment https only, and never an address that resolves to a private, local or
-    metadata range. The test route fetches the address for any caller with a key and returns what it
-    answers, so without this it reached whatever this server can reach (reported privately,
-    GHSA-c5g7-c47h-f6c3)."""
-    from urllib.parse import urlparse
-    try:
-        u = urlparse(str(base or ""))
-    except ValueError:
-        return "invalid url"
-    if not u.hostname:
-        return "url has no host"
-    if _pool_is_local():
-        return None if u.scheme in ("http", "https") else "the address must be http or https"
-    if u.scheme != "https":
-        return "only https addresses are allowed"
-    return await _internal_target(u.hostname, u.port or 443)
-
-
-class _CloudKeyRefused(HTTPException):
-    """Cloud answered 401 to a destination's key. Said to the console as 400: a 401 from this server
-    means the person's own session ended, and the console signs them out on it, so a pasted key Cloud
-    refused used to sign its operator out of their own console."""
-    def __init__(self, detail: str = "HarnessRouter Cloud refused this key. Check it, or sign in again to get a new one."):
-        super().__init__(400, detail)
-
-
-async def _cloud_me(base_url: str, api_key: str) -> dict:
-    """Resolve a key to where an upload lands, as HarnessRouter Cloud's /v1/me names it. Raises
-    HTTPException with the hosted side's words. A key Cloud's sign-in minted for the organization's
-    Default Workspace is answered with that workspace by Cloud itself (since 2026-10-23); a key it
-    answers with none is refused, however it came."""
-    refused = await _cloud_base_refused(base_url)
-    if refused:
-        raise HTTPException(400, f"that address cannot be used: {refused}")
-    try:
-        r = await _checked_http().get(f"{base_url}/v1/me", headers={"authorization": f"Bearer {api_key}"},
-                                      timeout=httpx.Timeout(20.0, connect=8.0))
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"could not reach {base_url}: {str(e)[:120]}")
-    if r.status_code == 401:
-        raise _CloudKeyRefused()
-    if r.status_code != 200:
-        raise HTTPException(502, f"cloud answered {r.status_code}")
-    me = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-    if not isinstance(me, dict) or not me.get("org"):
-        raise HTTPException(502, "cloud answered without an org")
-    if not me.get("workspace"):
-        raise HTTPException(400, "this key is not bound to a workspace; mint one inside the workspace")
-    return me
-
-
-async def _cloud_harness_body(org: str, hid: str, v: dict, plugins_ok: bool = False) -> dict:
-    """What travels: the harness config, with every skill's files inlined (a bundle the local
-    instance offloaded to a blob is a local detail; the hosted side gets the files). Never:
-    provider keys (not part of a harness), sessions, produced files, the local workspace.
-
-    Installed plugins travel whole, with their files, when the hosted side reports the plugins
-    capability. When it does not (a hosted side still on 2026-08-11), each enabled plugin travels
-    as what it contains, its skills and its remote servers on the harness's own lists, so the
-    hosted copy runs the same way; a stdio server has no place there and is left out."""
-    out = _harness_out(await _mcp_migrate(org, hid, v))
-    plugins: list[dict] = []
-    mcp_extra: list[dict] = []
-    skills_extra: list[dict] = []
-    for pe in _plugins_of(v):
-        pfiles = await _plugin_files_of(pe, org)
-        if not pfiles:
-            continue
-        if plugins_ok:
-            plugins.append({"name": pe["name"], "enabled": pe["enabled"], "files": pfiles})
-            continue
-        if not pe["enabled"]:
-            continue
-        for sk in pe["skills"]:
-            prefix = f"skills/{sk['name']}/"
-            sfiles = [{**f, "path": f["path"][len(prefix):]} for f in pfiles
-                      if isinstance(f, dict) and str(f.get("path") or "").startswith(prefix)]
-            if sfiles:
-                skills_extra.append({"name": sk["name"], "enabled": True, "files": sfiles})
-        for s in pe["mcpServers"]:
-            if s.get("transport") != "stdio" and s.get("url"):
-                mcp_extra.append({k: s[k] for k in ("name", "url", "transport", "headers") if k in s})
-    skills = []
-    for sk in out.get("skills") or []:
-        if not isinstance(sk, dict):
-            continue
-        sk = dict(sk)
-        if sk.get("blob") and not sk.get("files"):
-            raw = await _blob_get(f"skills/{sk['blob']}.json", kb=BLOB_KB)
-            if raw:
-                try:
-                    sk["files"] = json.loads(raw)
-                except Exception:  # noqa: BLE001
-                    pass
-            sk.pop("blob", None)
-        skills.append(sk)
-    return {"name": out["name"], "base": out["base"], "base_label": out.get("baseLabel") or out["base"],
-            "default_model": out.get("defaultModel") or None, "system_prompt": out.get("systemPrompt") or None,
-            "mcp_servers": (out.get("mcpServers") or []) + mcp_extra, "skills": skills + skills_extra,
-            **({"plugins": plugins} if plugins_ok else {}),
-            "disabled_tools": out.get("disabledTools") or [], "max_step": out.get("maxStep"),
-            "timeout_seconds": out.get("timeoutSeconds"), "additional_headers": out.get("additionalHeaders") or [],
-            "reasoning_effort": out.get("reasoningEffort") or None,
-            "kit": out.get("kit") or None,
-            "source": "selfhost", "source_instance": socket.gethostname()}
-
-
-def _cloud_fingerprint(body: dict) -> str:
-    stable = {k: v for k, v in body.items() if k not in ("source", "source_instance")}
-    return hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
-
-
-async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> dict:
-    """Upload one harness. Returns the per-row result the dialog renders; never raises for a
-    single harness, so a batch finishes every row."""
-    if not _HID_RE.match(hid):
-        return {"id": hid, "ok": False, "action": "skip", "error": "built-in"}
-    v = await _vertex_get(hid)
-    if not v or str(v.get("org") or "") != org or str(v.get("deleted") or "") in ("1", "true"):
-        return {"id": hid, "ok": False, "action": "skip", "error": "not found"}
-    refused = await _cloud_base_refused(target.get("base_url") or "")
-    if refused:          # a destination stored before the address was checked
-        return {"id": hid, "ok": False, "action": "skip", "error": f"that address cannot be used: {refused}"}
-    plugins_ok = harness_idem = False
-    try:
-        d = (await _checked_http().get(f"{target['base_url']}/v1/uhp",
-                                       timeout=httpx.Timeout(10.0, connect=5.0))).json()
-        caps = d.get("capabilities") or {}
-        plugins_ok, harness_idem = bool(caps.get("plugins")), bool(caps.get("harness_idempotency"))
-    except Exception:  # noqa: BLE001
-        plugins_ok = harness_idem = False
-    body = await _cloud_harness_body(org, hid, v, plugins_ok)
-    fp = _cloud_fingerprint(body)
-    per = records.setdefault("harnesses", {}).setdefault(hid, {})
-    tkey = _cloud_tkey(target)
-    rec = per.get(tkey)
-    # A copy is created with POST /v1/harnesses, which names its id, and replaced with PUT
-    # /v1/harnesses/{id} (UHP Harnesses §5.1, §5.2). PUT never creates: Cloud answers 404 for an id
-    # it holds no harness under, so a first deploy by PUT to a new id failed (found 2026-10-24).
-    # This destination's copy is the one its record names, so a
-    # second workspace, in the same org or another, gets its own; a copy deleted on Cloud since is
-    # created again.
-    action = "replace" if rec else "create"
-    # a record an upload before remote ids were kept names none: its copy is at the local id
-    rid = str((rec or {}).get("remote_id") or hid)
-    hdr = {"authorization": f"Bearer {target['api_key']}"}
-    # A create's key (Harnesses §5.1), from the local harness and the form being sent: a deploy
-    # whose answer was lost (a timeout, a restart before the record was saved) sends it again and
-    # gets Cloud's copy back instead of making a second one. A copy deleted on Cloud since leaves
-    # the key naming none, so the same key makes it again.
-    create_hdr = {**hdr, "idempotency-key": f"deploy:{hid}:{fp}"} if harness_idem else hdr
-    wait = httpx.Timeout(60.0, connect=8.0)
-    try:
-        r = None
-        if rec:
-            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{rid}",
-                                          json=body, headers=hdr, timeout=wait)
-            if r.status_code == 404:
-                action, r = "create", None
-        if r is None:
-            r = await _checked_http().post(f"{target['base_url']}/v1/harnesses", json=body, headers=create_hdr,
-                                           timeout=wait)
-    except Exception as e:  # noqa: BLE001
-        return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
-    try:
-        j = r.json()
-    except Exception:  # noqa: BLE001
-        j = {}
-    j = j if isinstance(j, dict) else {}
-    if r.status_code in (200, 201):
-        remote_id = rid if action == "replace" else str(j.get("id") or "")
-        if not remote_id:
-            return {"id": hid, "ok": False, "action": action, "error": "cloud answered without the copy's id"}
-        # the form it was sent in (plugins whole, or as their skills and servers): the status
-        # compares the setup now against that same form
-        per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
-                     "remote_id": remote_id, "target": _cloud_label(target), "plugins_ok": plugins_ok}
-        return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": remote_id}
-    if r.status_code == 401:
-        # the destination's key, refused: said as that, and the destination is marked so the next deploy
-        # asks to sign in again with the reason, instead of failing the same way or pairing in silence
-        return {"id": hid, "ok": False, "action": action, "refused": True,
-                "error": "HarnessRouter Cloud refused the key this instance keeps for that workspace. Sign in again to reconnect it."}
-    return {"id": hid, "ok": False, "action": action, "error": _cloud_refusal(r.status_code, j, r.text)}
-
-
-def _cloud_refusal(status: int, j: dict, text: str) -> str:
-    """Cloud's refusal of a deploy in its own words, naming what it refused. Its errors carry the
-    field they are about (`param`: base, default_model, plugins, or the field a body failed on) and a
-    sentence; a 422 on base or default_model means Cloud does not offer that harness or that model to
-    the workspace, which no retry changes."""
-    err = (j.get("error") or {}) if isinstance(j.get("error"), dict) else {}
-    msg = str(err.get("message") or (j.get("detail") if isinstance(j.get("detail"), str) else "") or "").strip() \
-        if j else str(text or "")[:160]
-    param = str(err.get("param") or "").strip()
-    what = {"base": "the agent harness", "default_model": "the model"}.get(param, param)
-    lead = f"HarnessRouter Cloud did not take {what}" if (status == 422 and what) else f"cloud answered {status}"
-    return f"{lead}: {msg}"[:300] if msg else lead[:300]
-
-
-def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict:
-    """Status against the CURRENTLY connected workspace: other targets' copies exist but are not
-    this chip's business."""
-    rec = (records.get("harnesses", {}).get(hid) or {}).get(_cloud_tkey(target))
-    if not rec:
-        return {"uploaded": False}
-    return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
-            "changed": bool(fp) and rec.get("fingerprint") != fp}
-
-
-@app.get("/v1/cloud-upload/targets")
-async def cloud_targets_get(request: Request) -> dict:
-    await _principal(request)
-    doc = await _cloud_targets()
-    # Self-heal a label: a target stored while the hosted side could not name its workspace keeps
-    # empty fields, and the hosted side has since learned to answer (names are stamped on keys at
-    # mint and were backfilled). Re-resolve only while a field is missing, best effort: a dead key
-    # keeps its stored shape and stays listed, and removal is always available.
-    changed = False
-    for tkey, t in list(doc["targets"].items()):
-        if t.get("workspace_name") and t.get("member"):
-            continue
-        try:
-            me = await _cloud_me(t.get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE, t.get("api_key") or "")
-        except HTTPException as e:
-            # A revoked key is a state the operator must see, not an empty label. Anything else
-            # (network, hosted hiccup) stays silent and retries on the next listing.
-            if isinstance(e, _CloudKeyRefused) and not t.get("revoked"):
-                t["revoked"] = True
-                changed = True
-            continue
-        t.update({"org": me.get("org") or t.get("org") or "", "org_name": me.get("org_name") or "",
-                  "workspace": me.get("workspace") or t.get("workspace") or "",
-                  "workspace_name": me.get("workspace_name") or "", "member": me.get("member") or "",
-                  "revoked": False})
-        new_key = _cloud_tkey(t)
-        if new_key != tkey:
-            doc["targets"].pop(tkey, None)
-            doc["targets"][new_key] = t
-            if doc.get("last") == tkey:
-                doc["last"] = new_key
-        changed = True
-    if changed:
-        await _cloud_targets_save(doc)
-    return {"targets": [_cloud_target_public(t) for t in doc["targets"].values()], "last": doc.get("last") or ""}
-
-
-@app.post("/v1/cloud-upload/targets")
-async def cloud_targets_add(body: CloudTargetBody, request: Request) -> dict:
-    """Add (or refresh) a stored destination: the key is verified before anything is written."""
-    await _principal(request)
-    key = (body.api_key or "").strip()
-    base = (body.base_url or "").strip().rstrip("/") or _CLOUD_UPLOAD_DEFAULT_BASE
-    if not key:
-        raise HTTPException(400, "an API key is required")
-    me = await _cloud_me(base, key)
-    t = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
-         "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or "",
-         "member": me.get("member") or ""}
-    doc = await _cloud_targets()
-    doc["targets"][_cloud_tkey(t)] = t
-    doc["last"] = _cloud_tkey(t)
-    await _cloud_targets_save(doc)
-    return _cloud_target_public(t)
-
-
-_DEPLOY = "deploy"
-
-
-@app.post("/v1/cloud-upload/connect", include_in_schema=False)
-async def cloud_connect_start(body: ConnectBody, request: Request) -> dict:
-    """Deploy to Cloud, the first time: open the HarnessRouter Cloud sign-in hand-off. The person
-    signs in (or up) on the page `url` names, the hosted side mints a key in their workspace, and
-    the next poll (cloud_connect_poll) stores it here as the destination of every deploy. No key is
-    pasted and none reaches the browser."""
-    await _require_integrations_admin(request)
-    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
-    return await _connect_open(instance, purpose=_DEPLOY)
-
-
-@app.get("/v1/cloud-upload/connect/{code}", include_in_schema=False)
-async def cloud_connect_poll(code: str, request: Request):
-    """One poll of a Deploy to Cloud hand-off: 202 while the person is still on the hosted page;
-    200 with the stored destination (its public view, never the key) once the key has landed, and
-    on every poll after that until the code expires; 410 when the code is not one of these."""
-    await _require_integrations_admin(request)
-    _connects_sweep()
-    entry = _CONNECTS.get(code)
-    if not entry or entry.get("purpose") != _DEPLOY:
-        raise HTTPException(410, "That sign-in is not open any more. Deploy again to start a new one.")
-    if entry.get("target"):
-        return {"status": "ready", "target": entry["target"]}
-    j = await _connect_fetch(code, entry)
-    if j is None:
-        return JSONResponse({"status": "pending"}, status_code=202)
-    key = str(j.get("api_key") or "")
-    if not key:
-        raise HTTPException(502, "HarnessRouter Cloud answered without a key. Deploy again.")
-    # where the key works: the API the hand-off names (its model endpoint is <base>/v1/provider)
-    endpoint = str(j.get("endpoint") or "").rstrip("/")
-    base = endpoint[: -len("/v1/provider")] if endpoint.endswith("/v1/provider") else _CLOUD_UPLOAD_DEFAULT_BASE
-    me = await _cloud_me(base, key)
-    t = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
-         "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or "",
-         "member": me.get("member") or ""}
-    doc = await _cloud_targets()
-    doc["targets"][_cloud_tkey(t)] = t
-    doc["last"] = _cloud_tkey(t)
-    await _cloud_targets_save(doc)
-    entry["target"] = _cloud_target_public(t)
-    return {"status": "ready", "target": entry["target"]}
-
-
-def _cloud_open_url(target: dict | None, remote_id: str) -> str:
-    """Where a deployed copy opens in HarnessRouter Cloud's console: its setup page, when the
-    destination is HarnessRouter Cloud itself ('' for another address, whose console is unknown)."""
-    base = str((target or {}).get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE).rstrip("/")
-    return f"{HR_HOSTED_CONSOLE}/studio/{remote_id}" if remote_id and base == HR_HOSTED_BASE else ""
-
-
-@app.post("/v1/cloud-upload/targets/test")
-async def cloud_targets_test(body: CloudTargetBody, request: Request) -> dict:
-    """Where would this key land. Nothing is stored."""
-    await _principal(request)
-    key = (body.api_key or "").strip()
-    base = (body.base_url or "").strip().rstrip("/") or _CLOUD_UPLOAD_DEFAULT_BASE
-    if not key:
-        raise HTTPException(400, "an API key is required")
-    me = await _cloud_me(base, key)
-    return {"ok": True, "label": _cloud_label(me), "workspace_name": me.get("workspace_name") or "",
-            "member": me.get("member") or ""}
-
-
-@app.delete("/v1/cloud-upload/targets")
-async def cloud_targets_remove(request: Request, id: str = "") -> dict:
-    """Remove one stored destination (?id=), or every one of them (no id). Upload records stay:
-    they are history, and re-adding the same workspace's key finds them again."""
-    await _principal(request)
-    doc = await _cloud_targets()
-    if id:
-        doc["targets"].pop(id, None)
-        if doc.get("last") == id:
-            doc["last"] = next(iter(doc["targets"]), "")
-    else:
-        doc = {"targets": {}, "last": ""}
-    await _cloud_targets_save(doc)
-    return {"targets": [_cloud_target_public(t) for t in doc["targets"].values()], "last": doc.get("last") or ""}
-
-
-class CloudUploadBody(BaseModel):
-    ids: list[str]
-    target: str | None = None              # a stored destination's id; the only one when omitted
-
-
-async def _cloud_pick_target(tid: str | None) -> dict:
-    doc = await _cloud_targets()
-    targets = doc["targets"]
-    if not targets:
-        raise HTTPException(400, "no cloud workspace connected")
-    if tid:
-        t = targets.get(tid)
-        if not t:
-            raise HTTPException(400, "that stored workspace is gone; pick another")
-        return t
-    if len(targets) == 1:
-        return next(iter(targets.values()))
-    last = targets.get(doc.get("last") or "")
-    if last:
-        return last
-    raise HTTPException(400, "several workspaces are stored; name one")
-
-
-async def _cloud_mark_refused(target: dict) -> None:
-    """A destination whose key Cloud refused on a deploy reads as refused (`revoked`) in the list, so the
-    console says so and asks for a sign-in; a sign-in to the same workspace replaces it whole."""
-    doc = await _cloud_targets()
-    t = doc["targets"].get(_cloud_tkey(target))
-    if t is not None and not t.get("revoked"):
-        t["revoked"] = True
-        await _cloud_targets_save(doc)
-
-
-async def _cloud_remember_last(target: dict) -> None:
-    doc = await _cloud_targets()
-    if doc.get("last") != _cloud_tkey(target) and _cloud_tkey(target) in doc["targets"]:
-        doc["last"] = _cloud_tkey(target)
-        await _cloud_targets_save(doc)
-
-
-@app.post("/v1/harnesses/upload", include_in_schema=False)
-async def cloud_upload_batch(body: CloudUploadBody, request: Request) -> dict:
-    p = await _principal(request)
-    target = await _cloud_pick_target(body.target)
-    records = await _cloud_records()
-    results = [await _cloud_upload_one(p.get("org", ""), str(h), target, records) for h in body.ids[:200]]
-    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
-    await _cloud_remember_last(target)
-    if any(x.get("refused") for x in results):
-        await _cloud_mark_refused(target)
-    return {"results": results, "target": _cloud_target_public(target)}
-
-
-class CloudUploadOneBody(BaseModel):
-    target: str | None = None
-
-
-@app.post("/v1/harnesses/{hid}/upload", include_in_schema=False)
-async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody | None = None) -> dict:
-    p = await _principal(request)
-    await _harness_in_reach(p, hid)
-    target = await _cloud_pick_target((body.target if body else None))
-    records = await _cloud_records()
-    res = await _cloud_upload_one(p.get("org", ""), hid, target, records)
-    await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
-    await _cloud_remember_last(target)
-    if res.get("refused"):
-        await _cloud_mark_refused(target)
-        raise _CloudKeyRefused(res.get("error") or "")
-    if not res.get("ok"):
-        raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
-    return {**res, "open_url": _cloud_open_url(target, str(res.get("remote_id") or "")),
-            "target_name": _cloud_label(target),
-            "status": _cloud_status(hid, records, None, target) | {"changed": False}}
-
-
-@app.get("/v1/harnesses/{hid}/upload", include_in_schema=False)
-async def cloud_upload_status(hid: str, request: Request) -> dict:
-    """The chip on the harness page: never uploaded, uploaded, or changed since."""
-    p = await _principal(request)
-    if hid not in _BASE_CATALOG:
-        await _harness_in_reach(p, hid)
-    records = await _cloud_records()
-    per = records.get("harnesses", {}).get(hid) or {}
-    if not per:
-        return {"uploaded": False}
-    v = await _vertex_get(hid)
-    tkey, rec = max(per.items(), key=lambda kv: kv[1].get("uploaded_at") or 0)
-    # compared in the form it was sent in: a copy sent to a Cloud that takes plugins whole carries
-    # them as such, and read back the other way every deploy there looked changed at once (10-23)
-    fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v, bool(rec.get("plugins_ok")))) if v else None
-    target = (await _cloud_targets())["targets"].get(tkey)
-    return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
-            "changed": bool(fp) and rec.get("fingerprint") != fp,
-            "open_url": _cloud_open_url(target, str(rec.get("remote_id") or "")) if target else ""}
-
-
-@app.get("/v1/cloud-upload/status")
-async def cloud_upload_status_all(request: Request) -> dict:
-    """For the list: which harnesses have been uploaded, and whether each changed since."""
-    p = await _principal(request)
-    records = await _cloud_records()
-    out = {}
-    for hid, per in records.get("harnesses", {}).items():
-        if not per:
-            continue
-        v = await _vertex_get(hid)
-        rec = max(per.values(), key=lambda r: r.get("uploaded_at") or 0)
-        fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v, bool(rec.get("plugins_ok")))) if v else None
-        out[hid] = {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
-                    "changed": bool(fp) and rec.get("fingerprint") != fp}
-    return {"harnesses": out}
 
 
 @app.get("/v1/harnesses/{hid}")
 async def get_harness_public(hid: str, request: Request) -> dict:
     _caller = await _pub_principal(request)
+    if hid.startswith("harn_uhp_"):
+        external = next((item for item in await _uhp_harnesses(_caller) if item["id"] == hid), None)
+        if external:
+            return external
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     org = _caller["org"]
     v = await _mcp_migrate(org, hid, await _harness_in_reach(_caller, hid))
     return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
@@ -25657,9 +25738,8 @@ async def get_harness_public(hid: str, request: Request) -> dict:
 # ── the API, described ────────────────────────────────────────────────────────────────────────
 # The public surface as an OpenAPI document, generated from the routes themselves so it cannot
 # drift from what is served. Only the routes a customer calls with a login or an API key: the
-# org-addressed twins the console uses, the admin pages, the console's own features (kits, cloud
-# upload, workspaces) and every route behind the internal key stay out. Served on the same host as the API, and once per process.
-_OPENAPI_PUBLIC_PREFIXES = ("/v1/responses", "/v1/files", "/v1/sessions", "/v1/harnesses", "/v1/bases",
+# org-addressed twins the console uses, the admin pages, and the console's own features (kits and workspaces) and every route behind the internal key stay out. Served on the same host as the API, and once per process.
+_OPENAPI_PUBLIC_PREFIXES = ("/v1/responses", "/v1/files", "/v1/sessions", "/v1/harnesses", "/v1/workflow-tasks", "/v1/bases",
                             "/v1/models", "/v1/mcp-secrets", "/v1/mcp-test", "/v1/containers", "/v1/traces",
                             "/v1/plugs", "/v1/uhp", "/v1/openapi.json")
 _openapi_doc: dict | None = None
@@ -25676,9 +25756,9 @@ def _openapi_public() -> dict:
                 continue
             if any(getattr(d, "dependency", None) is _internal_only for d in (r.dependencies or [])):
                 continue
-            # A route the console owns under a public prefix opts out with FastAPI's own marker,
-            # include_in_schema=False, at its decorator: the cloud-upload handlers and the kits'
-            # server state, vendor and media handlers live under /v1/harnesses and joined the
+            # A route a console-owned route under a public prefix opts out with FastAPI's own marker,
+            # include_in_schema=False, at its decorator: console-owned server state, vendor and
+            # media handlers live under /v1/harnesses and joined the
             # customer schema by prefix (#245). A new console route under a public prefix has to
             # say so where it is defined, which is where a reviewer sees it.
             if not r.include_in_schema:

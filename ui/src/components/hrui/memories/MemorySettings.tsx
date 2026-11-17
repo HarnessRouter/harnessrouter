@@ -111,8 +111,8 @@ export function MemorySettings({ memory, onSaved, onDeleted }: { memory: Memory;
     catch (e) { setRefused(plain(e, 'The memory was not deleted. Try again.')); setDeleting(false); }
   };
   const copy = async () => {
-    try { await navigator.clipboard.writeText(memory.id); toast('Memory ID copied'); }
-    catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
+    try { await navigator.clipboard.writeText(memory.id); toast('记忆 ID 已复制'); }
+    catch { toast('文本已选中，请按 Cmd 或 Ctrl + C。'); }
   };
 
   return (
@@ -126,8 +126,8 @@ export function MemorySettings({ memory, onSaved, onDeleted }: { memory: Memory;
             </div>
           ) : (
             <div className="mm-nf">
-              <div className="set-f"><span className="set-lb">Name</span><p className="mm-set-v">{memory.name}</p></div>
-              <div className="set-f"><span className="set-lb">Description</span><p className="mm-set-v">{memory.description || 'No description yet.'}</p></div>
+              <div className="set-f"><span className="set-lb">名称</span><p className="mm-set-v">{memory.name}</p></div>
+              <div className="set-f"><span className="set-lb">描述</span><p className="mm-set-v">{memory.description || '暂无描述。'}</p></div>
             </div>
           )}
           {said ? <p className="mm-sstat" role="status">{said}</p> : null}
@@ -140,12 +140,12 @@ export function MemorySettings({ memory, onSaved, onDeleted }: { memory: Memory;
 
         <section className="lg-sub mm-layer">
           <div className="lg-sub-h">
-            <h3>Agent harnesses{held.size ? <span className="muted">{`${held.size} on`}</span> : null}</h3>
+            <h3>Agent 列表{held.size ? <span className="muted">{`${held.size} 个已启用`}</span> : null}</h3>
           </div>
           {failed ? (
-            <div className="empty-list ws-fail" role="alert">The agent harnesses could not be read just now. <button type="button" className="link-q inl" onClick={() => void read()}>Try again</button></div>
+            <div className="empty-list ws-fail" role="alert">暂时无法读取 Agent 列表。<button type="button" className="link-q inl" onClick={() => void read()}>重试</button></div>
           ) : !setups || !grants ? (
-            <Skel label="Loading agent harnesses">
+            <Skel label="正在加载 Agent 列表">
               <div className="cap-list">{[0, 1, 2].map((i) => (
                 <div className="cap-row mm-sl am-sk" key={i}>
                   <SkLine w={30} h={30} r={8} /><span className="grow"><SkLine w="34%" h={13} /><SkLine w="18%" h={11} style={{ marginTop: 8 }} /></span><SkLine w={56} h={26} r={13} />
@@ -160,7 +160,7 @@ export function MemorySettings({ memory, onSaved, onDeleted }: { memory: Memory;
                 </div>
               ) : null}
               {!rows.length ? (
-                <div className="empty-list es cap-empty"><span>No agent harnesses yet.</span></div>
+                <div className="empty-list es cap-empty"><span>还没有 Agent。</span></div>
               ) : shown.length ? (
                 <div className="cap-list">
                   {shown.map((h) => {

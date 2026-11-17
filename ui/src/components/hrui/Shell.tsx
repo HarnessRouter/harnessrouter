@@ -1,7 +1,7 @@
 'use client';
-// The console's frame: a 64px rail on the left (the mark, the workspace, six places, the team's letter, the
+// The console's frame: a 64px rail on the left (the mark, the workspace, five places, the
 // account) and the page beside it. Every page draws its own top. The workspace and account menus open beside
-// the rail. On a phone the rail is a bottom bar of four places and More; Add-ons, API Keys and the letter are
+// the rail. On a phone the rail is a bottom bar of four places and More; Add-ons and API Keys are
 // in More there.
 import './hrui.css';
 import './hrui-console.css';
@@ -9,6 +9,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useWorkspace } from '@/lib/workspace';
+import { getSession, SESSION_EVENT } from '@/lib/auth';
+import { PLATFORM_ADMIN_ORGS, SELF_HOSTED } from '@/lib/edition';
 import { Ic } from './icons';
 import { MyPic, useOperator } from './Avatar';
 import { wsColor, WsBadge } from './ws';
@@ -27,8 +29,7 @@ export const LINKS = {
 // `nav` is the design's name for the place: its stylesheet keeps Add-ons and API Keys off the phone bar by
 // it (they are in More there)
 type Place = { key: string; href: string; label: string; icon: React.ReactNode; aria?: string; nav: string };
-const PLACES: Place[] = [
-  { key: 'start', href: '/start', label: '开始', icon: Ic.start, nav: 'start' },
+const BASE_PLACES: Place[] = [
   { key: 'studio', href: '/studio', label: '工作台', icon: Ic.studio, aria: 'Harness Studio', nav: 'agents' },
   { key: 'memories', href: '/memories', label: '记忆', icon: Ic.memories, nav: 'memories' },
   { key: 'extensions', href: '/extensions', label: '扩展', icon: Ic.extensions, nav: 'library' },   // 'Extensions' was too long for the rail (Richard, 10-21)
@@ -36,13 +37,34 @@ const PLACES: Place[] = [
   { key: 'keys', href: '/keys', label: 'API 密钥', icon: Ic.keys, nav: 'keys' },
 ];
 
+function useGithubStars(enabled: boolean): string | null {
+  const [stars, setStars] = useState<number | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    fetch('/api/github-stars', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d && Number.isFinite(d.stars)) setStars(d.stars); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [enabled]);
+  if (stars === null) return null;
+  return stars >= 1000 ? `${(stars / 1000).toFixed(stars >= 10000 ? 0 : 1)}k` : String(stars);
+}
+
+export function placesFor(selfHosted: boolean, showAdmin: boolean): Place[] {
+  return [
+    ...BASE_PLACES,
+    ...(selfHosted ? [{ key: 'runners', href: '/runners', label: '节点管理', icon: Ic.extensions, nav: 'library' } satisfies Place] : []),
+    ...(selfHosted || showAdmin ? [{ key: 'uhp', href: '/uhp', label: 'UHP连接', icon: Ic.uhp, nav: 'library' } satisfies Place] : []),
+  ];
+}
+
 /** Which rail place a path belongs to. */
-function placeOf(path: string): string {
+function placeOf(path: string, places: Place[]): string {
   if (/^\/(studio|harnesses|tasks)(\/|$)/.test(path)) return 'studio';
   if (/^\/(shop|kits|marketplace)(\/|$)/.test(path)) return 'shop';
   if (/^\/(extensions|plugins|environments)(\/|$)/.test(path)) return 'extensions';
-  if (/^\/(start|quickstart|dashboard|overview)(\/|$)/.test(path)) return 'studio';
-  const p = PLACES.find((x) => path === x.href || path.startsWith(x.href + '/'));
+  const p = places.find((x) => path === x.href || path.startsWith(x.href + '/'));
   return p ? p.key : '';
 }
 
@@ -71,7 +93,15 @@ function usePop(also?: React.RefObject<HTMLElement | null>): [boolean, (v: boole
 export function HruiShell({ children }: { children: React.ReactNode; ownStyles?: boolean }) {
   const pathname = usePathname() || '';
   const router = useRouter();
-  const here = placeOf(pathname);
+  const [, sessionRevision] = useState(0);
+  useEffect(() => {
+    const onSession = () => sessionRevision((n) => n + 1);
+    window.addEventListener(SESSION_EVENT, onSession);
+    return () => window.removeEventListener(SESSION_EVENT, onSession);
+  }, []);
+  const showUhp = SELF_HOSTED || PLATFORM_ADMIN_ORGS.includes(getSession()?.orgId || '');
+  const places = placesFor(SELF_HOSTED, showUhp);
+  const here = placeOf(pathname, places);
   const { workspaces, current, known, setCurrent, failed, lost, clearLost, refresh } = useWorkspace();
   // The workspace list is the switcher: until it has answered no page is drawn (every page is the current
   // workspace's, and nothing stands in for it); a list that could not be read is an error here and in place
@@ -105,6 +135,7 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
     window.addEventListener(WS_MENU_EVENT, on);
     return () => window.removeEventListener(WS_MENU_EVENT, on);
   }, [wsOpen, setWsOpen, setMeOpen]);
+  const stars = useGithubStars(!SELF_HOSTED);
   const op = useOperator();
   useEffect(() => { setWsOpen(false); setMeOpen(false); }, [pathname, setWsOpen, setMeOpen]);
   // an older address (a bookmark, a link in a guide or an email) opens its place in the redesign
@@ -161,7 +192,7 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
             style={known ? { background: wsColor(current.name) } : undefined} onClick={() => { const fromHead = !!wsAnchor.current; wsAnchor.current = null; setMeOpen(false); setWsOpen(fromHead || !wsOpen); setWsAt((n) => n + 1); }}>
             {known ? current.name.charAt(0).toUpperCase() : ''}
           </button>
-          {PLACES.map((p) => (
+          {places.map((p) => (
             <Link key={p.key} href={p.href} className={`rail-btn${here === p.key ? ' on' : ''}`} data-nav={p.nav}
               aria-current={here === p.key ? 'page' : undefined} aria-label={p.aria} title={p.aria}>
               {p.icon}{p.key === 'studio' ? <span className="rail-l2">{p.label}</span> : p.label}
@@ -224,8 +255,7 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
       {meOpen && (
         <div ref={mePop} className="ws-pop me-pop" role="menu" aria-label="账户">
           {op?.user ? <div className="me-h">{op.user}</div> : null}
-          <hr />
-          {PLACES.filter((p) => ['extensions', 'keys'].includes(p.key)).map((p) => (
+          {places.filter((p) => ['extensions', 'keys'].includes(p.key)).map((p) => (
             <button key={p.key} type="button" className={`me-row me-mob${here === p.key ? ' on' : ''}`} role="menuitem" onClick={() => go(p.href)}>{p.icon}{p.label}</button>
           ))}
           <hr className="me-mob" />
@@ -233,6 +263,15 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
           <button type="button" className={`me-row${pathname.startsWith('/profile') ? ' on' : ''}`} role="menuitem" onClick={() => go('/profile')}>{Ic.account}个人资料</button>
           <button type="button" className={`me-row${pathname.startsWith('/byok') ? ' on' : ''}`} role="menuitem" onClick={() => go('/byok')}>{Ic.byok}使用自己的密钥</button>
           <hr />
+          {!SELF_HOSTED ? <>
+            <div className="me-h me-sec" role="presentation">获取帮助</div>
+            <a className="me-row" href={LINKS.docs} target="_blank" rel="noopener noreferrer" role="menuitem">{Ic.docs}文档<span className="me-n" aria-hidden="true">↗</span></a>
+            <a className="me-row" href={LINKS.discord} target="_blank" rel="noopener noreferrer" role="menuitem">{Ic.discord}加入 Discord<span className="me-n" aria-hidden="true">↗</span></a>
+            <a className="me-row" href={LINKS.demo} target="_blank" rel="noopener noreferrer" role="menuitem">{Ic.calendar}预约演示<span className="me-n" aria-hidden="true">↗</span></a>
+            <a className="me-gh" href={LINKS.repo} target="_blank" rel="noopener noreferrer" role="menuitem">
+              {Ic.github}在 GitHub 上关注{stars ? <span className="me-star">{Ic.star}{stars}</span> : null}
+            </a>
+          </> : null}
           {op?.gated === false ? null : (<>
             <hr />
             <button type="button" className="me-row" role="menuitem"

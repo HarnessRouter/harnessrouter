@@ -119,6 +119,34 @@ def _runner_app(state=None):
 A, B = "http://a:8081", "http://b:8081"
 
 
+def test_dynamic_runner_requires_ready_heartbeat_and_keeps_affinity(tmp_path):
+    app = _mk_router(tmp_path, [_runner_app({})], key="test-key")
+
+    async def go():
+        headers = {"x-harness-internal": "test-key"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://router", headers=headers) as client:
+            assert (await client.get("/healthz")).status_code == 200
+            assert (await client.get("/readyz")).status_code == 503
+            assert (await client.post("/register", json={"name": "dynamic", "url": A})).status_code == 200
+            waiting = await client.post("/turn?identifier=dynamic-session", json={})
+            assert waiting.status_code == 503
+            assert waiting.json()["detail"]["code"] == "runner_not_ready"
+            heartbeat = {"name": "dynamic", "phase": "ready", "ready": True, "accepting": True,
+                         "installed_backends": ["codex"], "version": "test"}
+            assert (await client.post("/heartbeat", json=heartbeat)).status_code == 200
+            assert (await client.get("/readyz")).status_code == 200
+            assert (await client.post("/turn?identifier=dynamic-session", json={})).status_code == 200
+            assert app.state._affinity["dynamic-session"] == "dynamic"
+            rows = (await client.get("/runners")).json()["runners"]
+            assert rows[0]["backends"] == ["codex"]
+            assert rows[0]["last_heartbeat"]
+            assert (await client.post("/drain", json={"name": "dynamic"})).status_code == 200
+            assert (await client.post("/turn?identifier=new-session", json={})).status_code == 503
+            assert app.state._affinity["dynamic-session"] == "dynamic"
+
+    asyncio.run(go())
+
+
 def test_drain_persists_and_readiness_tracks_available_runners(tmp_path):
     async def go():
         app = _mk_router(tmp_path, [_runner_app({})], static=[("a", A)])

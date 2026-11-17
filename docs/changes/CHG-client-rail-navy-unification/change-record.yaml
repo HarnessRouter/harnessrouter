@@ -1,0 +1,141 @@
+id: CHG-client-rail-navy-unification
+status: closed
+status_reason: 用户确认的统一深海军蓝配色已在 client 工作树实现，相关 Playwright 用例、类型检查、生产构建和截图证据均通过。
+owner: Codex
+source: 用户附图和“统一使用这种配色”的确认（2026-11-16）
+goal: 将工作空间入口、工作空间头像和一级导航当前项统一为深海军蓝卡片配色，移除橙色头像与亮蓝半透明选中态的混用。
+non_goals:
+  - 修改工作空间切换、设置和创建流程
+  - 调整右侧检查器宽度、标签或交互
+  - 新增真实身份认证、密码校验或账户资料服务端接口
+  - 恢复 HarnessRouter Cloud 能力
+behavior:
+  before: 默认工作空间使用橙色头像，其余头像使用品牌蓝；一级导航当前项使用亮蓝半透明底。
+  after: 所有工作空间头像、工作空间入口和一级导航当前项统一使用深海军蓝卡片底与内描边，悬停仅在未选中态提亮。
+acceptance:
+  - id: AC-1
+    entry: 左侧 rail 与工作空间切换浮层
+    action: 打开工作空间浮层并检查入口和全部头像
+    expected: 工作空间入口和默认/非默认头像背景均为 rgb(27, 43, 70)，描边为 rgb(53, 80, 117)。
+    verification: client/tests/ui/workspace.spec.ts 中的工作空间配色断言
+  - id: AC-2
+    entry: 一级导航
+    action: 检查当前“对话”入口
+    expected: 当前项使用 rgb(27, 43, 70) 卡片底和内描边，不再使用亮蓝半透明底。
+    verification: client/tests/ui/gateway-settings.spec.ts 中的导航配色断言
+  - id: AC-3
+    entry: 一级导航最下方用户头像
+    action: 点击头像后登录、查看个人信息并退出
+    expected: 头像位于主题按钮之后；浮层提供登录或个人信息与退出操作；静态版本信息仅保存在当前浏览器且不保存密码，刷新后保持已登录状态。
+    verification: client/tests/ui/user-menu.spec.ts
+  - id: AC-4
+    entry: 应用后端模式
+    action: 点击用户头像并退出登录
+    expected: 复用同一头像入口，个人信息标注应用会话账户，退出调用应用会话登出接口并回到登录弹框。
+    verification: client/tests/app-ui/navigation.spec.ts 中的共享用户菜单登出用例
+baseline: 脏工作树；保留其他 client、Gateway、UHP/Runner 和 Hexa 产品契约改动。
+reuse_decision: extend
+discovery_evidence:
+  - client/src/styles.css 已集中维护 rail 和导航视觉令牌
+  - client/src/WorkspaceDialog.tsx 负责工作空间浮层头像渲染
+  - client/tests/ui/workspace.spec.ts 与 gateway-settings.spec.ts 已覆盖计算样式
+references:
+  - client/docs/visual-contract.md#统一深海军蓝-rail-配色2026-11-16
+impact:
+  direct:
+    - client/src/styles.css
+    - client/src/WorkspaceDialog.tsx
+    - client/src/UserMenu.tsx
+    - client/src/NavigationRail.tsx
+    - client/src/Workbench.tsx
+    - client/src/AppBackendClient.tsx
+    - client/tests/ui/workspace.spec.ts
+    - client/tests/ui/gateway-settings.spec.ts
+    - client/tests/ui/user-menu.spec.ts
+    - client/tests/app-ui/navigation.spec.ts
+    - client/docs/visual-contract.md
+    - docs/screenshots/rail-unified-navy.png
+    - docs/screenshots/workspace-menu-popover.png
+    - docs/screenshots/workspace-settings-centered.png
+    - docs/screenshots/workspace-create-centered.png
+    - docs/screenshots/rail-user-menu-signed-out.png
+    - docs/screenshots/rail-user-menu-signed-in.png
+    - docs/screenshots/rail-user-profile.png
+    - docs/screenshots/rail-user-menu-dark.png
+  transitive:
+    - 深色主题下的 rail 对比度
+    - 工作空间设置和新建工作区弹框的居中布局
+  unknown: []
+dependencies:
+  - 现有 Ant Design 工作空间浮层与 Modal
+  - Chromium Playwright 运行环境
+test_scope:
+  selection_reason: 变更影响 rail 颜色、工作空间浮层和新增用户菜单，选择工作空间、导航计算样式、用户菜单和应用后端导航用例，未运行无关模块测试。
+  selected:
+    - client/tests/ui/workspace.spec.ts
+    - client/tests/ui/gateway-settings.spec.ts
+    - client/tests/ui/user-menu.spec.ts
+    - client/tests/app-ui/navigation.spec.ts (playwright.app.config.ts)
+    - npm run typecheck
+    - npm run build
+  excluded:
+    - Gateway 与 Runner 测试：本次未修改接口、数据或运行时
+  full_suite_trigger: null
+  evidence_reuse: []
+verification:
+  - acceptance_ids: [AC-1]
+    status: passed
+    command_or_steps: npx playwright test tests/ui/workspace.spec.ts
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Chromium
+    evidence: 8/8 passed; client/docs/visual-contract.md 的工作空间章节和两张工作空间截图哈希
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-2]
+    status: passed
+    command_or_steps: npx playwright test tests/ui/gateway-settings.spec.ts
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Chromium
+    evidence: 11/11 passed; client/docs/visual-contract.md 的导航活动项颜色断言
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2]
+    status: passed
+    command_or_steps: npm run build; git diff --check
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Node.js and Vite 7
+    evidence: tsc -b 与 vite build 成功；构建仅保留既有大于 500 kB chunk 提示；diff check 无空白错误
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-3]
+    status: passed
+    command_or_steps: npx playwright test tests/ui/user-menu.spec.ts (同批 workspace/gateway-settings 20/20)
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Chromium
+    evidence: 覆盖底部顺序、圆形头像、登录持久化、无密码字段、个人信息、退出、刷新和 390px 无横向溢出；截图及哈希记录在 client/docs/visual-contract.md
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-4]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Chromium and Edge
+    evidence: 10/10 passed，包含 shared user menu logs out through the application session API
+    reason: null
+    next_action: null
+remaining:
+  - 真实身份头像上传、密码修改和跨设备资料同步不在本次静态版本范围；应用后端仅复用既有会话登录/退出。
+review: 未要求独立评审；已完成实际 diff、计算样式、截图和生产构建自检。
+handoff: null
+rollback: 回退 client/src/styles.css 中的 rail 卡片令牌与相关类规则，并同步恢复颜色断言和截图即可；不涉及数据或运行时状态迁移。
+closure:
+  outcome: rail 配色与用户菜单实现并验证完成；当前为脏工作树交付，用户未要求提交或创建 PR/MR。
+  merge_commit: null
+  release_evidence: []
+  superseded_by: null
+document_exit: 长期视觉规则保留在 client/docs/visual-contract.md；本 Change 保留最终验证摘要和截图证据引用。

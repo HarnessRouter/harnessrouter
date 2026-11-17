@@ -2,7 +2,7 @@
 // Sign-in for this instance: one username and password posted to /api/selfhost/login, on the sign-in
 // card. A field left empty is said under it and nothing is sent; a refusal is the server's own words;
 // a sign-in that works goes to `next` only when it is a path on this site (GHSA-59mq-hx4p-fw48), else
-// to Start. Nothing else is offered: no sign-up, no reset by email, no third-party sign-in.
+// to Studio. Nothing else is offered: no sign-up, no reset by email, no third-party sign-in.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -35,7 +35,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
 test('the card has the instance’s two fields, and nothing a box without accounts cannot back', async () => {
-  await open('/start');
+  await open('/studio');
   expect(document.getElementById('sh-user')?.getAttribute('autocomplete')).toBe('username');
   expect(document.getElementById('sh-pass')?.getAttribute('type')).toBe('password');
   expect(el.querySelector('#hrui .au-card h1')?.textContent).toBe('登录');
@@ -43,7 +43,7 @@ test('the card has the instance’s two fields, and nothing a box without accoun
 });
 
 test('an empty field is said under it and nothing is sent', async () => {
-  await open('/start');
+  await open('/studio');
   await submit();
   expect(document.getElementById('sh-userMsg')?.textContent).toBe('请输入用户名。');
   await type('sh-user', 'admin');
@@ -54,7 +54,7 @@ test('an empty field is said under it and nothing is sent', async () => {
 
 test('a refusal is the server’s own words, and the button can be pressed again', async () => {
   fetchMock.mockResolvedValue({ ok: false, status: 401, json: async () => ({ detail: 'Incorrect username or password.' }) });
-  await open('/start');
+  await open('/studio');
   await type('sh-user', 'admin');
   await type('sh-pass', 'wrong');
   await submit();
@@ -66,8 +66,8 @@ test('a refusal is the server’s own words, and the button can be pressed again
 
 test.each([
   ['/studio/chrn_1?test=s1', '/studio/chrn_1?test=s1'],
-  ['https://evil.example/', '/start'],
-  ['//evil.example', '/start'],
+  ['https://evil.example/', '/studio'],
+  ['//evil.example', '/studio'],
 ])('signed in, %j goes to %j', async (next, to) => {
   fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
   await open(next);

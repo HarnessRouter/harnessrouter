@@ -15,8 +15,8 @@ import { liveTower, runningNames } from './stackLive';
 import { recordNames } from './setupParts';
 import type { LayerKey } from './settingsModel';
 import { OVERLAY_MAX, readFold, stackOff, STACK_KEY, toggled, writeFold, type Fold } from './stackFold';
-import { DeployCloud } from './DeployCloud';
 import { Markup } from '../Markup';
+import { uhpHealth } from '../uhp-health';
 
 export type SetupTab = 'tasks' | 'settings';
 const SETUP_TABS: readonly SetupTab[] = ['tasks', 'settings'];
@@ -34,6 +34,8 @@ export const BACK_IC = <svg viewBox="0 0 24 24" width="18" height="18" fill="non
 /** A setup's health from its tasks of the last 24 h (setups.ts healthOf): Healthy, Failing (too many
  *  of its finished tasks failed) or Idle (none ran). Its tasks not read yet: nothing is claimed. */
 export function HealthPill({ r }: { r: SetupRow }) {
+  const connection = uhpHealth(r.h);
+  if (connection) return <span className={`pill ${connection.tone}`} data-connection-health role="status" title={connection.reason}>{connection.label}</span>;
   if (!r.tasksKnown) return <span className="pill-sk" aria-busy="true"><span className="sr">正在加载健康状态</span><SkLine w={84} h={22} r={999} /></span>;
   const h = healthOf(r.day);
   const tip = r.day.n ? `${r.day.n}${r.dayCapped ? '+' : ''} task${r.day.n === 1 && !r.dayCapped ? '' : 's'} in 24 h` : 'No tasks in 24 h';
@@ -42,10 +44,16 @@ export function HealthPill({ r }: { r: SetupRow }) {
   return <span className="pill neutral" title={tip}>空闲</span>;
 }
 
+export function TaskHealth({ r }: { r: SetupRow }) {
+  if (!r.h.external && r.h.base !== 'external_uhp') return null;
+  const label = !r.tasksKnown ? '未读取' : healthOf(r.day) === 'idle' ? '无任务' : healthOf(r.day) === 'failing' ? '异常' : '正常';
+  return <span className="task-health-history">任务表现 · 24 小时：{label}</span>;
+}
+
 /** The setup page's one bar (agentHead, as the hosted console's setup page redesign draws it): back to
  *  Harness Studio; the name on the first line, its agent harness and model on the second (the Harness ID
- *  is the first row of Settings › Agent harness); the setup's two actions, Deploy to Cloud
- *  (DeployCloud.tsx) and Connect your app; and Tasks · Settings at the bar's right end, each with its
+ *  is the first row of Settings › Agent harness); the setup's Connect your app action and Tasks · Settings
+ *  at the bar's right end, each with its
  *  icon, where the building page's bar draws them too. */
 // A tab chosen with the keyboard keeps the keyboard on it. The page changes its address for the new tab and
 // draws the bar again, often as a new tree, so the focus tabKeys gave the new tab was lost to the page body
@@ -77,6 +85,7 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
         <div className="ag-ident">
           <div className="ag-l1">
             <h1 className="ag-name" title={r.h.name}>{r.h.name}</h1>
+            {r.h.external || r.h.base === 'external_uhp' ? <HealthPill r={r} /> : null}
           </div>
           <div className={`ag-l2${logo ? ' has-logo' : ''}`}>
             {logo ? <img className="h-logo" src={logo} alt="" aria-hidden="true" title={r.baseName} /> : null}<span className="ag-h">{r.baseName}</span>
@@ -85,11 +94,7 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
         </div>
       </div>
       <div className="ag-right">
-        {/* the setup's two actions: where it runs (Deploy to Cloud), and connecting your app to it
-            (Connect your app, the primary one). They sit before the tabs, so Tasks · Settings keep the
-            bar's right end. On a phone each folds to its icon (its words stay its name and tooltip),
-            so the setup's name keeps the row */}
-        <DeployCloud id={r.h.id} name={r.h.name} />
+        {/* Connect your app is the only setup action in Hexa. */}
         {act('Connect your app', PLUG_IC, onSetUpApp, true)}
       </div>
       <div ref={tabsRef} className="tabs inline ag-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, SETUP_TABS, tab, (k) => { refocusTab = true; onTab(k); })}>

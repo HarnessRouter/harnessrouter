@@ -4,10 +4,8 @@
 // the name on the wire; a wire-only row saves under the wire name; an empty row is left out), and the
 // harnesses it can drive follow the format. Adding a key at the maker takes the models a gateway key
 // was serving. Which key serves each model (chat and image apart) is changed one model at a time, Off
-// included; a removed key leaves no route behind in either map. Media lists are reordered whole. A
-// HarnessRouter API key comes from the hand-off and is saved once it lands.
+// included; a removed key leaves no route behind in either map. Media lists are reordered whole.
 import { act } from 'react';
-import { HANDOFF_POLL_MS } from './ByokPage';
 import { createRoot, type Root } from 'react-dom/client';
 
 jest.mock('next/link', () => ({ __esModule: true, default: ({ children, href, className }: { children: React.ReactNode; href: string; className?: string }) => <a className={className} href={href}>{children}</a> }));
@@ -31,7 +29,6 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const SECRET = '__secret__';
 const CATALOG = [
-  { id: 'harnessrouter', label: 'HarnessRouter API', base_url: 'https://hosted.example/v1', fields: [], secret: 'api_key', secret_label: 'API Key', models: [], backends: ['pi'] },
   { id: 'anthropic', label: 'Anthropic', base_url: 'https://api.anthropic.com/v1', fields: [], secret: 'api_key', secret_label: 'API Key', key_hint: 'sk-ant-…',
     models: [{ canonical: 'claude-sonnet', provider_id: 'claude-sonnet' }], backends: ['claude'] },
   { id: 'openrouter', label: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1', fields: [], secret: 'api_key', secret_label: 'API Key',
@@ -41,6 +38,8 @@ const CATALOG = [
     models: [], canonicals: ['catalog-model'], backends: ['pi', 'codex', 'claude'],
     format_backends: { openai: ['pi'], responses: ['codex'], anthropic: ['claude'] } },
 ];
+const anthropicModels = CATALOG.find((provider) => provider.id === 'anthropic')!.models;
+const openrouterModels = CATALOG.find((provider) => provider.id === 'openrouter')!.models;
 type D = Record<string, unknown> & { integrations: Record<string, unknown>[] };
 let doc: D;
 let puts: Record<string, unknown>[];
@@ -93,7 +92,8 @@ it('reads the admin document and draws the server’s catalog, grouped, with not
   expect(document.querySelector('[data-group="direct"] [data-provider="anthropic"]')).not.toBeNull();
   expect(document.querySelector('[data-group="gateway"] [data-provider="openrouter"]')).not.toBeNull();
   expect(document.querySelector('[data-group="custom"] [data-provider="custom"]')).not.toBeNull();
-  expect(document.querySelector('#pvHosted [data-provider="harnessrouter"]')).not.toBeNull();
+  expect(document.querySelector('[data-provider="harnessrouter"]')).toBeNull();
+  expect(text()).not.toContain('HarnessRouter Cloud');
   expect(text()).not.toMatch(/balance|Microsoft sign-in|Sign in with Microsoft/i);
 });
 
@@ -102,14 +102,14 @@ it('a custom endpoint saves its format, its endpoint and its own rows: arbitrary
   await click('Add endpoint', rowOf('custom'));
   await type(document.getElementById('pk-custom-label'), 'proxy');
   await type(document.getElementById('pk-custom-base_url'), 'https://llm.example/v1');
-  await click('Add model', rowOf('custom'));
-  const model = rowOf('custom').querySelector('input[aria-label="Model"]') as HTMLInputElement;
+  await click('添加模型', rowOf('custom'));
+  const model = rowOf('custom').querySelector('input[aria-label="模型"]') as HTMLInputElement;
   expect(model.tagName).toBe('INPUT');
   expect(document.querySelector('#custom-model-ids option')?.getAttribute('value')).toBe('catalog-model');
   await type(model, 'gpt-4.1-mini');
-  await click('Add model', rowOf('custom'));
+  await click('添加模型', rowOf('custom'));
   await type(rowOf('custom').querySelectorAll('input[aria-label="Name on the wire"]')[1], 'wire-only-model');
-  await click('Add model', rowOf('custom'));
+  await click('添加模型', rowOf('custom'));
   await click('Create', rowOf('custom'));
   const put = lastPut() as { integrations: { name: string; provider: string; config: Record<string, string>; models: unknown[] }[] };
   expect(put.integrations[0]).toMatchObject({ name: 'proxy', provider: 'custom', config: { api_format: 'openai', base_url: 'https://llm.example/v1' } });
@@ -130,7 +130,7 @@ it('the harnesses a custom endpoint can drive follow its API format', async () =
 });
 
 it('a key at the maker takes the models a gateway key was serving; nothing is saved without the key', async () => {
-  doc.integrations = [{ name: 'or', provider: 'openrouter', config: { api_key: SECRET }, models: CATALOG[2].models }];
+  doc.integrations = [{ name: 'or', provider: 'openrouter', config: { api_key: SECRET }, models: openrouterModels }];
   doc.model_map = { 'claude-sonnet': 'or', 'gpt-x': 'or' };
   await open();
   await click('Add key', rowOf('anthropic'));
@@ -147,10 +147,10 @@ it('a key at the maker takes the models a gateway key was serving; nothing is sa
 });
 
 it('editing a key leaves a blank secret as it was (the sentinel goes back)', async () => {
-  doc.integrations = [{ name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: CATALOG[1].models }];
+  doc.integrations = [{ name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: anthropicModels }];
   doc.model_map = { 'claude-sonnet': 'main' };
   await open();
-  await click('Edit', rowOf('anthropic'));
+  await click('编辑', rowOf('anthropic'));
   expect((document.getElementById('pk-anthropic-api_key') as HTMLInputElement).placeholder).toBe('Saved. Leave blank to keep it.');
   await click('Save', rowOf('anthropic'));
   const put = lastPut() as { integrations: { config: Record<string, string> }[] };
@@ -159,10 +159,10 @@ it('editing a key leaves a blank secret as it was (the sentinel goes back)', asy
 
 it('editing a key keeps the request headers it was saved with (each value goes back as the sentinel)', async () => {
   const config = { api_key: SECRET, headers: { 'X-Project': SECRET } } as unknown as Record<string, string>;
-  doc.integrations = [{ name: 'main', provider: 'anthropic', config, models: CATALOG[1].models }];
+  doc.integrations = [{ name: 'main', provider: 'anthropic', config, models: anthropicModels }];
   doc.model_map = { 'claude-sonnet': 'main' };
   await open();
-  await click('Edit', rowOf('anthropic'));
+  await click('编辑', rowOf('anthropic'));
   await click('Save', rowOf('anthropic'));
   const put = lastPut() as { integrations: { config: Record<string, unknown> }[] };
   expect(put.integrations[0].config).toEqual({ api_key: SECRET, headers: { 'X-Project': SECRET } });
@@ -170,8 +170,8 @@ it('editing a key keeps the request headers it was saved with (each value goes b
 
 it('which key serves a model, chat and image apart, Off included', async () => {
   doc.integrations = [
-    { name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: CATALOG[1].models },
-    { name: 'or', provider: 'openrouter', config: { api_key: SECRET }, models: CATALOG[2].models, image_models: [{ canonical: 'img-1', provider_id: 'img-1' }] },
+    { name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: anthropicModels },
+    { name: 'or', provider: 'openrouter', config: { api_key: SECRET }, models: openrouterModels, image_models: [{ canonical: 'img-1', provider_id: 'img-1' }] },
   ];
   doc.model_map = { 'claude-sonnet': 'main', 'gpt-x': 'or' };
   doc.image_model_map = { 'img-1': 'or' };
@@ -185,13 +185,13 @@ it('which key serves a model, chat and image apart, Off included', async () => {
 
 it('a removed key leaves no route behind, chat or image, and models switched off stay off', async () => {
   doc.integrations = [
-    { name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: CATALOG[1].models },
-    { name: 'or', provider: 'openrouter', config: { api_key: SECRET }, models: CATALOG[2].models, image_models: [{ canonical: 'img-1', provider_id: 'img-1' }] },
+    { name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: anthropicModels },
+    { name: 'or', provider: 'openrouter', config: { api_key: SECRET }, models: openrouterModels, image_models: [{ canonical: 'img-1', provider_id: 'img-1' }] },
   ];
   doc.model_map = { 'claude-sonnet': 'main' };            // gpt-x switched off
   doc.image_model_map = { 'img-1': 'or' };
   await open();
-  await click('Remove', rowOf('openrouter'));
+  await click('移除', rowOf('openrouter'));
   expect(text()).toContain('No setup uses it right now.');
   await act(async () => { (document.querySelector('.del-go') as HTMLButtonElement).click(); });
   await flush();
@@ -209,47 +209,6 @@ it('a media list is reordered and switched whole, as the policy for its capabili
   await open();
   expect(text()).toContain('Video, from text');
   expect(text()).toContain('ignores the length you ask for');
-  await click('Down', document.querySelector('[data-capability="text_to_video"]')!);
+  await click('下移', document.querySelector('[data-capability="text_to_video"]')!);
   expect(lastPut()).toEqual({ integrations: [], media_policy: { text_to_video: { order: ['vid-b', 'vid-a'], disabled: [] } } });
-});
-
-it('omits the removed hosted provider and its key hand-off', async () => {
-  await open();
-  expect(document.querySelector('[data-provider="harnessrouter"]')).toBeNull();
-  expect(document.getElementById('pvHosted')).toBeNull();
-  expect(text()).not.toContain('获取密钥');
-});
-
-it('a key HarnessRouter Cloud refused says so on its own line, and Reconnect puts the new key in that connection', async () => {
-  // Cloud refused the stored key (the server read it and was answered 401). It used to read "serves no
-  // model now" with Get a key beside it, and the new key went in as a second connection behind the
-  // refused one, which stayed the one asked: the person paired again and again (hosted, 2026-11-08).
-  jest.useFakeTimers();
-  const opened = jest.fn();
-  Object.defineProperty(window, 'open', { value: opened, configurable: true });
-  doc.integrations = [{ name: 'HarnessRouter API', provider: 'harnessrouter', models: [], key_state: 'refused',
-    config: { api_key: SECRET, base_url: 'https://hosted.example/v1', models_url: 'https://hosted.example/v1/models' } }];
-  let ready = false;
-  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
-    if (url.startsWith('/api/harness/v1/harnesses')) return ok({ harnesses: [] });
-    if (url === '/api/harness/v1/admin/connect') return ok({ code: 'c2', url: 'https://hosted.example/connect/c2' });
-    if (url === '/api/harness/v1/admin/connect/c2') return ready ? ok({ status: 'ready', api_key: 'hr-key-2', endpoint: 'https://hosted.example/v1', name: 'HarnessRouter API' }) : ok({}, 202);
-    if (url === '/api/harness/v1/admin/integrations' && init?.method === 'PUT') { puts.push(JSON.parse(init.body || '{}')); return ok({}); }
-    return ok(doc);
-  });
-  await open();
-  const line = rowOf('harnessrouter').querySelector('[data-key-state="refused"]') as HTMLElement;
-  expect(line).not.toBeNull();
-  expect(line.textContent).toContain('HarnessRouter Cloud refused this key. Reconnect to get a new one.');
-  expect(line.textContent).not.toContain('Connected');
-  await click('Reconnect', line);
-  expect(opened).toHaveBeenCalledWith('https://hosted.example/connect/c2', '_blank', 'noopener');
-  ready = true;
-  await act(async () => { await jest.advanceTimersByTimeAsync(HANDOFF_POLL_MS); });
-  const put = lastPut() as { integrations: { name: string; provider: string; config: Record<string, string> }[] };
-  // one connection, the same name, the new key: never a second connection beside the refused one
-  expect(put.integrations).toHaveLength(1);
-  expect(put.integrations[0]).toMatchObject({ name: 'HarnessRouter API', provider: 'harnessrouter',
-    config: { api_key: 'hr-key-2', base_url: 'https://hosted.example/v1', models_url: 'https://hosted.example/v1/models' } });
-  expect(toast).toHaveBeenCalledWith('HarnessRouter API is reconnected to HarnessRouter.');
 });

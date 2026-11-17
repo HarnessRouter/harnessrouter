@@ -6,12 +6,6 @@
 // - Each provider the server's catalog lists is a row as the design draws it, grouped (direct, your
 //   cloud, model gateways, custom endpoints), and the keys at that provider are listed under it:
 //   several per provider, each under its own name, each edited or removed on its own (byok/KeyForm).
-// - A HarnessRouter API key can be pasted, or fetched with Get a key: this instance opens the hand-off
-//   with its own server (POST /v1/admin/connect), the person finishes it on the page that opens, and
-//   the key arrives here by polling the code (GET /v1/admin/connect/{code}); it is saved at once.
-//   A key HarnessRouter Cloud refused says so on its own line, with Reconnect, which runs the same
-//   hand-off and puts the new key in THAT connection: a new connection beside the refused one left
-//   the refused one first, and the person was back where they started (hosted, 2026-11-08).
 // - "Which key serves each model" is the model map in the person's words, for chat models and, apart
 //   from them, image models: for every model one of the keys can serve, the key that does, or Off. A
 //   key added at the maker itself takes the models a gateway key was serving (direct, then your
@@ -31,12 +25,10 @@ import { toast } from './toast';
 import { ConfirmSheet } from './Sheet';
 import { Skel, SkRows, SkLine } from './Skel';
 import {
-  HOSTED, claimsFor, getDoc, imageMapFor, isEntra, look, mapFor, putDoc, servable, servableImages,
+  claimsFor, getDoc, imageMapFor, isEntra, look, mapFor, putDoc, servable, servableImages,
   type CatalogEntry, type Doc, type Integration, type MediaChain, type MediaCandidate, type PutBody,
 } from './byok/doc';
 import { KeyForm } from './byok/KeyForm';
-import { nameFor, startHandoff, pollHandoff } from './byok/doc';
-export const HANDOFF_POLL_MS = 2000;
 
 const GROUPS: { key: Provider['group']; title: string }[] = [
   { key: 'direct', title: 'Direct provider' }, { key: 'cloud', title: 'Your cloud' }, { key: 'gateway', title: 'Model gateway' }, { key: 'custom', title: 'Custom endpoint' }];
@@ -161,16 +153,12 @@ function Chain({ chain, busy, onMove, onToggle }: { chain: MediaChain; busy: boo
   );
 }
 
-/** `replacing`: the connection whose key the hand-off replaces (Reconnect), else a new connection */
-type Handoff = { code: string; url: string; state: 'waiting' | 'failed'; note: string; replacing?: string };
-
 export function ByokPage() {
   const [doc, setDoc] = useState<Doc | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<{ provider: string; editing?: string } | null>(null);
   const [removing, setRemoving] = useState<Integration | null>(null);
-  const [handoff, setHandoff] = useState<Handoff | null>(null);
   const [models, setModels] = useState<Record<string, boolean>>({});      // a provider's full model list, opened
   const setups = useAllSetups();
   const docRef = useRef(doc);
@@ -256,64 +244,9 @@ export function ByokPage() {
     } finally { setBusy(false); }
   }
 
-  // the HarnessRouter key hand-off: the page it names opens in a new tab, and the code is read until
-  // the key is ready, which is then saved as a connection at once
-  async function getKey(replacing?: string) {
-    setHandoff(null);
-    try {
-      const h = await startHandoff();
-      setHandoff({ ...h, state: 'waiting', note: 'Approve it in the HarnessRouter tab. The key lands here on its own.', ...(replacing ? { replacing } : {}) });
-      window.open(h.url, '_blank', 'noopener');
-    } catch {
-      setHandoff({ code: '', url: '', state: 'failed', note: 'HarnessRouter could not be reached just now. Try again.' });
-    }
-  }
-  useEffect(() => {
-    if (!handoff || handoff.state !== 'waiting' || !handoff.code) return;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      const r = await pollHandoff(handoff.code);
-      if (!alive) return;
-      if (r === 'waiting') { timer = setTimeout(() => void tick(), HANDOFF_POLL_MS); return; }
-      if (r === 'failed') { setHandoff({ ...handoff, state: 'failed', note: 'That key hand-off ended without a key. Get a key again.' }); return; }
-      const d = docRef.current;
-      const meta = d?.catalog.find((c) => c.id === HOSTED);
-      setHandoff(null);
-      if (!d || !meta) return;
-      const config = { api_key: r.api_key, ...(r.endpoint ? { base_url: r.endpoint } : {}), ...(r.models_url ? { models_url: r.models_url } : {}), ...(r.balance_url ? { balance_url: r.balance_url } : {}) };
-      // Reconnect: the new key goes into the connection whose key was refused, under its name and routes
-      const old = handoff.replacing ? d.integrations.find((i) => i.name === handoff.replacing && i.provider === HOSTED) : undefined;
-      if (old) { await submit(meta, { ...old, config: { ...old.config, ...config } }, old.name, `${old.name} is reconnected to HarnessRouter.`); return; }
-      const entry: Integration = {
-        name: nameFor(d, HOSTED, (r.name || '').trim() || 'HarnessRouter API'), provider: HOSTED, models: [], config,
-      };
-      await submit(meta, entry);
-    };
-    timer = setTimeout(() => void tick(), HANDOFF_POLL_MS);
-    return () => { alive = false; if (timer) clearTimeout(timer); };
-  // the document is read through docRef at the moment the key lands
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handoff]);
 
   function keyLine(meta: CatalogEntry, i: Integration) {
     const n = servedBy(i);
-    const bal = i.balance;
-    if (i.key_state === 'refused') {
-      // said as what happened, with the one action that fixes it: never a silent "serves no model now"
-      return (
-        <div key={i.name} className="pv-key" data-key-state="refused">
-          <span className="pv-k bad">
-            <i className="pv-dot" />Refused · <b>{i.name}</b>
-            <span className="pv-serves"> · HarnessRouter Cloud refused this key. Reconnect to get a new one.</span>
-          </span>
-          <span className="pv-act">
-            <button type="button" className="link-q" disabled={busy} onClick={() => setRemoving(i)}>Remove</button>
-            <button type="button" className="btn small line" disabled={busy || handoff?.state === 'waiting'} onClick={() => void getKey(i.name)}>Reconnect</button>
-          </span>
-        </div>
-      );
-    }
     return (
       <div key={i.name} className="pv-key">
         <span className="pv-k">
@@ -408,7 +341,7 @@ export function ByokPage() {
           </Skel>
         ) : null}
         {doc ? GROUPS.map((g) => {
-          const list = doc.catalog.filter((c) => c.id !== HOSTED && look(c).group === g.key);
+          const list = doc.catalog.filter((c) => look(c).group === g.key);
           if (!list.length) return null;
           const n = list.reduce((a, c) => a + keysOf(c.id).length, 0);
           return (

@@ -16,9 +16,9 @@ test('a harness and a task open in Studio, by the same names', () => {
 });
 
 test('the other pages open their places', () => {
-  expect(movedTo('/quickstart', q())).toBe('/start');
-  expect(movedTo('/dashboard', q())).toBe('/start');
-  expect(movedTo('/overview', q())).toBe('/start');
+  expect(movedTo('/quickstart', q())).toBe('/studio');
+  expect(movedTo('/dashboard', q())).toBe('/studio');
+  expect(movedTo('/overview', q())).toBe('/studio');
   expect(movedTo('/kits', q())).toBe('/shop');
   expect(movedTo('/environments', q())).toBe('/extensions?tab=envs');
   expect(movedTo('/environments/henv_1', q())).toBe('/extensions?tab=envs&env=henv_1');

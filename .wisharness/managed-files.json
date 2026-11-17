@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "files": {
+    ".wisharness/rules/config-reference.md": "6344e19dace4e141b21c753731006c5f96bd0494d20c3adfa9db703fb17a8de7",
+    ".wisharness/rules/core.md": "97f803adfef7933808942c74e6dec5273b45910801f1a26c19249bdfb6023bbb",
+    ".wisharness/rules/cross-platform.md": "4279f58b8b7ac8174f9b6b0a047016dbde5633bec9222f3f1deddf8d6e728a79",
+    ".wisharness/rules/git-collaboration.md": "37593bf261f73abd497484a2bd0109d2a48e6647d6b84380f2d6f5d15060ff1e",
+    ".wisharness/rules/method-design-planning.md": "e5e4317f0ebce813d8f95ed9091d09b3eb56de5ba3b53382f65662ed81cba3fe",
+    ".wisharness/rules/method-diagnosis.md": "b18c35ff3a2da039900275ef4844397249b79faef7951224b1a57054fcde73dc",
+    ".wisharness/rules/method-requirements.md": "9d534092cbc3e22618101e935685e5c91b78d4786c3020af6851d65f22d24cc3",
+    ".wisharness/rules/method-retrospective.md": "d67c04e843245c2f6a637ac1d08feb7318238ec60485fc2b5f122e692bee9f72",
+    ".wisharness/rules/method-review.md": "7a2ad5cd317607e03e8a2537b7f035bb48d9b82a7f5939c1bfe3df71f2c8a996",
+    ".wisharness/rules/method-test-design.md": "bfc8f6f5be8bf4bdaf1a22b6243291f964d04ba6b20457baf467b9b67b4f45bb",
+    ".wisharness/rules/team-collaboration.md": "7bc56f08ce046f3541c8588c36e036c5144a460f3959427f637d709abff78c88",
+    ".wisharness/rules/ui-visual-contract.md": "1baea000bb773a21ee66d20ed813c50bf5e952985a6f759af0349b138cba6e69",
+    ".wisharness/templates/change-record.yaml": "710ba5dac79d021862c8c9bb48fad7c51ce48495bcc16667a46b02624f34dc8a",
+    ".wisharness/templates/handoff.md": "0b0d5b1059e772583c6829bd6b2995701ff1a0708d78c478e25f20e4e38d2434",
+    ".wisharness/templates/plan.md": "f5c0fd67791f7d61ca62b0bcef87ffcc067f638029302f2d06722e13fd907794",
+    ".wisharness/templates/platform-matrix.md": "68dd596a62d2d8831936fe419d3a8401b1a56bc556700b95e0f15e2944040eb7",
+    ".wisharness/templates/spec.md": "aaedc108ba106223f45281c4340ec02920ed65dc23761944aa5c9ddc37aa5fa9",
+    ".wisharness/templates/visual-contract.md": "c4bea7537842ac5e55fd35038c75c7bba39aaff9eaae1214f40a881d7c957d53"
+  }
+}

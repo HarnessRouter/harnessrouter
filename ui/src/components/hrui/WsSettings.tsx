@@ -1,12 +1,10 @@
 'use client';
 // A workspace's settings, inside its settings sheet (one sheet, settings inline as compact rows, not a
-// separate page): its name and description in one small form, then Cloud upload as one row, its state on
+// separate page): its name and description in one small form, with the workspace fields only, its state on
 // the row and Manage opening its manager right under it. A row whose read fails is shown as could not be
 // read, with Try again, never left out as if it did not apply.
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { addTarget, listTargets, removeTarget, type CloudTarget } from '@/lib/cloud-upload';
+import { useEffect, useRef, useState } from 'react';
 import { useWorkspace } from '@/lib/workspace';
-import { useEscapeLayer } from './escape';
 import { toast } from './toast';
 
 const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -63,87 +61,3 @@ export function WsProfile({ onSaving }: { onSaving: (busy: boolean) => void }) {
 
 /** One setting as a row: its name, its state, and Manage opening its manager under the row.
  *  Escape closes an open manager before it closes the sheet (escape.ts). */
-function SetRow({ label, state, onDone, children }: { label: string; state: string; onDone: () => void; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const btn = useRef<HTMLButtonElement | null>(null);
-  const id = `set-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`;
-  const close = () => { setOpen(false); onDone(); btn.current?.focus(); };
-  useEscapeLayer(open, close);
-  return (
-    <div className={`set-item${open ? ' open' : ''}`}>
-      <div className="set-row">
-        <span className="set-l">{label}</span>
-        <span className="set-v">{state}</span>
-        <button ref={btn} type="button" className="link-q" aria-expanded={open} aria-controls={id}
-          onClick={() => (open ? close() : setOpen(true))}>{open ? 'Done' : 'Manage'}</button>
-      </div>
-      {open ? <div id={id} className="set-more">{children}</div> : null}
-    </div>
-  );
-}
-
-/** A row whose read failed: its name, that it could not be read, and Try again in place of Manage
- *  (whether it applies is not known, so it is not left out). */
-function FailedRow({ label, onRetry }: { label: string; onRetry: () => void }) {
-  return (
-    <div className="set-item">
-      <div className="set-row" role="alert">
-        <span className="set-l">{label}</span>
-        <span className="set-v">暂时无法读取。</span>
-        <button type="button" className="link-q" onClick={onRetry}>重试</button>
-      </div>
-    </div>
-  );
-}
-
-
-/** Cloud upload: the hosted workspaces this instance may upload a harness to, each added with a key from
- *  that workspace and removed any time. Uploading replaces the cloud copy. */
-export function CloudUploadRow() {
-  const [targets, setTargets] = useState<CloudTarget[] | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [key, setKey] = useState('');
-  const [busy, setBusy] = useState(false);
-  const read = useCallback(() => {
-    setFailed(false);
-    listTargets().then((r) => setTargets(r.targets)).catch(() => setFailed(true));
-  }, []);
-  useEffect(read, [read]);
-  if (failed && targets === null) return <FailedRow label="上传到云端" onRetry={read} />;
-  const n = targets ? targets.length : 0;
-  const state = targets === null ? '' : n ? `${n} workspace${n === 1 ? '' : 's'}` : 'Off';
-
-  async function add() {
-    if (busy || !key.trim()) return;
-    setBusy(true);
-    try { await addTarget(key.trim()); setKey(''); setTargets((await listTargets()).targets); toast('Added'); }
-    catch (e) { toast(e instanceof Error && e.message ? e.message : 'It could not be added. Try again in a moment.'); }
-    finally { setBusy(false); }
-  }
-  async function remove(id: string) {
-    setBusy(true);
-    try { setTargets((await removeTarget(id)).targets); }
-    catch (e) { toast(e instanceof Error && e.message ? e.message : 'It could not be removed. Try again in a moment.'); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <SetRow label="上传到云端" state={state} onDone={() => setKey('')}>
-      <p className="set-note">上传智能体将替换云端副本。</p>
-      {(targets || []).map((t) => (
-        <div key={t.id} className="set-row set-sub">
-          <span className="set-l">{t.label}</span>
-          <span className="set-v">{t.revoked ? 'Key revoked. Paste a new one.' : t.key_hint}</span>
-          <button type="button" className="link-q" disabled={busy} onClick={() => void remove(t.id)}>移除</button>
-        </div>
-      ))}
-      <div className="keyrow">
-        <label className="sr" htmlFor="cloudKey">云端工作区密钥</label>
-        <input id="cloudKey" className="keyname plain" type="password" autoComplete="off" placeholder="sk-hr-…  (the cloud console, inside the workspace, under API Keys)"
-          value={key} onChange={(e) => setKey(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void add(); } }} />
-        <button type="button" className="btn" disabled={busy || !key.trim()} onClick={() => void add()}>{busy ? 'Adding' : 'Add'}</button>
-      </div>
-    </SetRow>
-  );
-}

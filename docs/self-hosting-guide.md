@@ -19,7 +19,6 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [Using the API](#using-the-api)
 - [Running on a cloud VM](#running-on-a-cloud-vm)
 - [Putting it on a public URL](#putting-it-on-a-public-url)
-- [Moving to the hosted service](#moving-to-the-hosted-service)
 - [Architecture](#architecture)
 - [Resources](#resources)
 - [License](#license)
@@ -430,7 +429,6 @@ offers you providers that work.
 | `typesafe` | System One (Jev on TypeSafe's own API: `jev-latest`, `jev-preview`) |
 | `bedrock` | Claude Code, Hermes |
 | `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits), Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
 | `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
 | `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
 | `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, CheetahClaws (OpenAI format), Deep Agents Code (Responses format), fast-agent (OpenAI format), Docker Agent (OpenAI format), Mistral Vibe (OpenAI format) |
@@ -1039,8 +1037,8 @@ run rather than shipped in the image. Review each tool's upstream terms before u
 policies. Credentials are not baked into the image; model requests follow your chosen provider
 and credentials.
 
-**What the hosted service does that this edition does not.** The protocol, the console and the
-starter kits are the same; these are the parts that need a service a single box does not have:
+**What Hexa keeps local.** Hexa does not provide hosted accounts, billing, marketplace services, or
+replicated hosted control-plane behavior:
 
 - **Billing.** Credits, grants, usage in dollars per task and the per-task spend counters belong to
   the hosted ledger. Here you pay your providers directly, and nothing caps a turn by its cost: a
@@ -1067,7 +1065,7 @@ starter kits are the same; these are the parts that need a service a single box 
 - **Real workspaces.** Agents get bash, git, and a filesystem, their native environment, not a
   sandbox emulation.
 - **No Console product telemetry.** Product analytics are disabled in the Community Edition Console.
-- **The same UHP contract as the hosted product.** Your application can use the shared protocol
+- **The UHP contract** Your application can use the shared protocol
   in either edition; deployment, authentication, and provider configuration differ.
 - **Actually self-contained.** No control plane to phone home to, no managed database.
 
@@ -1425,33 +1423,6 @@ runs straight through it.
 
 </details>
 
-## Moving to the hosted service
-
-Self-host for control, or use **HarnessRouter Cloud** for managed deployment, maintenance, and
-scaling. Cloud runs tasks in serverless, isolated sandboxes through the same public API contract
-as Community Edition.
-
-When a custom harness is working the way you want, save any pending changes in its **Settings**
-and select **Upload to Cloud**.
-Connect a destination with an API key created inside the target Cloud workspace. Built-in harnesses
-cannot be uploaded directly; create a custom harness first.
-
-The upload copies the harness configuration, including its skills and MCP configuration. It does
-not transfer provider keys, sessions, generated files, or the local workspace. Configure the
-required model providers in the destination separately.
-
-Update your application's base URL, authentication, and harness ID to use the destination.
-The shared API contract does not mean that local credentials or endpoint URLs work unchanged in
-Cloud. See the [Cloud authentication](https://harnessrouter.ai/docs/authentication) and
-[base URL](https://harnessrouter.ai/docs/base-url) guides.
-
-This is a manual, one-way upload. Later uploads replace the same hosted copy in that destination,
-so they can overwrite changes made in Cloud. Cloud edits are not pulled back into the local copy.
-
-Destination API keys are stored encrypted on your local instance for repeat uploads. If you set
-`HR_SECRET_KEY`, keep the same value across restarts and upgrades. You can remove a saved destination when it is no longer needed. See
-[restarts, upgrades, and backups](#restarts-upgrades-and-backups) before changing container settings.
-
 ## Architecture
 
 ```
@@ -1537,7 +1508,7 @@ owner. Keep the router's data volume when replacing its container. See
 
 ## Resources
 
-- **[Documentation and Cloud](https://harnessrouter.ai)**: hosted service, guides, and pricing.
+- **[Upstream documentation](https://harnessrouter.ai/docs)**: HarnessRouter reference guides.
 - **[Unified Harness Protocol](https://unifiedharnessprotocol.org)**: the open standard this repository implements.
 - **[Starter Kit](https://github.com/HarnessRouter/starter-kit)**: runnable example applications built on Community Edition.
 - **[Discord](https://discord.gg/nPcbwqVPb2)**: community for questions, integrations, and proposals.
@@ -1554,6 +1525,6 @@ licenses. Review them before enabling a backend.
 ### Roder
 
 Set `HR_BACKENDS=roder` for a Roder-only installation. Roder uses its native app-server
-and a Responses connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, or a custom
+and a Responses connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, or a custom
 endpoint with `api_format=responses`). See [Roder setup and verification](roder.md) for
 installation, session state, tool policy, MCP, and qualification limits.

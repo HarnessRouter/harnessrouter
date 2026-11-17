@@ -1,0 +1,103 @@
+id: CHG-hexa-remove-cloud-contract
+status: verifying
+status_reason_updated: '2026-11-13T20:48:52+08:00 Added Start/Letter console entry removal: redirects to /studio; menu icons and Start/Letter page components/styles removed. Redirect smoke tests removed as untestable via Jest mock; TypeScript and focused tests passed. Production build/deploy re-verification still pending for this delta.'
+status_reason: 源码删除、聚焦回归、镜像构建及本地运行接口验证通过；受保护页面的浏览器视觉验收尚未完成，不宣称全量 UI 或正式发布验收通过。
+owner: Codex
+source: 用户需求（2026-11-13）：“hexa版本就是要移除cloud相关功能”。
+goal: 移除 Hexa 面向 HarnessRouter Cloud 的部署、上传、账号/余额和 hosted provider 产品入口，同时保留普通 provider、UHP、Runner 与浏览器能力。
+non_goals:
+  - 删除普通外部模型服务商连接
+  - 删除 UHP、Runner 或浏览器运行时
+  - 清理所有仅作历史参考的 hosted/cloud 字样
+behavior:
+  before: Hexa 暴露 Cloud upload、目标管理、部署连接握手以及 HarnessRouter hosted provider 的 key/模型/余额逻辑。
+  after: 这些产品能力和路由不存在；普通本地编排与用户自有服务商连接继续工作。
+acceptance:
+  - id: AC-1
+    entry: Gateway route registry and public OpenAPI
+    action: Inspect routes and request removed Cloud paths.
+    expected: Cloud paths are absent or return 404/405 without outbound Cloud calls; OpenAPI does not list them.
+    verification: gateway/tests/test_hexa_no_cloud.py and gateway/tests/test_harness_env.py
+  - id: AC-2
+    entry: Console setup, workspace and BYOK pages
+    action: Render affected pages and run focused UI tests.
+    expected: No Cloud deployment/upload or HarnessRouter hosted account action is rendered or called.
+    verification: Focused Jest and TypeScript checks
+  - id: AC-3
+    entry: Documentation
+    action: Search product docs for Cloud deployment/account promotion.
+    expected: Hexa docs describe local/self-hosted operation only.
+    verification: rg and diff review
+baseline: Dirty worktree at c1d34c83d41135b26bc2fa189560d65543b0ca8c; unrelated prior feature changes are preserved.
+runtime:
+  environment: Local Docker Compose, docker-compose.cluster.yml, http://127.0.0.1:3000
+  gateway_image: sha256:9792a19fdc11bcdb0552ad90b01e268f0bffbb2483744af84889add40abdb587
+  started_at: '2026-11-13T08:20:31.186278576Z'
+  gateway_app_sha256: 6545aaa1068a46e825bbdd54a197810839bab4fc02c3edb2613da9b56dac20f4
+  source_matches_container: true
+  data: Existing gateway-data volume retained; Runner and session-router containers were not recreated.
+reuse_decision: new
+discovery_evidence:
+  - gateway/app.py Cloud upload section and HarnessRouter hosted provider section
+  - ui/src/components/hrui setup/workspace/BYOK components
+  - README.md and docs/self-hosting-guide.md Cloud deployment sections
+references:
+  - docs/changes/CHG-hexa-remove-cloud-contract/spec.md
+  - docs/changes/CHG-hexa-remove-cloud-contract/plan.md
+impact:
+  direct: [gateway/app.py, gateway/tests, ui/src/components/hrui, README.md, docs/self-hosting-guide.md]
+  transitive: [public OpenAPI, Console BYOK/setup/workspace consumers]
+  unknown: [external clients that still call removed Cloud routes]
+dependencies: [Docker/compose runtime if deployment verification is requested by current environment]
+test_scope:
+  selection_reason: Removed routes and their direct consumers need focused regression coverage; generic provider and security tests remain relevant.
+  selected:
+    - Gateway no-cloud, harness env, pinned address, workspace scope
+    - BYOK, provider hook, SetupSettings parts
+    - TypeScript and production Next.js build
+    - Deployed Cloud route, integrations, health, UHP and Runner HTTP probes
+    - scripts/verify-deployed-api-key.py
+    - scripts/verify-deployed-uhp.py
+  excluded: [full Console Jest suite with pre-existing unrelated failures]
+  full_suite_trigger: null
+  evidence_reuse: []
+verification:
+  - layer: unit_and_integration
+    command: python -X utf8 -m pytest -q gateway/tests/test_hexa_no_cloud.py gateway/tests/test_harness_env.py gateway/tests/test_pinned_address.py gateway/tests/test_workspace_scope.py
+    result: 'exit 0; 52 passed. Initial Windows locale run had 1 GBK decoding failure; UTF-8 run passed.'
+  - layer: unit
+    command: python -X utf8 -m pytest -q gateway/tests/test_hexa_no_cloud.py
+    result: 'exit 0; 2 passed after adding hidden Harness upload route absence assertions.'
+  - layer: component_integration
+    command: npx jest --runInBand src/components/hrui/ByokPage.test.tsx src/lib/providers.test.tsx src/components/hrui/setup/SetupSettings.parts.test.tsx
+    result: 'exit 0; 3 suites, 35 tests passed. Replaced stale numeric fixture references and old English assertions with current Chinese UI labels.'
+  - layer: build
+    command: npm run type-check; python -m py_compile gateway/app.py; docker compose -f docker-compose.cluster.yml build gateway
+    result: 'exit 0; TypeScript, Python compilation and Next.js production build/lint passed.'
+  - layer: deployed_http
+    command: docker compose -f docker-compose.cluster.yml up -d --no-deps gateway; authenticated HTTP probes through Console BFF and native Gateway
+    result: 'Cloud targets/connect/status/admin connect and per-Harness upload returned 404; POST /v1/harnesses/upload returned 405 through generic Harness ID path matching. Public OpenAPI omitted Cloud paths. Integrations returned 200 with 13 catalog entries and no HarnessRouter provider. Native healthz/UHP/Runner/UHP connections returned 200. All four compose services healthy.'
+  - layer: api_e2e
+    command: docker exec hexa2-gateway-1 python /tmp/verify-deployed-api-key.py
+    result: 'exit 0; mint/native/BFF/revoke 200; revoked key rejected with 401; temporary key cleaned up.'
+  - layer: api_e2e
+    command: docker exec hexa2-gateway-1 python /tmp/verify-deployed-uhp.py
+    result: 'exit 0; deterministic mock UHP connection/discovery/JSON/SSE/continuation/cancel/workflow passed; temporary connection cleaned up. Does not establish a new third-party Runtime conformance result.'
+  - layer: hygiene
+    command: git diff --check
+    result: 'exit 0; no whitespace errors.'
+remaining:
+  - 'not_evaluated: Browser visual acceptance of authenticated BYOK/setup/workspace pages and responsive layouts. Browser opened the login page only; HTTP authentication and API verification succeeded separately. Next step: use an authenticated browser session to inspect these pages and capture screenshots.'
+  - 'Full Console suite not rerun. Earlier NewSetup/AgentHead English assertions and start/open route expectations remain outside this change; no all-suite pass claimed.'
+review:
+  type: self_review
+  result: Product route removal and direct consumers checked; ordinary provider credentials remain masked, existing authentication and workspace scope retained. No new outbound destination introduced. Visual acceptance remains pending.
+handoff: null
+rollback: Any operational rollback must preserve the Hexa no-Cloud product contract. Previous images were not deployed as a rollback and automatic restoration of Cloud capability is not authorized by this record.
+closure:
+  outcome: Source and local deployed API removal verified; browser visual acceptance pending.
+  merge_commit: null
+  release_evidence:
+    - Local gateway image and start time recorded above; no remote deployment or merge performed.
+  superseded_by: null
+document_exit: Keep spec/plan as the current Hexa Cloud removal contract; move final evidence summary to docs/development-verification.md.

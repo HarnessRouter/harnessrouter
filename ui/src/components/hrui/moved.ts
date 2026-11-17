@@ -13,7 +13,7 @@ export function movedTo(path: string, q: URLSearchParams): string | null {
   }
   const m = path.match(/^\/harnesses\/([^/]+)$/);
   if (m) return `/studio/${m[1]}`;
-  if (path === '/dashboard' || path === '/overview' || path === '/quickstart') return '/start';
+  if (path === '/dashboard' || path === '/overview' || path === '/quickstart') return '/studio';
   if (path === '/kits') return '/shop';
   // a Microsoft 365 sign-in comes back to /plugins with its answer in the query (the address the
   // self-hosting guide registers): the Plugins tab reads it, so the query goes along

@@ -16,7 +16,7 @@ const SAID = 'hrui:agent-memory';
 
 /** The engine a person reads, and why: the service's own sentence. */
 export function lineOf(r: AgentMemoryRead): { engine: string; why: string } {
-  return r.memory ? { engine: vendorName(r.memory.engine), why: r.memory.reason || r.reason } : { engine: 'None', why: r.reason };
+  return r.memory ? { engine: vendorName(r.memory.engine), why: r.memory.reason || r.reason } : { engine: '无', why: r.reason };
 }
 
 /** Read a setup's memory again and tell every view of it (after something else changed it: a rename it followed). */
@@ -76,22 +76,22 @@ export function EngineMenu({ current, busy, onPick, label = 'Change' }: {
   const pick = (c: MemoryChoice) => { setOpen(false); onPick(c); };
   return (
     <span className="mm-popw am-menu" ref={wrap}>
-      <button type="button" className="link-q inl" aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(!open)}>{label}</button>
+      <button type="button" className="link-q inl" aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(!open)}>{label === 'Change' ? '更改' : label}</button>
       {open ? (
-        <div className="mm-pop am-pop" role="menu" aria-label="Engine">
+        <div className="mm-pop am-pop" role="menu" aria-label="记忆引擎">
           {Object.keys(VENDORS).map((id) => {
             const on = current === id, can = running(id);
             return (
               <button key={id} type="button" role="menuitemradio" aria-checked={on} className={`mm-mi${on ? ' on' : ''}`} disabled={!can || on}
                 onClick={() => pick({ engine: id })}>
-                <b>{vendorName(id)}</b><small>{can ? VENDORS[id].line : 'Not running here'}</small>
+                <b>{vendorName(id)}</b><small>{can ? VENDORS[id].line : '当前未运行'}</small>
               </button>
             );
           })}
           <div className="mm-pop-sep" />
           <button type="button" role="menuitemradio" aria-checked={current === ''} className={`mm-mi${current === '' ? ' on' : ''}`} disabled={current === ''}
             onClick={() => pick('none')}>
-            <b>None</b><small>Every task starts from nothing.</small>
+            <b>无</b><small>每个任务都从空白开始。</small>
           </button>
         </div>
       ) : null}
@@ -109,7 +109,7 @@ export function MemoryLine({ hid, proposed }: { hid?: string; proposed?: AgentMe
   const pick = (c: MemoryChoice) => void set(c, c === 'none' ? 'Memory off. Each task starts from nothing.' : 'Memory changed.');
   return (
     <div className="am-line" role="status">
-      <span className="am-k">Memory:</span>{' '}
+      <span className="am-k">记忆：</span>{' '}
       <b>{engine}</b>{why ? <span className="am-why">{`, ${after(why)}`}</span> : null}
       {hid ? <>{' '}<EngineMenu current={r.memory ? r.memory.engine : ''} busy={busy} onPick={pick} /></> : null}
     </div>

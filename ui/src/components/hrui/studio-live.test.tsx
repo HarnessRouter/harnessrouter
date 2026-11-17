@@ -50,7 +50,8 @@ import * as harness from '@/lib/harness';
 import * as data from '@/lib/revamp-data';
 import { emitFeedTurn } from '@/lib/feed-turns';
 import StudioPage from '@/app/(app)/studio/page';
-import { BACK_FULL_MS, FIRST_DRAW_MS, READS_IN_FLIGHT, READ_TIMEOUT_MS, RETRY_FIRST_MS, forgetSetupReads } from './setups';
+import { BACK_FULL_MS, FIRST_DRAW_MS, READS_IN_FLIGHT, READ_TIMEOUT_MS, RETRY_FIRST_MS, forgetSetupReads, useSetup } from './setups';
+import { HealthPill } from './setup/parts';
 import { PAUSED_AFTER_MS } from '@/lib/use-workspace-feed';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -130,6 +131,78 @@ beforeEach(() => {
   });
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); jest.useRealTimers(); });
+
+test.each([
+  ['unreachable', '无法连接'], ['unauthorized', '鉴权失败'], ['invalid', '响应无效'],
+  ['harness_missing', 'Harness 缺失'], ['unknown', '未检查'], ['healthy', '连接正常'],
+])('UHP %s overrides task history in cards and list', async (status, label) => {
+  const remote = H('h1', 'Remote', { base: 'external_uhp', external: true, available: status === 'healthy',
+    health: { status, harness_status: status === 'harness_missing' ? 'harness_missing' : 'healthy',
+      last_checked_at: secs(), fresh_until: secs() + 90 } } as Partial<CustomHarness>);
+  hx.listCustom.mockResolvedValue([remote]);
+  tasks.h1 = [card('success', 'completed')];
+  await open();
+  expect(cardOf('h1').querySelector('[data-connection-health]')?.textContent).toContain(label);
+  expect(figures('h1')[1]).toBe('100.0%');
+  await act(async () => { (Array.from(el.querySelectorAll('.vm-seg button')).find(button => button.textContent === '列表') as HTMLButtonElement).click(); });
+  expect(rowOfList('h1').querySelector('[data-connection-health]')?.textContent).toContain(label);
+  expect(rowOfList('h1').getAttribute('href')).toBe('/studio/h1');
+});
+
+test('UHP refreshes health without task events, expires and recovers, but not while hidden', async () => {
+  const remote = (status: string, until = secs() + 90) => H('h1', 'Remote', {
+    base: 'external_uhp', external: true, available: status === 'healthy',
+    health: { status, harness_status: 'healthy', last_checked_at: secs(), fresh_until: until },
+  } as Partial<CustomHarness>);
+  hx.listCustom.mockResolvedValue([remote('healthy', secs() + 2)]);
+  await open();
+  expect(cardOf('h1').querySelector('[data-connection-health]')?.textContent).toContain('连接正常');
+  await wait(2100);
+  expect(cardOf('h1').querySelector('[data-connection-health]')?.textContent).toContain('状态已过期');
+  hx.listCustom.mockResolvedValue([remote('unreachable')]);
+  await wait(30_000);
+  expect(cardOf('h1').querySelector('[data-connection-health]')?.textContent).toContain('无法连接');
+  await setVis('hidden');
+  const before = hx.listCustom.mock.calls.length;
+  await wait(60_000);
+  expect(hx.listCustom.mock.calls.length).toBe(before);
+  hx.listCustom.mockResolvedValue([remote('healthy')]);
+  await setVis('visible');
+  expect(cardOf('h1').querySelector('[data-connection-health]')?.textContent).toContain('连接正常');
+});
+
+test('UHP failed refresh retains observation without extending freshness', async () => {
+  hx.listCustom.mockResolvedValue([H('h1', 'Remote', { base: 'external_uhp', external: true, available: true,
+    health: { status: 'healthy', harness_status: 'healthy', fresh_until: secs() + 40 },
+  } as Partial<CustomHarness>)]);
+  await open();
+  hx.listCustom.mockRejectedValue(new Error('offline'));
+  await wait(30_000);
+  expect(cardOf('h1').querySelector('[data-connection-health]')?.textContent).toContain('连接正常');
+  await wait(11_000);
+  expect(cardOf('h1').querySelector('[data-connection-health]')?.textContent).toContain('状态已过期');
+});
+
+test('UHP detail refreshes and expires independently of historical task reads', async () => {
+  const remote = (status: string) => H('h1', 'Remote', { base: 'external_uhp', external: true,
+    available: status === 'healthy', health: { status, harness_status: 'healthy', fresh_until: secs() + 5 },
+  } as Partial<CustomHarness>);
+  hx.readCustom.mockResolvedValue(remote('unreachable'));
+  function Detail() {
+    const { row } = useSetup('h1');
+    return row ? <HealthPill r={row} /> : null;
+  }
+  await open();
+  await act(async () => { root.render(<Detail />); });
+  await flush();
+  expect(el.querySelector('[data-connection-health]')?.textContent).toContain('无法连接');
+  hx.readCustom.mockResolvedValue(remote('healthy'));
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  await flush();
+  expect(el.querySelector('[data-connection-health]')?.textContent).toContain('连接正常');
+  await wait(6000);
+  expect(el.querySelector('[data-connection-health]')?.textContent).toContain('状态已过期');
+});
 
 test('a turn starting turns the setup\'s running indicator on, in both views, and its end turns it off', async () => {
   await open();

@@ -1,5 +1,5 @@
 /** @jest-environment jsdom */
-// An address with no page, said inside the console's frame, calmly, with the way back to Start (and, signed
+// An address with no page, said inside the console's frame, calmly, with the way back to Studio (and, signed
 // out, Sign in as well).
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -32,15 +32,15 @@ async function open() {
 afterEach(() => { act(() => root.unmount()); el.remove(); signIn(false); });
 const link = (label: string) => Array.from(el.querySelectorAll('a')).find((a) => a.textContent === label);
 
-test('signed in: the heading and the line inside the console’s frame, drawn as its own page, and Start', async () => {
+test('signed in: the heading and the line inside the console’s frame, drawn as its own page, and Studio', async () => {
   signIn(true);
   await open();
   expect(el.querySelector('h1')?.textContent).toBe('This page isn’t here');
   expect(el.textContent).toContain('The link may be old, or the page was moved.');
   expect(el.querySelector('h1')?.closest('.shell')?.getAttribute('data-own')).toBe('1');
-  const start = link('Back to Start');
-  expect(start?.getAttribute('href')).toBe('/start');
-  expect(start?.className).toContain('btn primary');
+  const studio = link('返回工作台');
+  expect(studio?.getAttribute('href')).toBe('/studio');
+  expect(studio?.className).toContain('btn primary');
   expect(link('Sign in')).toBeUndefined();
 });
 
@@ -48,8 +48,8 @@ test('signed out: the same, on the sign-in card, with Sign in as well', async ()
   await open();
   expect(el.querySelector('.shell')).toBeNull();
   expect(el.querySelector('#hrui .au-card h1')?.textContent).toBe('This page isn’t here');
-  expect(link('Back to Start')?.getAttribute('href')).toBe('/start');
-  expect(link('Sign in')?.getAttribute('href')).toBe('/login');
+  expect(link('返回工作台')?.getAttribute('href')).toBe('/studio');
+  expect(link('登录')?.getAttribute('href')).toBe('/login');
 });
 
 test('its title, and no dash or internal word in what it says', async () => {

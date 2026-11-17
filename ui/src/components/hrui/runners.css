@@ -1,0 +1,51 @@
+#hrui .runner-page{max-width:1200px;margin:auto;padding:32px 24px}
+#hrui .runner-header,#hrui .runner-card header,#hrui .runner-card footer{display:flex;align-items:center;justify-content:space-between;gap:16px}
+#hrui .runner-header p,#hrui .runner-register p,#hrui .runner-card footer span{color:#657080;font-size:14px}
+#hrui .runner-summary{display:flex;align-items:center;gap:28px;flex-wrap:wrap;margin:24px 0;padding:18px 0;border-block:1px solid #e1e5e9}
+#hrui .runner-summary b{margin-left:12px;font-size:22px}
+#hrui .runner-summary small{margin-left:auto;color:#657080}
+#hrui .runner-register,#hrui .runner-card{border:1px solid #e1e5e9;border-radius:12px;padding:22px;margin-bottom:18px;background:white}
+#hrui .runner-register form{display:grid;grid-template-columns:1fr 2fr 120px auto;align-items:end;gap:14px;margin:18px 0 10px}
+#hrui .runner-register label{display:flex;flex-direction:column;gap:8px;font-size:14px}
+#hrui .runner-card h2{margin:0 0 6px;font-size:18px}
+#hrui .runner-card code{overflow-wrap:anywhere;font-size:13px;color:#657080}
+#hrui .runner-phase{padding:5px 12px;border-radius:18px;background:#f4eee0;font-size:13px;white-space:nowrap}
+#hrui .runner-phase.is-ready{background:#e5f2e9;color:#246b3e}
+#hrui .runner-card dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;margin:24px 0}
+#hrui .runner-card dt{color:#657080;font-size:12px;margin-bottom:7px}
+#hrui .runner-card dd{margin:0;font-size:14px;overflow-wrap:anywhere}
+#hrui .runner-card footer{border-top:1px solid #e1e5e9;padding-top:16px;margin-top:20px}
+#hrui .runner-card footer span{flex:1}
+#hrui .runner-error{color:#b22b32;background:#fff1f1;padding:12px;border-radius:6px}
+#hrui .runner-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:26px 0 16px}
+#hrui .runner-toolbar h2{margin:0;font-size:17px}
+#hrui .runner-view-switch{display:flex;gap:4px;padding:4px;border:1px solid #e1e5e9;border-radius:8px;background:#f5f6f8}
+#hrui .runner-view-switch button{border:0;background:transparent;padding:6px 16px;border-radius:5px;color:#657080;cursor:pointer;font:inherit;font-size:13px}
+#hrui .runner-view-switch button[aria-pressed="true"]{background:#fff;color:#17202a;box-shadow:0 1px 3px #17202a15}
+#hrui .runner-view-switch button:focus-visible{outline:2px solid #246b3e;outline-offset:2px}
+#hrui .runner-view-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+#hrui .runner-view-cards .runner-card{margin:0;display:flex;flex-direction:column;min-width:0}
+#hrui .runner-view-cards .runner-card dl{grid-template-columns:repeat(2,minmax(0,1fr))}
+#hrui .runner-view-cards .runner-card footer{flex-wrap:wrap;margin-top:auto}
+#hrui .runner-view-cards .runner-card footer span{flex-basis:100%}
+#hrui .runner-table-wrap{overflow-x:auto;border-top:1px solid #dfe4e9}
+#hrui .runner-table{width:100%;border-collapse:collapse;table-layout:auto;background:#fff;font-size:13px}
+#hrui .runner-table th{padding:12px 14px;text-align:left;color:#657080;font-size:12px;font-weight:500;white-space:nowrap;border-bottom:1px solid #dfe4e9}
+#hrui .runner-table td{height:64px;padding:10px 14px;border-bottom:1px solid #e7eaee;vertical-align:middle;white-space:nowrap}
+#hrui .runner-table tbody tr:hover{background:#fafbfc}
+#hrui .runner-table th:first-child,#hrui .runner-table td:first-child{padding-left:12px;min-width:210px}
+#hrui .runner-table th:last-child,#hrui .runner-table td:last-child{text-align:right;padding-right:12px}
+#hrui .runner-name-cell{display:flex;align-items:center;gap:10px}
+#hrui .runner-name-cell span:last-child{display:flex;flex-direction:column;gap:3px;min-width:0}
+#hrui .runner-name-cell strong{font-size:14px;color:#17202a}
+#hrui .runner-name-cell small{max-width:190px;overflow:hidden;text-overflow:ellipsis;color:#657080;font-size:11px}
+#hrui .runner-dot{width:8px;height:8px;flex:none;border-radius:50%;background:#c8cdd3}
+#hrui .runner-dot.is-ready{background:#25814a;box-shadow:0 0 0 4px #e5f2e9}
+#hrui .runner-phase-compact{display:inline-flex;padding:4px 10px;font-size:12px}
+#hrui .runner-backends{display:block;max-width:210px;overflow:hidden;text-overflow:ellipsis;color:#4f5b68}
+#hrui .runner-row-actions{display:inline-flex;gap:6px;opacity:.7}
+#hrui .runner-row-actions .btn{padding:5px 9px;font-size:12px}
+#hrui .runner-table tbody tr:hover .runner-row-actions,#hrui .runner-row-actions:focus-within{opacity:1}
+@media(max-width:900px){#hrui .runner-view-cards{grid-template-columns:1fr}}
+@media(max-width:700px){#hrui .runner-table{min-width:760px}#hrui .runner-table th,#hrui .runner-table td{padding-inline:10px}}
+@media(max-width:700px){#hrui .runner-register form{grid-template-columns:1fr}#hrui .runner-card dl{grid-template-columns:repeat(2,minmax(0,1fr))}#hrui .runner-card footer{flex-wrap:wrap}#hrui .runner-card footer span{flex-basis:100%}}

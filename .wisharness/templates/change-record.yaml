@@ -1,0 +1,58 @@
+# 命中已启用的团队协作规范的共享变更条件时，必须创建或复用 change-record.yaml；默认目录为 docs/changes/<change-id>/。
+# spec 写行为与验收，plan 写方案与步骤；二者及任务/MR 正文不能替代本记录的状态、验证证据与剩余事项。
+# 字段参考而非必填表：按适用场景裁剪，已在任务/MR 中记录的内容直接引用。
+# 填写事实；unknown/not_evaluated 须说明影响及下一步，占位值不作完成证据。
+# 目标、行为、验收、依赖及回滚正文已有真源时，对应字段保留摘要和准确引用（文件章节或场景），不重复展开。
+# 验收 ID 沿用已有编号；实际状态、验证证据及剩余事项在本记录维护，不能只互相链接而无正文。
+id: unknown
+status: proposed # proposed | implementing | verifying | review | merged | released | closed | superseded
+status_reason: unknown # 阶段依据；返工、取消或替代须说明原因
+owner: unknown
+source: unknown # 引用用户需求、持久任务或工作项；不要求创建远端 Issue
+goal: unknown
+non_goals: []
+behavior:
+  before: unknown
+  after: unknown
+acceptance: # 各场景绑定测试或人工验收；按实际增加正常、边界及失败恢复场景
+  - id: AC-1
+    entry: unknown
+    action: unknown
+    expected: unknown
+    verification: unknown # 测试文件与用例、命令或人工步骤；使用前核验
+baseline: unknown
+reuse_decision: unknown # reuse | extend | replace | new
+discovery_evidence: []
+references: [] # 链接已有需求、设计、接口契约、spec.md、plan.md 或 ADR；字段内注明对应章节或场景
+# 仅真实并发冲突时添加 claim，记录 source、scope、owner、expires_at；单执行者无冲突时省略。
+impact:
+  direct: []
+  transitive: []
+  unknown: []
+dependencies: []
+test_scope: # 默认目标用例与受影响回归；不默认全仓，不降低项目 CI / 发布要求
+  selection_reason: unknown # 验收、实际 diff、调用方与共享依赖；说明选中及排除范围的依据
+  selected: [] # 测试文件、模块或用例及对应命令；核验 runner 筛选与必要初始化
+  excluded: [] # 无关套件及排除依据；受影响但未执行的必需项须进入 remaining
+  full_suite_trigger: null # 未触发填 null；触发须说明具体风险/项目要求及更窄范围为何不足
+  evidence_reuse: [] # 引用通过证据，确认相关代码、测试、依赖、配置和环境未变化
+verification: # 与 acceptance ID 对应；证据更新到最终相关代码状态
+  - acceptance_ids: [AC-1]
+    status: not_evaluated # passed | failed | not_evaluated | blocked | not_applicable
+    command_or_steps: unknown
+    exit_code: null # 未执行或人工验证不填写虚构退出码
+    revision: unknown # 提交 SHA；脏工作树还需标识实际验证的 diff/快照
+    environment: unknown
+    evidence: unknown # 脱敏摘要或持久证据链接，不内嵌原始日志
+    reason: unknown # 失败、阻塞、未验证或不适用的原因与影响
+    next_action: unknown
+remaining: [] # 逐项记录未完成内容、阻塞、责任人及下一动作；必需项未完成不得报完成
+review: unknown # 有评审要求时保留
+handoff: unknown # 需跨会话或执行者交接时保留
+rollback: unknown # 涉及需恢复的数据、环境或发布状态时保留
+closure:
+  outcome: unknown # 完成依据，或取消/无需代码/替代的原因
+  merge_commit: null # 无合入环节则说明不适用；不得推测 SHA
+  release_evidence: [] # 环境、版本与实际证据；合入不等于发布
+  superseded_by: null # 被替代时指向接续 Change
+document_exit: unknown # 长期契约/ADR 的去向、最终证据、计划删除或归档结果；活动期填写退出条件

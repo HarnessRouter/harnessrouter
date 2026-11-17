@@ -86,7 +86,7 @@ def test_env_clean_refuses_the_loader_the_import_paths_the_trust_roots_and_the_p
 def test_the_runner_is_told_which_values_are_secret():
     """The turn body names the secret variables; the runner redacts them where the gateway reads
     the turn, so the gateway has no scrub of its own (one mechanism, every sink)."""
-    src = open(Path(gw.__file__)).read()
+    src = Path(gw.__file__).read_text(encoding="utf-8")
     assert '"env_secret": turn_secret,' in src
     assert "_scrub_secrets" not in src
 

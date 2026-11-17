@@ -1,5 +1,5 @@
 'use client';
-// An address with no page, in the redesign (app/not-found.tsx): said calmly, with the way back to Start.
+// An address with no page, in the redesign (app/not-found.tsx): said calmly, with the way back to Studio.
 // Someone signed in sees it inside the console's frame (the rail, their workspace), drawn as one of its
 // own pages whatever the address; someone signed out sees it on the sign-in screen's card, with Sign in
 // as well. Loaded on demand (NotFound.tsx), so a production build never loads the console's stylesheet.

@@ -2214,7 +2214,8 @@ import json, os, pathlib, sys, tempfile, time
 path, phase, ready, accepting, reason, installed = sys.argv[1:]
 data = {"phase": phase, "ready": ready == "1", "accepting": accepting == "1", "reason": reason,
         "requested_backends": [x for x in os.environ.get("HR_BACKENDS", "").split(",") if x],
-        "installed_backends": [x for x in installed.split(",") if x], "failed_backends": [],
+        "installed_backends": [x for x in installed.split(",") if x],
+        "failed_backends": [x for x in os.environ.get("HR_BACKENDS", "").split(",") if x and x not in installed.split(",")] if phase == "failed" else [],
         "version": os.environ.get("HR_VERSION", "dev"), "active": 0,
         "capacity": int(os.environ.get("HR_RUNNER_CAPACITY", "0") or 0), "at": time.time()}
 pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -2238,6 +2239,11 @@ seal_tools    # nothing else is running yet: the runner and the gateway start be
 export PATH="$TOOLS/bin:$PATH"
 if [ -d "$TOOLS/venv/bin" ]; then export PATH="$TOOLS/venv/bin:$PATH"; fi
 export NODE_PATH="$TOOLS/lib/node_modules"
+kill "${pids[0]}"
+wait "${pids[0]}" || true
+( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
+    HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host "$RUNNER_HOST" --port 8081 --log-level warning ) &
+pids[0]=$!
 fi
 
 cleanup() { trap - TERM INT; for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
@@ -2274,26 +2280,17 @@ if [ -n "${HR_ROUTER_URL:-}" ] && [ -n "${HR_RUNNER_NAME:-}" ]; then
       sleep "${HR_RUNNER_HEARTBEAT_S:-10}"
     done
     while true; do
-      curl -fsS -X POST "${HR_ROUTER_URL%/}/heartbeat" \
+      payload="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); d["name"]=sys.argv[2]; print(json.dumps(d))' "$HR_RUNNER_STATE" "$HR_RUNNER_NAME")"
+      curl --max-time 10 -fsS -X POST "${HR_ROUTER_URL%/}/heartbeat" \
         -H "X-Harness-Internal: $HARNESS_INTERNAL_KEY" \
         -H 'content-type: application/json' \
-        -d "{\"name\":\"$HR_RUNNER_NAME\",\"phase\":\"ready\",\"ready\":true,\"accepting\":true,\"active\":0,\"capacity\":${HR_RUNNER_CAPACITY:-0},\"installed_backends\":[\"${HR_BACKENDS_INSTALLED//,/\",\"}\"],\"version\":\"${HR_VERSION:-dev}\"}" \
+        -d "$payload" \
         >/dev/null 2>&1 || true
       sleep "${HR_RUNNER_HEARTBEAT_S:-10}"
     done
   ) &
   pids+=($!)
 fi
-fi
-
-if [ "$ROLE" != "gateway" ]; then
-# runner. Root, for the per-session uid switch; HR_SESSION_UIDS=1 is the declaration the runner
-# fails closed without. The console's credentials and the secret-store key are the product's and
-# are not in its environment at all.
-#
-# The split images cannot use loopback for this: the gateway is in another container. There the
-# runner binds the network interface and only the compose network reaches it; the internal key
-# (above) is what refuses every caller that is not the gateway.
 fi
 
 if [ "$ROLE" != "runner" ]; then

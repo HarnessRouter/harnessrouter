@@ -5,14 +5,14 @@
 // name, in its own words. A created workspace is switched to and the page reloads on Start; its
 // "is ready." toast survives the reload.
 //
-// Workspace settings, one sheet: the workspace's name and description, and its Cloud upload, inline as
+// Workspace settings, one sheet: the workspace's name and description,, inline as
 // compact rows (WsSettings.tsx), with no page of its own (/settings opens this sheet).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspace } from '@/lib/workspace';
 import { Sheet, SheetTop } from './Sheet';
 import { WsBadge } from './ws';
 import { toast } from './toast';
-import { CloudUploadRow, WsProfile } from './WsSettings';
+import { WsProfile } from './WsSettings';
 
 export type WsSheet = 'people' | 'newws' | null;
 
@@ -138,7 +138,6 @@ export function PeopleSheet({ onClose }: { onClose: () => void }) {
       </div>
       <div className="ins-h ws-set-h">设置</div>
       <WsProfile onSaving={setSaving} />
-      <CloudUploadRow />
     </Sheet>
   );
 }

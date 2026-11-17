@@ -1,4 +1,5 @@
 'use client';
+import { uhpHealth } from '../uhp-health';
 // The open task's conversation on a setup's Tasks tab (docs/uxuidesign/console-91: newPane, taskPane,
 // leanComposer, pgOpts in the composer's bar, threadHtml): test the saved setup the way your app
 // would call it. A test is a task: New task starts one, and every task of the setup takes follow-ups,
@@ -150,11 +151,9 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     const read = (n: number) => loadSessionTurns(resume).then(({ turns }) => {
       if (!alive) return;
       fromRecord.current = true;
-      // the model each turn asked for; where the record does not carry it, the one it was served on,
-      // without its provider ("openai/gpt-6.1-sol")
       setTurnModels(turns.map((t) => {
-        const x = t as { _model?: string; served_model?: string | null };
-        return String(x._model || (x.served_model ? x.served_model.split('/').pop() : '') || '');
+        const x = t as { model?: string | null; _model?: string; served_model?: string | null };
+        return String(x.model || x._model || '');
       }));
       setTurnIds(turns.map((x) => String(x.id || '')));
       setTurnMem(memoryOfTurns(turns));
@@ -184,7 +183,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     return () => { alive = false; };
   }, [recording]);
   const recorded = replayed && !forked;
-  const target: ChatTarget = { name: r.h.name, backend: oob?.backend ?? null, model, baseId: oob?.id, runtime: oob?.name, defaultModel };
+  const target: ChatTarget = { name: r.h.name, backend: oob?.backend ?? null, external: r.h.external || r.h.base === 'external_uhp', model, baseId: oob?.id, runtime: oob?.name, defaultModel };
   const conv = useConversationTurn({
     harnessId: r.h.id, sessionId: resume, target, onRan,
     onSession: (s) => { setSid(s); onBorn(s); },
@@ -295,6 +294,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   const opening = !!resume && conv.msgs.length === 0;
   /** a message goes out on the model chosen now; the turn is recorded with it once it is taken */
   const sendNow = (text: string, files: { name: string; dataUri: string }[]) => {
+    if (uhpHealth(r.h)?.ready === false) return;
     const m = model;
     // a branch's first message is the request that makes it, and stays that until one is taken (a
     // refusal keeps the draft); from then on this is a task like any other
@@ -305,7 +305,8 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     });
   };
   // a task whose record could not be read takes no message: it would go on from an unknown point
-  const canSend = !conv.busy && !hold && !conv.loadFailed && (input.trim() || att) && modelAvailability(target.backend, model) !== 'no';
+  const connection = uhpHealth(r.h);
+  const canSend = connection?.ready !== false && !conv.busy && !hold && !conv.loadFailed && (input.trim() || att) && modelAvailability(target.backend, model) !== 'no';
   // A setup's recorded first run, played back here: it reaches no server and takes nothing. In order
   // and in proportion, at most REPLAY_MAX_MS long; opened from the list, whole at once.
   const autoSent = useRef(false);
@@ -369,6 +370,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     loadSessionTurns(live).then(({ turns }) => noteFork(importedFirst(turns))).catch(() => { /* asked again on the next fork */ });
   }, [forked, conv.busy, sid, conv.liveSessionId]);
   const send = () => {
+    if (uhpHealth(r.h)?.ready === false) return;
     if (replayNow) { if (canGo) play(false); return; }
     if (!canSend) return;
     if (forkable) { void fork(); return; }
@@ -401,15 +403,15 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   const last = conv.msgs[conv.msgs.length - 1];
   const asking = !recorded && !conv.busy && last?.role === 'assistant' && last.status === 'incomplete' ? last.inputRequest : undefined;
   const answerCard = asking ? (
-    <InputRequestCard key={asking.id} request={asking} disabled={conv.busy || hold}
-      onAnswer={(answer, shown) => { void conv.send(shown, [], { input: [{ type: 'input_response', input_request_id: asking.id, answer }] }); }} />
+    <InputRequestCard key={asking.id} request={asking} disabled={conv.busy || hold || connection?.ready === false}
+      onAnswer={(answer, shown) => { if (uhpHealth(r.h)?.ready !== false) void conv.send(shown, [], { input: [{ type: 'input_response', input_request_id: asking.id, answer }] }); }} />
   ) : null;
   const composer = (ph: string) => (recorded && !offerFork ? (
     <div className="readonly"><span>录制任务</span>
       {onFollowUp ? <button type="button" className="btn small" onClick={onFollowUp}>继续对话</button> : null}
     </div>
   ) : (
-    <>{answerCard}<AgentComposer value={input} onChange={setInput} onSend={send} onStop={playing ? undefined : () => conv.stop()}
+    <>{connection && !connection.ready ? <div className="uhp-task-warning" role="status" data-uhp-unavailable>{connection.label}：{connection.reason} 新任务及续接已暂停，历史任务仍可查看。 <a href="/uhp">检查 UHP 连接</a></div> : null}{answerCard}<AgentComposer value={input} onChange={setInput} onSend={send} onStop={playing ? undefined : () => conv.stop()}
       running={conv.busy} stopping={conv.stopping} sendDisabled={!canGo}
       placeholder={ph} runningPlaceholder="Working on it. Write your next message here."
       ariaLabel={ph.replace(/…$/, '')} inputId="input" inputRef={ta}

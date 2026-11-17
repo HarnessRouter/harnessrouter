@@ -22,7 +22,7 @@ test.each([
   [' /harnesses'],
   [''],
 ])('%j is refused for the default', (raw) => {
-  expect(safeNext(raw)).toBe('/start');
+  expect(safeNext(raw)).toBe('/studio');
 });
 
 test.each([
@@ -43,6 +43,6 @@ test('what the middleware writes survives the round trip', () => {
 });
 
 test('nothing at all, and a custom default', () => {
-  expect(safeNext(null)).toBe('/start');
+  expect(safeNext(null)).toBe('/studio');
   expect(safeNext(undefined, '/quickstart')).toBe('/quickstart');
 });

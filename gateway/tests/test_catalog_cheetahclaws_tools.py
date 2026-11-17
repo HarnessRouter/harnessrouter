@@ -47,5 +47,5 @@ def test_it_is_wired_to_the_chat_completions_connections_only():
     # the hosted HarnessRouter API is TokenRouter-shaped and is wired wherever TokenRouter is
     # (test_harnessrouter_provider.py)
     assert wired == {"openrouter": "openai-api", "tokenrouter": "tokenrouter",
-                     "vercel": "tokenrouter", "custom": "openai-api", "harnessrouter": "tokenrouter"}
+                     "vercel": "tokenrouter", "custom": "openai-api"}
     assert set(wired.values()) <= set(BACKENDS["cheetahclaws"]["providers"])

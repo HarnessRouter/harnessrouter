@@ -1,0 +1,25 @@
+id: CHG-client-run-history-layout
+owner: Codex
+status: verified
+baseline: existing dirty worktree; AppTasks sample run views and AppBackendClient sidebar
+source: 用户要求运行记录中央流程图、重放和右侧属性栏（2026-11-17）
+contract: client/docs/run-history-layout.md
+reuse: 复用 AppTasks 导航、共享 tokens、已有 @xyflow/react；扩展当前明确标注的示例运行，不修改真实执行契约。
+scope: [client/src, client/tests, client/docs]
+non_goals: [Gateway 修改, FastAPI 修改, Docker 部署, Cloud 能力, 将回看变为重新执行]
+verification:
+  - command: npm test -- --runInBand
+    result: passed; 18 client unit tests
+  - command: npm run typecheck
+    result: passed
+  - command: npx playwright test --config playwright.app.config.ts --project=chromium --workers=1 tests/app-ui/run-history.spec.ts
+    result: passed; 2 Chromium tests including desktop and mobile layouts
+  - behavior: left run-history list collapses and expands without changing the selected run
+    result: passed
+  - behavior: run properties expose node, run, events and debug tabs in desktop and mobile drawer
+    result: passed
+  - behavior: run page uses a full-height infinite canvas with zoom, fit and pointer-pan controls
+    result: passed; covered by Chromium run-history UI regression and refreshed local Vite page
+  - behavior: desktop run properties collapse to a narrow rail and restore all tabs
+    result: passed; covered by Chromium run-history UI regression
+remaining: [Edge visual regression and real FastAPI run-history data]

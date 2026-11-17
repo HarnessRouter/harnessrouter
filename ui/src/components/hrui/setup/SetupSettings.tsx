@@ -15,7 +15,6 @@
 // each, beside what the setup includes (PluginSwitches.tsx); the layers list's Capabilities line counts
 // what a person added, as the Agent stack and Studio's card do. Under the layers: Delete setup, and
 // Duplicate beside it.
-// (Deploy to Cloud is the page bar's, beside Connect your app: DeployCloud.tsx.)
 // Every value, list, default and ceiling shown is read from the services: the setup's record, the
 // bases document (tools, built-in skills, thinking levels, runtime defaults), the model catalog,
 // and the workspace's plugins and environments. What is not read yet shows nothing.

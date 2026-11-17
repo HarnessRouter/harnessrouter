@@ -29,3 +29,17 @@ runner/henv*/
 # `npm install` next to run.mjs, so the lock has never been in the tree — and a `git add -A` after
 # installing playwright committed it twice in this branch before this rule existed.
 scripts/support-matrix/package-lock.json
+
+# Standalone client build and local dependency cache.
+client/node_modules/
+client/dist/
+client/*.tsbuildinfo
+runner/.pytest_cache/
+deploy/memories/.env.bak
+
+# Local agent assets, development logs and temporary screenshots.
+/.wiscode/
+/.wisharness-init.stderr
+/client/*.log
+/client/logs/
+/client/.artifacts/

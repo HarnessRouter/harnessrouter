@@ -1,0 +1,1 @@
+"""Hexa API tests."""

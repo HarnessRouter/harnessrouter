@@ -115,11 +115,10 @@ def test_a_harness_is_found_only_inside_a_held_keys_workspace(world):
     lambda: gw.delete_harness(ORG, "chrn_b", _Req()),
     lambda: gw.get_harness_models_public("chrn_b", _Req()),
     lambda: gw.export_harness_plugin_public("chrn_b", _Req()),
-    lambda: gw.cloud_upload_status("chrn_b", _Req()),
     lambda: gw.harness_events("chrn_b", _Req()),
     lambda: gw.detach_plugs("chrn_b", _Req()),
 ], ids=["read", "overwrite", "delete", "read-org-path", "overwrite-org-path", "delete-org-path", "models", "package",
-        "upload-status", "events", "detach-plugs"])
+        "events", "detach-plugs"])
 def test_another_workspaces_harness_is_not_found_on_any_route_and_nothing_is_written(world, monkeypatch, call):
     _as(monkeypatch, KEY_A)
     assert _status(call()) == 404

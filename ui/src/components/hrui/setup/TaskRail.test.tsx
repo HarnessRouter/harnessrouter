@@ -46,9 +46,9 @@ const frame = (sid: string, type: string, harness = H): FeedFrame => ({ session_
 let root: Root;
 let el: HTMLElement;
 let list: TL;
-function Rail({ cards = [] as TraceCard[] }) {
+function Rail({ cards = [] as TraceCard[], newDisabled = false }) {
   list = useTaskList(H, cards, 0);
-  return <TaskList setupName="Alpha" list={list} f={NO_FILTER} setF={() => undefined} current={null} isNew={false} onOpen={() => undefined} onNew={() => undefined} onGone={() => undefined} />;
+  return <TaskList setupName="Alpha" list={list} f={NO_FILTER} setF={() => undefined} current={null} isNew={false} newDisabled={newDisabled} onOpen={() => undefined} onNew={() => undefined} onGone={() => undefined} />;
 }
 const text = () => (el.textContent || '').replace(/\s+/g, ' ');
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
@@ -63,6 +63,16 @@ beforeEach(() => {
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); jest.useRealTimers(); });
+
+test('UHP unavailable disables new task but leaves task history visible', async () => {
+  harnessFetch.mockResolvedValue(ok({ sessions: [card('history')], cursor: '' }));
+  await act(async () => { root.render(<Rail cards={[card('history')]} newDisabled />); });
+  await flush();
+  expect(el.querySelector<HTMLButtonElement>('.tk-newb')?.disabled).toBe(true);
+  expect(text()).toContain('Task history');
+  await act(async () => { root.render(<Rail cards={[card('history')]} />); });
+  expect(el.querySelector<HTMLButtonElement>('.tk-newb')?.disabled).toBe(false);
+});
 
 describe('the first read', () => {
   test('the correct path: the newest page is the list, and an empty one says No tasks yet', async () => {

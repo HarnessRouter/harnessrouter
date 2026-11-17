@@ -1,0 +1,130 @@
+id: CHG-client-settings-tabs
+status: closed
+status_reason: 设置弹框已改为左侧书签式标签与右侧内容面板，静态版和应用后端模式共用同一组件，相关测试、类型检查、生产构建和截图证据均通过。
+owner: Codex
+source: 用户要求“设置页面调整为左侧tab，右侧内容，类似书签效果”（2026-11-16）
+goal: 将单页 Gateway 设置弹框重构为左侧垂直标签、右侧内容区，并把界面与导航设置纳入同一书签式弹框。
+non_goals:
+  - 修改 Gateway 请求、鉴权或配置存储契约
+  - 新增设置分区或后端管理接口
+  - 恢复 HarnessRouter Cloud 能力
+behavior:
+  before: 设置弹框标题为“Gateway 连接”，连接表单和导航文字开关在同一纵向长表单中，保存按钮为“保存连接”。
+  after: 弹框标题为“设置”，左侧书签标签分为“连接”和“界面与导航”，右侧只显示当前分区；应用后端模式复用相同结构，底部按钮统一为“保存设置”。
+acceptance:
+  - id: AC-1
+    entry: 一级导航设置按钮
+    action: 打开设置并检查结构
+    expected: 弹框名为“设置”，左栏为垂直 tablist，默认选中“连接”，标签右缘与右侧 panel 左缘衔接。
+    verification: client/tests/ui/gateway-settings.spec.ts 中的书签布局用例
+  - id: AC-2
+    entry: 设置标签
+    action: 点击“界面与导航”，再按 ArrowUp 返回“连接”
+    expected: 内容随活动标签切换；活动标签为白色表面；方向键更新选中项和焦点。
+    verification: 同上的 tab 状态、计算样式和键盘断言
+  - id: AC-3
+    entry: 界面与导航 tab
+    action: 关闭“一级导航显示文字”并保存
+    expected: 导航仅保留图标，刷新后保持设置；取消或 Escape 不保存草稿。
+    verification: client/tests/ui/gateway-settings.spec.ts 的保存、取消和刷新断言
+  - id: AC-4
+    entry: 应用后端设置按钮
+    action: 打开设置、切换界面与导航并保存
+    expected: 应用后端模式使用同一书签结构，并持久化导航文字开关。
+    verification: client/tests/app-ui/navigation.spec.ts（Chromium 与 Edge）
+  - id: AC-5
+    entry: 390px 移动视口
+    action: 打开设置
+    expected: 弹框不超出视口；“保存设置”在视口内；标签改为顶部横向布局。
+    verification: 书签布局用例的移动视口断言和视觉截图
+baseline: 脏工作树；保留其他 client、Gateway、UHP/Runner 和 Hexa 产品契约改动。
+reuse_decision: extend
+discovery_evidence:
+  - client/src/GatewaySettings.tsx 原为单页 Gateway 表单
+  - client/src/AppBackendClient.tsx 原使用独立的“应用设置”单页弹框
+  - client/tests/ui/gateway-settings.spec.ts 已有设置打开、保存、取消和移动端覆盖
+references:
+  - client/docs/visual-contract.md#设置页书签式左侧标签2026-11-16
+impact:
+  direct:
+    - client/src/SettingsDialog.tsx
+    - client/src/GatewaySettings.tsx
+    - client/src/AppBackendClient.tsx
+    - client/src/styles.css
+    - client/tests/ui/gateway-settings.spec.ts
+    - client/tests/ui/workspace.spec.ts
+    - client/tests/app-ui/navigation.spec.ts
+    - client/docs/visual-contract.md
+    - docs/screenshots/settings-bookmark-connection.png
+    - docs/screenshots/settings-bookmark-interface.png
+    - docs/screenshots/settings-bookmark-mobile.png
+    - docs/screenshots/settings-bookmark-dark.png
+  transitive:
+    - 静态与应用后端模式的设置弹框可访问名称改为“设置”
+    - 工作空间未配置 Gateway 时跳转设置后的标题与保存操作
+  unknown: []
+dependencies:
+  - 现有 Ant Design Modal、Button 与 Checkbox
+  - Chromium 与 Edge Playwright 运行环境
+test_scope:
+  selection_reason: 变更影响设置弹框结构、键盘交互、导航文字持久化及应用后端复用，选择相关静态 UI 与 app-ui 导航用例。
+  selected:
+    - client/tests/ui/gateway-settings.spec.ts
+    - client/tests/ui/workspace.spec.ts
+    - client/tests/ui/user-menu.spec.ts
+    - client/tests/app-ui/navigation.spec.ts (playwright.app.config.ts)
+    - npm run typecheck
+    - npm run build
+  excluded:
+    - Gateway 与 Runner 测试：本次未修改接口、数据或运行时
+  full_suite_trigger: null
+  evidence_reuse: []
+verification:
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-5]
+    status: passed
+    command_or_steps: npx playwright test tests/ui/gateway-settings.spec.ts tests/ui/workspace.spec.ts tests/ui/user-menu.spec.ts
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Chromium
+    evidence: 21/21 passed；覆盖书签几何、活动标签白底、键盘切换、取消/保存、移动端和既有工作空间/用户菜单回归
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-4]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts tests/app-ui/navigation.spec.ts -g "app mode preserves all four navigation entries"
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Chromium and Edge
+    evidence: 2/2 passed，应用后端模式可切换“界面与导航”并保存设置
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-5]
+    status: passed
+    command_or_steps: npm run typecheck; npm run build
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Node.js and Vite 7
+    evidence: tsc --noEmit、tsc -b 与 vite build 成功；仅保留既有大于 500kB chunk 提示
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3]
+    status: passed
+    command_or_steps: npm test
+    exit_code: 0
+    revision: dirty-worktree
+    environment: Windows local workspace, Node.js 24
+    evidence: 客户端既有单元测试 40/40 通过，未出现设置改动引起的 API 或状态回归
+    reason: 组件视觉与键盘行为由 Playwright 集成/E2E 覆盖；当前项目未配置 React 组件级单测运行器
+    next_action: null
+remaining:
+  - 真实触控设备上的标签手势切换未单独验证；当前标签为原生按钮，点击与键盘路径已验证。
+  - 应用导航文件中并发新增的检查器标题大小写用例当前失败 2 项（期望“参与 Agent”，实际“参与 AGENT”）；该失败与设置页改动无关，未在本次修改。
+review: 未要求独立评审；已完成实际 diff、可访问性、几何、计算样式、深色主题、移动端和构建自检。
+handoff: null
+rollback: 删除 SettingsDialog 并将 GatewaySettings/AppBackendClient 恢复为原单页弹框，同时回退设置样式和相关测试名称即可；不涉及数据迁移。
+closure:
+  outcome: 设置页书签式布局已实现并验证；当前为脏工作树交付，用户未要求提交或创建 PR/MR。
+  merge_commit: null
+  release_evidence: []
+  superseded_by: null
+document_exit: 长期结构、可访问性、响应式和视觉规则保留在 client/docs/visual-contract.md；本 Change 保留验证摘要与截图哈希。

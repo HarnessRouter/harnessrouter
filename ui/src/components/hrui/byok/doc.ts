@@ -28,10 +28,6 @@ export interface Integration {
   models: ModelRow[];
   /** image models it can serve, routed apart from chat models */
   image_models?: ModelRow[];
-  /** what is left on a HarnessRouter API key's account, read by the server; absent while unknown */
-  balance?: { usd: number; is_deficit: boolean; as_of: string };
-  /** 'refused': HarnessRouter Cloud answered the last read with this key by refusing it (absent otherwise) */
-  key_state?: 'refused';
 }
 export interface ProviderField { key: string; label: string; placeholder?: string }
 export interface CatalogEntry {
@@ -64,13 +60,9 @@ export interface Doc {
   catalog: CatalogEntry[];
   media_chains?: MediaChain[];
   media_policy?: MediaPolicy;
-  /** where a HarnessRouter API key's credit is added */
-  hosted_console?: string;
 }
 
 export const SECRET = '__secret__';
-/** The provider whose key comes from the HarnessRouter hand-off (POST /v1/admin/connect). */
-export const HOSTED = 'harnessrouter';
 export const isEntra = (i: Integration) => i.config?.auth === 'entra';
 /** The request headers on a connection (set through the API), read back as names with each value the sentinel. */
 export const connHeaders = (i?: Integration): Record<string, string> | undefined => {
@@ -88,7 +80,7 @@ export function look(c: Pick<CatalogEntry, 'id' | 'label'>): Provider {
 }
 
 const RANK: Record<Provider['group'], number> = { direct: 0, cloud: 1, gateway: 2, custom: 2 };
-/** the design's preference among keys that can serve a model: direct, then your cloud, then a gateway */
+/** Prefer a model maker's key, then an operator cloud credential, then a gateway. */
 export const rankOf = (provider: string) => RANK[providerById(provider)?.group || 'gateway'];
 
 type Routes = Record<string, string>;
@@ -159,30 +151,6 @@ export function nameFor(doc: Doc, provider: string, label: string): string {
   return name;
 }
 
-/** The HarnessRouter API key hand-off: this instance asks its own server to open one (the secret
- *  stays there), the person finishes it on the page `url` names, and `poll` reads the code until
- *  the key is ready (202 while it waits). */
-export async function startHandoff(): Promise<{ code: string; url: string }> {
-  const r = await harnessFetch('/api/harness/v1/admin/connect', {
-    method: 'POST', headers: authHeaders(),
-    body: JSON.stringify({ instance: typeof window !== 'undefined' ? window.location.host : '' }),
-  });
-  if (!r.ok) throw new Error(String(r.status));
-  const j = await r.json() as { code?: string; url?: string };
-  if (!j?.code || !j.url) throw new Error('no code');
-  return { code: j.code, url: j.url };
-}
-export interface HandedKey { api_key: string; endpoint?: string; models_url?: string; balance_url?: string; name?: string }
-/** One read of the hand-off: the key once it is ready, 'waiting' while it is not, 'failed' when the
- *  code is gone or refused. A read that gets no answer is 'waiting' (the next read asks again). */
-export async function pollHandoff(code: string): Promise<HandedKey | 'waiting' | 'failed'> {
-  let r: Response;
-  try { r = await harnessFetch(`/api/harness/v1/admin/connect/${encodeURIComponent(code)}`, { headers: authHeaders() }); }
-  catch { return 'waiting'; }
-  if (r.status === 202) return 'waiting';
-  const j = await r.json().catch(() => null) as (HandedKey & { status?: string }) | null;
-  return r.ok && j?.status === 'ready' && j.api_key ? j : 'failed';
-}
 
 export async function discoverModels(body: { base_url: string; api_key: string; api_format: string; integration_name?: string }): Promise<string[]> {
   const r = await harnessFetch('/api/harness/v1/admin/integrations/models', {

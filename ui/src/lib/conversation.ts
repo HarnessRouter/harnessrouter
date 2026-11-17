@@ -68,7 +68,7 @@ export interface TraceCard {
   model?: string; event_count?: number; elapsed?: number;
 }
 
-export interface ChatTarget { name: string; backend: string | null; model?: string; baseId?: string;
+export interface ChatTarget { name: string; backend: string | null; model?: string; baseId?: string; external?: boolean;
   /** The runtime this harness runs on and the model its settings default to (the footer names both). */
   runtime?: string; defaultModel?: string }
 /** A branch the server would not make (setup/branch.ts), in a person's words; '' for anything else, which keeps the
@@ -789,7 +789,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     // three stream into the same assistant message: the server runs the turn once, but the
     // reader watches the answer arrive three times over. The latch is a ref because it has to
     // flip now, not at the next render.
-    if ((!text && attach.length === 0) || busy || sendingRef.current || !target.backend) return false;
+    if ((!text && attach.length === 0) || busy || sendingRef.current || (!target.backend && !(target.external && harnessId))) return false;
     // a task whose record could not be read: what this message would follow is not known (Try again)
     if (loadFailedRef.current && sessionId) return false;
     sendingRef.current = true;

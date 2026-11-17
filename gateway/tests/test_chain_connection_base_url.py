@@ -85,7 +85,7 @@ def test_a_connection_with_nothing_to_change_is_the_same_object():
 
 
 # ── the same loss, one field further on: WHICH VENDOR this connection is ──────────────────────
-# `tokenrouter` is the runner's name for TokenRouter, Vercel, llmtr and the HarnessRouter API, and
+# `tokenrouter` is the runner's name for TokenRouter, Vercel, llmtr, and
 # `openai-api` is its name for Google AI Studio too. _map_model used that renamed name to pick a
 # model-id table, so a Vercel connection was given TokenRouter's slugs. MEASURED on the first
 # matrix column of this batch, through a recording proxy in front of the gateway (2026-10-19):
@@ -110,7 +110,7 @@ def test_the_model_id_sent_is_the_vendors_own_and_not_the_runner_names():
 
 def test_every_vendor_that_shares_a_runner_name_keeps_its_own_table():
     # the four that become `tokenrouter`, and the two that become `openai-api`
-    for vendor in ("vercel", "llmtr", "harnessrouter", "tokenrouter", "google", "openrouter"):
+    for vendor in ("vercel", "llmtr", "tokenrouter", "google", "openrouter"):
         conn = A._chain_wired({"name": vendor, "provider": vendor, "api_key": "k"}, "vibe")
         for canonical in ("grok-4.20", "qwen3.8-max", "glm-5.3"):
             want = A._vendor_models(vendor).get(canonical) or canonical

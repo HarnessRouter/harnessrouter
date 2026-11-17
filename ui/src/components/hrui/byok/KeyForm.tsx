@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { OOB } from '@/lib/harness';
 import { toast } from '../toast';
-import { HOSTED, SECRET, connHeaders, discoverModels, isEntra, nameFor, type CatalogEntry, type Doc, type Integration, type ModelRow, type ProviderField } from './doc';
+import { SECRET, connHeaders, discoverModels, isEntra, nameFor, type CatalogEntry, type Doc, type Integration, type ModelRow, type ProviderField } from './doc';
 
 const X = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>;
 const FORMATS: [string, string][] = [['openai', 'OpenAI Chat Completions'], ['responses', 'OpenAI Responses'], ['anthropic', 'Anthropic Messages']];
@@ -232,7 +232,7 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
               </details>
               {rowsBox('A model newer than this release: add it with the id the provider uses on the wire, and it shows in every model list this provider serves.')}
             </>
-          ) : <p className="set-help">{meta.id === HOSTED ? 'The list of models arrives with your key.' : 'No models are listed for this provider yet.'}</p>}
+          ) : <p className="set-help">{'No models are listed for this provider yet.'}</p>}
       </div>
       {refused ? <div className="keywarn" role="alert">{refused}</div> : null}
       <div className="sheet-actions">

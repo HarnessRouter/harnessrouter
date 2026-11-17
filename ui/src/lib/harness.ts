@@ -36,6 +36,13 @@ export interface McpServer {
 }
 
 export interface CustomHarness {
+  external?: boolean;
+  available?: boolean;
+  health?: {
+    status: string; harness_status?: string; stale?: boolean;
+    last_checked_at?: number; last_success_at?: number; fresh_until?: number;
+    latency_ms?: number; last_error?: string;
+  };
   id: string;
   name: string;
   base: string;            // base harness id (codex / claude-code)
@@ -573,8 +580,8 @@ export async function getCustom(id: string): Promise<CustomHarness | null> {
 /** One setup by id for a page that must tell "not here" from "could not be read": null only when the
  *  server answers 404 (not in this workspace, or gone); any other failure throws, so a moment of
  *  downtime is never shown as a missing setup. */
-export async function readCustom(id: string): Promise<CustomHarness | null> {
-  const r = await harnessFetch(`/api/harness/v1/harnesses/${encodeURIComponent(id)}`, { headers: gwHeaders(), cache: 'no-store' });
+export async function readCustom(id: string, signal?: AbortSignal): Promise<CustomHarness | null> {
+  const r = await harnessFetch(`/api/harness/v1/harnesses/${encodeURIComponent(id)}`, { headers: gwHeaders(), cache: 'no-store', signal });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(String(r.status));
   return r.json() as Promise<CustomHarness>;

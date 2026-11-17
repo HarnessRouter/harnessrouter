@@ -16,6 +16,8 @@ services:
       - "127.0.0.1:3000:3000"
     env_file:
       - .env
+    environment:
+      HARNESS_STREAM_PARTIAL: ${HARNESS_STREAM_PARTIAL:-1}
     volumes:
       # Everything durable lives here: SQLite databases, blobs, and the secret store.
       - harnessrouter-data:/data

@@ -1,0 +1,1 @@
+"""Server-side Gateway adapters."""

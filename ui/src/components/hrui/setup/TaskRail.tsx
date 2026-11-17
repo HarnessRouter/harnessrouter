@@ -311,8 +311,9 @@ const DOT: Record<string, string> = { running: ' run', failed: ' bad', done: ' o
  *  setup was made (ms), whether it is the one open, whether it is playing, and opening it. */
 export interface RecordedRow { title: string; at: number; on: boolean; running?: boolean; onOpen?: () => void }
 
-export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = isNew, recorded = null, recordedRetry, onOpen, onNew, onGone }: {
+export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = isNew, recorded = null, recordedRetry, onOpen, onNew, onGone, newDisabled = false }: {
   setupName: string;
+  newDisabled?: boolean;
   list: TaskList;
   f: TaskFilter;
   setF: (f: TaskFilter) => void;
@@ -402,7 +403,7 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
     </div>
   ) : (
     <div className="tk-bar">
-      <button type="button" className={`btn tk-newb${isNew ? ' on' : ''}`} aria-pressed={isNew} onClick={onNew}>{PLUS}新建任务</button>
+      <button type="button" className={`btn tk-newb${isNew ? ' on' : ''}`} disabled={newDisabled} title={newDisabled ? 'UHP 目标不可用，请检查连接。' : undefined} aria-pressed={isNew} onClick={onNew}>{PLUS}新建任务</button>
       <span className="grow" />
       <button ref={searchBtn} type="button" className="icon-btn tk-ib" aria-label="搜索任务" title="搜索任务" onClick={() => openSearch(true)}>{SEARCH}</button>
       <span className="flt-w">

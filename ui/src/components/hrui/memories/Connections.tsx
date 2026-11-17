@@ -25,7 +25,7 @@ export function Connections({ record, graph, failed, retry, schema, options, can
   const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
   if (!record || !record.id) return null;
-  if (failed) return <p className="mm-muted mm-cpad" role="alert">What this links to could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>;
+  if (failed) return <p className="mm-muted mm-cpad" role="alert">暂时无法读取关联内容。<button type="button" className="link-q inl" onClick={retry}>重试</button></p>;
   const g: MemoryGraph = graph || { nodes: [{ record, memory: { id: record.memory_id, name: '' } }], edges: [], truncated: false, degraded: [] };
   const nodeOf = (id: string) => g.nodes.find((n) => n.record.id === id);
   const mine = g.edges.filter((e) => e.from.record_id === record.id || e.to.record_id === record.id);
@@ -46,7 +46,7 @@ export function Connections({ record, graph, failed, retry, schema, options, can
         const out = e.from.record_id === record.id;
         const other = out ? e.to.record_id : e.from.record_id;
         const n = e.available ? nodeOf(other) : undefined;
-        if (!n) return <div className="mm-lr" key={i}><span className="mm-lb"><span className="mm-lt off">A record you can’t open</span></span></div>;
+        if (!n) return <div className="mm-lr" key={i}><span className="mm-lb"><span className="mm-lt off">无法打开的记录</span></span></div>;
         const k = kindInfo(kindOf(n.record), schema);
         return (
           <div className="mm-lr" key={i}>
@@ -57,8 +57,8 @@ export function Connections({ record, graph, failed, retry, schema, options, can
             {canUnlink(e) ? <button type="button" className="icon-btn xs" aria-label={`Remove link to ${labelOf(n.record) || 'this record'}`} onClick={() => onUnlink(e)}>{X}</button> : null}
           </div>
         );
-      }) : <p className="mm-muted">No links yet.</p>}
-      {g.truncated ? <p className="set-help">Only the nearest are shown.</p> : null}
+      }) : <p className="mm-muted">还没有关联。</p>}
+      {g.truncated ? <p className="set-help">当前仅显示最近的关联。</p> : null}
       {adding && options?.length ? (
         <div className="mm-lform">
           {cur && cur.other !== null ? (
@@ -66,7 +66,7 @@ export function Connections({ record, graph, failed, retry, schema, options, can
               {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
             </select>
           ) : (
-            <input className="set-in slim" aria-label="How they relate" placeholder="How they relate" value={freeRel} onChange={(e) => setFreeRel(e.target.value)} />
+            <input className="set-in slim" aria-label="关联关系" placeholder="关联关系" value={freeRel} onChange={(e) => setFreeRel(e.target.value)} />
           )}
           <select className="set-in slim" aria-label="Record" value={to || cands[0]?.id || ''} onChange={(e) => setTo(e.target.value)}>
             {cands.length ? cands.map((x) => <option key={x.id} value={x.id}>{labelOf(x) || 'Untitled'}</option>) : (
@@ -74,13 +74,13 @@ export function Connections({ record, graph, failed, retry, schema, options, can
             )}
           </select>
           <div className="mm-lform-a">
-            <button type="button" className="link-q" onClick={() => setAdding(false)}>Cancel</button>
-            <button type="button" className="btn small primary" disabled={!cands.length || busy} onClick={() => void link()}>Link</button>
+            <button type="button" className="link-q" onClick={() => setAdding(false)}>取消</button>
+            <button type="button" className="btn small primary" disabled={!cands.length || busy} onClick={() => void link()}>关联</button>
           </div>
         </div>
       ) : null}
       {adding || !options?.length ? null : (
-        <button type="button" className="btn small mm-add" onClick={() => { setAdding(true); setOptKey(''); setTo(''); }}>{PLUS}Link a record</button>
+        <button type="button" className="btn small mm-add" onClick={() => { setAdding(true); setOptKey(''); setTo(''); }}>{PLUS}关联记录</button>
       )}
     </div>
   );

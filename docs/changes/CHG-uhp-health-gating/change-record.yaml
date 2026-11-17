@@ -1,0 +1,57 @@
+id: CHG-uhp-health-gating
+status: deployed
+status_reason: Workbench and Agent detail now consume UHP health, refresh observations, fail closed for new tasks and preserve history. Source rebuilt and Gateway redeployed locally; existing xred-local remains unreachable and visibly gated.
+owner: Codex
+source: User-approved plan, 2026-11-16
+baseline: Dirty worktree at c1d34c8; existing Cloud removal, UHP, Workflow and client work preserved.
+goal: UHP health observation and dispatch gating with automatic recovery and visible operator state.
+reuse_decision: extend existing UHP probe, vault, control-store leases, Responses and Console cards
+references: [spec.md, plan.md, visual-contract.md]
+impact:
+    direct: [gateway/app.py, gateway/tests, ui/src/components/hrui/UhpConnectionsPage.tsx, ui/src/components/hrui/uhp-health.ts, ui/src/components/hrui/setups.ts]
+  transitive: [Workflow execution, UHP discovery consumers, local Gateway image]
+verification:
+  - layer: unit_and_integration
+    command: python -X utf8 -m pytest -q gateway/tests/test_uhp_health.py gateway/tests/test_uhp_connections.py gateway/tests/test_workflow_tasks.py --disable-warnings
+    result: exit 0; 32 passed. Covers health classification, redacted state, dispatch gating, recovery, stale observations, single-flight, scope, configuration invalidation, failed-save repair, workflow retries and business-error preservation.
+  - layer: component
+    command: npx jest --runInBand src/components/hrui/UhpConnectionsPage.test.tsx src/components/hrui/RunnersPage.test.tsx src/components/hrui/Shell.edition.test.ts
+    result: exit 0; 3 suites, 11 tests passed.
+  - layer: regression
+    command: npx jest --runInBand src/components/hrui/Shell.test.tsx src/components/hrui/moved.test.ts src/lib/safe-next.test.ts
+    result: exit 0; 3 suites, 41 tests passed.
+  - layer: client
+    command: npm test; npm run build
+    result: exit 0; 33 client tests passed and Vite production build completed.
+  - layer: typecheck_and_build
+    command: npm run type-check; npx next build; python -X utf8 -m pytest ...
+    result: TypeScript and Next production build passed; Docker production build also passed Python compileall. Host py_compile was not counted because its existing __pycache__ is permission-protected.
+  - layer: deployment
+    command: docker compose -f docker-compose.cluster.yml build gateway
+    result: exit 0; Docker Hub EOF bypassed by pulling the official Node image from public.ecr.aws/docker/library/node:22-slim and tagging locally. Original Dockerfile and Compose unchanged; Next standalone, type checks and Python compileall passed.
+  - layer: workbench_ui
+    command: npx jest --runInBand src/components/hrui/studio-live.test.tsx src/components/hrui/setup/Playground.branch.test.tsx src/components/hrui/setup/TaskRail.test.tsx --testNamePattern='UHP'; npx jest --runInBand src/lib/conversation.test.tsx src/components/hrui/uhp-health.test.ts src/components/hrui/UhpConnectionsPage.test.tsx
+    result: exit 0; 10 UHP workbench/detail/task-entry tests and 51 health/conversation/management tests passed. Covers status override over history, 30s refresh, stale expiration, hidden-page behavior, failed refresh retention, detail recovery, disabled new/send and external Harness-alias routing. Existing full studio/rail suites contain pre-existing English expectations against localized Chinese labels and were not counted as this change's pass.
+  - layer: deployed_http
+    command: Get-Content scripts/verify-deployed-uhp.py -Raw | docker exec -i hexa2-gateway-1 python -
+    result: exit 0; healthy save, redaction, manual check, JSON/SSE/continuation/cancel, successful Workflow, offline HTTP 503/auth/invalid JSON/missing Harness gating and recovery pass. Blocked dispatches send zero upstream task POSTs; unhealthy Workflow performs 3 attempts with retry_limit=2 and retains the specified Agent. Temporary connection deleted. Same probe failed on old container with missing health before replacement.
+  - layer: deployed_api_key
+    command: Get-Content scripts/verify-deployed-api-key.py -Raw | docker exec -i hexa2-gateway-1 python -
+    result: exit 0; mint/native/BFF/revoke return 200; revoked key returns 401.
+  - layer: deployed_browser
+    command: Playwright Chromium against http://127.0.0.1:3000 with real selfhost login; 1440x900 and 390x844
+    result: Authenticated UHP page, failed-save retention, immediate check and deletion pass; removed Start/Letter links absent and both old routes redirect to /studio. No document horizontal overflow. Screenshots reviewed for layout/readability; temporary connection deleted. Visual coverage is unavailable-state layout, not all health states.
+deployment:
+  image: sha256:f6f2386f5fbfeb6112531e79239adc130116232849dbf5455d57da939c9d8c87
+  tag: harnessrouter/gateway:studio-health-20261116
+  started_at: 2026-11-16T07:19:48.346003297Z
+  source_sha256: 1e75eecb307dd8e750d3def9cfc966e40c5fd081b6d93c6c52ddbab6d631c005
+  result: Container /app/gateway/app.py matches workspace; Gateway, both Runners and Session Router healthy; Compose config validates. Only Gateway recreated, all data volumes preserved.
+  node_base_digest: sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+visual_evidence:
+  - path: '%TEMP%/hexa-uhp-deployed-1440.png'
+    sha256: dc8095a7fdfc0a5d0bc35bbfe68ceb1161ff2040c0ec32b91d2d01a9f6e5e4a2
+  - path: '%TEMP%/hexa-uhp-deployed-390.png'
+    sha256: ac4a3099d9444fde0df30004198268c288e2df28a17cd688032a729884e16c0a
+remaining: [Real xred-local recovery/success not evaluated because host.docker.internal:8421 is unreachable; browser visuals for healthy/unauthorized/harness_missing and other browsers not evaluated; component tests cover these labels]
+rollback: Preserve connection configurations and data volumes; never restore removed Cloud product capabilities.

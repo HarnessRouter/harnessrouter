@@ -28,7 +28,7 @@ jest.mock('@/lib/conversation', () => ({
   }),
 }));
 const mockChat = {
-  turns: [] as { id: string; status?: string; imported?: boolean; _model?: string; branchable?: boolean }[],
+  turns: [] as { id: string; status?: string; imported?: boolean; model?: string; _model?: string; branchable?: boolean }[],
   origin: jest.fn(),
   reads: 0,
 };
@@ -87,7 +87,7 @@ const THREE: Msg[] = [
   { role: 'user', text: 'second' }, asst('two'),
   { role: 'user', text: 'third' }, asst('three'),
 ];
-const IDS = [{ id: 'r1', _model: 'gpt-5.4', branchable: true }, { id: 'r2', _model: 'gpt-5.5', branchable: true }, { id: 'r3', _model: 'gpt-5.4', branchable: true }];
+const IDS = [{ id: 'r1', model: 'gpt-5.4', branchable: true }, { id: 'r2', model: 'gpt-5.5', branchable: true }, { id: 'r3', model: 'gpt-5.4', branchable: true }];
 const DRAFT: BranchDraft = {
   from: 's1', title: 'Enable the service', responseId: 'r2', models: ['gpt-5.4', 'gpt-5.5'], model: 'gpt-5.5',
   msgs: THREE.slice(0, 4).map((m) => ({ ...m, imported: true as const })),
@@ -97,9 +97,9 @@ let root: Root;
 let el: HTMLElement;
 const flush = async () => { for (let i = 0; i < 12; i++) await act(async () => { await Promise.resolve(); }); };
 const onBranch = jest.fn();
-async function open(slot: Slot, taskTitle?: string) {
+async function open(slot: Slot, taskTitle?: string, agent: CustomHarness = H) {
   await act(async () => {
-    root.render(<Playground r={rowOf(H, 'Hermes', [], false)} onRan={() => {}} onBorn={() => {}} onPreview={() => {}} onBranch={onBranch} taskHref={(sid) => `/tasks/${sid}`} slot={slot} taskTitle={taskTitle} />);
+    root.render(<Playground r={rowOf(agent, 'Hermes', [], false)} onRan={() => {}} onBorn={() => {}} onPreview={() => {}} onBranch={onBranch} taskHref={(sid) => `/tasks/${sid}`} slot={slot} taskTitle={taskTitle} />);
   });
   await flush();
 }
@@ -128,6 +128,21 @@ beforeEach(() => {
   root = createRoot(el);
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
+
+test('UHP unavailable blocks new and resumed sends but keeps history, then recovers', async () => {
+  const remote = { ...H, base: 'external_uhp', external: true, available: false,
+    health: { status: 'unreachable', fresh_until: Date.now() / 1000 + 90 } } as CustomHarness;
+  mockConv.msgs = THREE;
+  await open(OPENED, undefined, remote);
+  await send('must not send');
+  expect(mockConv.send).not.toHaveBeenCalled();
+  expect(el.querySelector('[data-uhp-unavailable]')?.textContent).toContain('无法连接');
+  expect(el.querySelector('[data-uhp-unavailable] a')?.getAttribute('href')).toBe('/uhp');
+  await open(OPENED, undefined, { ...remote, available: true,
+    health: { status: 'healthy', harness_status: 'healthy', fresh_until: Date.now() / 1000 + 90 } } as CustomHarness);
+  await send('recovered');
+  expect(mockConv.send).toHaveBeenCalledTimes(1);
+});
 
 describe('the Branch action on a reply', () => {
   test('every finished reply has one where the server says it branches, and its turn that it can be', async () => {

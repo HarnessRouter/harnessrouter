@@ -40,7 +40,7 @@ def test_roder_is_wired_as_dcode_is():
     """The same Responses endpoints dcode drives, by the same runner providers: OpenRouter and a
     custom endpoint on openai-api, the aggregators on tokenrouter."""
     for provider in ("openai", "azure-foundry", "openrouter", "custom", "tokenrouter", "vercel",
-                     "llmtr", "harnessrouter"):
+                     "llmtr"):
         assert A._INTEGRATION_WIRING[(provider, "roder")] == A._INTEGRATION_WIRING[(provider, "dcode")], provider
         assert A._INTEGRATION_WIRING[(provider, "roder")] in roder_backend.PROVIDERS, provider
     assert A._INTEGRATION_WIRING[("openrouter", "roder")] == "openai-api"
@@ -48,7 +48,7 @@ def test_roder_is_wired_as_dcode_is():
 
 
 def test_roder_inherits_responses_channel_refusals():
-    for channel in ("tokenrouter", "harnessrouter"):
+    for channel in ("tokenrouter",):
         assert A._CHANNEL_REFUSES[(channel, "roder")] == A._CHANNEL_REFUSES[(channel, "dcode")]
 
 
@@ -133,7 +133,7 @@ def test_a_turn_checks_the_base_is_installed_before_its_model_or_connections():
 def test_every_catalog_backend_is_one_the_entrypoint_can_report():
     """HR_BACKENDS_INSTALLED is built from the entrypoint's backend_bin table: a catalog backend
     missing there would always read not installed."""
-    entry = (pathlib.Path(__file__).resolve().parents[2] / "docker" / "entrypoint.sh").read_text()
+    entry = (pathlib.Path(__file__).resolve().parents[2] / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
     table = entry[entry.index("backend_bin() {"):entry.index("\n}\n", entry.index("backend_bin() {"))]
     for b in {b["backend"] for b in A._BASE_CATALOG.values()}:
         assert f"\n    {b})" in table or f"\n    {b}) " in table, b

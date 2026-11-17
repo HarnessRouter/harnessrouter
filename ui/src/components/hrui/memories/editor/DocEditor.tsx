@@ -40,7 +40,7 @@ const colorOf = (u: Someone) => {
   const name = typeof u?.name === 'string' ? u.name.trim().toLowerCase() : '';
   return peerColor(id ? `id:${id}` : name ? `name:${name}` : '__anonymous__');
 };
-const nameOf = (u: Someone) => (typeof u?.name === 'string' && u.name.trim() ? u.name : 'Someone');
+const nameOf = (u: Someone) => (typeof u?.name === 'string' && u.name.trim() ? u.name : '访客');
 
 /** #rrggbb at an alpha, for a selection tint in the person's color. */
 const tint = (hex: string, alpha: number) => {
@@ -96,6 +96,6 @@ export function DocEditor({ doc, provider, currentUser, placeholder = '', readOn
   readyRef.current = onReady;
   useEffect(() => { if (editor) readyRef.current?.(); }, [editor]);
 
-  if (!editor) return <p className="mm-muted">Opening…</p>;
+  if (!editor) return <p className="mm-muted">正在打开…</p>;
   return <EditorContent editor={editor} className={`mm-ed${className ? ` ${className}` : ''}`} />;
 }

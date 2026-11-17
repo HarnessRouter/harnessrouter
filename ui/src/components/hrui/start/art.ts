@@ -1,5 +1,4 @@
-// Start's brick drawings (docs/uxuidesign/console-79): `wayArt` (the picture on each of Start's three
-// ways in), `nwArt` (the setup being put together in "Set up an agent harness") and `slabIcon` (the
+// Brick drawings: `nwArt` (the setup being put together in "Set up an agent harness") and `slabIcon` (the
 // save card's mark, console-87). Ported from the design's own functions. The drawings are markup strings; the only text in them is fixed labels
 // ("Agent harness", "Your app") and, in nwArt's tooltips, the chosen harness and model, escaped.
 //
@@ -41,55 +40,6 @@ function plateOf(K: ReturnType<typeof Iso>, pz: number): string {
   const sz = 1.72, o0 = (2.2 - sz) / 2, o = K.P(2.2 + o0, o0, pz), k = sz / 675;
   return '<g class="bk empty pc-plate">' + K.box(0, 0, 0, 4.4, 2.2, pz) + '</g>' +
     '<g class="pc-logo" transform="matrix(' + [K.c * K.u * k, 0.5 * K.u * k, -K.c * K.u * k, 0.5 * K.u * k, o[0], o[1]].map(f).join(',') + ') translate(-182,-174)">' + HR_MARK + '</g>';
-}
-
-export type Way = 'hr' | 'build' | 'move';
-
-/** Start art: one picture per way in, each a short story. The default markup is the end state (your
- *  app on an agent harness on HarnessRouter); the class "play" runs the story from the beginning. */
-export function wayArt(kind: Way): string {
-  const K = Iso(14, 0.9), pz = 0.42, zh = pz + 1, zm = zh + 0.62;
-  // print on a top face, the way HarnessRouter's mark is printed on its plate
-  const onTop = (x0: number, y0: number, z: number, inner: string) => {
-    const o = K.P(x0, y0, z);
-    return '<g transform="matrix(' + [K.c * K.u, 0.5 * K.u, -K.c * K.u, 0.5 * K.u, o[0], o[1]].map(f).join(',') + ')">' + inner + '</g>';
-  };
-  const brick = (cls: string, z0: number, z1: number, stud?: boolean) => '<g class="bk ' + cls + '">' + K.box(0, 0, z0, 2.2, 2.2, z1) + (stud ? K.stud(1.1, 1.1, z1, 2) : '') + '</g>';
-  // a name for a brick: a hairline from its left edge, then the name
-  const label = (z: number, text: string) => {
-    const a = K.P(0, 2.2, z), L = 12, w = text.length * 6.1, d = (L + w + 4) / (2 * K.c * K.u); K.P(-d, 2.2 + d, z);
-    return '<g class="wa-lb"><circle cx="' + f(a[0]) + '" cy="' + f(a[1]) + '" r="1.6"/><line x1="' + f(a[0] - 2) + '" y1="' + f(a[1]) + '" x2="' + f(a[0] - L) + '" y2="' + f(a[1]) + '"/><text x="' + f(a[0] - L - 3) + '" y="' + f(a[1] + 3) + '" text-anchor="end">' + text + '</text></g>';
-  };
-  // in the two small ways the name sits above the brick, so the picture stays narrow
-  const labelUp = (z: number, text: string) => {
-    const a = K.P(0, 0, z), L = 11; K.P(0, 0, z + (L + 16) / (K.zH * K.u));
-    return '<g class="wa-lb"><circle cx="' + f(a[0]) + '" cy="' + f(a[1]) + '" r="1.6"/><line x1="' + f(a[0]) + '" y1="' + f(a[1] - 2) + '" x2="' + f(a[0]) + '" y2="' + f(a[1] - L) + '"/><text x="' + f(a[0]) + '" y="' + f(a[1] - L - 4) + '" text-anchor="middle">' + text + '</text></g>';
-  };
-  const win = '<rect class="wa-win" x=".45" y=".55" width="1.3" height="1.1" rx=".12"/><line class="wa-win" x1=".45" y1=".85" x2="1.75" y2=".85"/>';
-  const app = (z0: number) => '<g class="bk built app">' + K.box(0, 0, z0, 2.2, 2.2, z0 + 1) + '</g>' + onTop(0, 0, z0 + 1, win);
-  let g = '';
-  if (kind === 'hr') {
-    const tp = K.P(2.2, 0, zm), bx = tp[0] + 12, by = tp[1] - 6;
-    g = plateOf(K, pz) + '<g class="wa-h">' + brick('built', pz, zh) + label((pz + zh) / 2 + 0.2, '智能体运行环境') + '</g>' + brick('built wa-m', zh, zm, false) +
-      '<g class="wa-g"><g class="bk app pc-ghost">' + K.box(0, 0, zm + 0.35, 2.2, 2.2, zm + 1.35) + '</g>' + label(zm + 0.85, '你的应用') + '</g>' +
-      '<g class="wa-log">' + [18, 12, 15].map((w, i) => '<g><circle cx="' + f(bx + 2) + '" cy="' + f(by + i * 7.5 + 1.7) + '" r="2.1"/><rect x="' + f(bx + 7) + '" y="' + f(by + i * 7.5) + '" width="' + w + '" height="3.4" rx="1.7"/></g>').join('') + '</g>';
-  } else if (kind === 'build') {
-    g = plateOf(K, pz) + brick('built wa-h', pz, zh) +
-      [0, 1, 2].map((i) => { const a = zh + i / 3, b = zh + (i + 1) / 3; return '<g class="bk built app wa-s wa-s' + i + '">' + K.box(0, 0, a, 2.2, 2.2, b) + '</g>'; }).join('') +
-      '<g class="wa-print">' + onTop(0, 0, zh + 1, win) + labelUp(zh + 1, '你的应用') + '</g>';
-  } else {
-    g = '<g class="wa-new">' + plateOf(K, pz) + brick('built', pz, zh) + '</g>' + '<g class="wa-old">' + brick('pc-ghost old', pz, zh, false) + '</g>' + '<g class="wa-app">' + app(zh) + labelUp(zh + 1, '你的应用') + '</g>';
-  }
-  const wr = K.wrap(g, 6);
-  return '<svg class="iso pc wa wa-' + kind + '" viewBox="0 0 ' + wr.w.toFixed(0) + ' ' + wr.h.toFixed(0) + '" width="' + wr.w.toFixed(0) + '" height="' + wr.h.toFixed(0) + '" aria-hidden="true">' + wr.svg + '</svg>';
-}
-
-/** One way's picture as Start places it (`.sg-art`): the story plays when `play`, and the drawing's
- *  own height rides along as --hn so short screens scale all three alike. */
-export function wayPic(kind: Way, play: boolean): string {
-  const sv = wayArt(kind).replace('class="iso pc wa ', 'class="iso pc wa ' + (play ? 'play ' : ''));
-  const m = sv.match(/height="(\d+)"/);
-  return sv.replace('<svg ', '<svg style="--hn:' + (m ? m[1] : 100) + '" ');
 }
 
 /** The setup as it is chosen in "Set up an agent harness": HarnessRouter's plate, then the agent

@@ -19,6 +19,9 @@ data/
 node_modules/
 .next/
 dist/
+**/node_modules/
+**/.next/
+**/dist/
 __pycache__/
 *.pyc
 .DS_Store

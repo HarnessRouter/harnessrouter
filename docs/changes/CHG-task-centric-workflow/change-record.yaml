@@ -1,0 +1,112 @@
+id: CHG-task-centric-workflow
+status: proposed
+status_reason: 已将任务模块统一定义为 client 展示、hexa-api 权威、Gateway 执行依赖的 v1 设计；尚未修改生产代码。
+owner: Codex
+source: 用户确认的任务模块正式产品方向（2026-11-16）
+goal: 将我的任务、画布编排、并行执行、运行历史、节点调试和模板复用收敛为 hexa-api 驱动的任务系统。
+version: v1
+architecture:
+  client: 展示任务状态、编辑画布并调用 hexa-api，不执行任务和保存权威运行状态。
+  hexa_api: 负责任务领域模型、数据库、状态机、调度、权限、脱敏、REST/SSE。
+  gateway: 只提供 hexa-api 调用的 Agent 执行能力，不保存 Hexa 任务历史。
+non_goals:
+  - 新增 Team 模型或成员权限
+  - 修改 Gateway /v1/workflow-tasks 或 Gateway 任务模型
+  - 跨设备离线编辑、外部队列、多实例租约和复杂条件分支
+  - 恢复 HarnessRouter Cloud 部署、上传、目标工作区、余额、密钥握手或 hosted provider 入口
+acceptance:
+  - id: AC-1
+    expected: 空白任务和模板任务都进入同一任务详情，模板运行历史不被复制。
+    verification: hexa-api 任务创建集成测试、client 路由测试、E2E
+  - id: AC-2
+    expected: 画布保存生成不可变 WorkflowRevision，活动 Run 锁定执行语义配置。
+    verification: 领域单元测试、API 集成测试、TaskCanvas 测试
+  - id: AC-3
+    expected: 五个无依赖 Agent 并行执行，状态通过 REST/SSE 到达 client。
+    verification: fake Gateway 执行器集成测试、真实本地服务冒烟
+  - id: AC-4
+    expected: 只选择部分并行结果作为总结节点输入，deps 与 inputRefs 分离。
+    verification: 输入引用单元测试、执行集成测试、E2E
+  - id: AC-5
+    expected: 总结、校验、报告按依赖执行，最终报告成功后任务完成。
+    verification: 执行器集成测试、完整流程 E2E
+  - id: AC-6
+    expected: 人工门控进入 waiting_human，继续后恢复执行，决定可追溯。
+    verification: 状态单元测试、API 集成测试、E2E
+  - id: AC-7
+    expected: 多次 Run 保存各自快照，NodeRun 输入输出和错误追加保留。
+    verification: 持久化集成测试、调试 API 测试
+  - id: AC-8
+    expected: 重试、跳过、取消和终态重跑遵循状态契约，终态重跑创建新 Run。
+    verification: 状态和执行器集成测试
+  - id: AC-9
+    expected: 采用新结果后实际消费者显示过期，历史记录不改写。
+    verification: stale 派生单元测试、采用结果集成测试、UI 测试
+  - id: AC-10
+    expected: 调试视图显示脱敏输入、环境、输出、错误、耗时和重试历史。
+    verification: 脱敏单元测试、API 安全测试、UI E2E
+  - id: AC-11
+    expected: 模板版本只保存工作流定义，不包含 Run、NodeRun、结果和密钥。
+    verification: 模板集成测试、模板复用 E2E
+  - id: AC-12
+    expected: 用户和工作区范围外的任务、结果和 Artifact 不可读、不可引用、不可导出。
+    verification: hexa-api 权限集成测试
+  - id: AC-13
+    expected: 版本冲突、活动 Run、幂等、恢复和不确定 Agent 结果有明确语义。
+    verification: API 集成测试、恢复测试、幂等测试
+  - id: AC-14
+    expected: 桌面和移动任务详情可用，加载、失败、恢复和路由刷新状态清晰。
+    verification: Playwright E2E、视觉验收、静态站点冒烟
+direct:
+  - hexa-api/app/db/models.py
+  - hexa-api/app/main.py
+  - hexa-api/app/tasks/（新增）
+  - hexa-api/migrations/002_tasks.sql（新增）
+  - hexa-api/tests/（新增任务领域、API、执行器测试）
+  - client/src/api.ts
+  - client/src/main.tsx
+  - client/src/workflow.ts
+  - client/src/styles.css
+  - client/tests/
+transitive:
+  - hexa-api/README.md 的 API 范围和联调说明
+  - client 静态站点路由回退配置
+  - GatewayClient.create_response 调用契约
+unknown:
+  - Artifact 长期存储扩展
+  - 多实例部署和外部调度队列
+dependencies:
+  - hexa-api 现有认证、数据库 session factory、工作区表和 GatewayClient
+  - client app 模式与同源 Cookie 代理
+  - PostgreSQL 迁移执行环境
+test_scope:
+  selected:
+    - hexa-api 领域单元、API 集成、执行器集成和恢复测试
+    - client API、workflow、TaskCanvas 和 Playwright 测试
+    - PostgreSQL 迁移冒烟
+    - client ↔ hexa-api 本地服务冒烟
+  excluded:
+    - 与任务调用契约无关的 Gateway 全量测试
+    - direct 模式下的旧本地任务实现
+verification:
+  - acceptance_ids: [AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-9, AC-11, AC-13]
+    status: passed
+    command_or_steps: "hexa-api: python -m pytest -q tests/test_task_domain.py tests/test_tasks_api.py tests/test_task_workflows.py; client: npm test; npm run typecheck; npm run build; npx playwright test -c playwright.app.config.ts tests/app-ui/tasks.spec.ts --project=chromium."
+    exit_code: 0
+    revision: worktree-before-merge
+    environment: Windows local workspace
+    evidence: docs/changes/CHG-task-centric-workflow/
+    reason: FastAPI 任务域、完整五收集器/人工选择/双校验/报告执行链、版本与幂等契约、终态目标重跑，以及 client 任务详情工作区已由选定测试覆盖；PostgreSQL、完整跨模块 E2E、真实 Artifact 下载和移动端视觉验收仍未完成。
+    next_action: 合并后在具备 PostgreSQL 的环境执行迁移冒烟，并运行 client ↔ hexa-api ↔ Gateway 集成套件。
+remaining:
+  - PostgreSQL 真实执行 migrations/002_tasks.sql 并验证现有生产库升级路径
+  - 完善 client 模板编辑器后端化、Artifact 存储/下载和调试详情分页
+  - 运行部署环境中的完整 client ↔ hexa-api ↔ Gateway 集成套件
+  - 补齐 AC-1、AC-8、AC-10、AC-12、AC-14 的模板端到端、节点重试/跳过、安全调试、跨工作区和移动端证据
+review: 已根据最终架构重新整理并完成本轮实现审查：任务权威收敛到 hexa-api；client 只展示与操作；Gateway 只负责 Agent 执行；保留 Task/WorkflowRevision/TemplateVersion/Run/NodeRun 领域契约。目标测试通过，根目录全量测试因 Windows/Linux 平台依赖未纳入本 Change 验证。
+rollback: 新接口采用新增路径；实现失败时保留现有会话、Agent、模板和任务入口，不修改 Gateway 任务接口。
+closure:
+  outcome: in_progress
+  merge_commit: null
+  release_evidence: []
+document_exit: 完成后保留 spec 作为任务长期契约，plan 作为实施记录，change-record.yaml 保留实际验证证据；稳定接口同步到 hexa-api/README.md。

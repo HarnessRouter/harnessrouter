@@ -51,13 +51,10 @@
 #hrui .av.pic{position:relative}
 #hrui .av.pic::after{content:"";position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line);pointer-events:none}
 /* the phone bar's More tab is the same box as the other tabs (Richard, 2026-10-19: "把这个 more 给它 fix
-   一下"). The desktop rule that spaces the account button from the Letter (.rail-letter+.rail-me, 8px)
-   matched on a phone too, where the Letter is hidden, and pushed the tab 3px down; the avatar was 20px
-   against the icons' 18px, so its label sat lower still. Now: no margin, the tabs' padding and gap, the
-   avatar the icons' 18px box, so the label shares their baseline; the unread dot sits on the avatar's
-   top right, not on the tab's far edge. */
+   一下"). The avatar is the icons' 18px box, so its label shares their baseline; the unread dot sits on
+   the avatar's top right, not on the tab's far edge. */
 @media (max-width:700px){
-  #hrui .rail .rail-me,#hrui .rail .rail-letter+.rail-me{margin:0;padding:7px 0;gap:3px}
+  #hrui .rail .rail-me{margin:0;padding:7px 0;gap:3px}
   #hrui .rail .rail-me .me-av.av{width:18px;height:18px;flex:none;font-size:8px;letter-spacing:-.02em;color:#fff}
   #hrui .rail .rail-me.dot::after{top:5px;right:auto;left:calc(50% + 3px)}
 }
@@ -257,11 +254,6 @@
    capped the column's children and left them at its left edge, so the content sat 110 px left of
    the area's centre; the column itself is narrowed instead (880 + its 40 px sides), and centres. */
 #hrui .list-wrap.lw-n{max-width:960px}
-/* the team's letter (LetterPage.tsx): while it loads, its column in the shape of the letter; if it
-   does not load, one line and Try again in the middle of the area */
-#hrui .letter-skel{width:100%;max-width:660px;margin:0 auto;padding:clamp(28px,6.4vh,72px) 16px 72px;display:flex;flex-direction:column}
-#hrui .letter-off{flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);padding:24px 16px;text-align:center}
-#hrui .letter-off p{margin:0}
 /* Usage, by task (UsagePage.tsx): the task with its setup and model as a muted second line, when it
    ended on one line, the cost lines this window has values for (bd0 to bd3), then the total. Narrower
    than a desktop the cost lines go first and Task, Ended and Total stay; on a phone Ended keeps its
@@ -448,12 +440,6 @@
 #hrui .set-split .lg-dz>.ly-n.lg-dup b{color:var(--accent)}
 #hrui .set-split .lg-dz>.ly-n.lg-dup:hover{background:var(--accent-soft)}
 #hrui .set-split .lg-col>.lg-dz{display:none}
-/* Upload to cloud: the row above Delete setup, in the layers' own ink */
-#hrui .set-split .lg-dz>.ly-n.lg-up b{color:var(--fg)}
-#hrui .set-split .lg-dz>.ly-n.lg-up:hover{background:var(--surface-2)}
-/* Upload to cloud's line (its status, or what it does) wraps in the column rather than running past it */
-#hrui .set-split .lg-dz>.ly-n.lg-up{min-width:0}
-#hrui .set-split .lg-dz>.ly-n.lg-up small{white-space:normal;overflow-wrap:anywhere}
 /* the rail lists the layers down to 861 px; the design's older 900 px rule would draw its chips too */
 @media (min-width:861px){#hrui .set-split .ly-chips{display:none}}
 @media (max-width:860px){
@@ -987,10 +973,10 @@
 #hrui .bp-caret{display:inline-flex;align-items:center;vertical-align:middle;margin-right:6px}
 #hrui .bp-in:focus-within{border-radius:6px;box-shadow:0 0 0 2px var(--accent)}
 #hrui .us-col:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
-/* where the keyboard is, on fields that draw no outline of their own: the task composer and Arena's box, the
-   Start box, a list's search field and the code editor show the accent on their box (audit, 10-21: the
+/* where the keyboard is, on fields that draw no outline of their own: the task composer and Arena's box,
+   a list's search field and the code editor show the accent on their box (audit, 10-21: the
    composer's border only darkened a shade, the others showed nothing) */
-#hrui .composer:focus-within,#hrui .st-ask-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),0 2px 12px rgba(0,0,0,.05)}
+#hrui .composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),0 2px 12px rgba(0,0,0,.05)}
 #hrui .search:focus-within{box-shadow:0 0 0 2px var(--accent);border-radius:10px}
 #hrui .cm-editor.cm-focused{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
 /* the setup's bar, two widths the audit measured (10-21). A phone: the tabs' own row is the row's width at most
@@ -1006,10 +992,6 @@
      than its share ends in "…", whole in its tooltip (the h1's title) */
   #hrui .ag-bar .ag-l1 .ag-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-size:18px}
 }
-/* Start: the first way's card puts the cursor in the box above it when clicked (StartPage focusAsk), so it says it can
-   be clicked and lights on hover like the two beside it; its demo tasks keep their own buttons */
-#hrui .sg .tile.tile-demo.sg-main{cursor:pointer}
-#hrui .sg .tile.tile-demo.sg-main:hover{background:linear-gradient(180deg,var(--accent-soft),transparent 70%)}
 /* a tab row that scrolls sideways clips what is drawn outside it, so a focused tab's ring (2px, 2px off) was cut at the top
    and the left on phones: the row gets 4px of room there, taken back by its margins, so nothing moves. The bottom keeps the
    row's line, which the tabs' underlines sit on (the environments' row, which always scrolls: envs.css). The top has 5px:
@@ -1023,27 +1005,6 @@
 #hrui .tk-d .tp-head .th-row>.tp-t{flex:1;min-width:0}
 #hrui .tk-d .tp-head .th-row>.tk-acts{margin-left:auto}
 
-/* Deploy to Cloud (setup/DeployCloud.tsx): the page bar's second action, beside Connect your app. Its menu
-   (In Cloud) hangs under it, right aligned, as the task filter's does (.rng-pop); Update Cloud carries a
-   dot; on a phone it folds to its icon like the bar's other action (.ag-act) */
-#hrui .dc-w{position:relative;display:inline-flex;flex:none}
-#hrui .dc-b{position:relative}
-#hrui .dc-b.on>svg{color:var(--accent)}
-#hrui .dc-dot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg)}
-#hrui .dc-pop{min-width:232px;white-space:nowrap}
-
-/* the workspace menu never runs off the window (Shell sets its height to the room it has): its
-   workspaces scroll inside it, and Workspace settings and New workspace stay at its foot */
-#hrui .ws-pop:not(.me-pop){display:flex;flex-direction:column;overscroll-behavior:contain}
-#hrui .ws-pop .ws-list{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow-y:auto}
-#hrui .ws-pop:not(.me-pop)>hr,#hrui .ws-pop:not(.me-pop)>.ws-row.plain{flex:none}
-/* Settings › Agent harness: the Harness ID, its first row, read only, with Copy (it left the page's bar). The label is
-   a field label's twin; the ID is whole where it fits and cut at its end where it doesn't, Copy always whole */
-#hrui .set-f .set-lb{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
-#hrui .set-ro.set-hid{gap:8px;padding:5px 6px 5px 12px}
-#hrui .set-hid code{flex:1 1 auto;min-width:0;font-size:13px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#hrui .set-hid .icon-btn{flex:none;width:28px;height:28px;color:var(--muted)}
-#hrui .set-hid .icon-btn:hover{color:var(--fg)}
 /* The setup's bar as the hosted console's setup page redesign draws it (Tasks and Settings at the right of the bar, no
    longer its middle): the name on the left, then the setup's two actions, then the tabs at the right end, each with its
    icon, the open one blue over a 3 px underline. 860 px and under the tabs take their own row; 600 and under they share

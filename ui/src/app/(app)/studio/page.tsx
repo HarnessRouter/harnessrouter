@@ -22,7 +22,7 @@ import { WsBadge } from '@/components/hrui/ws';
 import { isoSvg, ghostTower } from '@/components/hrui/tower';
 import { Iso } from '@/components/hrui/Iso';
 import { useSetups, ago, type SetupRow } from '@/components/hrui/setups';
-import { HealthPill } from '@/components/hrui/setup/parts';
+import { HealthPill, TaskHealth } from '@/components/hrui/setup/parts';
 import { onFeedTurn } from '@/lib/feed-turns';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import { NewSetup } from '@/components/hrui/NewSetup';
@@ -65,6 +65,7 @@ function Card({ r }: { r: SetupRow }) {
           <Logo base={r.h.base} />{r.baseName} · <span className="card-m">{r.h.defaultModel || 'harness default'}</span>
         </div>
         <div className="card-conn">{line ?? <SkLine w={110} h={11} />}</div>
+        <TaskHealth r={r} />
         <dl className="card-stats">
           <div><dt>任务 · 24 小时</dt><dd>{count(r)}</dd></div>
           <div><dt>成功率</dt><dd>{pct(r)}</dd></div>
@@ -160,7 +161,7 @@ export default function StudioPage() {
                     <Iso className="mini-iso" svg={isoSvg(r.tower, 5, false)} />
                     <span><b>{r.h.name}</b>{r.running ? <span className="dot run ag-run" role="img" aria-label="运行中" title="运行中" /> : null}<small className="sub2 ag-sub"><Logo base={r.h.base} />{r.baseName} · {r.h.defaultModel || 'harness default'}</small></span>
                   </span>
-                  <span><HealthPill r={r} /></span>
+                  <span><HealthPill r={r} /><TaskHealth r={r} /></span>
                   <span className="r">{count(r)}</span>
                   <span className="r">{pct(r)}</span>
                   <span className="r">{p95(r)}</span>
