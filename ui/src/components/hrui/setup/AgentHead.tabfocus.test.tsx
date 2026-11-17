@@ -13,7 +13,7 @@ import type { SetupRow } from '../setups';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const ROW = { h: { id: 'chrn_0123456789abcdef', name: 'Morning email brief', base: 'hermes', defaultModel: 'gpt-5.4' }, baseName: 'Hermes', conn: 'none' } as unknown as SetupRow;
 let root: Root; let el: HTMLElement;
-const tabNamed = (t: string) => Array.from(document.querySelectorAll<HTMLElement>('[role="tab"]')).find((b) => b.textContent?.startsWith(t));
+const tabOf = (tab: SetupTab) => document.querySelectorAll<HTMLElement>('[role="tab"]')[tab === 'tasks' ? 0 : 1];
 afterEach(() => { act(() => root.unmount()); el.remove(); document.body.innerHTML = ''; });
 
 function draw(tab: SetupTab, onTab: (t: SetupTab) => void) {
@@ -24,23 +24,23 @@ test('an arrow picks the next tab, and the bar drawn for it puts the keyboard on
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
   const onTab = jest.fn();
   draw('tasks', onTab);
-  tabNamed('Tasks')!.focus();
-  act(() => { tabNamed('Tasks')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
+  tabOf('tasks')!.focus();
+  act(() => { tabOf('tasks')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
   expect(onTab).toHaveBeenCalledWith('settings');
   // the page draws the bar again for the new address, as a new tree
   act(() => root.unmount()); el.remove(); document.body.innerHTML = '';
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
   draw('settings', onTab);
-  expect(document.activeElement).toBe(tabNamed('Settings'));
+  expect(document.activeElement).toBe(tabOf('settings'));
 });
 
 test('a click on a tab changes nothing about where focus goes', () => {
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
   const onTab = jest.fn();
   draw('tasks', onTab);
-  act(() => { tabNamed('Settings')!.click(); });
+  act(() => { tabOf('settings')!.click(); });
   draw('settings', onTab);
-  expect(document.activeElement).not.toBe(tabNamed('Settings'));
+  expect(document.activeElement).not.toBe(tabOf('settings'));
 });
 
 test('the bar no longer carries the Harness ID: it lives in Settings', () => {
@@ -57,6 +57,6 @@ test('Tasks · Settings carry their icons and end the bar, after its actions', (
   draw('tasks', () => {});
   const bar = el.querySelector('header.ag-bar')!;
   expect(bar.classList.contains('ag-rt')).toBe(true);
-  expect(Array.from(el.querySelectorAll('[role="tab"]')).map((t) => [t.textContent, !!t.querySelector('svg')])).toEqual([['Tasks', true], ['Settings', true]]);
+  expect(Array.from(el.querySelectorAll('[role="tab"]')).map((t) => [t.getAttribute('aria-selected'), !!t.querySelector('svg')])).toEqual([['true', true], ['false', true]]);
   expect(Array.from(bar.children).map((c) => c.className)).toEqual(['ag-lft', 'ag-right', 'tabs inline ag-tabs']);
 });

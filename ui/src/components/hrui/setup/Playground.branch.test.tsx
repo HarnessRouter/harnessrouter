@@ -165,7 +165,7 @@ describe('the Branch action on a reply', () => {
     await open(OPENED);
     expect(branches()).toHaveLength(0);
     // the reply's other actions are still there
-    expect(el.querySelectorAll('button[aria-label="Copy response ID"]')).toHaveLength(3);
+    expect(el.querySelectorAll('button[aria-label="复制响应 ID"]')).toHaveLength(3);
   });
 
   test('a reply that ends here has one once its turn says it can be branched', async () => {

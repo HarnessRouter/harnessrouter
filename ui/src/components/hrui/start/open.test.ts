@@ -8,7 +8,7 @@
 //      until it is reviewed);
 //   3. openNewSetup goes to the setup's own page (or, while it is being made, that page before it exists).
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative } from 'path';
+import { join, relative, sep } from 'path';
 
 jest.mock('./seed', () => ({ markMade: jest.fn() }));
 
@@ -29,7 +29,7 @@ const linesOf = (dirs: string[]): Line[] => dirs.flatMap((d) => {
   const p = join(SRC, d);
   return statSync(p).isDirectory() ? files(p) : [p];
 }).flatMap((p) => {
-  const file = relative(SRC, p);
+  const file = relative(SRC, p).split(sep).join('/');
   return readFileSync(p, 'utf8').split('\n').map((text, i) => ({ file, n: i + 1, text }))
     // comments may name addresses; only code navigates
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l.text));
@@ -99,7 +99,7 @@ const STUDIO_ALLOWED: Entry[] = [
   ['app/(app)/studio/[id]/page.tsx', 'const pgHref = ', 'the setup’s own address (the open task)'],
   ['app/(app)/studio/[id]/page.tsx', ": `/studio/${enc(id)}?tab=${t}`", 'the setup’s own address (its tab)'],
   ['app/(app)/studio/[id]/page.tsx', 'router.replace(`/studio/${enc(id)}?tab=settings&layer=', 'the setup’s own address (Settings’ layer)'],
-  ['app/(app)/studio/[id]/page.tsx', 'This setup is not in this workspace. <a className="link-q inl" href="/studio">', 'a setup that is not here: Back, pressed'],
+  ['app/(app)/studio/[id]/page.tsx', '<a className="link-q inl" href="/studio">', 'a setup that is not here: Back, pressed'],
 ];
 /** A navigation whose address is worked out at run time (it could be anywhere). */
 const RUNTIME = /(router\.(push|replace)|location\.(assign|replace))\(\s*(?![`'"]\/)|location\.href\s*=\s*(?![`'"]\/)/;

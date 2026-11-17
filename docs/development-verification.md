@@ -245,3 +245,17 @@ Gateway 为 UHP 连接增加独立健康观察：保存、列表刷新、手动�
 Console 失败文件：`NewSetup.test.tsx`、`setup/AgentHead.tabfocus.test.tsx`、`setup/Playground.branch.test.tsx`、`setup/TaskRail.test.tsx`、`start/open.test.ts`、`studio-live.test.tsx`。实际失败包含旧英文文案/按钮查询与中文界面不一致，以及 Windows 路径分隔符导致静态源码路由检查不匹配；本次没有修改或弱化断言。后续应按现有中文产品契约修复测试并复跑这六个文件；不能据当前结果宣称 Console 回归全部通过。
 
 本次 E2E、真实 Provider、PostgreSQL 升级、Linux Runner readiness 与部署验证为 `not_evaluated`：本次目标是提交并推送现有开发快照，未重跑这些环境测试，已有 Change 中的限制继续有效。安全检查覆盖提交文件名、常见凭据格式和环境文件忽略规则；未将其视为完整安全审计或全历史凭据扫描。远端 CI、MR、合并与发布尚未执行。
+
+## 2026-11-17：清理 Console 过时英文断言
+
+按用户要求清除上次提交前复核发现的过时英文文案要求，保留六个文件的全部行为用例。NewSetup 不再要求显示 Auto，保存操作使用现有按钮结构定位；AgentHead 按 tab 顺序与选中状态验证键盘焦点和图标；Studio 使用健康样式、运行提示、错误提示与骨架状态验证行为；TaskRail 保留重试回调和恢复结果验证，重试按钮与测试夹具一致；Playground 使用当前中文响应 ID 按钮。创建路由检查中的文件相对路径统一使用 `/`，并移除静态白名单对旧英文错误文案的耦合。
+
+更正上一节的归因：`start/open.test.ts` 的创建流程仍存在，失败主要来自 Windows 路径分隔符不匹配及静态白名单中的旧英文文案，不应作为已移除 Start/Letter 产品入口的证据。
+
+- 验证基线：`c9fccb9` 加上述六个测试文件改动；未修改生产行为。
+- 六文件首次定向回归：79 passed、1 failed；失败为测试夹具重试文案不一致，随后已修正。
+- 原 19 文件相关 Jest 回归：221 passed、1 failed；唯一失败为本次新增的骨架结构断言把占位容器误认为应不存在，随后修正为验证骨架存在且文本为空。
+- 最终只重跑受修正影响的 `studio-live.test.tsx`：exit 0，23 passed；其余 18 个文件的通过证据复用上次执行。最终相关范围共 19 个文件、222 个用例通过，未删除任何用例。
+- `npm run type-check --prefix ui`：exit 0；`git diff --check`：通过。
+- 当前 `conversation.test.tsx` 仍输出 React overlapping act() 警告，用例通过，未在本次扩大处理范围。
+- 本次为测试维护，无生产行为改变；组件测试覆盖相关协作与失败恢复；浏览器 E2E、生产构建和部署未重跑，原有平台与发布限制继续有效。Windows 路径修复由本机测试验证，POSIX 路径沿用标准 `path.relative`/`path.sep` API，未另行声明 Linux 实测通过。

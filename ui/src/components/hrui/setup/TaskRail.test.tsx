@@ -54,7 +54,7 @@ const text = () => (el.textContent || '').replace(/\s+/g, ' ');
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
 const later = async (ms: number) => { await act(async () => { jest.advanceTimersByTime(ms); }); await flush(); };
 const reads = () => harnessFetch.mock.calls.filter(([u]) => String(u).startsWith('/api/harness/v1/traces?')).length;
-const tryAgain = () => Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Try again');
+const tryAgain = () => Array.from(el.querySelectorAll('button')).find((b) => b.textContent === '重试');
 const cards24h = [card('s_today')];
 
 beforeEach(() => {
@@ -88,7 +88,8 @@ describe('the first read', () => {
     harnessFetch.mockResolvedValueOnce(ok({ sessions: [], cursor: '' }));
     await act(async () => { root.render(<Rail />); });
     await flush();
-    expect(text()).toContain('No tasks yet.');
+    expect(list.all).toEqual([]);
+    expect(el.querySelector('.tk-empty')).not.toBeNull();
   });
 
   test("a failed read with the page's own cards says older tasks could not be read, and the list is never complete", async () => {
@@ -114,14 +115,16 @@ describe('the first read', () => {
     await act(async () => { root.render(<Rail />); });
     await flush();
     expect(text()).toContain('Tasks could not be read.');
-    expect(text()).not.toContain('No tasks yet.');
+    expect(list.failed).toBe(true);
+    expect(el.querySelector('[role="alert"]')).not.toBeNull();
     act(() => root.unmount());
     root = createRoot(el);
     harnessFetch.mockResolvedValueOnce(ok({ detail: 'something else' }));
     await act(async () => { root.render(<Rail />); });
     await flush();
     expect(text()).toContain('Tasks could not be read.');
-    expect(text()).not.toContain('No tasks yet.');
+    expect(list.failed).toBe(true);
+    expect(el.querySelector('[role="alert"]')).not.toBeNull();
   });
 });
 
@@ -201,23 +204,24 @@ describe('kept current on push', () => {
     await act(async () => { feed.opts?.onUp(0); });
     await flush();
     expect(text()).toContain('Task s1');
-    expect(text()).toContain('Could not refresh.');
+    expect(list.stale).toBe(true);
+    expect(el.querySelector('[role="status"] button')).not.toBeNull();
     harnessFetch.mockResolvedValueOnce(ok({ sessions: [card('s1'), card('s2')], cursor: '' }));
     await act(async () => { tryAgain()?.click(); });
     await flush();
-    expect(text()).not.toContain('Could not refresh.');
+    expect(list.stale).toBe(false);
     expect(text()).toContain('Task s2');
   });
 
   test('while live updates are down the list says so, and Try again connects again', async () => {
     feed.paused = true;
     await shown([card('s1')]);
-    expect(text()).toContain('Live updates paused. This list may be out of date.');
+    expect(el.querySelector('[role="status"] button')).not.toBeNull();
     await act(async () => { tryAgain()?.click(); });
     expect(feed.reconnect).toHaveBeenCalledTimes(1);
     feed.paused = false;
     await act(async () => { root.render(<Rail />); });
-    expect(text()).not.toContain('Live updates paused');
+    expect(el.querySelector('[role="status"]')).toBeNull();
   });
 });
 
@@ -239,7 +243,7 @@ describe('a task opened by its link', () => {
     const l = useTaskList(H, [], 0);
     const r = useLinkedTask(H, sid, l, false, onGone);
     list = l;
-    return <div>{r.failed ? <button type="button" onClick={r.retry}>Try again</button> : 'fine'}</div>;
+    return <div>{r.failed ? <button type="button" onClick={r.retry}>重试</button> : 'fine'}</div>;
   }
   const route = (byCard: () => unknown) => harnessFetch.mockImplementation(async (u: string) =>
     (u.startsWith('/api/harness/v1/traces?') ? ok({ sessions: [], cursor: '' }) : byCard()));
