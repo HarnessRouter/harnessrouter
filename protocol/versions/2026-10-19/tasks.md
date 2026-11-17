@@ -409,11 +409,13 @@ A server that reports `resume`:
   `resume` in `input`, or more than one `resume`, with `400` and `code: "invalid_input"`.
 - MUST treat any other input chained on an interrupted response as a normal task, as before.
 
-A server that does not report `resume` MUST refuse a `resume` item with `400` and
-`code: "invalid_input"`, and MUST NOT read it as an empty or an ordinary task. A client checks the
-capability before sending the item.
+A client MUST check the capability before sending the item. A server that does not report `resume`
+SHOULD refuse a `resume` item with `400` and `code: "invalid_input"` rather than read it as an empty
+or an ordinary task. It is not required to, since a server conformant before this section may read an
+item type it does not know as part of an ordinary task, and a version does not tighten what a server
+accepts ([Versioning](../../VERSIONING.md)).
 
-This section is additive. A server without the capability never accepts the item. A server MAY add
+This section is additive. A server without the capability is unchanged. A server MAY add
 `workspace` and `effects_may_repeat` to an interrupted response without the capability, since a client
 ignores fields it does not know ([Versioning](../../VERSIONING.md)). A later version moves an
 interrupted turn from `failed` to `incomplete` with `incomplete_details.reason` `interrupted`, since a

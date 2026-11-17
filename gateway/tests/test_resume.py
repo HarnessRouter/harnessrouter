@@ -3,8 +3,8 @@
 An interrupted response says what the interruption left (`error.detail.workspace`, `effects_may_repeat`).
 A `resume` item chained on it continues the session and tells the harness it was cut off: once only
 (`409 resume_not_pending`), on an `Idempotency-Key` without a second turn, on a lost workspace too,
-and a malformed or unsupported one is `400 invalid_input` and runs nothing. The conformance checks
-T-15 and T-16 are run against this gateway as well, the way a client would meet it.
+and a malformed or unsupported one is `400 invalid_input` and runs nothing. The conformance check
+T-15 is run against this gateway as well, the way a client would meet it.
 """
 from __future__ import annotations
 
@@ -353,10 +353,10 @@ def _suite(api, monkeypatch, ids):
     return {c.id: c.run(ctx).outcome for c in REGISTRY if c.id in ids}
 
 
-def test_t15_passes_against_this_gateway_and_t16_skips(api, monkeypatch):
-    assert _suite(api, monkeypatch, ("T-15", "T-16")) == {"T-15": Outcome.PASS, "T-16": Outcome.SKIP}
+def test_t15_passes_against_this_gateway(api, monkeypatch):
+    assert _suite(api, monkeypatch, ("T-15",)) == {"T-15": Outcome.PASS}
 
 
-def test_t16_passes_against_this_gateway_without_the_capability(api, monkeypatch):
+def test_t15_skips_against_this_gateway_without_the_capability(api, monkeypatch):
     monkeypatch.setitem(gw.UHP_CAPABILITIES, "resume", False)
-    assert _suite(api, monkeypatch, ("T-15", "T-16")) == {"T-15": Outcome.SKIP, "T-16": Outcome.PASS}
+    assert _suite(api, monkeypatch, ("T-15",)) == {"T-15": Outcome.SKIP}

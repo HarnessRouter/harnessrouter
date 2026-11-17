@@ -1,9 +1,10 @@
-"""T-15 and T-16 are shown to fail on servers that get the refusals of a resume wrong (Tasks §3.3).
+"""T-15 is shown to fail on servers that get the refusals of a resume wrong (Tasks §3.3).
 
-A black-box suite cannot restart a server, so these checks measure what it can: that a resume with
-nothing to resume starts no task and is refused the way §3.3 says, and that a server without the
-capability refuses the item rather than running it as an empty task. The stub gets each rule wrong,
-one defect at a time.
+A black-box suite cannot restart a server, so this check measures what it can: that a resume with
+nothing to resume starts no task and is refused the way §3.3 says. A server without the capability
+is not judged, whatever it does with the item: §3.3 asks it to refuse (SHOULD), and requiring that
+within the version would fail servers that conformed before it. The stub gets each rule wrong, one
+defect at a time.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from uhp_conformance.context import Context
 from uhp_conformance.registry import REGISTRY, Outcome
 
 STUB = pathlib.Path(__file__).parent / "resume_stub.py"
-IDS = ("T-15", "T-16")
+IDS = ("T-15",)
 
 
 def _free_port() -> int:
@@ -61,18 +62,15 @@ def test_the_checks_are_registered_at_full():
     assert {c.cls for c in got} == {"full"}
 
 
-def test_a_conformant_server_passes_and_the_other_check_skips():
-    assert _run("none") == {"T-15": Outcome.PASS, "T-16": Outcome.SKIP}
+def test_a_conformant_server_passes():
+    assert _run("none") == {"T-15": Outcome.PASS}
 
 
-def test_a_server_without_the_capability_that_refuses_the_item_passes():
-    assert _run("no_capability") == {"T-15": Outcome.SKIP, "T-16": Outcome.PASS}
-
-
-def test_a_server_without_the_capability_that_runs_the_item_fails():
-    """It read a resume as an ordinary task: a client that sent it unchecked started a turn on
-    nothing."""
-    assert _run("capability_runs_it")["T-16"] is Outcome.FAIL
+@pytest.mark.parametrize("defect", ["no_capability", "capability_runs_it"])
+def test_a_server_without_the_capability_is_not_judged_whatever_it_does_with_the_item(defect):
+    """Refusing the item or reading it as an ordinary task, a server that does not report `resume`
+    keeps the verdict it had before §3.3: no check of the suite fails it (VERSIONING)."""
+    assert _run(defect) == {"T-15": Outcome.SKIP}
 
 
 @pytest.mark.parametrize("defect", ["runs_finished", "not_pending_is_404", "wrong_code",

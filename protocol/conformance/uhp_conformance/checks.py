@@ -1648,16 +1648,16 @@ def _t12_measure(ctx, hid: str, nonce: str, model: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
-# Full — a question for the person (Tasks §3.2, capability input_requests)
-# ══════════════════════════════════════════════════════════════════════════════════════
 # Full — resuming an interrupted turn (Tasks §3.3, capability resume)
 # ══════════════════════════════════════════════════════════════════════════════════════
 # A server cuts a turn short when it restarts or drains, and a client asks to carry on with a
-# `resume` item chained on that response. A black-box suite cannot make a server restart, so these
-# checks measure what it can: the refusals §3.3 requires of a resume that has nothing to resume,
-# and the refusal of a server that does not report the capability. That a resume of a real
-# interrupted turn is single-use, idempotent and honoured on a `lost` workspace is measured by the
-# reference server's own tests (gateway/tests/test_resume.py), which can cut a turn.
+# `resume` item chained on that response. A black-box suite cannot make a server restart, so this
+# check measures what it can: the refusals §3.3 requires of a resume that has nothing to resume.
+# That a resume of a real interrupted turn is single-use, idempotent and honoured on a `lost`
+# workspace is measured by the reference server's own tests (gateway/tests/test_resume.py), which
+# can cut a turn. A server without the capability is not checked: §3.3 asks it to refuse the item
+# (SHOULD), but requiring that within the version would fail servers that conformed before it
+# (VERSIONING: a server need not reject input it accepted), so a client checks the capability first.
 
 
 def _resume_item(note: str | None = None) -> dict:
@@ -1709,22 +1709,8 @@ def t15(ctx):
     return "409 resume_not_pending for a finished response; 400 invalid_input for three malformed shapes"
 
 
-@check("T-16", "A server without resume refuses a resume item rather than running it", "full",
-       f"{SPEC}/tasks.md#33-resuming-an-interrupted-turn")
-def t16(ctx):
-    """§3.3: a server that does not report `resume` refuses the item with `400 invalid_input`. It
-    does not read it as an empty or an ordinary task, which would start a turn on nothing."""
-    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
-    if caps.get("resume"):
-        raise Skip("this server reports the resume capability; T-15 measures it")
-    prev = _finished_response(ctx)
-    got = _post_resume(ctx, prev, [_resume_item()])
-    assert got.status == 400 and _error_code(got) == "invalid_input", (
-        f"a resume item sent to a server without the capability returned HTTP {got.status} "
-        f"{_error_code(got)!r}; §3.3 requires 400 invalid_input")
-    return "400 invalid_input"
-
-
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Full — a question for the person (Tasks §3.2, capability input_requests)
 # ══════════════════════════════════════════════════════════════════════════════════════
 # A harness that needs one answer ends its turn on the question: the response is `incomplete`
 # with reason `input_required`, the question is its last `input_request` item and its last

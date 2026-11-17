@@ -132,8 +132,8 @@ Against `2026-10-04`, one rule changes and the rest is additive.
   chained on a response the server itself cut short (`failed`, `error.detail.reason` `interrupted`),
   continues the session and tells the harness it was cut off. The interrupted response says what is
   left (`error.detail.workspace`: `kept`, `checkpoint` or `lost`) and whether the last step may run
-  again (`effects_may_repeat`). A resume is single-use (`409 resume_not_pending`). A server without
-  the capability refuses the item with `400 invalid_input`.
+  again (`effects_may_repeat`). A resume is single-use (`409 resume_not_pending`). A client sends the
+  item only to a server that reports the capability.
 - **A task can branch from an earlier response** ([Sessions §1.1](sessions.md#11-branching-from-an-earlier-response)),
   added after publication and additive: with the `session_branching` capability, `branch: true`
   beside `previous_response_id` starts a new session from that response's committed files and the
