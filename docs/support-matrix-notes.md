@@ -49,9 +49,45 @@ scenario in the column was 77 s (`gemini-4-argon`'s artifact turn), well inside 
 console menu showed 58 of the 60 ids the catalog offers, the other two not being served to this
 account.
 
-**Not yet run**, by name: the custom-harness dimension, the plugin matrix, the family tour, the
-environments column, the browser column, and the support matrix on a SECOND provider. Steps 2 to 5
-of the order are open.
+**Step 2, the custom-harness dimension: a pass, after the two faults it found were fixed.** The
+dimension builds one harness carrying a skill whose script must run, one inherited tool switched off
+and one public MCP server, then asks for the build stamp. Its first turn failed with
+`'McpServerConfig' object has no attribute 'name'`, and the tool policy was only half the reason.
+Six runs of the same fixture against workswarm 0.2.8, one variable at a time (every "completed" row
+below also wrote `stamp.txt` carrying the harness's env nonce, which is the proof the skill's script
+ran rather than being read):
+
+| the document sent (same config, same server, same skill) | outcome |
+|---|---|
+| `max_turns` + `mcp` | failed before the first model call: `AttributeError` at `interface_deep.py:11790`, `existing_names = {card.name for card in manager.list()}` |
+| `max_turns`, no `mcp` | completed |
+| `agent.tools` allowlist + `mcp` | failed the same way one frame over, in `tool_allowlist.py`'s `limited_list` |
+| `agent.tools` allowlist + `max_turns`, no `mcp` | completed, and the withheld tool was absent from the runtime's own resource registry |
+| `permissions.tools: {fetch_webpage: deny}`, with or without `mcp`, with or without a budget | completed with NO script: the skill's `python3 …/stamp.py` came back `用户拒绝` and `stamp.txt` was never written. Naming the other thirteen tools `allow` in the same block changed nothing |
+| config `modes.code.tools` minus `web_fetch_webpage` + `mcp`, no budget | completed; skill, script and MCP call all ran, and `fetch_webpage` was absent from the registry |
+
+**The second fault is the one worth stating plainly: the runner always sent `max_turns`, so every
+turn that declared an MCP server was dead on arrival** — and the 58-pair column could not see it,
+because not one of its five scenarios declares a server. The fifth row corrects what this file said
+before it: the deny door does refuse the named tool, which is all the first measurement looked at,
+and it also costs the shell, because any run permission puts the permission rail in the path of a
+`--run-json` run that cannot answer it (the CLI sends `supports_user_interaction: false`).
+
+So the policy now travels through `agent.tools` when no server is declared, through the config when
+one is, and a tool the config cannot reach is REFUSED with its reason rather than reported as off
+while it is callable. **The row, on the fixed build (two consecutive runs, 23 s and 19 s):** skill
+stored, tool policy stored and server stored; the answer carried the bundle's token; `stamp.txt`
+carried the env nonce; the withheld `fetch_webpage` was uncalled — and, read off the live turn's own
+diagnostic log rather than from the absence of a call, **not in the runtime's resource registry at
+all**, while the same log from a column session (no tool switched off) has it. The MCP half is the
+dispatcher chain this base's catalog warns about: `tool_search`, then `tool_call
+{mcp_deepwiki_read_wiki_structure}`, then the server's own tool. The turn's produced files were
+`stamp.txt` and `JIUWENSWARM.md` and nothing else, so the machinery door holds here too.
+
+**Not yet run**, by name: the plugin matrix, the family tour, the environments column, the browser
+column, and the support matrix on a SECOND provider. Steps 3 to 5 of the order are open. The 58-pair
+column above does not need re-running for the two fixes: no scenario in it declares an MCP server or
+switches a tool off, so neither fix can touch a recorded row.
 
 **What it is.** A general agent platform whose code work mode is a coding agent over a workspace;
 its other surfaces (web, TUI, desktop, chat channels) are not driven here. The turn runs through its
@@ -101,11 +137,16 @@ AttributeError: 'McpServerConfig' object has no attribute 'name'
 `ability_manager.list()` returns tool cards AND `McpServerConfig` objects, whose field is
 `server_name`, so every turn declaring both dies before its first model call. Measured as a
 single-variable A/B: same config, same server, with the agent object the turn failed; without it the
-turn called the server and answered. **Worth filing upstream.** So the policy travels as
-`permissions.tools: {<tool>: "deny"}`, which works with a server declared: the call is made and
-refused at execution (`[PERMISSION_DENIED] run policy`) and nothing happens — vibe's and vtcode's
-shape, and the runner turns the refusal into the `system/notice` the gateway renders rather than a
-tool row, so the turn's tool list still means "what ran".
+turn called the server and answered. **Worth filing upstream.**
+
+`permissions.tools: {<tool>: "deny"}` was chosen next and is ALSO wrong, which step 2 found and this
+paragraph used to get wrong (see "Step 2" below): the named tool is indeed refused
+(`[PERMISSION_DENIED] run policy`), but any run permission at all puts the permission rail in the
+path of a run that cannot answer it, and the first call it would ASK about — bash, every time — comes
+back `用户拒绝`. So the door in the shipped build is the `agent.tools` allowlist for a turn with no
+MCP server, and `modes.code.tools` in the config (the only door that reaches `fetch_webpage` while a
+server is declared) otherwise; any other tool switched off beside a server is refused with its
+reason.
 
 **21 tools declared, 14 offered.** Read off a turn's own request body, not from the host permission
 registry (`permission.get` lists 52 names, a different set) and not from the model's narration.

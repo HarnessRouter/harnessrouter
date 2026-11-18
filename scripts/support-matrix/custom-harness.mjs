@@ -136,6 +136,14 @@ const results = {};
 // matched the `search_tool*` arm above, and `tool_call` matched nothing, so withholding either
 // would have broken the fixture's MCP half for this dimension's own reason rather than the base's —
 // vibe's run_typescript lesson in a third spelling.
+// jiuwenswarm also has the narrowest spare set of any base here, and not by choice: on workswarm
+// 0.2.8 the runtime's own tool allowlist cannot be installed beside an MCP server (its ability list
+// holds the server configs and the wrapper reads `.name` off them), so the ONLY tool this harness
+// can withhold while this dimension's server is declared is `fetch_webpage`, through the config.
+// Anything else switched off here comes back as the product's own refusal — correctly, since the
+// alternative would be reporting a tool as off while it is callable — and the row then measures that
+// refusal instead of the base. `fetch_webpage` is what pickDisabled lands on today (no PREFERRED
+// name matches and it is the first id outside NEEDED_ID); keep it that way for this base.
 const NEEDED_ID = /^(bash|shell|exec|exec_session|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|run_typescript|exec_command|write_stdin|read|read_file|file_read|write|write_file|file_write|edit|edit_file|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|list_directory|directory_tree|read_multiple_files|read_text_file|write_text_file|ls|skills?_?tool|skill|task|search_tool|search_tools|search_tool_functions|tool_search|tool_call|use_tool|mcp.*)$/i;
 // dcode's seven are deepagents' own names, and six of them are already in this pattern (ls,
 // write_file, edit_file, glob, grep, execute). The seventh, `delete`, is deliberately NOT added:
