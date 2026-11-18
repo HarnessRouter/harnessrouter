@@ -100,7 +100,8 @@ the task's own words (a one-sentence prompt measured 30,929), and a three-call t
 unlike jcode's `done.usage` it can be read as the turn's own total. The relay's prompt cache is read
 on this base (24k cache-read tokens on a 48k-input turn).
 
-**Install.** 244 distributions and ~1.6 GB installed (arm64), which is more than twice the largest
+**Install.** 244 distributions and **1.9 GB** installed in the image (linux/arm64, measured on a
+fresh volume: about four minutes), 1.6 GB on macOS arm64 — more than twice the largest
 base of the default set, so this base is **opt-in**: add `jiuwenswarm` to `HR_BACKENDS`. The lock
 (`docker/locks/jiuwenswarm.lock.txt`) carries the sha256 of the wheel this work measured and of
 every dependency; the installer then runs what it installed, compares the distribution's version and

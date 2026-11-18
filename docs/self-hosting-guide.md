@@ -1120,7 +1120,7 @@ a minute or two to install on a fresh volume. All three are in the default list;
 out of `HR_BACKENDS` if you will not use it, and the console stops offering it.
 
 JiuwenSwarm (`jiuwenswarm`) is **not** in the default list, and it is the one base where that is
-about size: its environment is 244 distributions and about 1.6 GB, more than twice the largest base
+about size: its environment is 244 distributions and 1.9 GB, more than twice the largest base
 above. Add it to `HR_BACKENDS` when you want it:
 
 ```bash

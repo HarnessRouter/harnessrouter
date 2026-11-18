@@ -1643,7 +1643,7 @@ if not any(e.name == "fast-agent-acp" for e in md.distribution("fast-agent-mcp")
 # JiuwenSwarm (Apache-2.0, openJiuwen-ai/jiuwenswarm) from PyPI as `workswarm`, pinned to the
 # release the runner's code was measured against: the machine protocol's run/result shapes, the
 # session store's layout, the config template the builder starts from, and the tool list a turn
-# declares. Its own venv, for opensquilla's reason, and a large one: 244 distributions and ~1.6 GB
+# declares. Its own venv, for opensquilla's reason, and a large one: 244 distributions and 1.9 GB
 # installed (measured on arm64), which is why this base is OPT-IN rather than in the default
 # HR_BACKENDS — it is more than twice the largest base of the default set, and an operator who does
 # not use it should not pay for it on every fresh volume. A base left out is not a failing row: what
