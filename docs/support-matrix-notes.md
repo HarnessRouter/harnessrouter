@@ -6,6 +6,133 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## The jiuwenswarm backend: JiuwenSwarm (workswarm 0.2.8) — behaviour measured, NO column yet
+
+Added 2026-11-18. Everything below was measured against the published PyPI wheel on this laptop —
+against the Vercel AI Gateway through a recording proxy, and then through the runner's own builder
+and relay — not read off documentation. **No support-matrix column has been run on this base**, and
+neither has the custom-harness dimension, the plugin matrix, the family tour, the environments
+column, the browser column or a second provider: the five-step order in
+[harness-verification.md](harness-verification.md) starts at step 1, and step 1 has not run. What is
+written here is the step BEFORE a column, and it is worth what it says it is.
+
+**What it is.** A general agent platform whose code work mode is a coding agent over a workspace;
+its other surfaces (web, TUI, desktop, chat channels) are not driven here. The turn runs through its
+own machine protocol — `jiuwenswarm-process --run-json <file>`, one JSON request in, versioned JSONL
+out, one terminal `result` — which starts no Gateway, AgentServer or resident service.
+`protocol.capabilities` reports session_resume, run_model, run_skills, run_mcp, run_permissions,
+empty_tools and cancel, all true.
+
+**The model is ours, through the environment alone.** With no `models:` block in config.yaml the
+model entry is built from `API_BASE` / `API_KEY` / `MODEL_NAME` / `MODEL_PROVIDER`, so the relay's
+token is never written to disk — and the environment is where `_relay_served_model` and
+`_relay_usage` find the route. Measured ids: **claude-haiku-5.5 and gemini-3-flash**, each asked for
+and each served as itself, including across a mid-session switch (its session pins nothing, unlike
+jcode's and vibe's). Every other id in its catalog is offered so the matrix can measure it here and
+has not been measured on this base.
+
+**Continuity.** `run.session_id`, with the store at `<data>/agent/sessions/<id>/`. A second PROCESS
+continued the conversation and answered a question only the conversation carried; an unknown id
+fails `SESSION_NOT_FOUND` before any model call, which is the resume probe.
+
+**A failure reads as a failure.** `status: "failed"`, exit code 1 or 2, and
+`error: {code, message, retryable, details}` carrying the provider's own sentence — a 401 came back
+as `RUNTIME_ERROR` with the gateway's own text. Nothing is narrated as assistant prose, so there is
+no error prefix to strip here. Its stderr is one short line naming a per-run diagnostic log under
+`<data>/agent/process_cli_logs/`, which is kept for the failures that carry no reason of their own.
+
+**It writes its own machinery into the workspace.** Its machine entrypoint chdirs into
+`workspace.cwd`, so the memory store's `memory.db` and the log handlers' `logs/` resolve inside the
+directory the user collects: a turn asked to write NOTHING left `daily_memory/`, `logs/` (nine files)
+and `memory.db{,-shm,-wal}` there. Pointing the process cwd elsewhere does not help — measured, the
+private cwd stayed empty and the machinery followed `workspace.cwd`. `.git/info/exclude` hides them
+from the produced-files list (nanobot's and opensquilla's arrangement), and both halves were
+measured through `git status --porcelain -uall`, which is what `/produced` runs: write-nothing → no
+task file, write-one-file → exactly that file.
+
+**The tool policy, and the upstream defect that decided which door it uses.** `agent.tools` is a
+real, exact, hard allowlist: `[]` produced zero tool calls, no file and an answer saying it had no
+tools, while the same turn with the tool present wrote the file. It cannot be used here, because on
+0.2.8 it is mutually exclusive with an MCP server:
+
+```
+runtime/tool_allowlist.py:43  limited_list
+  return [card for card in original_list() if card.name in allowed]
+AttributeError: 'McpServerConfig' object has no attribute 'name'
+```
+
+`ability_manager.list()` returns tool cards AND `McpServerConfig` objects, whose field is
+`server_name`, so every turn declaring both dies before its first model call. Measured as a
+single-variable A/B: same config, same server, with the agent object the turn failed; without it the
+turn called the server and answered. **Worth filing upstream.** So the policy travels as
+`permissions.tools: {<tool>: "deny"}`, which works with a server declared: the call is made and
+refused at execution (`[PERMISSION_DENIED] run policy`) and nothing happens — vibe's and vtcode's
+shape, and the runner turns the refusal into the `system/notice` the gateway renders rather than a
+tool row, so the turn's tool list still means "what ran".
+
+**21 tools declared, 14 offered.** Read off a turn's own request body, not from the host permission
+registry (`permission.get` lists 52 names, a different set) and not from the model's narration.
+`ask_user` is declared and not offered — a one-shot run has nobody to answer it. The `subagent_*`
+family is not offered because a custom agent definition, which is how the runner drives this base,
+does not declare those six at all. `tool_search` and `tool_call` ARE offered and are the whole of the
+MCP path: with progressive tool exposure on (the shipped config's default) an MCP server's tools are
+not declared, and the model reaches them through those two, as `mcp_<server>_<tool>`.
+
+**A partial config of our own breaks the skill path silently.** With a hand-written config.yaml
+holding one `mcp:` block the wire carried 29 tools and no `skill_tool` at all, so a declared skill
+could not be reached; with the package's own scaffolded config it carried the stable 21 and the
+skill ran. The builder therefore starts from the package's own `resources/config.yaml` and patches
+it. `jiuwenswarm-init` is not used for that: it IGNORES `JIUWENSWARM_DATA_DIR` and scaffolded 368
+files into the real home directory while the variable pointed elsewhere.
+
+**Skills and MCP, in one turn.** `skill_tool` → `tool_search` → `bash` → `tool_call` →
+`mcp_deepwiki_read_wiki_structure`, with `stamp.txt` carrying the harness's env nonce (so the
+script really ran) and the answer carrying the bundle-only token.
+
+**The loopback-MCP class does not apply.** Its `StreamableHttpClient` dials a loopback host: a
+one-tool MCP server on 127.0.0.1 was initialized and its tool answered on a real turn, on the same
+transport the public probe uses. So this base is not in `_BRIDGE_LOOPBACK_BACKENDS`. Not yet
+confirmed against the product's own `plugs` server, which is what the browser column injects.
+
+**Cost facts, not failures.** Its own system prompt and tool schemas are ~31k input tokens before
+the task's own words (a one-sentence prompt measured 30,929), and a three-call turn reached 97k.
+`result.usage` is ACCUMULATED across the turn's model calls (97,521 = 31,184 + 32,457 + 33,880), so
+unlike jcode's `done.usage` it can be read as the turn's own total. The relay's prompt cache is read
+on this base (24k cache-read tokens on a 48k-input turn).
+
+**Install.** 244 distributions and ~1.6 GB installed (arm64), which is more than twice the largest
+base of the default set, so this base is **opt-in**: add `jiuwenswarm` to `HR_BACKENDS`. The lock
+(`docker/locks/jiuwenswarm.lock.txt`) carries the sha256 of the wheel this work measured and of
+every dependency; the installer then runs what it installed, compares the distribution's version and
+requires the five capabilities above, because `jiuwenswarm-process --version` is not a recognised
+argument.
+
+**A direct Anthropic connection does not drive it yet.** The runtime has an Anthropic dialect
+(`client_provider: Anthropic`, `/v1/messages`) and no turn here has run on it, so there is no
+`("anthropic", "jiuwenswarm")` wiring row — absent rather than nearly true.
+
+## durable-harness reviewed, not supported (2026-11-18)
+
+[vercel-labs/durable-harness](https://github.com/vercel-labs/durable-harness) was reviewed at
+`durable-harness@0.0.2` (commit badd648) on the same day and is **not a base here**, for a reason
+that is a property of the product rather than a version of it: it is a durability and orchestration
+layer around the agent CLIs this product already runs — its own description names Claude Code,
+Codex, OpenCode, Pi and fx, and four of those are in `HR_BACKENDS` already. It ships no turn surface
+of its own: its one published bin takes `vercel-json` and `sandbox prepare` and nothing else, a turn
+is started by calling a TypeScript API from inside a Next.js/Node app, and for its two
+Claude-family harnesses that turn runs only in a Vercel Sandbox (`sandbox_required` otherwise).
+The model is fixed on the agent at module scope, `StartOptions` and `SendOptions` carry none, and
+Codex's `model`, `base_url` and `env_key` are reserved keys that throw if an app sets them — so the
+matrix's switch scenario has no API to drive. There is no skill loader, no instruction-file
+convention (Claude runs with `settingSources: []` on purpose) and no per-invocation MCP
+configuration. Apache-2.0, alive (320 stars, pushed 2026-11-11), and explicitly experimental on
+`0.0.x`.
+
+What would reopen it: a one-shot turn subcommand on its own published bin —
+`durable-harness run --session <id> --model <gateway-id>` writing NDJSON to stdout, on a `virtual()`
+workspace under `WORKFLOW_TARGET_WORLD=local`. Even then it would be a durability VARIANT of the
+claude, codex, opencode and pi rows rather than a new base, which is a maintainer's call.
+
 ## GPT-6.2 Astra and Sol (2026-11-17, the day OpenAI released them)
 
 **Which connections serve them.** On the test instance (main 8b204a6a plus the 6.2 placement), a real turn per pair on codex and pi (both models) and qwen (Sol, chat-only). A turn passed only if the served model was the one asked for and the turn echoed a unique codeword.

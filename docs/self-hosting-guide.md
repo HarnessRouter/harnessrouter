@@ -1119,6 +1119,21 @@ Aider, OpenHands and Agent Zero are the largest of the set: each environment is 
 a minute or two to install on a fresh volume. All three are in the default list; leave any of them
 out of `HR_BACKENDS` if you will not use it, and the console stops offering it.
 
+JiuwenSwarm (`jiuwenswarm`) is **not** in the default list, and it is the one base where that is
+about size: its environment is 244 distributions and about 1.6 GB, more than twice the largest base
+above. Add it to `HR_BACKENDS` when you want it:
+
+```bash
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode,jiuwenswarm ...
+```
+
+It drives its own machine protocol (`jiuwenswarm-process --run-json`) on an OpenAI-compatible
+connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, Google's
+OpenAI-compatible surface, or a custom endpoint with `api_format=openai`). A direct Anthropic
+connection does not drive it: its Anthropic dialect has not been measured here. Its instruction file
+is `JIUWENSWARM.md`. No support-matrix column has been run on it yet — see
+[support-matrix-notes.md](support-matrix-notes.md) for exactly what was measured and what was not.
+
 Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
 archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv
 and 69 MB of source, 83 seconds on a fresh volume (measured on Linux arm64). It takes upstream's own

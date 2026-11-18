@@ -39,6 +39,9 @@ const LOGO: Record<string, string> = {
   'fast-agent': '/logos/fast-agent.svg',       // fast-agent's own icon, the amber chevron (docs/docs/assets/brand/fast-agent-icon.svg in the Apache-2.0 evalstate/fast-agent repository)
   dcode: '/logos/dcode.svg',                   // the square icon of the Deep Agents logo (.github/images/logo-light.svg in the MIT langchain-ai/deepagents repository), cut from its wordmark
 };
+// No entry for jiuwenswarm yet: upstream publishes a mark, but the marks here are added when the
+// maintainer picks one, and a mapping to a file that does not exist renders a broken image — worse
+// than the generic glyph a base with no entry draws.
 // No entry for vtcode: that base is not in this tree at all (its headless mode drops a harness's
 // MCP servers — docs/support-matrix-notes.md), so neither its mark nor its row is carried here.
 

@@ -356,6 +356,7 @@ backend_bin() {
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
     docker-agent) echo "$TOOLS/bin/docker-agent" ;;
     fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent-acp" ;;
+    jiuwenswarm) echo "$TOOLS/jiuwenswarm-venv/bin/jiuwenswarm-process" ;;
     dcode) echo "$TOOLS/dcode-venv/bin/dcode" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
     zeroclaw) echo "$TOOLS/bin/zeroclaw" ;;
@@ -448,7 +449,7 @@ install_base() {
 # can gain no privilege (--no-new-privs: no setuid program in the image changes its uid back).
 INSTALL_UID_BASE=19000
 # A new base goes at the END, so no base's uid moves.
-INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder "
+INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder jiuwenswarm "
 IU_UID=""; IU_HOME=""
 declare -A IU_HELD=()
 # Every directory the current install has filled, held or given back (a base can fill more than one:
@@ -1639,6 +1640,55 @@ if not any(e.name == "fast-agent-acp" for e in md.distribution("fast-agent-mcp")
 ' "$fa_ver" || { rm -rf "$TOOLS/fast-agent-venv"; return 1; }
 }
 
+# JiuwenSwarm (Apache-2.0, openJiuwen-ai/jiuwenswarm) from PyPI as `workswarm`, pinned to the
+# release the runner's code was measured against: the machine protocol's run/result shapes, the
+# session store's layout, the config template the builder starts from, and the tool list a turn
+# declares. Its own venv, for opensquilla's reason, and a large one: 244 distributions and ~1.6 GB
+# installed (measured on arm64), which is why this base is OPT-IN rather than in the default
+# HR_BACKENDS — it is more than twice the largest base of the default set, and an operator who does
+# not use it should not pay for it on every fresh volume. A base left out is not a failing row: what
+# installed is exported to the gateway as HR_BACKENDS_INSTALLED and the console does not offer the
+# rest.
+#
+# VERIFIED, not only pinned: installed from docker/locks/jiuwenswarm.lock.txt, whose workswarm entry
+# carries the sha256 of the wheel this work measured (2729746e…c956d), and whose 243 other entries
+# carry their own. `jiuwenswarm-init` is NOT used to scaffold anything: it ignores
+# JIUWENSWARM_DATA_DIR and writes into the real home directory (measured — 368 files under
+# ~/.jiuwenswarm while the variable pointed elsewhere), so the runner copies the package's own
+# config template itself.
+JIUWENSWARM_LOCKED="0.2.8"
+install_jiuwenswarm() {
+  jw_ver="${HR_JIUWENSWARM_VERSION:-$JIUWENSWARM_LOCKED}"; jw_ver="${jw_ver#v}"
+  if [ "$jw_ver" = "$JIUWENSWARM_LOCKED" ]; then
+    install_locked_venv "jiuwenswarm" "${HR_JIUWENSWARM_BASE_PYTHON:-python3}" "$TOOLS/jiuwenswarm-venv" jiuwenswarm.lock.txt || return 1
+  else
+    install_unlocked_venv "jiuwenswarm" "${HR_JIUWENSWARM_BASE_PYTHON:-python3}" "$TOOLS/jiuwenswarm-venv" "workswarm==$jw_ver" || return 1
+  fi
+  # RUN WHAT WAS INSTALLED, and ask it the two things the runner needs, rather than a --version it
+  # does not have (`jiuwenswarm-process --version` is an unrecognised argument): the installed
+  # DISTRIBUTION's version, and the machine protocol's own capability answer, which is the surface
+  # the builder writes for. An installer that exits 0 without a working entry point is the same lie
+  # as a check with no input (jcode's 505-byte shim).
+  iu "$TOOLS/jiuwenswarm-venv/bin/python" -c '
+import sys, importlib.metadata as md
+want = sys.argv[1]
+have = md.version("workswarm")
+if have != want:
+    sys.exit("workswarm %s installed, wanted %s" % (have, want))
+import jiuwenswarm  # the package the entry points import
+from jiuwenswarm.common.utils import get_agent_skills_dir, get_config_file   # _write_skills and the config
+from jiuwenswarm.common.config import get_model_entries                      # the env fallback the relay rides
+' "$jw_ver" || { rm -rf "$TOOLS/jiuwenswarm-venv"; return 1; }
+  jw_caps="$(printf '%s' '{"schema_version":"0.1","type":"query","operation":"protocol.capabilities"}' \
+             | iu "$TOOLS/jiuwenswarm-venv/bin/jiuwenswarm-process" --query-json - 2>/dev/null)"
+  for jw_need in '"session_resume": true' '"run_model": true' '"run_skills": true' '"run_mcp": true' '"run_permissions": true'; do
+    case "$jw_caps" in
+      *"$jw_need"*) ;;
+      *) echo "jiuwenswarm $jw_ver does not report $jw_need"; rm -rf "$TOOLS/jiuwenswarm-venv"; return 1 ;;
+    esac
+  done
+}
+
 # Docker Agent (Apache-2.0, docker/docker-agent) from its GitHub release: one static binary per
 # platform, ~150 MB, and UPSTREAM PUBLISHES NO CHECKSUM FILE beside them — so the digests are
 # computed here and pinned, which is install_goose's arrangement rather than install_omp's. They
@@ -2186,6 +2236,20 @@ install_backends() {
     export HR_FAST_AGENT_ACP_BIN="$TOOLS/fast-agent-venv/bin/fast-agent-acp"
     # The driver is stdlib-only, so the agent's own interpreter runs it (dcode's arrangement).
     export HR_FAST_AGENT_PYTHON="$TOOLS/fast-agent-venv/bin/python"
+  fi
+  JIUWENSWARM_PIN="${HR_JIUWENSWARM_VERSION:-$JIUWENSWARM_LOCKED}"; JIUWENSWARM_PIN="${JIUWENSWARM_PIN#v}"
+  if wanted jiuwenswarm && ! current jiuwenswarm "$(lock_ident "$JIUWENSWARM_PIN" "$JIUWENSWARM_LOCKED" jiuwenswarm.lock.txt)"; then
+    echo "[harnessrouter] installing JiuwenSwarm $JIUWENSWARM_PIN (Apache-2.0)…"
+    install_base jiuwenswarm "JiuwenSwarm" install_jiuwenswarm || true
+  fi
+  if [ -x "$TOOLS/jiuwenswarm-venv/bin/jiuwenswarm-process" ]; then
+    export HR_JIUWENSWARM_BIN="$TOOLS/jiuwenswarm-venv/bin/jiuwenswarm-process"
+    # The config template the builder starts from, named rather than left to a glob of the venv's
+    # lib directory: a layout this script did not predict would otherwise silently write a partial
+    # config, which on this base takes `skill_tool` away and makes a declared skill unreachable.
+    for jw_tpl in "$TOOLS"/jiuwenswarm-venv/lib/python3.*/site-packages/jiuwenswarm/resources/config.yaml; do
+      [ -f "$jw_tpl" ] && export HR_JIUWENSWARM_CONFIG_TEMPLATE="$jw_tpl" && break
+    done
   fi
   # dcode's identity carries the interpreter it was built on: the pinned CPython, or the operator's.
   DCODE_PIN="${HR_DCODE_VERSION:-$DCODE_LOCKED}"; DCODE_PIN="${DCODE_PIN#v}"

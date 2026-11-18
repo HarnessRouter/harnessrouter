@@ -34,6 +34,8 @@ def test_it_leads_the_meta_family_wherever_it_passed_and_is_off_where_it_failed(
     # 21 since batch 4: vibe, docker-agent, fast-agent and dcode each take kimi's list, so they
     # offer the Meta family for the same reason every other id on them is offered — the wire reach
     # implies it. No column has run on those four, which docs/support-matrix-notes.md says.
-    assert len(offered) == 21, sorted(offered)
+    # 22 since jiuwenswarm, which takes the same list for the same reason and has had no column
+    # either; the notes name the two ids that WERE measured on it, and no muse id is among them.
+    assert len(offered) == 22, sorted(offered)
     assert all("muse-wonder-1.0" in gw._NOT_OFFERED[b] for b in ("agentzero", "aider", "openhands"))
     assert gw._MODEL_ORDER.count("muse-wonder-1.0") == 1

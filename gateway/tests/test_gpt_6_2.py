@@ -26,6 +26,9 @@ DEFAULTS = {
     "jcode": "gpt-5.4", "opensquilla": "gpt-5.4", "nanobot": "gpt-5.4", "zeroclaw": "gpt-5.4",
     "vibe": "gpt-5.4", "docker-agent": "gpt-5.4", "fast-agent": "gpt-5.4", "dcode": "gpt-6.1-sol",
     "roder": "gpt-6.1-sol", "systemone": "jev-latest", "qoder": "ultimate",
+    # jiuwenswarm arrived after the 6.2 line and takes the same default the four bases above it
+    # take; the 6.2 ids are offered on it and none has been measured there.
+    "jiuwenswarm": "gpt-5.4",
 }
 
 

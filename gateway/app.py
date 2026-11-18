@@ -1588,6 +1588,20 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # and qwen's route). Its `anthropic` provider type is that surface, not Messages.
     # fast-agent, the same reach: one OpenAI shape through the relay, pointed at it by the two
     # environment variables its generic client reads.
+    # jiuwenswarm's measured client is its OpenAI-compatible one (`client_provider: OpenAI`,
+    # /chat/completions), which every row below reaches through the runner's relay. There is NO
+    # ("anthropic", "jiuwenswarm") row: the runtime also has an Anthropic dialect
+    # (`client_provider: Anthropic`, /v1/messages) and no turn has run on it here, so the row is
+    # absent rather than nearly true — a direct Anthropic connection does not drive this base yet,
+    # and docs/support-matrix-notes.md says so by name.
+    ("openai", "jiuwenswarm"): "openai",
+    ("azure-foundry", "jiuwenswarm"): "azure",
+    ("openrouter", "jiuwenswarm"): "openai-api",
+    ("tokenrouter", "jiuwenswarm"): "tokenrouter", ("vercel", "jiuwenswarm"): "tokenrouter",
+    ("llmtr", "jiuwenswarm"): "tokenrouter",
+    ("custom", "jiuwenswarm"): "openai-api",
+    ("google", "jiuwenswarm"): "openai-api",
+    ("harnessrouter", "jiuwenswarm"): "tokenrouter",
     ("anthropic", "fast-agent"): "anthropic",   ("openai", "fast-agent"): "openai",
     ("azure-foundry", "fast-agent"): "azure",
     ("openrouter", "fast-agent"): "openai-api",
@@ -7007,7 +7021,11 @@ _CUSTOM_FORMAT_BACKENDS = {
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
                "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw",
-               "vibe", "docker-agent", "fast-agent"},
+               "vibe", "docker-agent", "fast-agent",
+               # jiuwenswarm: a custom OpenAI endpoint is what its measured client speaks. Its
+               # Anthropic dialect exists and is unmeasured here, so it stays off the anthropic set
+               # for the reason jcode's and opensquilla's Messages providers do.
+               "jiuwenswarm"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: codex, dcode and roder use it natively; omp and pi can select it for a
@@ -9654,8 +9672,14 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # each asked for and each served as itself over /v1/responses, across a mid-session switch its
 # session had pinned. The Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6.2-astra, gpt-6-astra) are
 # NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
+# jiuwenswarm's measured client is the same chat/completions one (`client_provider: OpenAI` reading
+# API_BASE/API_KEY/MODEL_NAME from the environment, so every keyed turn rides the relay). MEASURED
+# on it (2026-11-18, the Vercel gateway through the runner's own relay): claude-haiku-5.5 and
+# gemini-3-flash, each asked for and each served as itself, including across a mid-session switch
+# (its session pins nothing). The rest of this list is offered so the matrix can measure it here and
+# has NOT been measured on this base yet — docs/support-matrix-notes.md says which two were.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
-           "vibe", "docker-agent", "fast-agent", "dcode"):
+           "vibe", "docker-agent", "fast-agent", "dcode", "jiuwenswarm"):
     # gpt-5.4 by default, but dcode: see _GPT_6_1_DEFAULT below
     _MODEL_CATALOG[_b] = {"default": "gpt-6.1-sol" if _b == "dcode" else "gpt-5.4",
                           "models": list(_MODEL_CATALOG["kimi"]["models"])}
@@ -9921,10 +9945,12 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6.2-astra", "gpt-6-astr
 # docker-agent: its provider config takes api_type `openai_chatcompletions` or
 # `openai_responses`, and this runner declares chat/completions — so a Responses-API-only id would
 # be a picker row that fails on send here too.
+# jiuwenswarm: the runner configures its OpenAI-compatible client, which posts to
+# /chat/completions, so a Responses-API-only id would be a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
                       "jcode", "opensquilla", "nanobot", "zeroclaw",
-                      "vibe", "docker-agent", "fast-agent")
+                      "vibe", "docker-agent", "fast-agent", "jiuwenswarm")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -21565,6 +21591,45 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "jiuwenswarm": {
+        "label": "JiuwenSwarm", "backend": "jiuwenswarm", "status": "ready",
+        "system_prompt": ("You are JiuwenSwarm, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tools a turn actually DECLARES to the provider, read off the requests of a measured
+        # turn on workswarm 0.2.8 rather than from the docs — and not from its host permission
+        # registry either, which lists 52 names, a different set that includes tools this surface
+        # never declares. `tool_search` and `tool_call` are DISPATCHERS and are listed as such:
+        # with progressive tool exposure on (the shipped config's default) an MCP server's tools are
+        # reached THROUGH them, so a judge reading tool NAMES alone will not see an MCP call here
+        # (mimo's and vibe's lesson). Held equal to the runner's ALL_JIUWENSWARM_TOOLS by
+        # gateway/tests/test_jiuwenswarm_tools.py.
+        # `ask_user` is declared by this runtime and is NOT offered: nobody is attached to a
+        # one-shot machine run to answer it, so it is denied on every turn rather than offered and
+        # then ending one. The `subagent_*` family is not offered either — a custom agent
+        # definition, which is how this runner drives it, does not declare those six at all
+        # (measured on the wire).
+        "tools": [("bash", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("glob", "Glob"), ("grep", "Grep"),
+                  ("fetch_webpage", "Fetch Page"), ("skill_tool", "Skill"),
+                  ("tool_search", "Tool Search"), ("tool_call", "Tool Call"),
+                  ("todo_create", "Todo Create"), ("todo_list", "Todo List"),
+                  ("todo_get", "Todo Get"), ("todo_modify", "Todo Modify")],
+        # "hard", measured at the door, and the MECHANISM is worth stating because it is not the
+        # usual one: a disabled tool is still DECLARED to the model and the call is refused at
+        # execution (`[PERMISSION_DENIED] run policy`, nothing written — measured with write_file
+        # switched off, the file was not created), which is vibe's and vtcode's shape. The runner
+        # turns such a refusal into a note on the reply instead of a tool row, so the turn's tool
+        # list still means "what ran".
+        # Its own exact ALLOWLIST (`agent.tools`) is hard too and would withhold the tool from the
+        # model outright — but on 0.2.8 it cannot be used beside an MCP server: the allowlist
+        # wrapper filters `card.name` over a list that also holds `McpServerConfig` objects, whose
+        # field is `server_name`, so a turn declaring both dies before its first model call. The
+        # deny door has no such limit, and it is the one this base uses.
+        # The usual limit is not overstated either: withholding a tool withholds that tool, not the
+        # capability — a model left with `bash` can still write a file with a shell command.
         "tool_enforcement": "hard",
     },
     "dcode": {
