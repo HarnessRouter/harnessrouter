@@ -15930,7 +15930,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
 #
 #   * THE MODEL IS OURS, THROUGH THE ENVIRONMENT ALONE. With no `models:` block in config.yaml the
 #     model entry is built from API_BASE / API_KEY / MODEL_NAME / MODEL_PROVIDER (its
-#     `get_model_entries` env fallback), so the relay's token is never written to disk — and the
+#     `get_default_models` env fallback), so the relay's token is never written to disk — and the
 #     environment is exactly where _relay_served_model and _relay_usage look for the route. Two
 #     turns in one session on two different models were each served the model they asked for.
 #   * CONTINUITY is `run.session_id`, and the store is <data>/agent/sessions/<id>/ with a

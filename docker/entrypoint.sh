@@ -1677,16 +1677,27 @@ if have != want:
     sys.exit("workswarm %s installed, wanted %s" % (have, want))
 import jiuwenswarm  # the package the entry points import
 from jiuwenswarm.common.utils import get_agent_skills_dir, get_config_file   # _write_skills and the config
-from jiuwenswarm.common.config import get_model_entries                      # the env fallback the relay rides
+from jiuwenswarm.common.config import get_default_models                     # the env fallback the relay rides
 ' "$jw_ver" || { rm -rf "$TOOLS/jiuwenswarm-venv"; return 1; }
-  jw_caps="$(printf '%s' '{"schema_version":"0.1","type":"query","operation":"protocol.capabilities"}' \
-             | iu "$TOOLS/jiuwenswarm-venv/bin/jiuwenswarm-process" --query-json - 2>/dev/null)"
-  for jw_need in '"session_resume": true' '"run_model": true' '"run_skills": true' '"run_mcp": true' '"run_permissions": true'; do
-    case "$jw_caps" in
-      *"$jw_need"*) ;;
-      *) echo "jiuwenswarm $jw_ver does not report $jw_need"; rm -rf "$TOOLS/jiuwenswarm-venv"; return 1 ;;
-    esac
-  done
+  # PARSE the answer, never grep it: the output is compact JSON, so a `"session_resume": true`
+  # substring (with the space a reader writes) can never match and the check would refuse every
+  # install for a reason about itself.
+  printf '%s' '{"schema_version":"0.1","type":"query","operation":"protocol.capabilities"}' \
+    | iu "$TOOLS/jiuwenswarm-venv/bin/jiuwenswarm-process" --query-json - 2>/dev/null \
+    | python3 -c '
+import json, sys
+need = ("session_resume", "run_model", "run_skills", "run_mcp", "run_permissions", "empty_tools")
+line = next((l for l in sys.stdin if l.strip().startswith("{")), "")
+if not line:
+    sys.exit("protocol.capabilities answered nothing")
+answer = json.loads(line)
+if answer.get("status") != "completed":
+    sys.exit("protocol.capabilities failed: %s" % (answer.get("error") or {}).get("message", ""))
+features = (answer.get("data") or {}).get("features") or {}
+missing = [n for n in need if features.get(n) is not True]
+if missing:
+    sys.exit("does not report these features: %s" % ", ".join(missing))
+' || { rm -rf "$TOOLS/jiuwenswarm-venv"; return 1; }
 }
 
 # Docker Agent (Apache-2.0, docker/docker-agent) from its GitHub release: one static binary per
