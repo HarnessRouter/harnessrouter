@@ -227476,5 +227476,5509 @@
    "turns_with_usage": 5
   },
   "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-haiku-5.5",
+  "at": "2026-11-18T17:44:03.783Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 M1-claude-haiku-5.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-haiku-5.5 \u00b7 Done in 7.9 s",
+   "answer": "M1-claude-haiku-5.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess3fae056e1a36460daf12c8bd04ef862f",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 M2-claude-haiku-5.5 JiuwenSwarm \u00b7 claude-haiku-5.5 \u00b7 Done in 7.1 s",
+   "answer": "M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.75,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-haiku-5.5 \u00b7 Done in 9.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-haiku-5.5 JiuwenSwarm \u00b7 claude-haiku-5.5 \u00b7 Done in 7.4 s",
+   "answer": "M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess3fae056e1a36460daf12c8bd04ef862f\",\"checkpoint_sha\":\"294e125c8d2916321e097d506b7bb1dbe1fc8d23badb8c53ad75ed59a1a5c11d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145413,
+   "cache_read": 31929,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-6.2-sol": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-6.2-sol",
+  "at": "2026-11-18T17:47:14.701Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.64,
+   "tail": "Reply with exactly: M1-gpt-6.2-sol M1-gpt-6.2-sol md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.4 s",
+   "answer": "M1-gpt-6.2-sol",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess7160e7e8a8d84d14981d8374678ae061",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-gpt-6.2-sol M2-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M2-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol JiuwenSwarm \u00b7 gpt-6.1-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 37.84,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u4f1a\u521b\u5efa\u6587\u4ef6\u5e76\u6838\u5bf9\u5185\u5bb9\u3002 Ran a command, created a file, read a file +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 17.6 s",
+   "answer": "\u6211\u4f1a\u521b\u5efa\u6587\u4ef6\u5e76\u6838\u5bf9\u5185\u5bb9\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.0 s",
+   "answer": "M1-gpt-6.2-sol",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess7160e7e8a8d84d14981d8374678ae061\",\"checkpoint_sha\":\"6d615e74fcae430839db02bb53c363aaa7135df08e92820e3b0ccbc174282c03\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-6.2-sol",
+   "openai/gpt-6.1-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 94307,
+   "cache_read": 57307,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-6.1-sol": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-6.1-sol",
+  "at": "2026-11-18T17:48:44.524Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M1-gpt-6.1-sol M1-gpt-6.1-sol md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-6.1-sol \u00b7 Done in 8.2 s",
+   "answer": "M1-gpt-6.1-sol",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess734ed4e2e554490e90b4bbce155f4c09",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-gpt-6.1-sol M2-gpt-6.1-sol JiuwenSwarm \u00b7 gpt-6.1-sol \u00b7 Done in 7.8 s",
+   "answer": "M2-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 40.89,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u4f1a\u521b\u5efa hello-jiuwenswarm.txt\uff0c\u5185\u5bb9\u4e3a HELLO\uff0c\u5e76\u6838\u5bf9\u3002 Found files, created a file, read a file +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-6.1-sol \u00b7 Done in 18.3 s",
+   "answer": "\u6211\u4f1a\u521b\u5efa `hello-jiuwenswarm.txt`\uff0c\u5185\u5bb9\u4e3a `HELLO`\uff0c\u5e76\u6838\u5bf9\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6.1-sol JiuwenSwarm \u00b7 gpt-6.1-sol \u00b7 Done in 8.9 s",
+   "answer": "M1-gpt-6.1-sol",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess734ed4e2e554490e90b4bbce155f4c09\",\"checkpoint_sha\":\"890f052f0748985190c5e4f4ce3b5ad66798877c544d8c20466b4b2d000e427a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-6.1-sol",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 94283,
+   "cache_read": 57275,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-6-sol": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-6-sol",
+  "at": "2026-11-18T17:50:17.274Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M1-gpt-6-sol M1-gpt-6-sol md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-6-sol \u00b7 Done in 7.8 s",
+   "answer": "M1-gpt-6-sol",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess62dff6047b324bacb4c669b847ef5077",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M2-gpt-6-sol M2-gpt-6-sol JiuwenSwarm \u00b7 gpt-6-sol \u00b7 Done in 7.8 s",
+   "answer": "M2-gpt-6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 37.85,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u4f1a\u5728\u5de5\u4f5c\u533a\u521b\u5efa\u6587\u4ef6\uff0c\u5e76\u6838\u5bf9\u5185\u5bb9\u3002 Ran a command, created a file, read a file +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-6-sol \u00b7 Done in 17.4 s",
+   "answer": "\u6211\u4f1a\u5728\u5de5\u4f5c\u533a\u521b\u5efa\u6587\u4ef6\uff0c\u5e76\u6838\u5bf9\u5185\u5bb9\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6-sol JiuwenSwarm \u00b7 gpt-6-sol \u00b7 Done in 7.9 s",
+   "answer": "M1-gpt-6-sol",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess62dff6047b324bacb4c669b847ef5077\",\"checkpoint_sha\":\"e3f5ef80534e490bb9cbae6cdd67b74b9462b3813870498617e84123b5f60cf1\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-6-sol",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 94232,
+   "cache_read": 57308,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-6-luna": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-6-luna",
+  "at": "2026-11-18T17:51:46.991Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-gpt-6-luna M1-gpt-6-luna md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-6-luna \u00b7 Done in 8.9 s",
+   "answer": "M1-gpt-6-luna",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsesscb16bc90b33c46ecb7deee1dc2f35856",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-gpt-6-luna M2-gpt-6-luna JiuwenSwarm \u00b7 gpt-6-luna \u00b7 Done in 7.2 s",
+   "answer": "M2-gpt-6-luna",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.85,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5148\u786e\u8ba4\u5de5\u4f5c\u533a\u4f4d\u7f6e\uff0c\u518d\u521b\u5efa\u5305\u542b\u6307\u5b9a\u5185\u5bb9\u7684\u6587\u4ef6\u3002 Ran a command, created a file +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-6-luna \u00b7 Done in 13.9 s",
+   "answer": "\u6211\u5148\u786e\u8ba4\u5de5\u4f5c\u533a\u4f4d\u7f6e\uff0c\u518d\u521b\u5efa\u5305\u542b\u6307\u5b9a\u5185\u5bb9\u7684\u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6-luna JiuwenSwarm \u00b7 gpt-6-luna \u00b7 Done in 8.2 s",
+   "answer": "M1-gpt-6-luna",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsesscb16bc90b33c46ecb7deee1dc2f35856\",\"checkpoint_sha\":\"9a0de3a865d563a10741acf1c56ecf5f02287cf1f11eb31dc0131817ba1072a4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-6-luna",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 94167,
+   "cache_read": 38102,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-5.6-sol": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.6-sol",
+  "at": "2026-11-18T17:53:13.760Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.63,
+   "tail": "Reply with exactly: M1-gpt-5.6-sol M1-gpt-5.6-sol md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.6-sol \u00b7 Done in 7.5 s",
+   "answer": "M1-gpt-5.6-sol",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsesseb1782e8a090409a9b6aa11c683ff9b3",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-gpt-5.6-sol M2-gpt-5.6-sol JiuwenSwarm \u00b7 gpt-5.6-sol \u00b7 Done in 7.5 s",
+   "answer": "M2-gpt-5.6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 40.87,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5c06\u521b\u5efa\u6307\u5b9a\u6587\u4ef6\u5e76\u5199\u5165\u7cbe\u786e\u5185\u5bb9\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.6-sol \u00b7 Done in 20.1 s",
+   "answer": "\u6211\u5c06\u521b\u5efa\u6307\u5b9a\u6587\u4ef6\u5e76\u5199\u5165\u7cbe\u786e\u5185\u5bb9\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-sol JiuwenSwarm \u00b7 gpt-5.6-sol \u00b7 Done in 8.0 s",
+   "answer": "M1-gpt-5.6-sol",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsesseb1782e8a090409a9b6aa11c683ff9b3\",\"checkpoint_sha\":\"417173f8455de35e8e4233eeae8e71115a9d02059a968d715393a0c4d4666fcf\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-5.6-sol",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 94033,
+   "cache_read": 19002,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-5.6-terra": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.6-terra",
+  "at": "2026-11-18T17:54:46.480Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M1-gpt-5.6-terra M1-gpt-5.6-terra md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.6-terra \u00b7 Done in 7.6 s",
+   "answer": "M1-gpt-5.6-terra",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess8e55e0c51b4d47f7b31506265ae0ec19",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-gpt-5.6-terra M2-gpt-5.6-terra JiuwenSwarm \u00b7 gpt-5.6-terra \u00b7 Done in 7.1 s",
+   "answer": "M2-gpt-5.6-terra",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.79,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5c06\u5148\u786e\u8ba4\u5de5\u4f5c\u533a\u4f4d\u7f6e\uff0c\u518d\u521b\u5efa\u6307\u5b9a\u5185\u5bb9\u7684\u6587\u4ef6\u3002 Ran a command, created a file +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.6-terra \u00b7 Done in 14.1 s",
+   "answer": "\u6211\u5c06\u5148\u786e\u8ba4\u5de5\u4f5c\u533a\u4f4d\u7f6e\uff0c\u518d\u521b\u5efa\u6307\u5b9a\u5185\u5bb9\u7684\u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-terra JiuwenSwarm \u00b7 gpt-5.6-terra \u00b7 Done in 8.0 s",
+   "answer": "M1-gpt-5.6-terra",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess8e55e0c51b4d47f7b31506265ae0ec19\",\"checkpoint_sha\":\"806e85a03394a3ef15ec9854212ce4d8420d97540f07b92ac45e19167bc1f59a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-5.6-terra",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 94370,
+   "cache_read": 38186,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-5.6-luna": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.6-luna",
+  "at": "2026-11-18T17:56:13.116Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M1-gpt-5.6-luna M1-gpt-5.6-luna md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.6-luna \u00b7 Done in 7.1 s",
+   "answer": "M1-gpt-5.6-luna",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess7fa54e0a53b342179691d0b8374604a8",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-gpt-5.6-luna M2-gpt-5.6-luna JiuwenSwarm \u00b7 gpt-5.6-luna \u00b7 Done in 7.4 s",
+   "answer": "M2-gpt-5.6-luna",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 37.86,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u4f1a\u5728\u5de5\u4f5c\u533a\u521b\u5efa\u8be5\u6587\u4ef6\uff0c\u5e76\u786e\u8ba4\u5185\u5bb9\u51c6\u786e\u65e0\u8bef\u3002 Ran a command, created a file, read a file +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.6-luna \u00b7 Done in 15.3 s",
+   "answer": "\u6211\u4f1a\u5728\u5de5\u4f5c\u533a\u521b\u5efa\u8be5\u6587\u4ef6\uff0c\u5e76\u786e\u8ba4\u5185\u5bb9\u51c6\u786e\u65e0\u8bef\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-luna JiuwenSwarm \u00b7 gpt-5.6-luna \u00b7 Done in 8.6 s",
+   "answer": "M1-gpt-5.6-luna",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess7fa54e0a53b342179691d0b8374604a8\",\"checkpoint_sha\":\"8178cb8de909870af42184d44e3349fbe1a8f7eb4531bb33a254f942785c8984\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-5.6-luna",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 94387,
+   "cache_read": 57379,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-5.5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.5",
+  "at": "2026-11-18T17:57:42.884Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-gpt-5.5 M1-gpt-5.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.5 \u00b7 Done in 8.7 s",
+   "answer": "M1-gpt-5.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessa2f95195cead4a71bfc74a305f9cfc85",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M2-gpt-5.5 M2-gpt-5.5 JiuwenSwarm \u00b7 gpt-5.5 \u00b7 Done in 7.6 s",
+   "answer": "M2-gpt-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.89,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u4f1a\u5728\u5f53\u524d\u5de5\u4f5c\u533a\u521b\u5efa\u6307\u5b9a\u6587\u672c\u6587\u4ef6\uff0c\u5e76\u5199\u5165\u7cbe\u786e\u5185\u5bb9\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.5 \u00b7 Done in 12.4 s",
+   "answer": "\u6211\u4f1a\u5728\u5f53\u524d\u5de5\u4f5c\u533a\u521b\u5efa\u6307\u5b9a\u6587\u672c\u6587\u4ef6\uff0c\u5e76\u5199\u5165\u7cbe\u786e\u5185\u5bb9\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.5 JiuwenSwarm \u00b7 gpt-5.5 \u00b7 Done in 7.9 s",
+   "answer": "M1-gpt-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessa2f95195cead4a71bfc74a305f9cfc85\",\"checkpoint_sha\":\"b0672af1a1bdf2a29c466ab707bdce06bdd5102feef6fea9320ed82e809f5a28\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-5.5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 47412,
+   "cache_read": 65536,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-5.4": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.4",
+  "at": "2026-11-18T17:59:09.708Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.64,
+   "tail": "Reply with exactly: M1-gpt-5.4 M1-gpt-5.4 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.4 \u00b7 Done in 7.3 s",
+   "answer": "M1-gpt-5.4",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess4be7bff32e9147c79f2099b667d37c2d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M2-gpt-5.4 M2-gpt-5.4 JiuwenSwarm \u00b7 gpt-5.4 \u00b7 Done in 7.4 s",
+   "answer": "M2-gpt-5.4",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.81,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5148\u521b\u5efa\u6587\u4ef6\u5e76\u5199\u5165\u6307\u5b9a\u5185\u5bb9\u3002 Ran a command, created a file +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.4 \u00b7 Done in 14.4 s",
+   "answer": "\u6211\u5148\u521b\u5efa\u6587\u4ef6\u5e76\u5199\u5165\u6307\u5b9a\u5185\u5bb9\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4 JiuwenSwarm \u00b7 gpt-5.4 \u00b7 Done in 8.1 s",
+   "answer": "M1-gpt-5.4",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess4be7bff32e9147c79f2099b667d37c2d\",\"checkpoint_sha\":\"b47eb922e7064cc7e39e20d85e2eebd0ab639fc0be3ab4be5066e298b537fdbe\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-5.4",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 46947,
+   "cache_read": 85504,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-5.4-mini": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.4-mini",
+  "at": "2026-11-18T18:00:36.311Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-gpt-5.4-mini M1-gpt-5.4-mini md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.1 s",
+   "answer": "M1-gpt-5.4-mini",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess75fbf14728cd4f78a86489365ab1bd78",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.73,
+   "tail": "Reply with exactly: M2-gpt-5.4-mini M2-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 8.1 s",
+   "answer": "M2-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.79,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5148\u5728\u5de5\u4f5c\u533a\u91cc\u521b\u5efa\u6307\u5b9a\u6587\u4ef6\u5e76\u5199\u5165\u5185\u5bb9\uff0c\u7136\u540e\u56de\u590d\u4f60\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 10.6 s",
+   "answer": "\u6211\u5148\u5728\u5de5\u4f5c\u533a\u91cc\u521b\u5efa\u6307\u5b9a\u6587\u4ef6\u5e76\u5199\u5165\u5185\u5bb9\uff0c\u7136\u540e\u56de\u590d\u4f60\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.1 s",
+   "answer": "M1-gpt-5.4-mini",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess75fbf14728cd4f78a86489365ab1bd78\",\"checkpoint_sha\":\"adaff440cfda29c4bbf614a823c8289572d05c5bd84ba651ae5cada87269f1d9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-5.4-mini",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 46006,
+   "cache_read": 66816,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gpt-5.2": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.2",
+  "at": "2026-11-18T18:02:00.019Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M1-gpt-5.2 M1-gpt-5.2 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.2 \u00b7 Done in 7.8 s",
+   "answer": "M1-gpt-5.2",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess46fc7d04c5664a05bca8d9b3ce51f1a9",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-gpt-5.2 M2-gpt-5.2 JiuwenSwarm \u00b7 gpt-5.2 \u00b7 Done in 7.2 s",
+   "answer": "M2-gpt-5.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.73,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.73,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5c06\u521b\u5efa hello-jiuwenswarm.txt \u6587\u4ef6\u5e76\u5199\u5165 HELLO\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.2 \u00b7 Done in 10.8 s",
+   "answer": "\u6211\u5c06\u521b\u5efa hello-jiuwenswarm.txt \u6587\u4ef6\u5e76\u5199\u5165 HELLO\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.2 JiuwenSwarm \u00b7 gpt-5.2 \u00b7 Done in 8.2 s",
+   "answer": "M1-gpt-5.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess46fc7d04c5664a05bca8d9b3ce51f1a9\",\"checkpoint_sha\":\"41675b53ca82b08ad9f010e8ba93b448596e29cf00dafd4aa05b860943fba9aa\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "openai/gpt-5.2",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 47178,
+   "cache_read": 66048,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-fable-5-2": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-fable-5-2",
+  "at": "2026-11-18T18:03:05.586Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "Reply with exactly: M1-claude-fable-5-2 M1-claude-fable-5-2 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-fable-5-2 \u00b7 Done in 9.9 s",
+   "answer": "M1-claude-fable-5-2",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess69f2b9ce92fe4192a074cd2a2f75c2f6",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 12.17,
+   "tail": "Reply with exactly: M2-claude-fable-5-2 M2-claude-fable-5-2 JiuwenSwarm \u00b7 claude-fable-5-2 \u00b7 Done in 9.2 s",
+   "answer": "M2-claude-fable-5-2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.89,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6b63\u5728\u521b\u5efa\u6587\u4ef6 hello-jiuwenswarm.txt\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-fable-5-2 \u00b7 Done in 15.0 s",
+   "answer": "\u6b63\u5728\u521b\u5efa\u6587\u4ef6 hello-jiuwenswarm.txt\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 12.23,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-fable-5-2 JiuwenSwarm \u00b7 claude-fable-5-2 \u00b7 Done in 9.2 s",
+   "answer": "M1-claude-fable-5-2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess69f2b9ce92fe4192a074cd2a2f75c2f6\",\"checkpoint_sha\":\"d977f25355cf62c7a729aae8f2f6336c76ce95f237e5d5a0c05ca860ac17d6cc\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-fable-5.2",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145696,
+   "cache_read": 31972,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-fable-5-1": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-fable-5-1",
+  "at": "2026-11-18T18:04:38.432Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.64,
+   "tail": "Reply with exactly: M1-claude-fable-5-1 M1-claude-fable-5-1 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-fable-5-1 \u00b7 Done in 9.8 s",
+   "answer": "M1-claude-fable-5-1",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessca29b0fdbdd24412a37c1865e40ee29b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "Reply with exactly: M2-claude-fable-5-1 M2-claude-fable-5-1 JiuwenSwarm \u00b7 claude-fable-5-1 \u00b7 Done in 9.2 s",
+   "answer": "M2-claude-fable-5-1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.74,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-fable-5-1 \u00b7 Done in 14.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-fable-5-1 JiuwenSwarm \u00b7 claude-fable-5-1 \u00b7 Done in 9.5 s",
+   "answer": "M1-claude-fable-5-1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessca29b0fdbdd24412a37c1865e40ee29b\",\"checkpoint_sha\":\"0ae4a8ae60d65e01f98942363bb4b232dae2bd9f83e4e92c039894a72adaf026\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-fable-5.1",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145466,
+   "cache_read": 31937,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-fable-5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-fable-5",
+  "at": "2026-11-18T18:05:56.075Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.65,
+   "tail": "Reply with exactly: M1-claude-fable-5 M1-claude-fable-5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-fable-5 \u00b7 Done in 9.6 s",
+   "answer": "M1-claude-fable-5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess728d6bef10af467daad66e56cdead9c5",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.75,
+   "tail": "Reply with exactly: M2-claude-fable-5 M2-claude-fable-5 JiuwenSwarm \u00b7 claude-fable-5 \u00b7 Done in 9.8 s",
+   "answer": "M2-claude-fable-5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.72,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-fable-5 \u00b7 Done in 14.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-fable-5 JiuwenSwarm \u00b7 claude-fable-5 \u00b7 Done in 11.5 s",
+   "answer": "M1-claude-fable-5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess728d6bef10af467daad66e56cdead9c5\",\"checkpoint_sha\":\"8615a838a3282962e8e6e70a2344b4339750330452320307feb7783b8d4c03d9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-fable-5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145216,
+   "cache_read": 31888,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-opus-5.5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-opus-5.5",
+  "at": "2026-11-18T18:07:13.688Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.64,
+   "tail": "Reply with exactly: M1-claude-opus-5.5 M1-claude-opus-5.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-opus-5.5 \u00b7 Done in 8.0 s",
+   "answer": "M1-claude-opus-5.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsesse177d0d3efad450a86c6beb1c216cb09",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-claude-opus-5.5 M2-claude-opus-5.5 JiuwenSwarm \u00b7 claude-opus-5.5 \u00b7 Done in 8.3 s",
+   "answer": "M2-claude-opus-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-opus-5.5 \u00b7 Done in 11.8 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-opus-5.5 JiuwenSwarm \u00b7 claude-opus-5.5 \u00b7 Done in 8.7 s",
+   "answer": "M1-claude-opus-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsesse177d0d3efad450a86c6beb1c216cb09\",\"checkpoint_sha\":\"6e0d3140ef1a61d321250d50ee6467f7441d48bdaeda58bcb3e71b4fca329f0e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-opus-5.5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145398,
+   "cache_read": 31924,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-opus-5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-opus-5",
+  "at": "2026-11-18T18:08:19.201Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.67,
+   "tail": "Reply with exactly: M1-claude-opus-5 M1-claude-opus-5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-opus-5 \u00b7 Done in 10.0 s",
+   "answer": "M1-claude-opus-5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess906cdc341ed04c78ab2ceb0d57ddf662",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-claude-opus-5 M2-claude-opus-5 JiuwenSwarm \u00b7 claude-opus-5 \u00b7 Done in 8.0 s",
+   "answer": "M2-claude-opus-5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.75,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-opus-5 \u00b7 Done in 12.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-opus-5 JiuwenSwarm \u00b7 claude-opus-5 \u00b7 Done in 8.0 s",
+   "answer": "M1-claude-opus-5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess906cdc341ed04c78ab2ceb0d57ddf662\",\"checkpoint_sha\":\"66789431f35bee332f2c832e2fbface5548ceb64ca60c41bca84ffd33f39bb62\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-opus-5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145405,
+   "cache_read": 31932,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-sonnet-5.5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-sonnet-5.5",
+  "at": "2026-11-18T18:09:30.775Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M1-claude-sonnet-5.5 M1-claude-sonnet-5.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-sonnet-5.5 \u00b7 Done in 7.8 s",
+   "answer": "M1-claude-sonnet-5.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess6b0c37456d934e6eafa699bc1a8ba07d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M2-claude-sonnet-5.5 M2-claude-sonnet-5.5 JiuwenSwarm \u00b7 claude-sonnet-5.5 \u00b7 Done in 7.6 s",
+   "answer": "M2-claude-sonnet-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-sonnet-5.5 \u00b7 Done in 11.2 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-sonnet-5.5 JiuwenSwarm \u00b7 claude-sonnet-5.5 \u00b7 Done in 8.7 s",
+   "answer": "M1-claude-sonnet-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6b0c37456d934e6eafa699bc1a8ba07d\",\"checkpoint_sha\":\"1054631ea5523350f69d0948b4d755aa03106dda736243366f7a60a8c057059f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-sonnet-5.5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145564,
+   "cache_read": 31966,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-sonnet-5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-sonnet-5",
+  "at": "2026-11-18T18:10:36.302Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-claude-sonnet-5 M1-claude-sonnet-5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 7.9 s",
+   "answer": "M1-claude-sonnet-5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessd60cd8d40b1f4acc81cea6127a5649ce",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-claude-sonnet-5 M2-claude-sonnet-5 JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 7.4 s",
+   "answer": "M2-claude-sonnet-5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 11.2 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-sonnet-5 JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 7.4 s",
+   "answer": "M1-claude-sonnet-5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd60cd8d40b1f4acc81cea6127a5649ce\",\"checkpoint_sha\":\"52cfadd715e371bc88a30ed6a1b35697aaa64e747affd571c548d29e6c446fb1\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145752,
+   "cache_read": 32013,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-opus-4.8": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-opus-4.8",
+  "at": "2026-11-18T18:11:41.776Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M1-claude-opus-4.8 M1-claude-opus-4.8 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-opus-4.8 \u00b7 Done in 8.0 s",
+   "answer": "M1-claude-opus-4.8",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess07e154766d3e40c5ae91e7448fb4077b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-claude-opus-4.8 M2-claude-opus-4.8 JiuwenSwarm \u00b7 claude-opus-4.8 \u00b7 Done in 7.5 s",
+   "answer": "M2-claude-opus-4.8",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 28.87,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-opus-4.8 \u00b7 Done in 24.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-opus-4.8 JiuwenSwarm \u00b7 claude-opus-4.8 \u00b7 Done in 8.8 s",
+   "answer": "M1-claude-opus-4.8",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess07e154766d3e40c5ae91e7448fb4077b\",\"checkpoint_sha\":\"ac962328dadecd6277d5c3b627a678ce1d3507cccdce36371b9c42d9158d3593\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-opus-4.8",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 145403,
+   "cache_read": 31926,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-opus-4.7": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-opus-4.7",
+  "at": "2026-11-18T18:13:02.439Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M1-claude-opus-4.7 M1-claude-opus-4.7 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-opus-4.7 \u00b7 Done in 8.1 s",
+   "answer": "M1-claude-opus-4.7",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess01c3f9b10ea746d2b78a4fc912ecb03a",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M2-claude-opus-4.7 M2-claude-opus-4.7 JiuwenSwarm \u00b7 claude-opus-4.7 \u00b7 Done in 7.2 s",
+   "answer": "M2-claude-opus-4.7",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.3 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.73,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-opus-4.7 \u00b7 Done in 10.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-opus-4.7 JiuwenSwarm \u00b7 claude-opus-4.7 \u00b7 Done in 7.4 s",
+   "answer": "M1-claude-opus-4.7",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess01c3f9b10ea746d2b78a4fc912ecb03a\",\"checkpoint_sha\":\"a36b26ca7c9ae73777ac907463b917c6029f02a7d4395c29f29d8d1e85ee95a1\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-opus-4.7",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 147241,
+   "cache_read": 32363,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-sonnet-4.6": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-sonnet-4.6",
+  "at": "2026-11-18T18:14:08.026Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-claude-sonnet-4.6 M1-claude-sonnet-4.6 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-sonnet-4.6 \u00b7 Done in 7.5 s",
+   "answer": "M1-claude-sonnet-4.6",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess56e26237b9fa4c07b02121452ececa21",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M2-claude-sonnet-4.6 M2-claude-sonnet-4.6 JiuwenSwarm \u00b7 claude-sonnet-4.6 \u00b7 Done in 7.3 s",
+   "answer": "M2-claude-sonnet-4.6",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.8,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-sonnet-4.6 \u00b7 Done in 16.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-sonnet-4.6 JiuwenSwarm \u00b7 claude-sonnet-4.6 \u00b7 Done in 7.3 s",
+   "answer": "M1-claude-sonnet-4.6",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess56e26237b9fa4c07b02121452ececa21\",\"checkpoint_sha\":\"8b5190321b649a86dd2cf3b245ab753ad15faa37613a9a9f5005001d28fcd44f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-sonnet-4.6",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 117026,
+   "cache_read": 24759,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|claude-haiku-4.5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "claude-haiku-4.5",
+  "at": "2026-11-18T18:15:19.668Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M1-claude-haiku-4.5 M1-claude-haiku-4.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-haiku-4.5 \u00b7 Done in 7.7 s",
+   "answer": "M1-claude-haiku-4.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessd61284c16fd344febf5016216593265e",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-claude-haiku-4.5 M2-claude-haiku-4.5 JiuwenSwarm \u00b7 claude-haiku-4.5 \u00b7 Done in 7.4 s",
+   "answer": "M2-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.77,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u6765\u521b\u5efa\u8fd9\u4e2a\u6587\u4ef6\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-haiku-4.5 \u00b7 Done in 9.9 s",
+   "answer": "\u6211\u6765\u521b\u5efa\u8fd9\u4e2a\u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.73,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-haiku-4.5 JiuwenSwarm \u00b7 claude-haiku-4.5 \u00b7 Done in 7.5 s",
+   "answer": "M1-claude-haiku-4.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd61284c16fd344febf5016216593265e\",\"checkpoint_sha\":\"c2ebc477c8e3d09a0a9dfdb9037b088a3c3d87578b0587328c784645343192f9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "anthropic/claude-haiku-4.5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 158762,
+   "cache_read": 35195,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-4-argon": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-4-argon",
+  "at": "2026-11-18T18:16:43.270Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.7,
+   "tail": "Reply with exactly: M1-gemini-4-argon M1-gemini-4-argon md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-4-argon \u00b7 Done in 12.6 s",
+   "answer": "M1-gemini-4-argon",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess54eaeb41b1d14c5383f55e5bbdeff2d6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.66,
+   "tail": "Reply with exactly: M2-gemini-4-argon M2-gemini-4-argon JiuwenSwarm \u00b7 gemini-4-argon \u00b7 Done in 12.1 s",
+   "answer": "M2-gemini-4-argon",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 77.12,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. I will create the file hello-jiuwenswarm.txt with the content HELLO. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-4-argon \u00b7 Done in 56.9 s",
+   "answer": "I will create the file `hello-jiuwenswarm.txt` with the content `HELLO`.\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 25.82,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-4-argon JiuwenSwarm \u00b7 gemini-4-argon \u00b7 Done in 23.2 s",
+   "answer": "M1-gemini-4-argon",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess54eaeb41b1d14c5383f55e5bbdeff2d6\",\"checkpoint_sha\":\"32405ab21e88a04d9499240cef4533b994274e0b37d912360645efe78ca32e21\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-4-argon",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 106354,
+   "cache_read": 19539,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3.8-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.8-flash",
+  "at": "2026-11-18T18:19:16.333Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.64,
+   "tail": "Reply with exactly: M1-gemini-3.8-flash M1-gemini-3.8-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.8-flash \u00b7 Done in 9.4 s",
+   "answer": "M1-gemini-3.8-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess80ac4e6fbe554486b79335041eb719c9",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M2-gemini-3.8-flash M2-gemini-3.8-flash JiuwenSwarm \u00b7 gemini-3.8-flash \u00b7 Done in 8.2 s",
+   "answer": "M2-gemini-3.8-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 46.96,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. I will create the file hello-jiuwenswarm.txt with the content HELLO. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.8-flash \u00b7 Done in 24.7 s",
+   "answer": "I will create the file `hello-jiuwenswarm.txt` with the content `HELLO`.\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.8-flash JiuwenSwarm \u00b7 gemini-3.8-flash \u00b7 Done in 9.0 s",
+   "answer": "M1-gemini-3.8-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess80ac4e6fbe554486b79335041eb719c9\",\"checkpoint_sha\":\"4d2018739baf135bd2732af4c28b18cb96afc55cb924b11cde3f6fe91ff01e05\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3.8-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 100604,
+   "cache_read": 18249,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3.7-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.7-flash",
+  "at": "2026-11-18T18:20:58.174Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M1-gemini-3.7-flash M1-gemini-3.7-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.7-flash \u00b7 Done in 8.2 s",
+   "answer": "M1-gemini-3.7-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessb2eac37e982a40b0baa9ff278a4fa219",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M2-gemini-3.7-flash M2-gemini-3.7-flash JiuwenSwarm \u00b7 gemini-3.7-flash \u00b7 Done in 7.4 s",
+   "answer": "M2-gemini-3.7-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.3 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.76,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. I will create the hello-jiuwenswarm.txt file. Created hello-jiuwenswarm.txt +1 \u22120 DONE. txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.7-flash \u00b7 Done in 12.0 s",
+   "answer": "I will create the `hello-jiuwenswarm.txt` file.\n\nDONE.",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.7-flash JiuwenSwarm \u00b7 gemini-3.7-flash \u00b7 Done in 8.8 s",
+   "answer": "M1-gemini-3.7-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb2eac37e982a40b0baa9ff278a4fa219\",\"checkpoint_sha\":\"9d70b315682ecb848efd3c60e845f213c92f6acb6b2cb532132b2f88ea7c8a64\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3.7-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 100418,
+   "cache_read": 18216,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3.6-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.6-flash",
+  "at": "2026-11-18T18:22:21.761Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.74,
+   "tail": "Reply with exactly: M1-gemini-3.6-flash M1-gemini-3.6-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.6-flash \u00b7 Done in 7.9 s",
+   "answer": "M1-gemini-3.6-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess00a0deb84b984a02a2b958a1a422a6a6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M2-gemini-3.6-flash M2-gemini-3.6-flash JiuwenSwarm \u00b7 gemini-3.6-flash \u00b7 Done in 7.4 s",
+   "answer": "M2-gemini-3.6-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.83,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. I will create a file named hello-jiuwenswarm.txt containing HELLO. Created hello-jiuwenswarm.txt +1 \u22120 DONE. txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.6-flash \u00b7 Done in 11.2 s",
+   "answer": "I will create a file named `hello-jiuwenswarm.txt` containing `HELLO`.\n\nDONE.",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.6-flash JiuwenSwarm \u00b7 gemini-3.6-flash \u00b7 Done in 8.3 s",
+   "answer": "M1-gemini-3.6-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess00a0deb84b984a02a2b958a1a422a6a6\",\"checkpoint_sha\":\"15132e6deeb8a4910d9d6793d97a278c0e5bca6567b06a2dc39c4fd07302796a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3.6-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 67774,
+   "cache_read": 51112,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3.5-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.5-flash",
+  "at": "2026-11-18T18:23:45.496Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.7,
+   "tail": "Reply with exactly: M1-gemini-3.5-flash M1-gemini-3.5-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 9.6 s",
+   "answer": "M1-gemini-3.5-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess96c812b4dc0b478c9bbf73ac01251632",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M2-gemini-3.5-flash M2-gemini-3.5-flash JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 7.6 s",
+   "answer": "M2-gemini-3.5-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.73,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. I will create a file named hello-jiuwenswarm.txt with the content HELLO. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 14.0 s",
+   "answer": "I will create a file named hello-jiuwenswarm.txt with the content HELLO.\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.79,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.5-flash JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 8.1 s",
+   "answer": "M1-gemini-3.5-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess96c812b4dc0b478c9bbf73ac01251632\",\"checkpoint_sha\":\"1ec85bf3f121024f2264dda8f9a0495d79ea4eaf894fd5a6a29481fd77078517\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3.5-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 103659,
+   "cache_read": 15148,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3.5-flash-lite": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.5-flash-lite",
+  "at": "2026-11-18T18:24:57.341Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-gemini-3.5-flash-lite M1-gemini-3.5-flash-lite md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.5-flash-lite \u00b7 Done in 7.4 s",
+   "answer": "M1-gemini-3.5-flash-lite",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessb548b14aa0fd4646aa8bfb0116a883f1",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.75,
+   "tail": "Reply with exactly: M2-gemini-3.5-flash-lite M2-gemini-3.5-flash-lite JiuwenSwarm \u00b7 gemini-3.5-flash-lite \u00b7 Done in 7.3 s",
+   "answer": "M2-gemini-3.5-flash-lite",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.75,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.5-flash-lite \u00b7 Done in 9.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.77,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.5-flash-lite JiuwenSwarm \u00b7 gemini-3.5-flash-lite \u00b7 Done in 7.5 s",
+   "answer": "M1-gemini-3.5-flash-lite",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb548b14aa0fd4646aa8bfb0116a883f1\",\"checkpoint_sha\":\"aa4b5e767eb59542b592a731d3b39691b0e01732bfd6e2f3d123c7adf1f68d20\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3.5-flash-lite",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 99664,
+   "cache_read": 18921,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3.1-pro-preview": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.1-pro-preview",
+  "at": "2026-11-18T18:26:03.079Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "Reply with exactly: M1-gemini-3.1-pro-preview M1-gemini-3.1-pro-preview md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.1-pro-preview \u00b7 Done in 10.8 s",
+   "answer": "M1-gemini-3.1-pro-preview",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess50787b609ccc473caf9f8cb40b2ff2e5",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "Reply with exactly: M2-gemini-3.1-pro-preview M2-gemini-3.1-pro-preview JiuwenSwarm \u00b7 gemini-3.1-pro-preview \u00b7 Done in 9.5 s",
+   "answer": "M2-gemini-3.1-pro-preview",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.81,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE. txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.1-pro-preview \u00b7 Done in 15.3 s",
+   "answer": "DONE.",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.1-pro-preview JiuwenSwarm \u00b7 gemini-3.1-pro-preview \u00b7 Done in 11.5 s",
+   "answer": "M1-gemini-3.1-pro-preview",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess50787b609ccc473caf9f8cb40b2ff2e5\",\"checkpoint_sha\":\"b4a77bcb2b0fa957b6c4524ed70df1998e051b434e179c138089dc82549b750e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3.1-pro-preview",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 118676,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3.1-flash-lite": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.1-flash-lite",
+  "at": "2026-11-18T18:27:23.799Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-gemini-3.1-flash-lite M1-gemini-3.1-flash-lite md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.1-flash-lite \u00b7 Done in 7.9 s",
+   "answer": "M1-gemini-3.1-flash-lite",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess36c987f9100e4994a2e231a7c98a61b5",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M2-gemini-3.1-flash-lite M2-gemini-3.1-flash-lite JiuwenSwarm \u00b7 gemini-3.1-flash-lite \u00b7 Done in 7.4 s",
+   "answer": "M2-gemini-3.1-flash-lite",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE. txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.1-flash-lite \u00b7 Done in 8.8 s",
+   "answer": "DONE.",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.1-flash-lite JiuwenSwarm \u00b7 gemini-3.1-flash-lite \u00b7 Done in 7.6 s",
+   "answer": "M1-gemini-3.1-flash-lite",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess36c987f9100e4994a2e231a7c98a61b5\",\"checkpoint_sha\":\"db19ab04a690be1ed503716473b6f8db5158b70d7b11c0b650279f4b857d63f0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3.1-flash-lite",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 99876,
+   "cache_read": 18924,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|gemini-3-flash-preview": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3-flash-preview",
+  "at": "2026-11-18T18:28:26.256Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "Reply with exactly: M1-gemini-3-flash-preview M1-gemini-3-flash-preview md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3-flash-preview \u00b7 Done in 9.5 s",
+   "answer": "M1-gemini-3-flash-preview",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessb7cf64adc35b4585954daa170b26ba14",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.74,
+   "tail": "Reply with exactly: M2-gemini-3-flash-preview M2-gemini-3-flash-preview JiuwenSwarm \u00b7 gemini-3-flash-preview \u00b7 Done in 8.3 s",
+   "answer": "M2-gemini-3-flash-preview",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3-flash-preview \u00b7 Done in 10.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3-flash-preview JiuwenSwarm \u00b7 gemini-3-flash-preview \u00b7 Done in 11.2 s",
+   "answer": "M1-gemini-3-flash-preview",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb7cf64adc35b4585954daa170b26ba14\",\"checkpoint_sha\":\"98428755a014cbc6c6fa14cdb4f9005057e6095cea7fab0b95065faca792f125\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "google/gemini-3-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 100143,
+   "cache_read": 18185,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|grok-4.6": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "grok-4.6",
+  "at": "2026-11-18T18:29:37.923Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.65,
+   "tail": "Reply with exactly: M1-grok-4.6 M1-grok-4.6 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 grok-4.6 \u00b7 Done in 9.2 s",
+   "answer": "M1-grok-4.6",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess5c58f70fd9e5480da8f0219ac08aac48",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.78,
+   "tail": "Reply with exactly: M2-grok-4.6 Used Todo create M2-grok-4.6 JiuwenSwarm \u00b7 grok-4.6 \u00b7 Done in 11.3 s",
+   "answer": "M2-grok-4.6",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.0 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.77,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5c06\u521b\u5efa hello-jiuwenswarm.txt\uff0c\u5185\u5bb9\u4ec5\u4e3a HELLO\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 grok-4.6 \u00b7 Done in 10.7 s",
+   "answer": "\u6211\u5c06\u521b\u5efa `hello-jiuwenswarm.txt`\uff0c\u5185\u5bb9\u4ec5\u4e3a `HELLO`\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.76,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-grok-4.6 JiuwenSwarm \u00b7 grok-4.6 \u00b7 Done in 11.9 s",
+   "answer": "M1-grok-4.6",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess5c58f70fd9e5480da8f0219ac08aac48\",\"checkpoint_sha\":\"a2675bcdefd3c0310b0ed359b9cdc91bc2f611ae04e28ec171d0c770c4d8e949\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "spacexai/grok-4.6",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 88882,
+   "cache_read": 59264,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|grok-4.5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "grok-4.5",
+  "at": "2026-11-18T18:31:10.697Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-grok-4.5 M1-grok-4.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 8.3 s",
+   "answer": "M1-grok-4.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess3361588d4e3c4d0590d31d907cd95376",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.63,
+   "tail": "Reply with exactly: M2-grok-4.5 M2-grok-4.5 JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 7.6 s",
+   "answer": "M2-grok-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6b63\u5728\u521b\u5efa hello-jiuwenswarm.txt\u3002 Edited hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 10.7 s",
+   "answer": "\u6b63\u5728\u521b\u5efa `hello-jiuwenswarm.txt`\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-grok-4.5 JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 8.4 s",
+   "answer": "M1-grok-4.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess3361588d4e3c4d0590d31d907cd95376\",\"checkpoint_sha\":\"d1dbbde06bc6753926e80e0c752beed813067d4fcbb8172e245c6bda22a607f3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "spacexai/grok-4.5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 96277,
+   "cache_read": 30080,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|grok-4.3": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "grok-4.3",
+  "at": "2026-11-18T18:32:34.252Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.68,
+   "tail": "Reply with exactly: M1-grok-4.3 M1-grok-4.3 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 grok-4.3 \u00b7 Done in 11.7 s",
+   "answer": "M1-grok-4.3",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess5006e9b2b6314fc5b6e05b74d015d007",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 28.78,
+   "tail": "Reply with exactly: M2-grok-4.3 M2-grok-4.3 JiuwenSwarm \u00b7 grok-4.3 \u00b7 Done in 26.5 s",
+   "answer": "M2-grok-4.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 22.74,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 grok-4.3 \u00b7 Done in 18.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-grok-4.3 JiuwenSwarm \u00b7 grok-4.3 \u00b7 Done in 11.6 s",
+   "answer": "M1-grok-4.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess5006e9b2b6314fc5b6e05b74d015d007\",\"checkpoint_sha\":\"44b397f8104f2f4450d616e0079bae45d146d3f7acb7c27ff1291668c1417373\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "spacexai/grok-4.3",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 92491,
+   "cache_read": 28800,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|grok-4.20": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "grok-4.20",
+  "at": "2026-11-18T18:34:12.926Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.66,
+   "tail": "Reply with exactly: M1-grok-4.20 M1-grok-4.20 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 grok-4.20 \u00b7 Done in 9.9 s",
+   "answer": "M1-grok-4.20",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessf3dc432777f6421d9fa3f5b1430d56af",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.7,
+   "tail": "Reply with exactly: M2-grok-4.20 M2-grok-4.20 JiuwenSwarm \u00b7 grok-4.20 \u00b7 Done in 9.6 s",
+   "answer": "M2-grok-4.20",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.83,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 grok-4.20 \u00b7 Done in 15.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.73,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-grok-4.20 JiuwenSwarm \u00b7 grok-4.20 \u00b7 Done in 10.2 s",
+   "answer": "M1-grok-4.20",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessf3dc432777f6421d9fa3f5b1430d56af\",\"checkpoint_sha\":\"7863de3d04bee0d0705e0e32e7520938d8bc7b91e7529447f5e4e462c23a186d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "spacexai/grok-4.20-reasoning",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 85003,
+   "cache_read": 36224,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|grok-build-0.1": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "grok-build-0.1",
+  "at": "2026-11-18T18:35:33.580Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.67,
+   "tail": "Reply with exactly: M1-grok-build-0.1 M1-grok-build-0.1 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 grok-build-0.1 \u00b7 Done in 13.2 s",
+   "answer": "M1-grok-build-0.1",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess862f103a7c9f41ba97aa54e7f93dc963",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.77,
+   "tail": "Reply with exactly: M2-grok-build-0.1 M2-grok-build-0.1 JiuwenSwarm \u00b7 grok-build-0.1 \u00b7 Done in 11.2 s",
+   "answer": "M2-grok-build-0.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.87,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created a file, ran 5 commands +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 grok-build-0.1 \u00b7 Done in 30.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-grok-build-0.1 JiuwenSwarm \u00b7 grok-build-0.1 \u00b7 Done in 9.7 s",
+   "answer": "M1-grok-build-0.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess862f103a7c9f41ba97aa54e7f93dc963\",\"checkpoint_sha\":\"5af4ea36279c160ceeb1e240a9e3988a26a6ee93f2e245f89b16e711b5862d92\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "spacexai/grok-build-0.1",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 86683,
+   "cache_read": 140544,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|muse-wonder-1.0": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "muse-wonder-1.0",
+  "at": "2026-11-18T18:37:09.371Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-muse-wonder-1.0 M1-muse-wonder-1.0 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 muse-wonder-1.0 \u00b7 Done in 7.9 s",
+   "answer": "M1-muse-wonder-1.0",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessdf358b295ca843bfa39ca6bd768abf97",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M2-muse-wonder-1.0 M2-muse-wonder-1.0 JiuwenSwarm \u00b7 muse-wonder-1.0 \u00b7 Done in 7.1 s",
+   "answer": "M2-muse-wonder-1.0",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.87,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u521b\u5efa HELLO \u6587\u4ef6\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 muse-wonder-1.0 \u00b7 Done in 9.9 s",
+   "answer": "\u521b\u5efa HELLO \u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-muse-wonder-1.0 JiuwenSwarm \u00b7 muse-wonder-1.0 \u00b7 Done in 7.8 s",
+   "answer": "M1-muse-wonder-1.0",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdf358b295ca843bfa39ca6bd768abf97\",\"checkpoint_sha\":\"840feed60c85987ffd7db302d1931b559d077b1296f9be3fbb958c86e87dd8cb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "meta/muse-wonder-1.0",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 101764,
+   "cache_read": 21328,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|muse-spark-1.3": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "muse-spark-1.3",
+  "at": "2026-11-18T18:38:32.992Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M1-muse-spark-1.3 M1-muse-spark-1.3 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 muse-spark-1.3 \u00b7 Done in 7.9 s",
+   "answer": "M1-muse-spark-1.3",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess76a9a068e621436eac881305397fda48",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-muse-spark-1.3 M2-muse-spark-1.3 JiuwenSwarm \u00b7 muse-spark-1.3 \u00b7 Done in 7.0 s",
+   "answer": "M2-muse-spark-1.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.63,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 49.91,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6b63\u5728\u521b\u5efa\u4f60\u8981\u6c42\u7684\u6587\u4ef6\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 muse-spark-1.3 \u00b7 Done in 30.1 s",
+   "answer": "\u6b63\u5728\u521b\u5efa\u4f60\u8981\u6c42\u7684\u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-muse-spark-1.3 JiuwenSwarm \u00b7 muse-spark-1.3 \u00b7 Done in 12.0 s",
+   "answer": "M1-muse-spark-1.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess76a9a068e621436eac881305397fda48\",\"checkpoint_sha\":\"9e3b83008691fe76a10ad3b6fee58145ee32aeca81acfcdb6a512e54f0588cf0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "meta/muse-spark-1.3",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 122928,
+   "cache_read": 565,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|muse-spark-1.2": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "muse-spark-1.2",
+  "at": "2026-11-18T18:40:17.789Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.67,
+   "tail": "Reply with exactly: M1-muse-spark-1.2 M1-muse-spark-1.2 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 muse-spark-1.2 \u00b7 Done in 10.2 s",
+   "answer": "M1-muse-spark-1.2",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess98c7a96ede34407c8bbfbe651f534b98",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M2-muse-spark-1.2 M2-muse-spark-1.2 JiuwenSwarm \u00b7 muse-spark-1.2 \u00b7 Done in 7.7 s",
+   "answer": "M2-muse-spark-1.2",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6b63\u5728\u521b\u5efa\u6587\u4ef6 hello-jiuwenswarm.txt\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 muse-spark-1.2 \u00b7 Done in 11.3 s",
+   "answer": "\u6b63\u5728\u521b\u5efa\u6587\u4ef6 hello-jiuwenswarm.txt\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-muse-spark-1.2 JiuwenSwarm \u00b7 muse-spark-1.2 \u00b7 Done in 9.3 s",
+   "answer": "M1-muse-spark-1.2",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess98c7a96ede34407c8bbfbe651f534b98\",\"checkpoint_sha\":\"afa2540dc887fb19473d8012f0f246934b7c4e580f95bf03db981a4136cd3e9b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "meta/muse-spark-1.2",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 103723,
+   "cache_read": 19938,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|muse-spark-1.1": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "muse-spark-1.1",
+  "at": "2026-11-18T18:41:47.506Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.76,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 M1-muse-spark-1.1 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 15.9 s",
+   "answer": "M1-muse-spark-1.1",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess03382ab74fe248f7a86e9089c1b25554",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 M2-muse-spark-1.1 JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 7.1 s",
+   "answer": "M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.77,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6b63\u5728\u521b\u5efa\u4f60\u8bf7\u6c42\u7684\u6587\u4ef6\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 11.3 s",
+   "answer": "\u6b63\u5728\u521b\u5efa\u4f60\u8bf7\u6c42\u7684\u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-muse-spark-1.1 JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 7.5 s",
+   "answer": "M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess03382ab74fe248f7a86e9089c1b25554\",\"checkpoint_sha\":\"1c6806a0abfc18a19a53fd1c052184b8371e1b436d90ac8d966eb62867312c5c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "meta/muse-spark-1.1",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 82377,
+   "cache_read": 41269,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|muse-glimmer-30b": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "muse-glimmer-30b",
+  "at": "2026-11-18T18:43:20.237Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-muse-glimmer-30b M1-muse-glimmer-30b md JIUWENSWARM.md MD JiuwenSwarm \u00b7 muse-glimmer-30b \u00b7 Done in 7.7 s",
+   "answer": "M1-muse-glimmer-30b",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessc1252695eedb46c6ac66cbbfab37f6e9",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-muse-glimmer-30b M2-muse-glimmer-30b JiuwenSwarm \u00b7 muse-glimmer-30b \u00b7 Done in 7.6 s",
+   "answer": "M2-muse-glimmer-30b",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.72,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 muse-glimmer-30b \u00b7 Done in 13.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-muse-glimmer-30b JiuwenSwarm \u00b7 muse-glimmer-30b \u00b7 Done in 12.3 s",
+   "answer": "M1-muse-glimmer-30b",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc1252695eedb46c6ac66cbbfab37f6e9\",\"checkpoint_sha\":\"a545e5552550332af67069e32d2520cc87fd9d923fa0cc967ecc105c66a2d2e1\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "meta/muse-glimmer-30b",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 87999,
+   "cache_read": 36896,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|deepseek-v4.1-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "deepseek-v4.1-flash",
+  "at": "2026-11-18T18:44:34.802Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M1-deepseek-v4.1-flash M1-deepseek-v4.1-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 deepseek-v4.1-flash \u00b7 Done in 7.8 s",
+   "answer": "M1-deepseek-v4.1-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess3d7a4a13de674829ae312356abb0f3b6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-deepseek-v4.1-flash M2-deepseek-v4.1-flash JiuwenSwarm \u00b7 deepseek-v4.1-flash \u00b7 Done in 7.1 s",
+   "answer": "M2-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.69,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 deepseek-v4.1-flash \u00b7 Done in 9.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-deepseek-v4.1-flash JiuwenSwarm \u00b7 deepseek-v4.1-flash \u00b7 Done in 7.7 s",
+   "answer": "M1-deepseek-v4.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess3d7a4a13de674829ae312356abb0f3b6\",\"checkpoint_sha\":\"8e50542c571f24e82652386a1566d628c513251e9c2dff690ed3961c39e9bd9c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "deepseek/deepseek-v4.1-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 79901,
+   "cache_read": 45312,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|deepseek-v4-pro": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "deepseek-v4-pro",
+  "at": "2026-11-18T18:45:40.421Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.68,
+   "tail": "Reply with exactly: M1-deepseek-v4-pro M1-deepseek-v4-pro md JIUWENSWARM.md MD JiuwenSwarm \u00b7 deepseek-v4-pro \u00b7 Done in 9.5 s",
+   "answer": "M1-deepseek-v4-pro",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessc2a796cb0c5347ccb16d81eec652228b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "Reply with exactly: M2-deepseek-v4-pro M2-deepseek-v4-pro JiuwenSwarm \u00b7 deepseek-v4-pro \u00b7 Done in 9.6 s",
+   "answer": "M2-deepseek-v4-pro",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.75,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 deepseek-v4-pro \u00b7 Done in 13.2 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.8,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-deepseek-v4-pro JiuwenSwarm \u00b7 deepseek-v4-pro \u00b7 Done in 10.3 s",
+   "answer": "M1-deepseek-v4-pro",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc2a796cb0c5347ccb16d81eec652228b\",\"checkpoint_sha\":\"0a722186a33a08cb62ef6c232227011a96f55ed7904f0583445f91156e28b48c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "deepseek/deepseek-v4-pro",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 88245,
+   "cache_read": 37248,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|deepseek-v4-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "deepseek-v4-flash",
+  "at": "2026-11-18T18:46:58.154Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M1-deepseek-v4-flash M1-deepseek-v4-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 7.3 s",
+   "answer": "M1-deepseek-v4-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess979fea60d5a6402eb55c2a3efb034d17",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M2-deepseek-v4-flash M2-deepseek-v4-flash JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 8.8 s",
+   "answer": "M2-deepseek-v4-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.75,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 14.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-deepseek-v4-flash JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 8.7 s",
+   "answer": "M1-deepseek-v4-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess979fea60d5a6402eb55c2a3efb034d17\",\"checkpoint_sha\":\"8b43fe945e7bfd03290d83a2e27b1bdebdeb8c293bb7745aa965423ff7207739\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "deepseek/deepseek-v4-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 109387,
+   "cache_read": 15872,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|kimi-k3": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "kimi-k3",
+  "at": "2026-11-18T18:48:06.715Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-kimi-k3 M1-kimi-k3 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 8.6 s",
+   "answer": "M1-kimi-k3",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessd55764059d744228b08f5c816d2b3c9d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-kimi-k3 M2-kimi-k3 JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 7.6 s",
+   "answer": "M2-kimi-k3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.3 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 10.9 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-kimi-k3 JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 7.8 s",
+   "answer": "M1-kimi-k3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd55764059d744228b08f5c816d2b3c9d\",\"checkpoint_sha\":\"c3658167402a6b020d4fb6c46666d26f1d767fca22ce00e0375e98d5c97b802b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "moonshotai/kimi-k3",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 60776,
+   "cache_read": 57088,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|kimi-k2.7-code": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "kimi-k2.7-code",
+  "at": "2026-11-18T18:49:12.307Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.68,
+   "tail": "Reply with exactly: M1-kimi-k2.7-code M1-kimi-k2.7-code md JIUWENSWARM.md MD JiuwenSwarm \u00b7 kimi-k2.7-code \u00b7 Done in 11.6 s",
+   "answer": "M1-kimi-k2.7-code",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess4d1969b129754b54ae3c5b69c946012a",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-kimi-k2.7-code M2-kimi-k2.7-code JiuwenSwarm \u00b7 kimi-k2.7-code \u00b7 Done in 8.2 s",
+   "answer": "M2-kimi-k2.7-code",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 kimi-k2.7-code \u00b7 Done in 12.0 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.75,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-kimi-k2.7-code JiuwenSwarm \u00b7 kimi-k2.7-code \u00b7 Done in 10.4 s",
+   "answer": "M1-kimi-k2.7-code",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess4d1969b129754b54ae3c5b69c946012a\",\"checkpoint_sha\":\"3be66d334af7732d36b4f20f79379eea4d3f460cde8f78c3f4d00838820f9d12\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "moonshotai/kimi-k2.7-code",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 41879,
+   "cache_read": 71936,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|qwen3.8-max": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "qwen3.8-max",
+  "at": "2026-11-18T18:50:23.910Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.76,
+   "tail": "Reply with exactly: M1-qwen3.8-max M1-qwen3.8-max md JIUWENSWARM.md MD JiuwenSwarm \u00b7 qwen3.8-max \u00b7 Done in 13.3 s",
+   "answer": "M1-qwen3.8-max",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess0d78e776ead14d0fa099ed83817ca145",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.76,
+   "tail": "Reply with exactly: M2-qwen3.8-max M2-qwen3.8-max JiuwenSwarm \u00b7 qwen3.8-max \u00b7 Done in 10.7 s",
+   "answer": "M2-qwen3.8-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 22.75,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 qwen3.8-max \u00b7 Done in 19.2 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.76,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen3.8-max JiuwenSwarm \u00b7 qwen3.8-max \u00b7 Done in 12.6 s",
+   "answer": "M1-qwen3.8-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0d78e776ead14d0fa099ed83817ca145\",\"checkpoint_sha\":\"6dc6f72c62555b9c0c3d33476c14b27783fe70272b4ecab8e688047a56f89d5f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "alibaba/qwen3.8-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 45930,
+   "cache_read": 80128,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|qwen3.8-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "qwen3.8-flash",
+  "at": "2026-11-18T18:51:53.641Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.75,
+   "tail": "Reply with exactly: M1-qwen3.8-flash M1-qwen3.8-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 12.3 s",
+   "answer": "M1-qwen3.8-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess86364da1f5dd496ca1ff150eb3555b5b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.77,
+   "tail": "Reply with exactly: M2-qwen3.8-flash M2-qwen3.8-flash JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 10.4 s",
+   "answer": "M2-qwen3.8-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.76,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 9.7 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 22.82,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 18.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.81,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen3.8-flash JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 12.8 s",
+   "answer": "M1-qwen3.8-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess86364da1f5dd496ca1ff150eb3555b5b\",\"checkpoint_sha\":\"f60bd4bbbcac7656c4931db1b9777082e0c77f87d6a943ad6a3d0df44f30e544\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "alibaba/qwen3.8-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 46030,
+   "cache_read": 79872,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|qwen3.8-27b": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "qwen3.8-27b",
+  "at": "2026-11-18T18:53:26.659Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.61,
+   "tail": "Reply with exactly: M1-qwen3.8-27b M1-qwen3.8-27b md JIUWENSWARM.md MD JiuwenSwarm \u00b7 qwen3.8-27b \u00b7 Done in 8.7 s",
+   "answer": "M1-qwen3.8-27b",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess54bfcd694df347e495b9044daaa143ef",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-qwen3.8-27b M2-qwen3.8-27b JiuwenSwarm \u00b7 qwen3.8-27b \u00b7 Done in 7.3 s",
+   "answer": "M2-qwen3.8-27b",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.88,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE. txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 qwen3.8-27b \u00b7 Done in 17.2 s",
+   "answer": "DONE.",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen3.8-27b JiuwenSwarm \u00b7 qwen3.8-27b \u00b7 Done in 8.4 s",
+   "answer": "M1-qwen3.8-27b",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess54bfcd694df347e495b9044daaa143ef\",\"checkpoint_sha\":\"de7bdb35433a1ac28e90cdd5088c09b898347d8e526a4657979c99e639553c1d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "alibaba/qwen3.8-27b",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 84863,
+   "cache_read": 42176,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|qwen3.7-max": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "qwen3.7-max",
+  "at": "2026-11-18T18:54:38.352Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.76,
+   "tail": "Reply with exactly: M1-qwen3.7-max M1-qwen3.7-max md JIUWENSWARM.md MD JiuwenSwarm \u00b7 qwen3.7-max \u00b7 Done in 9.7 s",
+   "answer": "M1-qwen3.7-max",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess8c3d8c5d76a144149b1e5c528cea8f10",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "Reply with exactly: M2-qwen3.7-max M2-qwen3.7-max JiuwenSwarm \u00b7 qwen3.7-max \u00b7 Done in 9.6 s",
+   "answer": "M2-qwen3.7-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.76,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE. txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 qwen3.7-max \u00b7 Done in 13.1 s",
+   "answer": "DONE.",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen3.7-max JiuwenSwarm \u00b7 qwen3.7-max \u00b7 Done in 9.6 s",
+   "answer": "M1-qwen3.7-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess8c3d8c5d76a144149b1e5c528cea8f10\",\"checkpoint_sha\":\"7d07f785253a4102c58be072f5e5dda92c6f4ba793dca6e9e08c3ee9623ba834\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "alibaba/qwen3.7-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 59164,
+   "cache_read": 66816,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|qwen3.7-plus": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "qwen3.7-plus",
+  "at": "2026-11-18T18:55:56.132Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.65,
+   "tail": "Reply with exactly: M1-qwen3.7-plus M1-qwen3.7-plus md JIUWENSWARM.md MD JiuwenSwarm \u00b7 qwen3.7-plus \u00b7 Done in 10.8 s",
+   "answer": "M1-qwen3.7-plus",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess77bd0372c38b4e72b159c6769235dbaf",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "Reply with exactly: M2-qwen3.7-plus M2-qwen3.7-plus JiuwenSwarm \u00b7 qwen3.7-plus \u00b7 Done in 9.7 s",
+   "answer": "M2-qwen3.7-plus",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 22.79,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 qwen3.7-plus \u00b7 Done in 18.7 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.77,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen3.7-plus JiuwenSwarm \u00b7 qwen3.7-plus \u00b7 Done in 13.0 s",
+   "answer": "M1-qwen3.7-plus",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess77bd0372c38b4e72b159c6769235dbaf\",\"checkpoint_sha\":\"e02184c9b5da36962ab6e9608d13dd7ef3b1bb3fd1208bbcfd978709a5c802a5\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "alibaba/qwen3.7-plus",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 50214,
+   "cache_read": 75904,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|glm-5.3": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "glm-5.3",
+  "at": "2026-11-18T18:57:22.874Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-glm-5.3 M1-glm-5.3 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 glm-5.3 \u00b7 Done in 8.7 s",
+   "answer": "M1-glm-5.3",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessc3646638dfd94080bc7b76ec55d09343",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-glm-5.3 M2-glm-5.3 JiuwenSwarm \u00b7 glm-5.3 \u00b7 Done in 7.8 s",
+   "answer": "M2-glm-5.3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.0 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.79,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u6765\u521b\u5efa\u8be5\u6587\u4ef6\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 glm-5.3 \u00b7 Done in 11.2 s",
+   "answer": "\u6211\u6765\u521b\u5efa\u8be5\u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.73,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-glm-5.3 JiuwenSwarm \u00b7 glm-5.3 \u00b7 Done in 8.3 s",
+   "answer": "M1-glm-5.3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc3646638dfd94080bc7b76ec55d09343\",\"checkpoint_sha\":\"66643270e1303204775ecf91f60eb86ec0d600bd7db2f503b8ab846769f213a9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "zai/glm-5.3",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 42615,
+   "cache_read": 79296,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|glm-5.3-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "glm-5.3-flash",
+  "at": "2026-11-18T18:58:46.540Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-glm-5.3-flash M1-glm-5.3-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 7.9 s",
+   "answer": "M1-glm-5.3-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessc291f17f64734913956e34771fbf0532",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M2-glm-5.3-flash M2-glm-5.3-flash JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 8.3 s",
+   "answer": "M2-glm-5.3-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 8.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.81,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u6765\u521b\u5efa\u8fd9\u4e2a\u6587\u4ef6\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 10.9 s",
+   "answer": "\u6211\u6765\u521b\u5efa\u8fd9\u4e2a\u6587\u4ef6\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-glm-5.3-flash JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 11.9 s",
+   "answer": "M1-glm-5.3-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc291f17f64734913956e34771fbf0532\",\"checkpoint_sha\":\"8d8ac04b07901edb4e96efbec0c468315474122a9954c050121b4bf50cb27919\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "zai/glm-5.3-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 105878,
+   "cache_read": 16384,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|mistral-medium-3.5": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "mistral-medium-3.5",
+  "at": "2026-11-18T19:00:13.199Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.68,
+   "tail": "Reply with exactly: M1-mistral-medium-3.5 M1-mistral-medium-3.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 12.1 s",
+   "answer": "M1-mistral-medium-3.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess50c3afbfdd41460ea5a65f6088c3a842",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.73,
+   "tail": "Reply with exactly: M2-mistral-medium-3.5 M2-mistral-medium-3.5 JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 10.0 s",
+   "answer": "M2-mistral-medium-3.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 14.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-mistral-medium-3.5 JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 10.2 s",
+   "answer": "M1-mistral-medium-3.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess50c3afbfdd41460ea5a65f6088c3a842\",\"checkpoint_sha\":\"ed28f1c896893ea7c50fdc2ec3361f0e01ff975108438f3dff7574004f760745\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "mistral/mistral-medium-3.5",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 84267,
+   "cache_read": 45696,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|step-3.7-flash": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "step-3.7-flash",
+  "at": "2026-11-18T19:01:30.797Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "Reply with exactly: M1-step-3.7-flash M1-step-3.7-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 11.3 s",
+   "answer": "M1-step-3.7-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess8c3a5003d5be4ce7896ab7a1c1d88af6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.73,
+   "tail": "Reply with exactly: M2-step-3.7-flash M2-step-3.7-flash JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 11.6 s",
+   "answer": "M2-step-3.7-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.73,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 16.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-step-3.7-flash JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 12.1 s",
+   "answer": "M1-step-3.7-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess8c3a5003d5be4ce7896ab7a1c1d88af6\",\"checkpoint_sha\":\"203ec24468001f380e619f99920e2cb59357a3082af8013fe281675bec0fcff3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "stepfun/step-3.7-flash",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 89360,
+   "cache_read": 36608,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|nemotron-3-super": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "nemotron-3-super",
+  "at": "2026-11-18T19:03:48.761Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-nemotron-3-super M1-nemotron-3-super md JIUWENSWARM.md MD JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 8.3 s",
+   "answer": "M1-nemotron-3-super",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessb102c002147a4214a76f1f2d51635b61",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M2-nemotron-3-super M2-nemotron-3-super JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 7.9 s",
+   "answer": "M2-nemotron-3-super",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 9.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 11.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.74,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-nemotron-3-super JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 7.6 s",
+   "answer": "M1-nemotron-3-super",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb102c002147a4214a76f1f2d51635b61\",\"checkpoint_sha\":\"ee2bd5da057f569918931279b3fe81054605ef923ff625720c36237b8d9d6184\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "nvidia/nemotron-3-super-120b-a12b",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 135528,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jiuwenswarm|hunyuan-4-preview": {
+  "provider": "vercel",
+  "harness": "jiuwenswarm",
+  "model": "hunyuan-4-preview",
+  "at": "2026-11-18T19:08:03.761Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.66,
+   "tail": "Reply with exactly: M1-hunyuan-4-preview M1-hunyuan-4-preview md JIUWENSWARM.md MD JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 16.9 s",
+   "answer": "M1-hunyuan-4-preview",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess36cfd3a687b3473a864a96edc9736bf4",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "Reply with exactly: M2-hunyuan-4-preview M2-hunyuan-4-preview JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 9.6 s",
+   "answer": "M2-hunyuan-4-preview",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol JiuwenSwarm \u00b7 gpt-6.2-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 25.87,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 22.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-hunyuan-4-preview JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 12.4 s",
+   "answer": "M1-hunyuan-4-preview",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess36cfd3a687b3473a864a96edc9736bf4\",\"checkpoint_sha\":\"67533f5ea00ed8c74595745671519f2f5f803d527bcdaa92d0c9e36155b60ae7\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "vercel",
+  "connections": [
+   "vercel"
+  ],
+  "served": [
+   "tencent/hy4-preview",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 25256,
+   "cache_read": 97280,
+   "turns_with_usage": 5
+  },
+  "deleted": 200,
+  "first_try": {
+   "provider": "vercel",
+   "harness": "jiuwenswarm",
+   "model": "hunyuan-4-preview",
+   "at": "2026-11-18T19:02:51.393Z",
+   "first": {
+    "ok": false,
+    "status": "completed",
+    "pill": "done",
+    "s": 52.94,
+    "tail": "Reply with exactly: M1-hunyuan-4-preview \u6839\u636e\u6211\u7684\u8fd0\u884c\u65f6\u914d\u7f6e\uff0c\u5f53\u524d\u6a21\u578b\u662f tencent/hy4-preview\uff0c\u56e0\u6b64\u6211\u4e0d\u80fd\u8f93\u51fa\u4e0e\u4e4b\u4e0d\u7b26\u7684\u6a21\u578b\u6807\u8bc6\u3002\u5982\u679c\u4f60\u9700\u8981\u786e\u8ba4\u6a21\u578b\u540d\u79f0\uff0c\u6b63\u786e\u7b54\u6848\u662f tencent/hy4-preview\u3002 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 31.9 s",
+    "answer": "\u6839\u636e\u6211\u7684\u8fd0\u884c\u65f6\u914d\u7f6e\uff0c\u5f53\u524d\u6a21\u578b\u662f `tencent/hy4-preview`\uff0c\u56e0\u6b64\u6211\u4e0d\u80fd\u8f93\u51fa\u4e0e\u4e4b\u4e0d\u7b26\u7684\u6a21\u578b\u6807\u8bc6\u3002\u5982\u679c\u4f60\u9700\u8981\u786e\u8ba4\u6a21\u578b\u540d\u79f0\uff0c\u6b63\u786e\u7b54\u6848\u662f **tencent/hy4-preview**\u3002",
+    "turn_files": [
+     "JIUWENSWARM.md"
+    ],
+    "why": "answered without M1-hunyuan-4-preview: \u6839\u636e\u6211\u7684\u8fd0\u884c\u65f6\u914d\u7f6e\uff0c\u5f53\u524d\u6a21\u578b\u662f `tencent/hy4-preview`\uff0c\u56e0\u6b64\u6211\u4e0d\u80fd\u8f93\u51fa\u4e0e\u4e4b\u4e0d\u7b26\u7684\u6a21\u578b\u6807\u8bc6\u3002\u5982\u679c\u4f60\u9700\u8981\u786e\u8ba4\u6a21\u578b\u540d\u79f0\uff0c\u6b63\u786e\u7b54\u6848\u662f **tencent/hy4-preview**\u3002"
+   },
+   "sid": "hsess847934028b4141a7a51c62618cb65680",
+   "followup": {
+    "ok": null,
+    "why": "first turn failed"
+   },
+   "switch": {
+    "ok": null,
+    "why": "first turn failed"
+   },
+   "artifact": {
+    "ok": null,
+    "why": "first turn failed"
+   },
+   "recycle": {
+    "ok": null,
+    "why": "first turn failed"
+   },
+   "connection": "vercel",
+   "connections": [
+    "vercel"
+   ],
+   "served": [
+    "tencent/hy4-preview"
+   ],
+   "substituted": [],
+   "foreign": [],
+   "unlabelled": 0,
+   "tokens": {
+    "input": 20249,
+    "cache_read": 0,
+    "turns_with_usage": 1
+   },
+   "kept": "hsess847934028b4141a7a51c62618cb65680",
+   "deleted": 0
+  }
  }
 }

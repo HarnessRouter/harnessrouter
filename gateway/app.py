@@ -9676,8 +9676,10 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # API_BASE/API_KEY/MODEL_NAME from the environment, so every keyed turn rides the relay). MEASURED
 # on it (2026-11-18, the Vercel gateway through the runner's own relay): claude-haiku-5.5 and
 # gemini-3-flash, each asked for and each served as itself, including across a mid-session switch
-# (its session pins nothing). The rest of this list is offered so the matrix can measure it here and
-# has NOT been measured on this base yet — docs/support-matrix-notes.md says which two were.
+# (its session pins nothing). The FULL column then ran on Vercel (2026-11-18): 58 pairs, 290 of 290
+# scenario runs, no substitution and no unlabelled turn, with one row retested once — so every id
+# this list offers has been measured on this base on that provider. The two ids the account was not
+# served, and the row that needed the retest, are named in docs/support-matrix-notes.md.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
            "vibe", "docker-agent", "fast-agent", "dcode", "jiuwenswarm"):
     # gpt-5.4 by default, but dcode: see _GPT_6_1_DEFAULT below

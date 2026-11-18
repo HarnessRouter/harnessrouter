@@ -1131,8 +1131,9 @@ It drives its own machine protocol (`jiuwenswarm-process --run-json`) on an Open
 connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, Google's
 OpenAI-compatible surface, or a custom endpoint with `api_format=openai`). A direct Anthropic
 connection does not drive it: its Anthropic dialect has not been measured here. Its instruction file
-is `JIUWENSWARM.md`. No support-matrix column has been run on it yet — see
-[support-matrix-notes.md](support-matrix-notes.md) for exactly what was measured and what was not.
+is `JIUWENSWARM.md`. Its first support-matrix column (Vercel, 58 pairs, 290 of 290 scenario runs)
+is in [support-matrix.md](support-matrix.md); [support-matrix-notes.md](support-matrix-notes.md)
+says what that column found and which steps of the verification order have NOT run yet.
 
 Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
 archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv

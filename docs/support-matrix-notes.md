@@ -6,15 +6,52 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
-## The jiuwenswarm backend: JiuwenSwarm (workswarm 0.2.8) — behaviour measured, NO column yet
+## The jiuwenswarm backend: JiuwenSwarm (workswarm 0.2.8), and its first column
 
-Added 2026-11-18. Everything below was measured against the published PyPI wheel on this laptop —
-against the Vercel AI Gateway through a recording proxy, and then through the runner's own builder
-and relay — not read off documentation. **No support-matrix column has been run on this base**, and
-neither has the custom-harness dimension, the plugin matrix, the family tour, the environments
-column, the browser column or a second provider: the five-step order in
-[harness-verification.md](harness-verification.md) starts at step 1, and step 1 has not run. What is
-written here is the step BEFORE a column, and it is worth what it says it is.
+Added 2026-11-18. Everything below was measured against the published PyPI wheel — against the
+Vercel AI Gateway through a recording proxy, then through the runner's own builder and relay, and
+then as **step 1 of the five-step order in [harness-verification.md](harness-verification.md): the
+support matrix on the first provider**, against a locally built image of this branch.
+
+**The column: 58 pairs, 290 of 290 scenario runs passed** (Vercel, `EXPECT_CONNECTION=vercel`,
+2026-11-18, one worker, about 85 minutes). Every rule had a non-empty input, which is what makes the
+verdict mean anything:
+
+| | |
+|---|---|
+| pairs / scenario runs | 58 / 290, all passed |
+| rule 1, ran where you said | `connections = ['vercel']` on every row; `foreign` empty on all 58 |
+| rule 2, ran what you asked | `substituted` empty, `unlabelled` **0 turns**, and the `served` list is **2 entries on every one of the 58 rows** — the pair's own model and the switch partner, which is what proves the chip's move reached the provider rather than being echoed back |
+| rule 3, cards are the stored files | the artifact row passed on all 58 |
+| recycle | passed on all 58: the sandbox was let go and the follow-up still recalled the first message |
+| tokens | 5,574,252 input with 2,429,085 cache reads (44%) |
+
+**The strongest single line of that column**: across all 290 turns the only files ANY turn handed
+back were `JIUWENSWARM.md` (the instruction file the product itself writes) and
+`hello-jiuwenswarm.txt` (the artifact scenario's deliverable). The machinery described below —
+`daily_memory/`, `logs/`, `memory.db{,-shm,-wal}` — never appeared once, so the `.git/info/exclude`
+door holds through the product's own collection path and not merely in a rig.
+
+**One row was retested once**, which the table records: `hunyuan-4-preview`'s FIRST try answered
+without the scenario's token and said instead that "当前模型是 `tencent/hy4-preview`, so I cannot
+print a model identifier that disagrees with it" — the turn completed, the served model was
+`tencent/hy4-preview` (the same model under the provider's own name, per `samemodel.py`), and the
+model simply refused to echo a string that looked like a claim about its identity. The retest passed
+all five. **Not reproduced, so the cause is unmeasured** — and not simply a property of the prompt
+either: the same model's first turn passed on 36 other base x provider rows already in
+`support-matrix-results.json`. What is specific to this base is the size and content of its own
+system prompt (~31k tokens, and its own `context.usage` names the configured model), which is the
+suspect a second occurrence should start from.
+
+**Three more facts the column produced, none of them failures:** `gemini-3.1-pro-preview` and
+`nemotron-3-super` read no prompt cache at all on this channel (every other id did); the slowest
+scenario in the column was 77 s (`gemini-4-argon`'s artifact turn), well inside the budget; and the
+console menu showed 58 of the 60 ids the catalog offers, the other two not being served to this
+account.
+
+**Not yet run**, by name: the custom-harness dimension, the plugin matrix, the family tour, the
+environments column, the browser column, and the support matrix on a SECOND provider. Steps 2 to 5
+of the order are open.
 
 **What it is.** A general agent platform whose code work mode is a coding agent over a workspace;
 its other surfaces (web, TUI, desktop, chat channels) are not driven here. The turn runs through its
