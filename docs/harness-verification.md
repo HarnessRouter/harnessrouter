@@ -193,9 +193,17 @@ build rather than kept.
 ## Adding a harness
 
 A new harness is registered in the places below, and is not finished until it has a measured
-column. Every one of them fails SILENTLY when missed — the harness still builds, still answers, and
-loses one capability without saying so. The single exception is the console's backend union type,
-which fails the type-check, and that is the only one a compiler will find for you.
+column. Most of them fail SILENTLY when missed — the harness still builds, still answers, and loses
+one capability without saying so.
+
+Five do not, and it is worth knowing which, because they are the cheapest ones to get right: the
+console's backend union type fails the TYPE-CHECK (the only one a compiler will find for you), and
+four fail in the TEST SUITE — `test_install_uid.py` on point 18, `test_console_placeholders.py` when
+the console's placeholder list is not the catalog's own, `test_gpt_6_2.py` on the per-base defaults
+it pins, and `test_muse_wonder.py` on the count of bases offering the Meta family. Run the suite
+before reading the rest of this list as the whole of the work: on the base added on 2026-11-18 those
+four were the only registration points missed, and all four were named by a failing test rather than
+by a column.
 
 **The runner** — `runner/server.py`:
 
@@ -269,6 +277,12 @@ and need no edit — they were hand-written lists once, and each silently missed
     never measures this harness at all.
 17. `docs/support-matrix.md`, a column per provider, produced by the suite, with its notes in
     `docs/support-matrix-notes.md`.
+18. `docker/entrypoint.sh`'s `INSTALL_UID_ORDER`: one install uid per base, and
+    `install_as_uid` REFUSES a base that is not in the list, so a base missing from it cannot
+    install at all. A uid is the base's PLACE in that list, so a new name goes on the END — an
+    insertion renumbers every base after it on a volume that already holds them.
+    `gateway/tests/test_install_uid.py` is what catches the omission, which is how this point was
+    found: it was missing from this list while the list claimed to be complete.
 
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.
