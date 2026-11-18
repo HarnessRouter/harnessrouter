@@ -52,8 +52,11 @@ def test_every_offered_tool_has_a_label_a_person_can_read():
 
 
 def test_the_claim_is_hard_because_the_policy_really_withholds():
-    # Measured: with write_file denied the model's call was refused at execution
-    # (`[PERMISSION_DENIED] run policy`) and the file was not created.
+    # Measured: the runner withholds through the runtime's own `agent.tools` allowlist, so the tool
+    # is never declared to the model (`[]` produced no tool call at all, and a nine-name list was
+    # declared on the wire as exactly those nine). A turn that declares an MCP server can only
+    # withhold `fetch_webpage`, through the config, and any other combination is refused with its
+    # reason rather than reported as off — see the runner's _JW_TOOL_DOORS.
     assert A._BASE_CATALOG["jiuwenswarm"]["tool_enforcement"] == "hard"
 
 

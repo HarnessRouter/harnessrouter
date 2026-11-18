@@ -21619,17 +21619,19 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("tool_search", "Tool Search"), ("tool_call", "Tool Call"),
                   ("todo_create", "Todo Create"), ("todo_list", "Todo List"),
                   ("todo_get", "Todo Get"), ("todo_modify", "Todo Modify")],
-        # "hard", measured at the door, and the MECHANISM is worth stating because it is not the
-        # usual one: a disabled tool is still DECLARED to the model and the call is refused at
-        # execution (`[PERMISSION_DENIED] run policy`, nothing written — measured with write_file
-        # switched off, the file was not created), which is vibe's and vtcode's shape. The runner
-        # turns such a refusal into a note on the reply instead of a tool row, so the turn's tool
-        # list still means "what ran".
-        # Its own exact ALLOWLIST (`agent.tools`) is hard too and would withhold the tool from the
-        # model outright — but on 0.2.8 it cannot be used beside an MCP server: the allowlist
-        # wrapper filters `card.name` over a list that also holds `McpServerConfig` objects, whose
-        # field is `server_name`, so a turn declaring both dies before its first model call. The
-        # deny door has no such limit, and it is the one this base uses.
+        # "hard", measured at the door: the runtime's own exact ALLOWLIST (`agent.tools`), so a
+        # switched-off tool is never declared to the model at all — measured, `[]` produced no tool
+        # call and no file, and a nine-name list was declared on the wire as exactly those nine.
+        # ONE LIMIT, and it is the runtime's: on workswarm 0.2.8 that allowlist cannot be used
+        # beside an MCP server, because its wrapper filters `card.name` over an ability list that
+        # also holds `McpServerConfig` objects, whose field is `server_name`, and the turn dies
+        # before its first model call. The config can withhold `fetch_webpage` on its own (its
+        # toolkit is simply not built), so a harness that declares an MCP server can switch that
+        # one off and no other — any other combination is REFUSED with its reason rather than
+        # reported as off while it is callable (UHP §4.3). The per-run `permissions.tools: deny`
+        # door, which an earlier measurement had made look right, is not used: any run permission
+        # puts the permission rail in the path of a machine run that cannot answer it, and the
+        # first call it would ask about — bash, every time — comes back refused.
         # The usual limit is not overstated either: withholding a tool withholds that tool, not the
         # capability — a model left with `bash` can still write a file with a shell command.
         "tool_enforcement": "hard",

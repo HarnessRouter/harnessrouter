@@ -15991,21 +15991,42 @@ _JW_INSTRUCTIONS = ("You are a coding agent working in this workspace. Your inst
 # `ask_user` is deliberately NOT among them: the tool exists, but nobody is attached to a one-shot
 # machine run to answer it, so it is never allowed rather than offered and then failing.
 #
-# _JW_DENY_ONLY: THE POLICY TRAVELS AS A PER-RUN `deny`, NOT AS `agent.tools`.
-# `agent.tools` is a real, exact and hard allowlist — measured: `[]` produced zero tool calls and no
-# file, and a nine-name list was declared on the wire as exactly those nine. It cannot be used here
-# anyway, because on 0.2.8 it is mutually exclusive with an MCP server: `agent.tools` installs
-# `runtime/tool_allowlist.py`'s wrapper, whose `limited_list` filters
-# `[card for card in original_list() if card.name in allowed]`, and `ability_manager.list()` also
-# holds `McpServerConfig` objects, whose field is `server_name` — so every turn that declared both
-# died with `'McpServerConfig' object has no attribute 'name'` before the first model call. Measured
-# as a single-variable A/B: same config and same server, with the agent object the turn failed,
-# without it the turn called the server and answered.
-# So the door used here is `permissions.tools: {<tool>: "deny"}`, which works WITH a server
-# declared: the call is made and refused at execution (`[PERMISSION_DENIED] run policy`) and
-# nothing happens — vibe's and vtcode's enforcement shape, and the refusal becomes the
-# `system/notice` the gateway renders rather than a tool row, so this base's tool list still means
-# "what ran".
+# _JW_TOOL_DOORS: THE POLICY HAS TWO DOORS, AND A PER-RUN `deny` IS NOT ONE OF THEM.
+# Four single-variable A/Bs on 0.2.8 (2026-11-18), each run with the custom-harness dimension's own
+# fixture — a skill whose script must run, one tool withheld, one MCP server declared:
+#   * `permissions.tools: {<tool>: "deny"}` refuses the named tool AND COSTS THE SHELL. Any run
+#     permissions at all put the permission rail in the path, and `--run-json` has no duplex control
+#     channel, so the CLI sends `supports_user_interaction: false` and the first call the rail would
+#     ASK about comes back `用户拒绝` ("the user refused"). The skill's `python3 …/stamp.py` was
+#     refused on every attempt and stamp.txt was never written; naming the other thirteen tools
+#     "allow" in the same block changed nothing (the rail's `resolve_interrupt` short-cuts `deny`
+#     only). Switching off ONE tool in the console would have taken bash with it, so this door,
+#     which an earlier measurement of the refusal alone had made look right, is shut.
+#   * `agent.tools` IS an exact hard allowlist (a nine-name list was declared on the wire as exactly
+#     those nine, `[]` produced no tool call at all) and it works alongside `max_turns` — but not
+#     alongside an MCP server: `runtime/tool_allowlist.py`'s `limited_list` filters
+#     `[card for card in original_list() if card.name in allowed]` while `ability_manager.list()`
+#     also holds `McpServerConfig`, whose field is `server_name`, so the turn dies with
+#     `'McpServerConfig' object has no attribute 'name'` before the first model call.
+#   * `modes.code.tools` in the config withholds AT REGISTRATION and does work with a server
+#     declared: with `web_fetch_webpage` dropped, the runtime's own resource registry no longer held
+#     `fetch_webpage` and the turn ran the skill, its script and the MCP call. It reaches exactly
+#     ONE of the ids offered here — removing `user_todos` left todo_create/get/list/modify
+#     registered and removing `skill_toolkit` left `skill_tool` registered (both read off the
+#     registry, not inferred from the name), because those are the deep agent's own tools and not
+#     the optional toolkit's.
+# So: no server declared -> `agent.tools`; a server declared -> the config door where it reaches,
+# and otherwise the turn is REFUSED with its reason, rather than reporting a tool as off while it is
+# callable (UHP 4.3) or quietly dropping the person's server.
+#
+# _JW_MAX_TURNS_AND_MCP: the per-run `max_turns` is mutually exclusive with an MCP server too, and
+# this one is not about tools at all. `max_turns` (or a host tool) is what makes the CLI call
+# `configure_process_cli_run`, whose first line is
+# `existing_names = {card.name for card in manager.list()}` (interface_deep.py:11790) — the same
+# `.name` over the same list, so a turn that declared a server and a turn budget died the same way.
+# That was EVERY MCP turn this runner sent, because the budget is always set; the five-scenario
+# column never saw it because not one of those five declares a server. With a server the budget is
+# left off and the turn is bounded by `timeout_seconds` alone.
 ALL_JIUWENSWARM_TOOLS = ("bash", "read_file", "write_file", "edit_file", "glob", "grep",
                          "fetch_webpage", "skill_tool", "tool_search", "tool_call",
                          "todo_create", "todo_list", "todo_get", "todo_modify")
@@ -16013,6 +16034,11 @@ ALL_JIUWENSWARM_TOOLS = ("bash", "read_file", "write_file", "edit_file", "glob",
 # produced-files list through git's own door, never deleted: the next turn's memory and logs are in
 # there and the session keeps them.
 _JW_MACHINERY = ("daily_memory/", "logs/", "memory.db", "memory.db-shm", "memory.db-wal")
+# The config door (_JW_TOOL_DOORS): which of the ids above an OPTIONAL toolkit of `modes.code.tools`
+# is the sole source of. Read off the runtime's own tool registry with each toolkit dropped in turn,
+# which is why it has one entry and not three: `user_todos` and `skill_toolkit` name themselves
+# after tools the deep agent registers anyway, and dropping them withheld nothing.
+_JW_TOOLKITS = {"web_fetch_webpage": frozenset({"fetch_webpage"})}
 
 
 def _jiuwenswarm_template() -> pathlib.Path | None:
@@ -16030,7 +16056,9 @@ def _jiuwenswarm_template() -> pathlib.Path | None:
     return None
 
 
-def _jiuwenswarm_config(cwd: str, mcp_servers: list[dict] | None) -> tuple[pathlib.Path, list[str]]:
+def _jiuwenswarm_config(cwd: str, mcp_servers: list[dict] | None,
+                        withheld_toolkits: list[str] | None = None,
+                        ) -> tuple[pathlib.Path, list[str]]:
     """Write this turn's config.yaml from the PACKAGE'S OWN TEMPLATE, and name the servers in it.
 
     Starting from the template matters: a partial config of our own changed which rails the runtime
@@ -16081,13 +16109,23 @@ def _jiuwenswarm_config(cwd: str, mcp_servers: list[dict] | None) -> tuple[pathl
     if servers:
         mcp = base.get("mcp")
         base["mcp"] = {**mcp, "servers": servers} if isinstance(mcp, dict) else {"servers": servers}
+    for toolkit in (withheld_toolkits or []):
+        # The config door (_JW_TOOL_DOORS): a toolkit named here is never built, so the tools it is
+        # the sole source of are not in the runtime's registry and cannot be declared or called.
+        # Parsed and re-dumped like everything else, so a test can assert the structure rather than
+        # a line of text.
+        mode = ((base.get("modes") or {}).get("code")
+                if isinstance(base.get("modes"), dict) else None)
+        if isinstance(mode, dict) and isinstance(mode.get("tools"), list):
+            mode["tools"] = [t for t in mode["tools"] if str(t) != toolkit]
     path.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return path, names
 
 
 def _jiuwenswarm_run_doc(cwd: str, prompt: str, model: str, resume: str, skills: list[str],
-                         servers: list[str], tools: list[str]) -> pathlib.Path:
-    # `tools` is the DENY list: the tools this harness switched off (see _JW_DENY_ONLY).
+                         servers: list[str], allowed: list[str] | None) -> pathlib.Path:
+    # `allowed` is the hard ALLOWLIST this turn declares, or None for "everything the runtime has"
+    # (see _JW_TOOL_DOORS; an MCP turn's policy travels in the config instead).
     """This turn's machine request, as a file.
 
     A FILE and not stdin: the runner starts every turn with stdin at /dev/null (a CLI that inherits
@@ -16100,7 +16138,6 @@ def _jiuwenswarm_run_doc(cwd: str, prompt: str, model: str, resume: str, skills:
                  # help says Plan and Team are interactive-only).
                  "mode": "agent.code.normal",
                  "model": model,
-                 # NO `tools` allowlist here, deliberately — see _JW_DENY_ONLY.
                  "agent": {"name": _JW_AGENT, "instructions": _JW_INSTRUCTIONS},
                  # The workspace the person collects IS the agent's working directory, so a
                  # deliverable written by a relative path lands where /produced can see it.
@@ -16111,10 +16148,10 @@ def _jiuwenswarm_run_doc(cwd: str, prompt: str, model: str, resume: str, skills:
         doc["session_id"] = resume
     if skills:
         doc["agent"]["skills"] = skills
-    if tools:
-        # The tool policy, as a per-run DENY rather than an allowlist (_JW_DENY_ONLY). Scoped to
-        # this run: its own docs say a run's permissions are never written to the global config.
-        doc["permissions"] = {"tools": {name: "deny" for name in tools}}
+    if allowed is not None:
+        # The tool policy as the runtime's own hard allowlist: a withheld tool is never declared to
+        # the model, so there is nothing to refuse later (_JW_TOOL_DOORS).
+        doc["agent"]["tools"] = allowed
     if servers:
         # DECLARED IS NOT ENABLED on this base either: config.yaml declares a server and `run.mcp`
         # is what turns it on for the turn.
@@ -16159,43 +16196,13 @@ def _jiuwenswarm_usage(obj: dict) -> dict:
     return out
 
 
-# What a refused call's result begins with, measured on 0.2.8 with `permissions.tools` set to deny.
-_JW_DENIED_PREFIX = "[PERMISSION_DENIED]"
-
-
-def _jiuwenswarm_denied(state: dict) -> set[str]:
-    """The tools this turn's own run document switched off, cached after the first read.
-
-    Read from the document the builder wrote for THIS turn rather than passed down the run loop's
-    signature, so the policy the stream is judged against is the policy the turn was started with
-    and nothing else can drift from it."""
-    cached = state.get("_jw_deny_set")
-    if cached is not None:
-        return cached
-    deny: set[str] = set()
-    try:
-        doc = json.loads((_jiuwenswarm_home(state.get("cwd") or "") / "run.json")
-                         .read_text(encoding="utf-8"))
-        tools = ((doc.get("permissions") or {}).get("tools") or {})
-        deny = {str(k) for k, v in tools.items() if str(v) == "deny"}
-    except (OSError, ValueError, AttributeError, TypeError):
-        deny = set()
-    state["_jw_deny_set"] = deny
-    return deny
-
-
 def _jiuwenswarm_calls(state: dict) -> list[dict]:
-    """Close any tool call this turn opened and never saw a result for.
-
-    A HELD call (one for a switched-off tool) is emitted first: the turn ended before its refusal
-    arrived, so what the model tried is part of the record rather than a row that vanished."""
+    """Close any tool call this turn opened and never saw a result for."""
     opened = state.pop("_jw_open", None) or {}
-    held = state.pop("_jw_held", None) or {}
-    out = [use for use in held.values()]
-    return out + [{"type": "user", "message": {"content": [
+    return [{"type": "user", "message": {"content": [
         {"type": "tool_result", "tool_use_id": call_id, "is_error": True,
          "content": "no result was reported for this tool call"}]}}
-                  for call_id in opened]
+            for call_id in opened]
 
 
 def _jiuwenswarm_to_claude(obj: dict, state: dict) -> list[dict]:
@@ -16230,37 +16237,18 @@ def _jiuwenswarm_to_claude(obj: dict, state: dict) -> list[dict]:
                 {"type": "tool_use", "id": call_id, "name": name,
                  "input": args if isinstance(args, dict) else {"arguments": args}}]}}
             state.setdefault("_jw_open", {})[call_id] = name
-            if name in _jiuwenswarm_denied(state):
-                # A tool this harness switched off is DECLARED to the model here and refused at the
-                # call (_JW_DENY_ONLY), so the attempt is HELD rather than streamed: if the refusal
-                # comes back it becomes a notice and never a tool row, and if the runtime ran it
-                # after all the row is emitted then, late but true. Only the denied names are held —
-                # everything else streams as it happens, because a shell command can run for
-                # minutes and a person is watching.
-                state.setdefault("_jw_held", {})[call_id] = use
-                return []
+            # No call is held back for a tool policy here: a withheld tool is never declared to the
+            # model (_JW_TOOL_DOORS), so every call that reaches this line is one the harness has.
             return [use]
         if event == "chat.tool_result":
             call_id = str(payload.get("tool_call_id") or "tool")
             name = (state.get("_jw_open") or {}).pop(call_id, None) or str(payload.get("tool_name") or "")
             text = payload.get("result")
             body = "" if text is None else str(text)
-            held = (state.get("_jw_held") or {}).pop(call_id, None)
-            if held is not None and body.startswith(_JW_DENIED_PREFIX):
-                # Measured: `[PERMISSION_DENIED] run policy`, and nothing happened — the file the
-                # model asked to write was not written. The person whose switch stopped the agent is
-                # told, once per tool.
-                note = f"{name or 'a tool'} was refused: this harness has it switched off"
-                seen = state.setdefault("_jw_notices", [])
-                if note in seen:
-                    return []
-                seen.append(note)
-                return [{"type": "system", "subtype": "notice", "text": note}]
-            return ([held] if held is not None else []) + [
-                {"type": "user", "message": {"content": [
-                    {"type": "tool_result", "tool_use_id": call_id,
-                     "is_error": payload.get("success") is False,
-                     "content": body[:8000]}]}}]
+            return [{"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": call_id,
+                 "is_error": payload.get("success") is False,
+                 "content": body[:8000]}]}}]
         if event == "chat.error":
             # Kept as THIS turn's reason, but not terminal on its own: the `result` line that
             # follows carries the same sentence in `error.message` and the status that decides.
@@ -16344,7 +16332,6 @@ def _build_jiuwenswarm(provider: str, auth: Auth, model: str, prompt: str, cwd: 
     if auth.api_key:
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, chat_cache=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
-    _jiuwenswarm_config(cwd, mcp_servers)
     # Its machinery follows workspace.cwd, which is the session directory (see the header). Hidden
     # from the deliverables list, and left in place: the next turn reads its own memory and logs.
     _git_exclude(cwd, list(_JW_MACHINERY),
@@ -16352,6 +16339,29 @@ def _build_jiuwenswarm(provider: str, auth: Auth, model: str, prompt: str, cwd: 
     # Only this base's own tools are named in the policy: an id matching nothing is dropped on the
     # way through and disables nothing while the console reports it as off.
     denied = [t for t in ALL_JIUWENSWARM_TOOLS if t in {str(x) for x in (tools_disabled or ())}]
+    servers = [str(s.get("name") or "") for s in (mcp_servers or [])
+               if s.get("name") and s.get("url")]
+    # Which door this turn's policy goes through, and whether it can go through one at all
+    # (_JW_TOOL_DOORS).
+    allowed: list[str] | None = None
+    toolkits: list[str] = []
+    if denied and not servers:
+        allowed = [t for t in ALL_JIUWENSWARM_TOOLS if t not in set(denied)]
+    elif denied:
+        covered: set[str] = set()
+        for toolkit, ids in _JW_TOOLKITS.items():
+            if ids <= set(denied):
+                toolkits.append(toolkit)
+                covered |= ids
+        unreachable = [t for t in denied if t not in covered]
+        if unreachable:
+            raise HTTPException(400, (
+                "jiuwenswarm cannot switch off " + ", ".join(unreachable) + " on a turn that also "
+                "declares an MCP server: on workswarm 0.2.8 the runtime's tool allowlist walks the "
+                "same ability list its MCP server configs live in and dies on them, and only "
+                "fetch_webpage can be withheld in the config instead. Switch the tool back on for "
+                "this harness, or take the MCP server off it."))
+    _jiuwenswarm_config(cwd, mcp_servers, toolkits)
     env["JIUWENSWARM_DATA_DIR"] = str(_jiuwenswarm_home(cwd))
     # Its OpenAI-compatible client's own four variables, read by the config template's placeholders.
     env["API_BASE"] = (auth.base_url or "").rstrip("/")
@@ -16360,13 +16370,11 @@ def _build_jiuwenswarm(provider: str, auth: Auth, model: str, prompt: str, cwd: 
     env["MODEL_PROVIDER"] = "OpenAI"
     known = bool(resume_session_id) and _jiuwenswarm_session_present(cwd, [], resume_session_id)
     doc = _jiuwenswarm_run_doc(cwd, prompt, model, resume_session_id if known else "",
-                               _jiuwenswarm_skills(cwd),
-                               [str(s.get("name") or "") for s in (mcp_servers or [])
-                                if s.get("name") and s.get("url")],
-                               denied)
-    if max_turns:
+                               _jiuwenswarm_skills(cwd), servers, allowed)
+    if max_turns and not servers:
         # Its own per-run ceiling, so a model that will not stop ends at the turn's budget rather
-        # than at the wall clock.
+        # than at the wall clock. NOT sent on a turn that declares an MCP server, where it is what
+        # kills the turn before the first model call (_JW_MAX_TURNS_AND_MCP).
         try:
             request = json.loads(doc.read_text(encoding="utf-8"))
             request["max_turns"] = int(max_turns)

@@ -13,8 +13,9 @@ from.
 
 Each test pins one thing that would otherwise fail SILENTLY:
 
-  * the tool policy's DOOR — `agent.tools` cannot be used beside an MCP server on this build, so the
-    policy travels as a per-run deny and the refusal becomes a note rather than a tool row
+  * the tool policy's DOOR — `agent.tools` is the exact hard allowlist, a per-run `deny` costs this
+    base its shell, and neither can be used beside an MCP server, where only the config door reaches
+    (and a budget must be left off entirely)
   * the config, which must START from the package's own template: a partial one takes `skill_tool`
     away and a declared skill is then unreachable
   * the machinery this runtime writes into the workspace, which is otherwise handed to the user as
@@ -29,6 +30,7 @@ import tempfile
 
 import pytest
 import yaml
+from fastapi import HTTPException
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (ALL_JIUWENSWARM_TOOLS, Auth, BACKENDS,  # noqa: E402
@@ -71,6 +73,8 @@ def _template(body: dict | None = None) -> str:
     p.write_text(yaml.safe_dump(body if body is not None else {
         # the two keys of the real template this base depends on
         "progressive_tool_enabled": True,
+        # the optional toolkits the config door drops from (the real template's own list)
+        "modes": {"code": {"tools": ["web_fetch_webpage", "user_todos", "skill_toolkit"]}},
         "models": {"defaults": [{"model_client_config": {"api_base": "${API_BASE}",
                                                          "api_key": "${API_KEY}",
                                                          "model_name": "${MODEL_NAME}",
@@ -185,14 +189,26 @@ def test_a_keyed_turn_gets_the_relays_placeholder_and_not_the_connections_key():
 
 def test_the_document_carries_only_fields_the_schema_knows():
     ws = _ws()
-    _build(ws, max_turns=7, tools_disabled=["bash"],
-           mcp_servers=[{"name": "probe", "url": "https://mcp.example/mcp"}])
+    _build(ws, max_turns=7, tools_disabled=["bash"])
     doc = _doc(ws)
     assert set(doc) <= RUN_FIELDS, sorted(set(doc) - RUN_FIELDS)
     assert doc["type"] == "run" and doc["schema_version"] == "0.1"
     # single-agent code mode: the only mode a non-interactive run supports
     assert doc["mode"] == "agent.code.normal"
     assert doc["max_turns"] == 7
+
+
+def test_no_turn_budget_rides_a_turn_that_declares_a_server():
+    # _JW_MAX_TURNS_AND_MCP: `max_turns` is what makes the CLI call configure_process_cli_run, whose
+    # first line walks `card.name` over an ability list that also holds McpServerConfig objects, so
+    # EVERY MCP turn died with "'McpServerConfig' object has no attribute 'name'" before the first
+    # model call. Measured as a single-variable A/B: the same document minus `mcp` answered.
+    ws = _ws()
+    _build(ws, max_turns=400, mcp_servers=[{"name": "probe", "url": "https://mcp.example/mcp"}])
+    doc = _doc(ws)
+    assert "max_turns" not in doc, "a budget here kills the turn before its first model call"
+    assert doc["mcp"] == ["probe"]
+    assert doc["timeout_seconds"] > 0, "the turn is still bounded, by the wall clock"
 
 
 def test_the_workspace_the_user_collects_is_the_agents_working_directory():
@@ -204,31 +220,69 @@ def test_the_workspace_the_user_collects_is_the_agents_working_directory():
     assert doc["workspace"]["project_dir"] == resolved
 
 
-def test_the_policy_is_a_per_run_deny_and_never_an_agent_allowlist():
-    # `agent.tools` is a real, exact and hard allowlist on this build — and it CANNOT be used beside
-    # an MCP server: it installs runtime/tool_allowlist.py's wrapper, whose limited_list filters
-    # `card.name` over a list that also holds McpServerConfig objects (whose field is server_name),
-    # so a turn declaring both dies with "'McpServerConfig' object has no attribute 'name'" before
-    # its first model call. Measured as a single-variable A/B. The deny door has no such limit.
+def test_the_policy_is_the_runtimes_own_allowlist_and_never_a_per_run_deny():
+    # _JW_TOOL_DOORS. `agent.tools` is exact and hard (measured: `[]` produced no tool call at all).
+    # The per-run `permissions.tools: deny` door refuses the named tool AND costs the shell: any run
+    # permission puts the permission rail in the path of a machine run that cannot answer it, and
+    # the skill's own `python3 …/stamp.py` came back `用户拒绝` on every attempt. So nothing is ever
+    # written to `permissions` here.
     ws = _ws()
     _build(ws, tools_disabled=["bash", "fetch_webpage"])
     doc = _doc(ws)
-    assert "tools" not in doc["agent"], "an allowlist here kills every turn that declares a server"
-    assert doc["permissions"] == {"tools": {"bash": "deny", "fetch_webpage": "deny"}}
+    assert "permissions" not in doc, "a run permission costs this base its shell"
+    assert doc["agent"]["tools"] == [t for t in ALL_JIUWENSWARM_TOOLS
+                                     if t not in ("bash", "fetch_webpage")]
+
+
+def test_a_turn_with_nothing_switched_off_declares_no_allowlist():
+    # The sensitivity half of the test above: the key is absent because nothing was withheld, and a
+    # turn that declares `tools: [...]` of everything would still install the wrapper that cannot
+    # live beside an MCP server.
+    ws = _ws()
+    _build(ws)
+    assert "tools" not in _doc(ws)["agent"]
 
 
 def test_a_tool_id_this_base_does_not_have_is_not_written_into_the_policy():
     # A tool id matching nothing is dropped on the way through and disables nothing, while the
-    # console reports it as off — which UHP §4.3 forbids. Only this base's own ids are named.
+    # console reports it as off — which UHP §4.3 forbids. Only this base's own ids are withheld,
+    # and a foreign one leaves the allowlist whole.
     ws = _ws()
     _build(ws, tools_disabled=["WebSearch", "bash"])
-    assert _doc(ws)["permissions"]["tools"] == {"bash": "deny"}
+    assert _doc(ws)["agent"]["tools"] == [t for t in ALL_JIUWENSWARM_TOOLS if t != "bash"]
 
 
-def test_every_offered_tool_can_be_named_in_the_policy():
+def test_every_offered_tool_can_really_be_withheld():
     ws = _ws()
     _build(ws, tools_disabled=list(ALL_JIUWENSWARM_TOOLS))
-    assert set(_doc(ws)["permissions"]["tools"]) == set(ALL_JIUWENSWARM_TOOLS)
+    assert _doc(ws)["agent"]["tools"] == []
+
+
+def test_a_server_turn_withholds_fetch_webpage_in_the_config_instead():
+    # The one id the config door reaches (_JW_TOOL_DOORS): `web_fetch_webpage` is simply not built,
+    # so `fetch_webpage` is not in the runtime's registry and cannot be declared or called — read
+    # off that registry, with the MCP server declared and the turn answering.
+    ws = _ws()
+    _build(ws, monkeypatch=None, tools_disabled=["fetch_webpage"],
+           mcp_servers=[{"name": "probe", "url": "https://mcp.example/mcp"}])
+    doc = _doc(ws)
+    assert "tools" not in doc["agent"] and "permissions" not in doc
+    cfg = yaml.safe_load((_jiuwenswarm_home(ws) / "config" / "config.yaml").read_text())
+    assert cfg["modes"]["code"]["tools"] == ["user_todos", "skill_toolkit"]
+
+
+def test_a_server_turn_refuses_a_policy_it_cannot_honour():
+    # Neither door reaches `bash` while a server is declared, and the honest answer is the turn's
+    # reason: reporting the tool as off while it is callable is what UHP §4.3 forbids, and dropping
+    # the person's server would be the same overstatement one layer down.
+    ws = _ws()
+    with pytest.raises(HTTPException) as caught:
+        _build(ws, tools_disabled=["bash", "fetch_webpage"],
+               mcp_servers=[{"name": "probe", "url": "https://mcp.example/mcp"}])
+    assert caught.value.status_code == 400
+    # the reason names the tool it could NOT honour, and not the one the config door covers
+    assert "switch off bash on a turn" in caught.value.detail
+    assert "MCP server" in caught.value.detail
 
 
 def test_ask_user_is_not_offered_because_nobody_can_answer_it():
@@ -297,8 +351,6 @@ def test_a_template_that_cannot_be_read_stops_the_turn(monkeypatch):
     # It does NOT fall back to a config of our own: a partial one takes `skill_tool` away, so the
     # fallback would be a turn whose declared skill is silently unreachable. A step that cannot run
     # is not a pass.
-    from fastapi import HTTPException
-
     ws = _ws()
     monkeypatch.setenv("HR_JIUWENSWARM_CONFIG_TEMPLATE", "/nonexistent/config.yaml")
     with pytest.raises(HTTPException) as caught:
@@ -372,31 +424,21 @@ def test_a_real_turn_reports_the_session_the_answer_and_the_usage():
     assert result["usage"]["cache_read_input_tokens"] == 64152
 
 
-def test_a_switched_off_tool_becomes_a_note_and_never_a_tool_row():
-    # The policy refuses the call at execution (`[PERMISSION_DENIED] run policy`) and nothing
-    # happens. Recording the attempt as a call would make this base's tool list mean something
-    # different from every other base's, and the custom-harness dimension reads exactly that list.
+def test_every_call_in_a_real_turn_is_recorded_as_the_record_names_it():
+    # This capture is the turn the per-run deny door was measured on: its `write_file` call came
+    # back `[PERMISSION_DENIED] run policy`, and the same turn reached an MCP server through the
+    # dispatchers. That door is no longer used (_JW_TOOL_DOORS: it costs the shell), so no call is
+    # held back and no notice is invented — a refusal that still arrives is the tool's own result,
+    # which is what every other base's rows mean too.
     ws = _ws()
-    (_jiuwenswarm_home(ws)).mkdir(parents=True, exist_ok=True)
-    (_jiuwenswarm_home(ws) / "run.json").write_text(
-        json.dumps({"permissions": {"tools": {"write_file": "deny"}}}))
     events, _ = _norm(_fixture("jiuwenswarm-denied-and-mcp.ndjson"), cwd=ws)
     rows = _tool_rows(events)
-    assert "write_file" not in rows, rows
-    notices = [e for e in events if e.get("type") == "system" and e.get("subtype") == "notice"]
-    assert notices and "switched off" in notices[0]["text"]
-    assert "write_file" in notices[0]["text"]
-    # ...and the MCP call in the same turn IS a tool row, named as the record names it
+    assert "write_file" in rows, rows
     assert "mcp_hrprobe_probe_stamp" in rows
-
-
-def test_without_the_policy_the_same_stream_records_the_call():
-    # The sensitivity half: the row is absent above BECAUSE the policy named that tool, not because
-    # the normaliser drops write_file.
-    ws = _ws()
-    events, _ = _norm(_fixture("jiuwenswarm-denied-and-mcp.ndjson"), cwd=ws)
-    assert "write_file" in _tool_rows(events)
     assert not [e for e in events if e.get("subtype") == "notice"]
+    refused = [b for e in events for b in ((e.get("message") or {}).get("content") or [])
+               if b.get("type") == "tool_result" and "PERMISSION_DENIED" in str(b.get("content"))]
+    assert refused, "the refusal the runtime reported is in the record"
 
 
 def test_a_conversation_that_is_gone_is_reported_rather_than_answered_from_nothing():
