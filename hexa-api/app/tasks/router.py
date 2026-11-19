@@ -534,6 +534,11 @@ def build_router(app, require_session, user_id):
         with app.state.session_factory() as db:
             task = owned_task(db, task_id, user_id(session))
             ids = select(Run.id).where(Run.task_id == task.id)
+            # PostgreSQL enforces the current revision foreign key while the
+            # immutable revision rows are removed below. Clear the pointer
+            # first; SQLite's default foreign-key setting did not expose this.
+            task.current_revision_id = None
+            db.flush()
             db.execute(delete(Artifact).where(Artifact.task_id == task.id))
             db.execute(delete(NodeRun).where(NodeRun.run_id.in_(ids)))
             db.execute(delete(RunDecision).where(RunDecision.run_id.in_(ids)))

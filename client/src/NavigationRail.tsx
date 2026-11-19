@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
-import { AppstoreOutlined, CarryOutOutlined, MessageOutlined, MoonOutlined, RobotOutlined, SettingOutlined, SunOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CarryOutOutlined, MessageOutlined, MoonOutlined, RobotOutlined, SettingOutlined, SunOutlined, ApartmentOutlined } from '@ant-design/icons';
 
-export type ClientModule = 'chat' | 'tasks' | 'agents';
+export type ClientModule = 'chat' | 'coordinator' | 'tasks' | 'agents';
 export const CLIENT_MODULES = [
   { id: 'chat', label: '对话', Icon: MessageOutlined },
+  { id: 'coordinator', label: '协调 Agent', Icon: ApartmentOutlined },
   { id: 'tasks', label: '任务', Icon: CarryOutOutlined },
   { id: 'agents', label: '智能体', Icon: RobotOutlined },
 ] as const;

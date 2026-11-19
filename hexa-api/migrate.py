@@ -14,6 +14,7 @@ MIGRATIONS = (
     "004_task_template_source.sql",
     "005_task_artifacts.sql",
     "006_conversation_execution.sql",
+    "007_node_execution.sql",
 )
 
 

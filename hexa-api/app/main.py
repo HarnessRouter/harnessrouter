@@ -18,6 +18,8 @@ from app.auth.service import COOKIE_NAME, authenticate, create_session, get_sess
 from app.config import Settings
 from app.db.models import AppWorkspace, AuthSession, Conversation, ConversationMessage, ConversationFile, IdempotencyRequest, Run, RunDecision, Task, WorkflowRevision, create_session_factory
 from app.gateway.client import GatewayClient, GatewayError, response_text
+from app.gateway.execution import safe_execution
+from app.tasks.domain import redact
 from app.tasks.router import build_router
 from app.tasks.service import TaskError, TaskExecutor
 from app.agents.router import build_agent_router
@@ -287,6 +289,7 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
             messages = db.scalars(select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.id)).all()
             records = db.scalars(select(IdempotencyRequest).where(IdempotencyRequest.conversation_id == conversation.id)).all()
             executions = {record.key: json.loads(record.execution_json) for record in records if record.execution_json}
+            latest = max(records, key=lambda record: record.id, default=None)
             return {
                 "id": conversation.id,
                 "title": conversation.title,
@@ -294,6 +297,8 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                 "agent_id": conversation.agent_id,
                 "model": conversation.model,
                 "status": conversation.response_status,
+                "progress": redact({'text': latest.partial_text or '', 'response_id': latest.response_id,
+                                    'execution': json.loads(latest.execution_json) if latest.execution_json else {}}) if latest else None,
                 "messages": [{"id": row.id, "role": row.role, "text": row.text, **({'execution': executions[row.idempotency_key]} if row.role == 'assistant' and row.idempotency_key in executions else {})} for row in messages],
             }
 
@@ -347,6 +352,7 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                 raise HTTPException(404, '会话不存在。')
         async def snapshots():
             last = None
+            started = False
             for _ in range(1200):
                 with app.state.session_factory() as db:
                     row = db.get(Conversation, conversation_id)
@@ -354,13 +360,17 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                     snapshot = {'status': row.response_status, 'response_id': pending.response_id if pending else row.previous_response_id, 'text': pending.partial_text if pending else ''}
                     if pending and pending.execution_json:
                         snapshot['execution'] = json.loads(pending.execution_json)
-                encoded = json.dumps(snapshot, ensure_ascii=False)
+                encoded = json.dumps(redact(snapshot, (resolved.gateway_api_key, resolved.session_secret)), ensure_ascii=False)
+                if snapshot['status'] == 'running':
+                    started = True
                 if encoded != last:
                     yield f'data: {encoded}\n\n'
                     last = encoded
                 else:
                     yield ': heartbeat\n\n'
-                if snapshot['status'] != 'running':
+                # A subscription can arrive before the POST has claimed the conversation.
+                # Keep it alive; the client closes after observing its execution's terminal state.
+                if started and snapshot['status'] not in ('pending', 'running', 'unknown'):
                     return
                 await asyncio.sleep(0.5)
         return StreamingResponse(snapshots(), media_type='text/event-stream', headers={'X-Accel-Buffering': 'no'})
@@ -501,10 +511,10 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                     if record:
                         if rid:
                             record.response_id = rid
-                        record.partial_text = partial
+                        record.partial_text = redact(partial, (resolved.gateway_api_key, resolved.session_secret))[:262144]
                         progress_db.commit()
             async def save_execution(details):
-                execution.update(details)
+                execution.update(safe_execution(details, (resolved.gateway_api_key, resolved.session_secret)))
                 with app.state.session_factory() as progress_db:
                     record = progress_db.get(IdempotencyRequest, request_record.id)
                     if record:
@@ -531,7 +541,7 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
             response_id = result.get("response_id")
             conversation.previous_response_id = response_id
             conversation.response_status = result.get("status", "completed")
-            execution.update(result.get('execution') or {})
+            execution.update(safe_execution(result.get('execution') or {}, (resolved.gateway_api_key, resolved.session_secret)))
             execution.update(status=conversation.response_status, elapsed_ms=round((time.time() - started_at) * 1000))
             request_record.execution_json = json.dumps(execution, ensure_ascii=False)
             assistant = ConversationMessage(conversation_id=conversation.id, role="assistant", text=result.get("text", ""), idempotency_key=idempotency_key)

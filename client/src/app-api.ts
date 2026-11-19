@@ -35,7 +35,7 @@ export interface AppConversation {
 export interface AppExecutionStep { id: string; name: string; status: string }
 export interface AppMessageExecution { elapsed_ms?: number; started_at?: number; harness_id?: string; model?: string; reasoning?: string; steps?: AppExecutionStep[]; status?: string }
 export interface AppMessage { id?: number; role: 'user' | 'assistant'; text: string; execution?: AppMessageExecution }
-export interface AppConversationDetail extends AppConversation { messages: AppMessage[] }
+export interface AppConversationDetail extends AppConversation { messages: AppMessage[]; progress?: { text: string; response_id: string | null; execution?: AppMessageExecution } | null }
 
 export class AppApiError extends Error {
   status: number;
@@ -185,13 +185,21 @@ export async function appConversationFiles(id: number): Promise<AppFile[]> {
   return Array.isArray(data.files) ? data.files : [];
 }
 export function appCancelConversation(id: number) { return appRequest<{ status: string }>(`/api/hexa/conversations/${id}/cancel`, { method: 'POST' }); }
-export function appWatchConversation(id: number, onSnapshot: (value: { status: string; text: string; response_id: string | null; execution?: AppMessageExecution }) => void): () => void {
+export function appWatchConversation(id: number, onSnapshot: (value: { status: string; text: string; response_id: string | null; execution?: AppMessageExecution }) => void, options: { waitForStart?: boolean; startedAt?: number } = {}): () => void {
   const source = new EventSource(appUrl(`/api/hexa/conversations/${id}/events`), { withCredentials: true });
+  let started = !options.waitForStart;
   source.onmessage = event => {
-    try { const data = JSON.parse(event.data); onSnapshot(data); if (data.status !== 'running') source.close(); }
+    try {
+      const data = JSON.parse(event.data);
+      if (!started) {
+        if (data.status === 'running' || (options.startedAt && data.execution?.started_at * 1000 >= options.startedAt - 1000)) started = true;
+        else return;
+      }
+      onSnapshot(data); if (!['running', 'unknown'].includes(data.status)) source.close();
+    }
     catch { source.close(); }
   };
-  source.onerror = () => source.close();
+  // EventSource reconnects automatically, including after a temporary network interruption.
   return () => source.close();
 }
 export async function appFileBlob(id: number): Promise<Blob> {
@@ -216,7 +224,7 @@ export interface AppTaskNode { id: string; name?: string; agent_id?: string; mod
 export interface AppPagination { offset: number; limit: number; has_more: boolean }
 export interface AppTask { id: number; title: string; description: string; input?: string; workspace_id?: number | null; status: string; current_revision: number; current_revision_id?: number | null; workflow_state?: 'draft' | 'saved'; workflow_revision?: { id: number; revision: number; kind: 'saved' } | null; source_template?: { id: number; version_id: number; version: number } | null; workflow: { nodes: AppTaskNode[] } | null; current_result: Record<string, number>; stale_nodes?: string[]; latest_run_id?: number | null; source_template_id?: number | null; source_template_version_id?: number | null; source_template_version?: number | null }
 export interface AppArtifact { id: number; task_id: number; run_id: number; node_run_id: number; filename: string; media_type: string; bytes: number; cleanup_status?: string; created_at?: string | null }
-export interface AppNodeRun { id: number; node_id: string; run_id: number; attempt: number; status: string; input: Record<string, unknown>; output: Record<string, unknown> | null; error_code: string | null; response_id?: string | null; started_at?: string | null; finished_at?: string | null }
+export interface AppNodeRun { id: number; node_id: string; run_id: number; attempt: number; status: string; input: Record<string, unknown>; output: Record<string, unknown> | null; error_code: string | null; response_id?: string | null; started_at?: string | null; finished_at?: string | null; progress?: { text: string; execution?: AppMessageExecution } }
 export interface AppRun { id: number; task_id: number; workflow_revision: number; workflow_revision_id?: number | null; workflow_revision_ref?: { id: number | null; revision: number } | null; status: string; paused?: boolean; kind: string; superseded_by?: number | null; execution_snapshot?: { workflow: { nodes: AppTaskNode[] }; workflow_revision_id?: number | null; source?: { kind: string; revision: number }; [key: string]: unknown }; workflow?: { nodes: AppTaskNode[] }; nodes: AppNodeRun[]; decisions?: Array<{ node_id: string; input_refs: string[] }> }
 
 export interface AppTemplateVersion { id: number; version: number; workflow: { nodes: AppTaskNode[] } }

@@ -10,6 +10,19 @@ CREATE TABLE IF NOT EXISTS tasks (
     input_text TEXT NOT NULL DEFAULT '',
     archived_status VARCHAR(32)
 );
+
+-- Existing installations may have the original task table from the first
+-- application release. Add every column used below before creating indexes or
+-- backfilling version identities so upgrades remain forward compatible.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS user_id BIGINT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS workspace_id BIGINT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title VARCHAR(255) NOT NULL DEFAULT '未命名任务';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'draft';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS current_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS current_result_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS input_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_status VARCHAR(32);
 CREATE INDEX IF NOT EXISTS ix_tasks_user_id ON tasks (user_id);
 CREATE INDEX IF NOT EXISTS ix_tasks_workspace_id ON tasks (workspace_id);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS current_revision_id BIGINT;

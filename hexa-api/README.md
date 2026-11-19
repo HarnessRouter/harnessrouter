@@ -30,6 +30,8 @@ python -m uvicorn app.main:app --app-dir hexa-api --host 127.0.0.1 --port 4010 -
 3. `migrations/003_agent_templates.sql`
 4. `migrations/004_task_template_source.sql`
 5. `migrations/005_task_artifacts.sql`
+6. `migrations/006_conversation_execution.sql`
+7. `migrations/007_node_execution.sql`
 
 应用启动不会自动创建 PostgreSQL 表，也不会连接未配置的默认数据库。SQLite 只用于测试工厂；SQLite 开发数据库启动时会补齐 Agent 模板表、任务来源模板字段、任务版本身份字段和任务 Artifact 表，已有任务按已有版本号回填可确定的版本 ID。Agent 模板独立于任务工作流模板，保存名称、说明、运行时、默认模型和系统提示词，不保存 Gateway 凭据。`004_task_template_source.sql` 给现有任务增加可空的来源模板及固定版本字段，旧任务不会推测补写来源。`005_task_artifacts.sql` 只保存 Gateway 文件引用和任务权限元数据，不复制文件内容。
 
@@ -53,7 +55,7 @@ python -m uvicorn app.main:app --app-dir hexa-api --host 127.0.0.1 --port 4010 -
 
 消息接口使用 `Idempotency-Key`。Gateway 响应流中断时，后端保留不确定状态并返回 409 给重复提交，客户端应先读取会话状态，不自动重新创建远程任务。
 
-回复消息可包含 `execution`：独立记录 Harness、模型、状态、耗时（毫秒）、Gateway 公开思考摘要和工具名称/状态。流式快照同步当前详情，刷新后按消息恢复；旧消息无记录时省略。只保存工具名称和状态，不包含工具原始参数。SQLite 启动时兼容新增列；PostgreSQL 部署须通过 `python migrate.py` 应用 `006_conversation_execution.sql`。
+回复消息可包含 `execution`：独立记录 Harness、模型、状态、耗时（毫秒）、Gateway 公开思考摘要和工具名称/状态。流式快照同步当前详情，刷新后按消息恢复；旧消息无记录时省略。只保存工具名称和状态，不包含工具原始参数。SQLite 启动时兼容新增列；PostgreSQL 部署须通过 `python migrate.py` 按顺序应用 `006_conversation_execution.sql` 和 `007_node_execution.sql`。
 
 ## 前端热更新联调
 

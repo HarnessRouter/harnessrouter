@@ -109,6 +109,7 @@ def node_json(row):
     return {'id': row.id, 'node_id': row.node_id, 'run_id': row.run_id, 'attempt': row.attempt, 'status': row.status,
             'input': json.loads(row.input_json), 'output': json.loads(row.output_json) if row.output_json else None,
             'error_code': row.error_code, 'response_id': row.response_id,
+            'progress': redact({'text': row.partial_text or '', 'execution': json.loads(row.execution_json) if row.execution_json else {}}),
             'started_at': row.started_at.isoformat() if row.started_at else None,
             'finished_at': row.finished_at.isoformat() if row.finished_at else None}
 
@@ -343,15 +344,27 @@ class TaskExecutor:
 
     async def execute_node(self, run_id, attempt_id, item, context, workspace_id):
         result, error = None, None
+        def save_progress(*, response_id=None, partial=None, details=None):
+            with self.session_factory() as db:
+                row, run = db.get(NodeRun, attempt_id), db.get(Run, run_id)
+                if not row or not run or row.status != 'running' or run.status != 'running':
+                    return
+                if response_id:
+                    row.response_id = response_id
+                if partial is not None:
+                    row.partial_text = redact(partial, self.secrets)[:262144]
+                if details is not None:
+                    from app.gateway.execution import safe_execution
+                    row.execution_json = encoded(safe_execution(details, self.secrets))
+                db.commit()
         async def progress(response_id, partial):
-            if response_id:
-                with self.session_factory() as db:
-                    row = db.get(NodeRun, attempt_id)
-                    if row.status == 'running':
-                        row.response_id = response_id
-                        db.commit()
+            save_progress(response_id=response_id, partial=partial)
+        async def execution(details):
+            save_progress(details=details)
         try:
-            result = await self.gateway.create_response(encoded(context), None, f'hexa-task-{run_id}-{attempt_id}', agent_id=item['agent_id'], model=item['model'], workspace_id=workspace_id, on_progress=progress)
+            result = await self.gateway.create_response(encoded(context), None, f'hexa-task-{run_id}-{attempt_id}', agent_id=item['agent_id'], model=item['model'], workspace_id=workspace_id, on_progress=progress, on_execution=execution)
+            if result.get('execution'):
+                await execution(result['execution'])
             if result.get('status') != 'completed':
                 error = 'agent_incomplete'
             if len(encoded(result).encode()) > 1024 * 1024:

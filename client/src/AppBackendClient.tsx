@@ -11,6 +11,7 @@ import { AppAgentsPanel } from './AppAgentsPanel';
 import { appModelSelection, onAppSessionExpired } from './app-api';
 import { AppLoginDialog } from './AppLoginDialog';
 import { AppTasks } from './AppTasks';
+import { SuperAgentCoordinator } from './SuperAgentCoordinator';
 import { WorkspaceMenu } from './WorkspaceMenu';
 import { CopyReplyButton, MarkdownMessage } from './MarkdownMessage';
 import { formatElapsed } from './reply-details';
@@ -98,7 +99,9 @@ export function AppBackendClient() {
   const [contextMax, setContextMax] = useState(CONTEXT_MAX);
   const [tab, setTab] = useState<InspectorTab>('session');
   const [dark, setDark] = useState(false);
-  const [active, setActive] = useState<ClientModule>(() => /^\/(tasks|runs)\//.test(location.pathname) ? 'tasks' : 'chat');
+  const [active, setActive] = useState<ClientModule>(() => location.pathname.startsWith('/coordinator') ? 'coordinator' : /^\/(tasks|runs)\//.test(location.pathname) ? 'tasks' : 'chat');
+  const [coordinatorVisited, setCoordinatorVisited] = useState(() => location.pathname.startsWith('/coordinator'));
+  useEffect(() => { if (active === 'coordinator') setCoordinatorVisited(true); }, [active]);
   const [taskSection, setTaskSection] = useState<'mine' | 'templates' | 'runs'>(() => location.pathname.startsWith('/runs/') ? 'runs' : 'mine');
   const [selectedRunId, setSelectedRunId] = useState(() => location.pathname.match(/^\/runs\/(\d+)$/)?.[1] || '');
   const [taskCreateRequest, setTaskCreateRequest] = useState(0);
@@ -182,7 +185,17 @@ export function AppBackendClient() {
       if (serial !== generation.current) return;
       setLiveText(snapshot.text || ''); if (snapshot.response_id) setResponseId(snapshot.response_id);
       if (snapshot.execution) setResponseExecution(current => ({ ...current, ...snapshot.execution }));
-    });
+      if (snapshot.status !== 'running') {
+        setStatus(snapshot.status);
+        setBusy(false);
+        setExecutingId(null);
+        // A restored page has no pending send promise to project the final
+        // persisted messages. Read them after the stream reaches its end.
+        void restoreConversation(executingId, serial).catch(cause => {
+          if (serial === generation.current) setError(errorText(cause));
+        });
+      }
+    }, { waitForStart: true, startedAt: responseStartedAt || undefined });
   }, [busy, executingId]);
   useEffect(() => {
     if (!responseStartedAt || !busy) return;
@@ -215,6 +228,18 @@ export function AppBackendClient() {
     const snapshot = await appGetConversation(id);
     if (serial !== generation.current) return;
     setMessages(snapshot.messages); setResponseId(snapshot.previous_response_id); setAgentId(snapshot.agent_id || ''); setModel(snapshot.model || ''); setStatus(snapshot.status || 'idle');
+    if (snapshot.status === 'running' && snapshot.progress) {
+      setLiveText(snapshot.progress.text || '');
+      setResponseId(snapshot.progress.response_id || snapshot.previous_response_id);
+      const startedAt = snapshot.progress.execution?.started_at ? snapshot.progress.execution.started_at * 1000 : Date.now();
+      setResponseStartedAt(startedAt);
+      setResponseExecution(current => ({ ...current, ...(snapshot.progress?.execution || {}), started_at: snapshot.progress?.execution?.started_at, elapsed_ms: Date.now() - startedAt, status: 'running' }));
+      setExecutingId(id);
+      setBusy(true);
+    } else {
+      setBusy(false);
+      setExecutingId(null);
+    }
     const listed = await appConversationFiles(id);
     if (serial === generation.current) setFiles(listed);
   };
@@ -323,8 +348,8 @@ export function AppBackendClient() {
   const updateContextWidth = (value: number) => setContextWidth(Math.round(Math.max(CONTEXT_MIN, Math.min(contextMax, value))));
   return <ConfigProvider theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm, ...antdTheme(dark) }}><div className={`app hexa-backend-app${dark ? ' dark' : ''}`}>
     <NavigationRail active={active} onSelect={setActive} labels={railLabels} dark={dark} onTheme={() => setDark(value => !value)} onSettings={() => { setLabelsDraft(railLabels); setSettingsOpen(true); }} workspace={<WorkspaceMenu workspaces={workspaces} currentId={workspaceId} onReload={loadCatalog} onSelected={id => { setWorkspaceId(id); newChat(); }} />} user={<UserMenu user={username ? { username, displayName: username, signedInAt: 0 } : null} workspaceName={workspaces.find(row => row.id === workspaceId)?.name || 'Hexa 工作空间'} dark={dark} onRequestLogin={() => setLoginOpen(true)} onUserChange={user => { if (!user) void logout(); }} />} />
-    <aside className="sidebar"><header><b>{CLIENT_MODULES.find(item => item.id === active)?.label}</b><small>{workspaces.find(row => row.id === workspaceId)?.name || 'Hexa 工作空间'}</small></header>{active === 'chat' && <Button block icon={<PlusOutlined />} disabled={busy} onClick={() => newChat()}>新建对话</Button>}{active === 'tasks' && <Button block icon={<PlusOutlined />} onClick={() => { setTaskSection('mine'); setTaskCreateRequest(value => value + 1); }}>新建任务</Button>}<div className="side-list"><small>{active === 'chat' ? '对话历史' : active === 'tasks' ? '任务工作区' : '全部智能体'}</small>{active === 'chat' && <>{historyLoading && <p role="status">正在加载历史…</p>}{historyError && <div role="alert">{historyError}<button onClick={() => void loadHistory()}>重试</button></div>}{!historyLoading && !historyError && !conversations.length && <p>暂无历史对话</p>}</>}{active === 'chat' && conversations.map(row => <button key={row.id} aria-label={row.title} disabled={busy} className={selected === row.id ? 'selected' : ''} onClick={() => setSelected(row.id)}>{row.title}{row.status === 'unknown' && <small> · 待恢复</small>}</button>)}{active === 'tasks' && <nav aria-label="任务菜单"><button className={taskSection === 'mine' ? 'selected' : ''} onClick={() => setTaskSection('mine')}><span>我的任务</span><small>{taskCounts.tasks}</small></button><button className={taskSection === 'templates' ? 'selected' : ''} onClick={() => setTaskSection('templates')}><span>模板管理</span><small>{taskCounts.templates}</small></button><span className="side-list-divider" aria-hidden="true" /><button className={taskSection === 'runs' ? 'selected' : ''} onClick={() => setTaskSection('runs')}><span>运行记录</span><small>{taskCounts.runs}</small></button></nav>}{active === 'agents' && agents.map(row => <button key={row.id} disabled={busy} className={agentDetailId === row.id ? 'selected' : ''} aria-current={agentDetailId === row.id ? 'true' : undefined} onClick={() => setAgentDetailId(row.id)}>{row.name}</button>)}</div><small className="app-user">{checking ? '检查登录状态…' : ''}</small></aside>
-    <main className="main">{active === 'tasks' && <AppTasks section={taskSection} selectedRunId={selectedRunId} onSectionChange={setTaskSection} onRunChange={setSelectedRunId} key={`${username}-${workspaceId}`} workspaceId={workspaceId} agents={agents} createRequest={taskCreateRequest} onCountsChange={setTaskCounts} />}{active === 'agents' ? <AppAgentsPanel key={username} agents={agents} selectedAgentId={agentDetailId} onSelectAgent={setAgentDetailId} reload={loadAgents} onChat={newChat} /> : active === 'chat' && <section className={`page chat-page${inspectorOpen ? ' is-context-open' : ''}`} aria-label="对话工作台">
+    <aside className="sidebar"><header><b>{CLIENT_MODULES.find(item => item.id === active)?.label}</b><small>{workspaces.find(row => row.id === workspaceId)?.name || 'Hexa 工作空间'}</small></header>{active === 'chat' && <Button block icon={<PlusOutlined />} disabled={busy} onClick={() => newChat()}>新建对话</Button>}{active === 'tasks' && <Button block icon={<PlusOutlined />} onClick={() => { setTaskSection('mine'); setTaskCreateRequest(value => value + 1); }}>新建任务</Button>}<div className="side-list"><small>{active === 'chat' ? '对话历史' : active === 'tasks' ? '任务工作区' : active === 'coordinator' ? '协调工作区' : '全部智能体'}</small>{active === 'chat' && <>{historyLoading && <p role="status">正在加载历史…</p>}{historyError && <div role="alert">{historyError}<button onClick={() => void loadHistory()}>重试</button></div>}{!historyLoading && !historyError && !conversations.length && <p>暂无历史对话</p>}</>}{active === 'chat' && conversations.map(row => <button key={row.id} aria-label={row.title} disabled={busy} className={selected === row.id ? 'selected' : ''} onClick={() => setSelected(row.id)}>{row.title}{row.status === 'unknown' && <small> · 待恢复</small>}</button>)}{active === 'tasks' && <nav aria-label="任务菜单"><button className={taskSection === 'mine' ? 'selected' : ''} onClick={() => setTaskSection('mine')}><span>我的任务</span><small>{taskCounts.tasks}</small></button><button className={taskSection === 'templates' ? 'selected' : ''} onClick={() => setTaskSection('templates')}><span>模板管理</span><small>{taskCounts.templates}</small></button><span className="side-list-divider" aria-hidden="true" /><button className={taskSection === 'runs' ? 'selected' : ''} onClick={() => setTaskSection('runs')}><span>运行记录</span><small>{taskCounts.runs}</small></button></nav>}{active === 'coordinator' && <p className="sidebar-note">协调 Agent 只负责分发与监控。</p>}{active === 'agents' && agents.map(row => <button key={row.id} disabled={busy} className={agentDetailId === row.id ? 'selected' : ''} aria-current={agentDetailId === row.id ? 'true' : undefined} onClick={() => setAgentDetailId(row.id)}>{row.name}</button>)}</div><small className="app-user">{checking ? '检查登录状态…' : ''}</small></aside>
+    <main className="main">{username && (coordinatorVisited || active === 'coordinator') && <SuperAgentCoordinator key={`coordinator-${username}-${workspaceId}`} visible={active === 'coordinator'} agents={agents} workspaceId={workspaceId} onOpenTasks={(mode = 'mine') => { setActive('tasks'); setTaskSection(mode); }} />}{active === 'tasks' && <AppTasks section={taskSection} selectedRunId={selectedRunId} onSectionChange={setTaskSection} onRunChange={setSelectedRunId} key={`${username}-${workspaceId}`} workspaceId={workspaceId} agents={agents} createRequest={taskCreateRequest} onCountsChange={setTaskCounts} />}{active === 'agents' ? <AppAgentsPanel key={username} agents={agents} selectedAgentId={agentDetailId} onSelectAgent={setAgentDetailId} reload={loadAgents} onChat={newChat} /> : active === 'chat' && <section className={`page chat-page${inspectorOpen ? ' is-context-open' : ''}`} aria-label="对话工作台">
       <div ref={chatWorkspaceRef} className={`chat-workspace${inspectorOpen ? ' is-context-open' : ''}`} style={{ '--chat-context-width': `${contextWidth}px` } as CSSProperties}>
         <section className="chat-main" aria-label="会话内容">
           <header className="chat-main-head"><small>当前对话</small><h1>{conversations.find(row => row.id === selected)?.title || '新对话'}</h1><Tag color={gatewayState === 'connected' ? 'green' : gatewayState === 'unavailable' || gatewayState === 'unauthorized' ? 'red' : 'blue'}>{username ? gatewayLabel : '未登录'}</Tag><button className="chat-context-reveal" type="button" aria-label="展开上下文" onClick={() => setInspectorOpen(true)}>上下文</button></header>

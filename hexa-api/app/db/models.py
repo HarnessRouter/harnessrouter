@@ -152,6 +152,8 @@ class NodeRun(Base):
     output_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     response_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    partial_text: Mapped[str] = mapped_column(Text, default='')
+    execution_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -265,6 +267,11 @@ def create_session_factory(database_url: str):
             request_columns = {column['name'] for column in inspect(connection).get_columns('idempotency_requests')}
             if 'execution_json' not in request_columns:
                 connection.execute(text('ALTER TABLE idempotency_requests ADD COLUMN execution_json TEXT'))
+            node_columns = {column['name'] for column in inspect(connection).get_columns('node_runs')}
+            if 'partial_text' not in node_columns:
+                connection.execute(text("ALTER TABLE node_runs ADD COLUMN partial_text TEXT NOT NULL DEFAULT ''"))
+            if 'execution_json' not in node_columns:
+                connection.execute(text('ALTER TABLE node_runs ADD COLUMN execution_json TEXT'))
     else:
         # PostgreSQL schema changes are deployment-owned migrations. The API must
         # fail clearly when 005_task_artifacts.sql has not been applied rather

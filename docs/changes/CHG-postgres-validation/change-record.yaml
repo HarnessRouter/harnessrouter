@@ -1,0 +1,30 @@
+id: CHG-postgres-validation
+status: verified_locally
+owner: Codex
+baseline: 959b30ce63a0e10f566afc1973531ceea86e3e23 plus existing execution-progress working-tree changes
+reuse: extend existing migration CLI, SQL migrations, Compose profile and API tests
+spec: spec.md
+plan: plan.md
+scope:
+  direct: [PostgreSQL test isolation, migration verification, database compatibility fixes, Compose runtime verification]
+  transitive: [task persistence, immutable revisions, execution progress, Artifact metadata]
+  excluded: [existing Gateway and Runner deployments, production data, UI changes, MR merge]
+validation:
+  environment: Windows host with Docker Desktop Linux engine 29.6.1 and Compose v5.3.0
+  discovery: Existing PG migration runner and deployment profile found; original compose config fails without required environment values.
+  first_real_pg_run:
+    command: python .artifacts/postgres/validate.py test hexa-api/tests/test_postgres_migrations.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_workbench_pagination.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_auth.py hexa-api/tests/test_conversations.py
+    result: 48 passed, 2 failed
+    findings: [legacy tasks table upgrade missing columns, PostgreSQL task deletion blocked by current revision foreign key]
+    fixed_in_worktree: [hexa-api/migrations/002_tasks.sql, hexa-api/app/tasks/router.py]
+  final_real_pg_run:
+    migration_and_api_regression: 50 passed
+    compose: build, migration-before-start, PostgreSQL healthcheck and API healthcheck passed
+    http: login, task create/read, API and PostgreSQL restart, and post-restart task read passed for task 1
+    sqlite_regression: 48 passed
+    cleanup: isolated Compose project, volume and network removed
+    diff_check: passed
+remaining:
+  - Real Gateway/BYOK execution and production deployment remain outside this validation environment.
+  - macOS native PostgreSQL packaging and runtime remain not_evaluated.
+document_exit: Keep reusable test entry and migration documentation; record evidence and limitations here.

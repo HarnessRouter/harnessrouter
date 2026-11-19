@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 import pytest
@@ -58,9 +59,20 @@ class FakeGateway:
 
 
 @pytest.fixture()
-def app(tmp_path: Path):
+def database_url(tmp_path: Path):
+    postgres_url = os.getenv('HEXA_TEST_POSTGRES_URL')
+    if postgres_url:
+        from tests.postgres import isolated_database
+        with isolated_database(postgres_url) as url:
+            yield url
+    else:
+        yield f"sqlite:///{tmp_path / 'test.db'}"
+
+
+@pytest.fixture()
+def app(database_url):
     settings = Settings(
-        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        database_url=database_url,
         admin_username="admin",
         admin_password_hash=hash_password("correct-password"),
         session_secret="test-session-secret",

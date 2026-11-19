@@ -1,0 +1,151 @@
+id: CHG-super-agent-coordinator
+status: completed
+status_reason: 用户确认协调 Agent 只分发、监控和汇报，不执行具体工作；本次实现从现有任务 REST/SSE 契约扩展 client 入口，并已完成客户端验证。
+owner: Codex
+source: 用户需求（2026-11-19）
+goal: 在 client 增加协调 Agent，支持多任务分发、实时监控、状态管理和结果汇报。
+non_goals:
+  - 新增后端 Super Agent 或 Gateway 执行节点
+  - 修改 Task/WorkflowRevision/Run 保存语义
+  - 恢复 Hexa Cloud、余额、密钥或 hosted provider 入口
+behavior:
+  before: client 只能在任务工作台内查看和监控已加载的活动 Run。
+  after: client 提供协调 Agent 页面，批量启动已保存任务并同时订阅多个 Run，断线后逐项轮询恢复并汇报结果。
+acceptance:
+  - id: AC-1
+    entry: 协调 Agent
+    action: 选择多个已保存任务并点击分发
+    expected: 每个任务独立创建 Run；单个失败不影响其他成功启动项，页面显示逐项结果。
+    verification: client/tests/super-agent-coordinator.test.mjs；协调页 Playwright 用例
+  - id: AC-2
+    entry: 协调 Agent
+    action: 观察多个活动 Run
+    expected: 每个 Run 独立显示服务端状态、节点进度和最新事件，支持完成、等待人工、失败和取消。
+    verification: 协调页 Playwright 用例；复用 appWatchTaskRun API
+  - id: AC-3
+    entry: 协调 Agent
+    action: 断开一个 Run 的 SSE
+    expected: 该 Run 进入恢复提示并轮询，其他 Run 继续更新，终态后停止轮询。
+    verification: 协调页 Playwright 用例
+  - id: AC-4
+    entry: 协调 Agent
+    action: 打开创建任务或模板入口
+    expected: 进入既有任务工作台，不把草稿作为已保存可运行版本。
+    verification: 导航回归和任务工作台回归
+baseline: dirty worktree at 959b30c with pre-existing task workbench changes preserved
+reuse_decision: extend
+discovery_evidence:
+  - client/src/app-api.ts
+  - client/src/ApiTaskWorkbench.tsx
+  - docs/changes/CHG-task-centric-workflow/spec.md#版本关系与保存边界
+  - docs/changes/CHG-hexa-remove-cloud-contract/spec.md
+references:
+  - spec.md
+  - plan.md
+impact:
+  direct:
+    - client/src/SuperAgentCoordinator.tsx
+    - client/src/super-agent-coordinator.ts
+    - client/src/NavigationRail.tsx
+    - client/src/AppBackendClient.tsx
+    - client/src/styles.css
+    - client/tests/super-agent-coordinator.test.mjs
+  transitive:
+    - client/src/app-api.ts
+    - client/src/AppTasks.tsx
+  unknown:
+    - deployed browser SSE behavior behind production reverse proxy
+dependencies:
+  - hexa-api task and Run REST/SSE APIs
+  - authenticated current workspace session
+test_scope:
+  selection_reason: 新增协调层单元和完整用户入口，覆盖多 Run 聚合、批量分发和断线恢复，并运行受影响客户端回归。
+  selected:
+    - client/tests/super-agent-coordinator.test.mjs
+    - client/tests/app-api.test.mjs
+    - client/tests/app-ui/navigation.spec.ts
+    - client/tests/app-ui/tasks.spec.ts
+    - npm test --prefix client
+    - npm run typecheck --prefix client
+  excluded:
+    - hexa-api tests：本次不修改后端行为
+    - PostgreSQL/真实 Gateway：本次不修改服务端或执行协议
+verification:
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4]
+    status: passed
+    command_or_steps: npm test --prefix client
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows client workspace
+    evidence: 最终客户端单测 51/51 通过，包含协调状态聚合、断线恢复、幂等分发、任务可运行性、结果解析和列表安全错误详情保留。
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4]
+    status: passed
+    command_or_steps: npm run typecheck --prefix client
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows client workspace
+    evidence: TypeScript 检查通过。
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4]
+    status: passed
+    command_or_steps: npm run build --prefix client
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows client workspace
+    evidence: 客户端生产构建通过；Vite 仅报告现有的大包体积提示。
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4]
+    status: passed
+    command_or_steps: cd client; npx playwright test -c playwright.app.config.ts coordinator.spec.ts --workers=1
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows Chromium and Edge app harness
+    evidence: 协调页浏览器验收 6/6 通过，覆盖多任务分发、单项失败隔离、幂等重试、任务与模板独立保存、暂停/继续/取消、分页、深色主题、移动端无横向溢出和导航保持监控。
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4]
+    status: passed
+    command_or_steps: cd client; npx playwright test -c playwright.e2e.config.ts coordinator.spec.ts --project=chromium --workers=1
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows local services with real task REST/SSE path
+    evidence: 真实本地服务 E2E 1/1 通过；验证两个已保存工作流、两个 Run、SSE 订阅、最终完成、刷新后恢复报告以及 Run 与 WorkflowRevision 关系。结果摘要已确认读取 Gateway 正文而非 response ID 或元数据。
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-4]
+    status: failed_then_fixed
+    command_or_steps: cd client; npx playwright test -c playwright.app.config.ts coordinator.spec.ts navigation.spec.ts tasks.spec.ts --workers=2
+    exit_code: 1
+    revision: dirty worktree
+    environment: Windows Chromium and Edge app harness
+    evidence: 协调页和导航回归通过；任务工作台的既有 task list failure 用例在 Chromium 和 Edge 各失败一次，当前界面文案为“任务列表接口不可用，请重试。”而测试仍期待“任务服务暂时不可用”。该差异不涉及协调页行为。
+    reason: 列表恢复层覆盖了 API 已过滤的安全错误说明；交付复核新增单测确认 Red，并保留安全服务说明及列表上下文。404 继续使用列表不可用提示，401 继续触发会话失效。
+    next_action: 最终复验记录见 delivery_verification。
+remaining:
+  - 生产反向代理后的 SSE 行为尚未验证。
+  - PostgreSQL、生产 Gateway 和真实 BYOK 环境不在本次客户端变更验证范围内。
+review: ready
+handoff: null
+rollback: Remove coordinator client files and navigation wiring; no persisted data changes.
+closure:
+  outcome: verified_locally
+  merge_commit: null
+  release_evidence:
+    - client unit tests 51/51 passed
+    - client typecheck passed
+    - client production build passed
+    - coordinator app browser tests 6/6 passed
+    - coordinator local-service E2E 1/1 passed
+document_exit: Keep spec as the client coordination behavior contract; retain change record with validation evidence.
+delivery_verification:
+  date: '2026-11-19'
+  unit: npm test --prefix client; 51 passed
+  browser: npx playwright test -c playwright.app.config.ts coordinator.spec.ts navigation.spec.ts tasks.spec.ts workbench-loading.spec.ts --workers=2; 40 passed across Chromium and Edge
+  backend_regression: python -X utf8 -m pytest -q hexa-api/tests/test_conversations.py hexa-api/tests/test_gateway_sse.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_workbench_pagination.py --tb=short; 49 passed
+  build: Client typecheck and production build passed; existing bundle size advisory remains
+  red_green: New safe list error explanation unit test failed before the recovery layer fix and passed afterward; both previously failing browser cases now pass
+  merge_base: Remote target was an ancestor of source HEAD; temporary merge tree matched source tree without conflicts

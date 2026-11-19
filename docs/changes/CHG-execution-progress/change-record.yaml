@@ -1,0 +1,37 @@
+id: CHG-execution-progress
+status: verified_locally
+owner: Codex
+baseline: codex/sync-harnessrouter-787cd2e; existing dirty working tree preserved
+reuse: extend existing conversation execution details, Gateway SSE callbacks, Run SSE and runner thread wrapper
+spec: spec.md
+plan: plan.md
+visual_contract: existing inline chat reply details; node properties show bounded plain text and tool name/status, no overlay, wrap at 390px
+platforms: Windows host with Linux Docker runner; Python logic must remain portable
+validation:
+  red: target tests initially failed before implementation; Runner test was then moved to the real Linux container because runner/server.py imports POSIX-only modules on Windows
+  unit: hexa-api/test_execution_progress.py, client app-api target tests, runner/tests/test_execution_logging.py in hexa2-runner-1-1; passed
+  integration: python -m pytest tests/test_conversations.py tests/test_gateway_sse.py tests/test_execution_progress.py --tb=short; 19 passed
+  client: npm run typecheck; passed; npm test final workspace suite; 50 passed; npm run build passed
+  container: copied updated runner/server.py and runner test into hexa2-runner-1-1; unittest target; 2 passed
+  diff: git diff --check; passed
+  e2e: client npm run test:e2e; Chromium 20 and Edge 1 passed against the isolated 4020/4022 fixture stack; this does not validate the user's 4173/4010 process
+  visual: browser E2E passed on Chromium and Edge; the live 4173 page was separately checked after replacing the stale 4010 API process
+  added_e2e:
+    command: npx playwright test -c playwright.e2e.config.ts tests/e2e/execution-progress.spec.ts --project=chromium --workers=1
+    result: 2 passed
+    coverage: [reload_running_conversation_to_terminal_reply, node_progress_during_sse, node_progress_after_reload, desktop_panel, 390px_drawer, long_text_wrap]
+  live_entry:
+    command: Playwright browser check against http://localhost:4173/runs/8 with the running 4010 API and dev database
+    result: passed; Run #8 rendered on first load and after reload, with no alert; all observed Hexa API requests returned 200
+    scope: validates the user's actual 4173/4010 entrypoint separately from the isolated 4020/4022 E2E fixture stack
+  visual_evidence:
+    screenshots: [client/.artifacts/execution-progress/chat-restored-desktop.png, client/.artifacts/execution-progress/chat-restored-mobile.png, client/.artifacts/execution-progress/nodes-live-desktop.png, client/.artifacts/execution-progress/nodes-persisted-mobile.png]
+    result: passed; inspected desktop and mobile screenshots for inline layout, drawer bounds, readability and overflow
+  regression:
+    initial_reload_test: failed because terminal SSE updated status without reloading persisted messages; fixed in client/src/AppBackendClient.tsx
+    initial_node_test: first 404 was caused by missing selected workspace in test data; second assertion incorrectly expected final output during live progress; final test binds workspace and checks public execution details while running, persisted output after completion
+  platform: Windows API/client checks passed; Linux Docker Runner lifecycle test passed in the running container; other supported hosts not_evaluated
+  security: tool arguments are excluded, execution is allowlisted and bounded, progress and logs redact configured secrets; no prompt/response body is logged
+remaining:
+  - Keep the 4010 Hexa API process aligned with the workspace code when 4173 is used; Docker PostgreSQL deployment remains a separate environment
+document_exit: preserve execution progress contract and final evidence summary

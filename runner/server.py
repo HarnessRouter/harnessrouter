@@ -4652,12 +4652,46 @@ def _relay_forget(tokens: list | None) -> None:
                 _MCP_RELAY["routes"].pop(tok, None)
 
 
+_TURN_LOG_INTERVAL_S = 30.0
+
+
+def _turn_log(event: str, turn_id: str, rec: dict, *, failed: bool = False):
+    # Allowlist metadata only. Never log model/command/prompt, events or exception text.
+    print('[turn] ' + json.dumps({
+        'event': event, 'runner': os.environ.get('HR_RUNNER_NAME') or socket.gethostname(),
+        'turn_id': turn_id, 'session_id': str(rec.get('identifier') or '')[:255],
+        'status': 'failed' if failed else rec.get('status', 'running'),
+        'elapsed_s': round(max(0, time.time() - rec.get('started', time.time())), 1),
+        'events': len(rec.get('events', [])),
+    }, ensure_ascii=True), flush=True)
+
+
 def _routes_end_with_turn(run, tokens: list | None):
     """A turn's runner, whose routes leave when it returns, however it returns."""
     def runner(*args, **kwargs):
+        turn_id = args[0] if args and isinstance(args[0], str) else ''
+        rec = _turns.get(turn_id)
+        stopped = threading.Event()
+        monitor = None
+        failed = False
+        if rec is not None:
+            _turn_log('started', turn_id, rec)
+            def progress():
+                while not stopped.wait(_TURN_LOG_INTERVAL_S):
+                    _turn_log('progress', turn_id, rec)
+            monitor = threading.Thread(target=progress, daemon=True)
+            monitor.start()
         try:
             return run(*args, **kwargs)
+        except BaseException:
+            failed = True
+            raise
         finally:
+            stopped.set()
+            if monitor:
+                monitor.join()
+            if rec is not None:
+                _turn_log('finished', turn_id, rec, failed=failed)
             _relay_forget(tokens)
     return runner
 

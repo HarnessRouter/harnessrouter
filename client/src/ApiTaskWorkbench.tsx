@@ -14,6 +14,7 @@ import { WorkflowCanvas } from './workflow-canvas';
 import { layoutRunNodes, replayStates } from './run-history';
 import { mergePage, nextOffset } from './pagination';
 import type { ClientTemplate } from './app-types';
+import { loadWorkbenchLists } from './workbench-loading';
 
 export type TaskSection = 'mine' | 'templates' | 'runs';
 type Counts = { tasks: number; runs: number; templates: number };
@@ -60,45 +61,59 @@ export function AppTasks({ section = 'mine', onSectionChange, selectedRunId = ''
 
   const load = useCallback(async () => {
     const serial = ++generation.current;
-    setLoading(true); setDetailLoading(false); setMoreLoading(false); setError(''); setRetryPage(false);
+    setLoading(true); setDetailLoading(false); setMoreLoading(false); setError(''); setRetryPage(false); setStreamError('');
+    const linkedTaskId = Number(location.pathname.match(/^\/tasks\/(\d+)$/)?.[1]) || null;
+    const linkedRunId = Number(location.pathname.match(/^\/runs\/(\d+)$/)?.[1]) || null;
     try {
       const options = { offset: 0, limit: 20, workspaceId };
-      const [taskPage, templatePage, runPage] = await Promise.all([
-        appListTasksPage({ ...options, ...(section === 'mine' ? { q: query, status: filter } : {}) }),
-        appListTemplates({ ...options, ...(section === 'templates' ? { q: query } : {}) }),
-        appListRuns({ ...options, ...(section === 'runs' ? { q: query, status: filter } : {}) }),
+      // A deep-linked run/task is the primary screen. Load it independently so a
+      // secondary list endpoint (templates, global runs, or a stale deployment)
+      // cannot turn a valid detail page into a misleading "Not Found" state.
+      const linked = await Promise.allSettled([
+        linkedRunId ? appGetRun(linkedRunId) : Promise.resolve(null),
+        linkedTaskId ? appGetTask(linkedTaskId) : Promise.resolve(null),
       ]);
       if (serial !== generation.current) return;
+      let linkedRun = linked[0].status === 'fulfilled' ? linked[0].value : null;
+      const linkedTask = linked[1].status === 'fulfilled' ? linked[1].value : null;
+      let parent: AppTask | null = linkedTask;
+      let routeError = '';
+      if (linkedRun) {
+        try { parent = await appGetTask(linkedRun.task_id); }
+        catch (cause) { routeError = errorText(cause); linkedRun = null; }
+      }
+      if (serial !== generation.current) return;
+      if (parent && (parent.workspace_id ?? null) !== workspaceId) {
+        routeError = '该记录不在当前工作区，请切换工作区。';
+        linkedRun = null; parent = null;
+      }
+      if (linkedRun) setRuns(current => mergePage(current, [linkedRun!]));
+      if (parent) setTasks(current => mergePage(current, [parent!]));
+      const detailFailure = linkedRunId && linked[0].status === 'rejected' ? errorText(linked[0].reason) : linkedTaskId && linked[1].status === 'rejected' ? errorText(linked[1].reason) : '';
+
+      const lists = await loadWorkbenchLists({
+        tasks: appListTasksPage({ ...options, ...(section === 'mine' ? { q: query, status: filter } : {}) }),
+        templates: appListTemplates({ ...options, ...(section === 'templates' ? { q: query } : {}) }),
+        runs: appListRuns({ ...options, ...(section === 'runs' ? { q: query, status: filter } : {}) }),
+      });
+      if (serial !== generation.current) return;
+      const taskPage = lists.tasks || { tasks: [], pagination: { offset: 0, limit: 20, has_more: false } };
+      const templatePage = lists.templates || { templates: [], pagination: { offset: 0, limit: 20, has_more: false } };
+      const runPage = lists.runs || { runs: [], pagination: { offset: 0, limit: 20, has_more: false } };
+      const listFailure = lists.failures.find(failure => failure.section === (section === 'mine' ? 'tasks' : section)) || lists.failures[0];
       cursors.current = { mine: nextOffset(taskPage.pagination), templates: nextOffset(templatePage.pagination), runs: nextOffset(runPage.pagination) };
       setHasMore(cursors.current[section] !== null);
       const scoped = taskPage.tasks.filter(row => (row.workspace_id ?? null) === workspaceId);
-      let routeError = '';
-      const linkedId = Number(location.pathname.match(/^\/tasks\/(\d+)$/)?.[1]);
-      if (linkedId) {
-        try {
-          const linked = await appGetTask(linkedId);
-          if ((linked.workspace_id ?? null) !== workspaceId) routeError = '该任务不在当前工作区，请切换工作区。';
-          else if (!scoped.some(task => task.id === linked.id)) scoped.unshift(linked);
-        } catch (cause) { routeError = errorText(cause); }
-      }
-      const snapshots = await Promise.all(scoped.filter(task => task.latest_run_id && !runPage.runs.some(run => run.id === task.latest_run_id)).map(task => appGetRun(task.latest_run_id!)));
+      if (parent && !scoped.some(task => task.id === parent!.id)) scoped.unshift(parent);
+      const snapshots = (await Promise.allSettled(scoped.filter(task => task.latest_run_id && !runPage.runs.some(run => run.id === task.latest_run_id)).map(task => appGetRun(task.latest_run_id!)))).flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
       if (serial !== generation.current) return;
       setListIds({ mine: taskPage.tasks.map(t => t.id), runs: runPage.runs.map(r => r.id), templates: templatePage.templates.map(t => t.id) });
       setTasks(current => mergePage(current.filter(t => t.id === taskId && (t.workspace_id ?? null) === workspaceId), scoped));
       setTemplates(templatePage.templates.filter(t => (t.workspace_id ?? null) === workspaceId));
-      setRuns(current => mergePage(mergePage(current.filter(r => r.id === runId && scoped.some(t => t.id === r.task_id)), runPage.runs), snapshots).sort((a, b) => b.id - a.id));
-      const linkedRunId = Number(location.pathname.match(/^\/runs\/(\d+)$/)?.[1]);
-      if (linkedRunId) {
-        try {
-          const linked = await appGetRun(linkedRunId);
-          const parent = await appGetTask(linked.task_id);
-          if (serial !== generation.current) return;
-          if ((parent.workspace_id ?? null) !== workspaceId) routeError = '该运行不在当前工作区，请切换工作区。';
-          else { setRuns(current => mergePage(current, [linked])); setTasks(current => mergePage(current, [parent])); }
-        } catch (cause) { routeError = errorText(cause); }
-      }
+      setRuns(current => mergePage(mergePage(mergePage(current.filter(r => r.id === runId && scoped.some(t => t.id === r.task_id)), runPage.runs), snapshots), linkedRun ? [linkedRun] : []).sort((a, b) => b.id - a.id));
       if (serial !== generation.current) return;
-      if (routeError) setError(routeError);
+      if (routeError || detailFailure) setError(routeError || detailFailure);
+      else if (listFailure) setError(listFailure.message);
     } catch (cause) { if (serial === generation.current) setError(errorText(cause)); }
     finally { if (serial === generation.current) setLoading(false); }
   }, [workspaceId, section, query, filter]);
@@ -536,7 +551,7 @@ function RunSnapshot({ run, onAction }: { run: AppRun; onAction: (action: () => 
   const action = async (operation: () => Promise<unknown>) => { setBusy(true); setError(''); try { await onAction(operation); } catch (cause) { setError(errorText(cause)); } finally { setBusy(false); } };
   const propertyContent = <><header className="run-properties-header"><h3>{selectedNode?.name || selected}</h3></header><div className="run-properties-tabs" role="tablist" aria-label="运行属性标签">{(['node', 'run', 'events', 'debug'] as const).map((value, index) => <button role="tab" key={value} aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{['节点', '运行', '事件', '调试'][index]}</button>)}</div><div className="run-properties-body">
     <p>Run #{run.id} · Workflow v{run.workflow_revision}</p>
-    {tab === 'node' && <><h4>{selectedNode?.name || selected}</h4><p>{nodeLabels[states[selected] || 'idle'] || states[selected]}</p><p>依赖：{selectedNode?.deps?.join('、') || '无'}</p><p>{selectedNode?.node_type === 'human' || selectedNode?.node_type === 'human_gate' || selectedNode?.requires_human ? '人工节点 · 不会调用 Agent' : `Agent：${selectedNode?.agent_id || '未提供'} · ${selectedNode?.model || '未提供'}`}</p>{selectedIsGate && selectedGate && <section className="run-human-gate" aria-label="人工确认"><div className="run-human-gate-head"><strong>人工确认</strong><span>{gateRefs.length} 项</span></div><p>选择上游结果后确认，勾选内容会进入下游上下文。</p>{(selectedGate.deps || []).map(id => { const candidate = run.nodes.find(node => node.node_id === id); const name = run.workflow?.nodes.find(node => node.id === id)?.name || id; return <div key={id} className="gate-candidate"><label className="dep"><input aria-label={name} type="checkbox" disabled={candidate?.status !== 'succeeded' || busy} checked={gateRefs.includes(id)} onChange={event => setGateRefs(current => event.target.checked ? [...current, id] : current.filter(ref => ref !== id))} />{name} · {nodeLabels[candidate?.status || 'idle'] || candidate?.status}</label><ResultOutput title={`查看 ${name} 的结果`} output={candidate?.output || null} /></div>; })}<div className="gate-actions"><Button type="primary" disabled={busy || !gateRefs.length} onClick={() => void action(() => appContinueRun(run.id, selectedGate.id, gateRefs, crypto.randomUUID()))}>确认并继续</Button><Button danger disabled={busy} onClick={() => void action(() => appControlRun(run.id, 'cancel', {}, crypto.randomUUID()))}>终止任务</Button></div></section>}{step === 0 && <p>尚无节点事件</p>}</>}
+    {tab === 'node' && <><h4>{selectedNode?.name || selected}</h4><p>{nodeLabels[states[selected] || 'idle'] || states[selected]}</p><p>依赖：{selectedNode?.deps?.join('、') || '无'}</p><p>{selectedNode?.node_type === 'human' || selectedNode?.node_type === 'human_gate' || selectedNode?.requires_human ? '人工节点 · 不会调用 Agent' : `Agent：${selectedNode?.agent_id || '未提供'} · ${selectedNode?.model || '未提供'}`}</p>{attempt?.progress && (attempt.progress.text || attempt.progress.execution?.reasoning || attempt.progress.execution?.steps?.length) ? <section className="run-node-progress" aria-label="节点实时过程"><strong>实时过程</strong>{attempt.progress.text && <p>{attempt.progress.text}</p>}{attempt.progress.execution?.reasoning && <p>{attempt.progress.execution.reasoning}</p>}{attempt.progress.execution?.steps?.map(tool => <span key={tool.id}><b>{tool.name}</b><em>{tool.status}</em></span>)}</section> : null}{selectedIsGate && selectedGate && <section className="run-human-gate" aria-label="人工确认"><div className="run-human-gate-head"><strong>人工确认</strong><span>{gateRefs.length} 项</span></div><p>选择上游结果后确认，勾选内容会进入下游上下文。</p>{(selectedGate.deps || []).map(id => { const candidate = run.nodes.find(node => node.node_id === id); const name = run.workflow?.nodes.find(node => node.id === id)?.name || id; return <div key={id} className="gate-candidate"><label className="dep"><input aria-label={name} type="checkbox" disabled={candidate?.status !== 'succeeded' || busy} checked={gateRefs.includes(id)} onChange={event => setGateRefs(current => event.target.checked ? [...current, id] : current.filter(ref => ref !== id))} />{name} · {nodeLabels[candidate?.status || 'idle'] || candidate?.status}</label><ResultOutput title={`查看 ${name} 的结果`} output={candidate?.output || null} /></div>; })}<div className="gate-actions"><Button type="primary" disabled={busy || !gateRefs.length} onClick={() => void action(() => appContinueRun(run.id, selectedGate.id, gateRefs, crypto.randomUUID()))}>确认并继续</Button><Button danger disabled={busy} onClick={() => void action(() => appControlRun(run.id, 'cancel', {}, crypto.randomUUID()))}>终止任务</Button></div></section>}{step === 0 && <p>尚无节点事件</p>}</>}
     {tab === 'run' && <><p>{runLabels[run.status]} · {taskProgress(run).done} / {taskProgress(run).total} 个节点完成</p><label>重放进度<input type="range" aria-label="重放进度" min={0} max={events.length} value={currentStep} onChange={event => { setStep(Number(event.target.value)); setPlaying(false); }} /></label><p>{currentStep} / {events.length} 个已记录事件</p><div className="task-api-actions"><Button onClick={() => { setStep(0); setPlaying(false); }}>从头重放</Button><Button disabled={!currentStep} onClick={() => { setPlaying(false); setStep(currentStep - 1); }}>上一步</Button><Button disabled={currentStep >= events.length} onClick={() => { setPlaying(false); setStep(currentStep + 1); }}>下一步</Button><Button onClick={() => { setStep(null); setPlaying(false); }}>返回最新</Button></div><p>重放与拖动仅调整查看方式。</p></>}
     {tab === 'events' && <ol>{events.filter(e => e.nodeId === selected).map((event, index) => <li key={index}>{event.label} · {event.time || '未提供时间'}</li>)}</ol>}
     {error && <p role="alert">{error}</p>}

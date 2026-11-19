@@ -55,7 +55,7 @@ function normalizeTemplate(value: unknown): ClientTemplate {
   };
 }
 export function loadTemplate(): ClientTemplate { try { return normalizeTemplate(JSON.parse(localStorage.getItem('hexa.client.template') || '')); } catch { return defaultTemplate; } }
-export function Templates({ template, onSave, onUse, onBack, persist = true, mode = 'template', agents = [] }: { template: ClientTemplate; onSave: (template: ClientTemplate) => void | Promise<void>; onUse: () => void; onBack?: () => void; persist?: boolean; mode?: 'task' | 'template'; agents?: AppAgent[] }) {
+export function Templates({ template, onSave, onUse, onBack, persist = true, mode = 'template', agents = [], taskSaveLabel = '保存任务流程' }: { template: ClientTemplate; onSave: (template: ClientTemplate) => void | Promise<void>; onUse: () => void; onBack?: () => void; persist?: boolean; mode?: 'task' | 'template'; agents?: AppAgent[]; taskSaveLabel?: string }) {
   const [draft, setDraft] = useState(template);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -298,7 +298,7 @@ export function Templates({ template, onSave, onUse, onBack, persist = true, mod
       </div>
       <div className="header-actions">
         {mode === 'template' && <Button disabled={saving} onClick={onUse}>使用已保存版本</Button>}
-        <Button type="primary" loading={saving} onClick={() => void save()}>{mode === 'task' ? '保存任务流程' : '保存模板新版本'}</Button>
+        <Button type="primary" loading={saving} onClick={() => void save()}>{mode === 'task' ? taskSaveLabel : '保存模板新版本'}</Button>
       </div>
     </header>
     {error && <p className="error-banner" role="alert">{error}</p>}

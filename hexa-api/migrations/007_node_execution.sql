@@ -1,0 +1,2 @@
+ALTER TABLE node_runs ADD COLUMN IF NOT EXISTS partial_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE node_runs ADD COLUMN IF NOT EXISTS execution_json TEXT;

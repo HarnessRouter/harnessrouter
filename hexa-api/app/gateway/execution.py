@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 
+def safe_execution(details, secrets=()):
+    """Only public summary and tool identity/state cross the persistence boundary."""
+    from app.tasks.domain import redact
+    return redact({
+        'reasoning': str(details.get('reasoning') or '')[:32000],
+        'steps': [{key: str(step.get(key) or '')[:255 if key != 'status' else 64]
+                   for key in ('id', 'name', 'status')}
+                  for step in (details.get('steps') or [])[:100] if isinstance(step, dict)],
+    }, secrets)
+
+
 class PublicExecution:
     def __init__(self):
         self.reasoning = ''
