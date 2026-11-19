@@ -208,14 +208,20 @@ A new harness is registered in the places below, and is not finished until it ha
 column. Most of them fail SILENTLY when missed — the harness still builds, still answers, and loses
 one capability without saying so.
 
-Five do not, and it is worth knowing which, because they are the cheapest ones to get right: the
+Seven do not, and it is worth knowing which, because they are the cheapest ones to get right: the
 console's backend union type fails the TYPE-CHECK (the only one a compiler will find for you), and
-four fail in the TEST SUITE — `test_install_uid.py` on point 18, `test_console_placeholders.py` when
+six fail in the TEST SUITE — `test_install_uid.py` on point 18, `test_console_placeholders.py` when
 the console's placeholder list is not the catalog's own, `test_gpt_6_2.py` on the per-base defaults
-it pins, and `test_muse_wonder.py` on the count of bases offering the Meta family. Run the suite
-before reading the rest of this list as the whole of the work: on the base added on 2026-11-18 those
-four were the only registration points missed, and all four were named by a failing test rather than
-by a column.
+it pins, `test_muse_wonder.py` on the count of bases offering the Meta family, and the two written
+when points 19 and 20 were added, `test_guide_provider_table.py` and `test_readme_base_list.py`,
+each holding its page to the source of truth it is derived from. Run the suite before reading the
+rest of this list as the whole of the work: on the base added on 2026-11-18 those four were the only
+registration points missed, and all four were named by a failing test rather than by a column.
+
+The last two points are a pattern worth naming: both are PAGES, both were missing for a whole batch,
+and neither broke anything. A documentation point is registered the same way a code one is — derived
+from the source of truth in the list above, and held there by a test — or it is not registered at
+all, because nothing will ever tell you.
 
 **The runner** — `runner/server.py`:
 
@@ -301,6 +307,13 @@ and need no edit — they were hand-written lists once, and each silently missed
     decide which key to buy is told the base cannot be driven at all. The wiring in point 10 is the
     source of truth, so the row list is derived from it, and `custom` carries the format the base
     speaks (point 11).
+20. `README.md`'s "N harness bases today" sentence: the base's label among the names, and the count
+    kept with them. Nothing fails when it is missing — the base installs, the console offers it, and
+    the first page anyone reads says the product does not have it. Being opt-in is not a reason to
+    leave it out: Roder is opt-in and was added to this sentence in the pull request that added it
+    (#588), while the base added on 2026-11-18 was not, which is how this point was found — on the
+    day its own pull request was opened. `_BASE_CATALOG` (point 9) is the source of truth, and
+    `gateway/tests/test_readme_base_list.py` holds the sentence to it in both directions.
 
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.
