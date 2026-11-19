@@ -8,7 +8,7 @@ The run started on v0.13.5 and finished on v0.13.13. Every release between them 
 
 ## The jiuwenswarm backend: JiuwenSwarm (workswarm 0.2.8), its columns and its dimensions
 
-**Where the five-step order stands** (the order itself is in
+**Where the six-step order stands** (the order itself is in
 [harness-verification.md](harness-verification.md)): step 1 the Vercel column, 58 pairs / 290 of 290;
 step 2 the custom-harness dimension, a pass after the two faults it found were fixed; step 3 the
 plugin matrix, 5 of 5 columns after two more; step 4 the family tour, 13 of 13 families in one
@@ -21,7 +21,7 @@ written up below where it was found.
 
 Added 2026-11-18. Everything below was measured against the published PyPI wheel — against the
 Vercel AI Gateway through a recording proxy, then through the runner's own builder and relay, and
-then as **step 1 of the five-step order in [harness-verification.md](harness-verification.md): the
+then as **step 1 of the six-step order in [harness-verification.md](harness-verification.md): the
 support matrix on the first provider**, against a locally built image of this branch.
 
 **The column: 58 pairs, 290 of 290 scenario runs passed** (Vercel, `EXPECT_CONNECTION=vercel`,
@@ -343,6 +343,9 @@ What would reopen it: a one-shot turn subcommand on its own published bin —
 `durable-harness run --session <id> --model <gateway-id>` writing NDJSON to stdout, on a `virtual()`
 workspace under `WORKFLOW_TARGET_WORLD=local`. Even then it would be a durability VARIANT of the
 claude, codex, opencode and pi rows rather than a new base, which is a maintainer's call.
+
+Its row, with the twenty other harnesses reviewed and not supported and the one concrete artifact
+that would reopen each, is in [harness-candidates.md](harness-candidates.md).
 
 ## GPT-6.2 Astra and Sol (2026-11-17, the day OpenAI released them)
 
