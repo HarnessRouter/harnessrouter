@@ -57,7 +57,15 @@ BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode"
          # natively; dcode reads the claude-shaped config, which
          # carries all three. No remote column has been measured on any of them against a live
          # server yet — that is what this dimension is for.
-         "vibe", "docker-agent", "fast-agent", "dcode", "roder"]
+         "vibe", "docker-agent", "fast-agent", "dcode", "roder",
+         # 2026-11-18, batch 5. jiuwenswarm's own loader takes stdio, sse, http and
+         # streamable-http (`build_mcp_server_config`), so it is in no bridged column — and an
+         # entry whose transport that function cannot read returns None and is DROPPED, which is
+         # why its writer now spells a plugin's stdio server out as stdio instead of forcing every
+         # server to the url shape. Its MCP path is also the one the judge has to be told about:
+         # with progressive tool exposure on, the server's tools are reached through `tool_search`
+         # and `tool_call`, so the tool NAMES in a turn record are the dispatchers'.
+         "jiuwenswarm"]
 NO_STDIO: set[str] = set()
 # The public probe the remote columns call: its SSE end answers PROBE-SSE-<id>, its streamable-HTTP
 # end PROBE-HTTP-<id>. Both are the same fixed server, so a wrong answer is the base, not the probe.

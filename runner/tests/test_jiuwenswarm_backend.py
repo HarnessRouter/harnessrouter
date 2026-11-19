@@ -347,6 +347,36 @@ def test_the_servers_are_asserted_as_structure_and_not_as_text(monkeypatch):
     assert servers[0]["headers"]["Authorization"] == "Bearer t0ken"
 
 
+def test_a_plugins_stdio_server_is_written_as_stdio_and_enabled(monkeypatch):
+    # A plugin package's server is a COMMAND, not a url, and `build_mcp_server_config` reads
+    # `command`/`args`/`env` only when the transport says stdio — an entry it cannot read is
+    # dropped and returns None, which is a declared server that is silently absent. The previous
+    # writer kept url servers only, so the whole plugin path went nowhere.
+    monkeypatch.setenv("HR_JIUWENSWARM_CONFIG_TEMPLATE", _template())
+    ws = _ws()
+    path, names = _jiuwenswarm_config(ws, [{"name": "fixture", "command": "/bin/server",
+                                            "args": ["--stdio", "1"], "env": {"TOKEN": "t"}}])
+    written = yaml.safe_load(path.read_text())
+    assert names == ["fixture"]
+    entry = written["mcp"]["servers"][0]
+    assert entry["transport"] == "stdio" and entry["command"] == "/bin/server"
+    assert entry["args"] == ["--stdio", "1"] and entry["env"] == {"TOKEN": "t"}
+    assert entry["enabled"] is True and "url" not in entry
+    # ...and the run document names it, because declared is not enabled on this base
+    _build(ws, mcp_servers=[{"name": "fixture", "command": "/bin/server"}])
+    assert _doc(ws)["mcp"] == ["fixture"]
+
+
+def test_an_sse_server_keeps_the_transport_it_was_declared_with(monkeypatch):
+    # This runtime has an SSE client of its own (`client_type: sse`), so relabelling one
+    # streamable-http would point its client at an endpoint that speaks neither.
+    monkeypatch.setenv("HR_JIUWENSWARM_CONFIG_TEMPLATE", _template())
+    ws = _ws()
+    path, _ = _jiuwenswarm_config(ws, [{"name": "probe", "url": "https://mcp.example/sse",
+                                        "transport": "sse"}])
+    assert yaml.safe_load(path.read_text())["mcp"]["servers"][0]["transport"] == "sse"
+
+
 def test_a_template_that_cannot_be_read_stops_the_turn(monkeypatch):
     # It does NOT fall back to a config of our own: a partial one takes `skill_tool` away, so the
     # fallback would be a turn whose declared skill is silently unreachable. A step that cannot run

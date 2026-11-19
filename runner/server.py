@@ -16093,17 +16093,32 @@ def _jiuwenswarm_config(cwd: str, mcp_servers: list[dict] | None,
     for server in (mcp_servers or []):
         name = str(server.get("name") or "").strip()
         url = str(server.get("url") or "").strip()
-        if not name or not url:
+        command = str(server.get("command") or "").strip()
+        if not name or not (url or command):
             continue
-        # Its loader takes stdio, sse, http and streamable-http; the harness's url servers are
-        # streamable-http here, and its own client reads `headers` into the auth headers the remote
-        # server sees (its source says so in as many words: resolved headers MUST populate
-        # auth_headers "or the remote MCP gets no Authorization and silently returns 0 tools").
-        entry = {"name": name, "transport": "streamable-http", "url": url, "enabled": True,
-                 "timeout_s": 60}
-        headers = _mcp_headers(server)
-        if headers:
-            entry["headers"] = headers
+        # Its loader takes stdio, sse, http and streamable-http (`build_mcp_server_config`), and the
+        # transport decides which half of that entry it reads: `command`/`args`/`env` for stdio,
+        # `url`/`headers` otherwise. An entry whose transport it does not know is DROPPED (that
+        # function returns None), which would be a declared server that is silently absent — so a
+        # plugin's stdio server is written as stdio and nothing is forced to the url shape.
+        if not url:
+            entry = {"name": name, "transport": "stdio", "command": command,
+                     "args": [str(a) for a in (server.get("args") or [])],
+                     "enabled": True, "timeout_s": 60}
+            if isinstance(server.get("env"), dict):
+                entry["env"] = {str(k): str(v) for k, v in server["env"].items()}
+        else:
+            # Its own client reads `headers` into the auth headers the remote server sees (its
+            # source says so in as many words: resolved headers MUST populate auth_headers "or the
+            # remote MCP gets no Authorization and silently returns 0 tools"). An SSE server keeps
+            # its own transport, which this runtime has a client for, rather than being relabelled.
+            declared = str(server.get("transport") or "").strip().lower()
+            entry = {"name": name,
+                     "transport": "sse" if declared == "sse" else "streamable-http",
+                     "url": url, "enabled": True, "timeout_s": 60}
+            headers = _mcp_headers(server)
+            if headers:
+                entry["headers"] = headers
         servers.append(entry)
         names.append(name)
     if servers:
@@ -16339,8 +16354,10 @@ def _build_jiuwenswarm(provider: str, auth: Auth, model: str, prompt: str, cwd: 
     # Only this base's own tools are named in the policy: an id matching nothing is dropped on the
     # way through and disables nothing while the console reports it as off.
     denied = [t for t in ALL_JIUWENSWARM_TOOLS if t in {str(x) for x in (tools_disabled or ())}]
+    # Which servers this turn has at all, by the same test the config writer applies (a url OR a
+    # stdio command): the run document names them one by one, because DECLARED IS NOT ENABLED here.
     servers = [str(s.get("name") or "") for s in (mcp_servers or [])
-               if s.get("name") and s.get("url")]
+               if s.get("name") and (s.get("url") or s.get("command"))]
     # Which door this turn's policy goes through, and whether it can go through one at all
     # (_JW_TOOL_DOORS).
     allowed: list[str] | None = None
@@ -16361,7 +16378,9 @@ def _build_jiuwenswarm(provider: str, auth: Auth, model: str, prompt: str, cwd: 
                 "same ability list its MCP server configs live in and dies on them, and only "
                 "fetch_webpage can be withheld in the config instead. Switch the tool back on for "
                 "this harness, or take the MCP server off it."))
-    _jiuwenswarm_config(cwd, mcp_servers, toolkits)
+    # The run document names exactly the servers the config actually wrote, so the two can never
+    # disagree about what this turn has.
+    _, servers = _jiuwenswarm_config(cwd, mcp_servers, toolkits)
     env["JIUWENSWARM_DATA_DIR"] = str(_jiuwenswarm_home(cwd))
     # Its OpenAI-compatible client's own four variables, read by the config template's placeholders.
     env["API_BASE"] = (auth.base_url or "").rstrip("/")
