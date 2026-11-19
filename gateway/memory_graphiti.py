@@ -16,7 +16,8 @@ against that server on 2026-11-04.
       `hr_read:<node>` taken in the background (11-06, so each system is used as it is built to be): the entities
       and facts it finds come from the stated record, never from the copy, which is not shown. Graphiti's merging
       can rewrite a node's summary, so a stated node keeps its words in `hr_text`. Revising re-reads; forgetting
-      or erasing it takes the copy, and what came only from it, away.
+      or erasing it takes the copy, and what came only from it, away. A recall answers a fact read from a stated
+      record as that record (_as_stated).
   holds    = Graphiti's own: a new fact that contradicts an old one closes it (`invalid_at`), and the old
       one stays readable. A closed fact is `superseded`, and `time.valid_to` says when.
   forget   = a fact closed now; a stated node marked. erase = deleted. An erased fact's words can still be in
@@ -589,5 +590,30 @@ class Graphiti(mp.Provider):
         rows = self._facts_out(mid, d.get("edges") or [], copies) + [self._node_out(mid, n, copies) for n in d.get("nodes") or []] + \
             [self._episode_out(mid, x) for x in d.get("episodes") or [] if not self._is_copy(x)]
         why = [w for w, on in (("query", query), ("text", text), ("filters", later)) if on]
-        kept = [x for x in rows if keep(x)]
+        kept = await self._as_stated(mid, [x for x in rows if keep(x)], keep)
         return {"results": [{"record": x, "memory_id": mid, "score": round(1 - i / max(len(kept), 1), 4), "why": why} for i, x in enumerate(kept)][:limit], "degraded": degraded, "abstain": False}
+
+    async def _as_stated(self, mid: str, rows: list[dict], keep) -> list[dict]:
+        """A fact Graphiti read from a stated record's copy says what that record says, and the stated record is the
+        one a reader acts on: it keeps its writer's words, its references, and a disagreement it is part of. So such a
+        fact is answered as the stated record it came from, at the fact's place, each record once. A hit on one side
+        of a disagreement then brings the other (§6.3), which a fact Graphiti drew from it, carrying no `contradicts`,
+        did not (UHP conformance ME-12). A fact that came from an episode, even in part, stays as it is, and so does
+        one whose stated record can't be read or is not one this recall keeps."""
+        found = {x["id"]: x for x in rows}
+        out: list[dict] = []
+        placed: set[str] = set()
+        for x in rows:
+            src = [str(r.get("record_id") or "") for r in x.get("references") or [] if r.get("rel") == "derived_from"]
+            if x["id"].startswith(EDGE) and src and all(s.startswith(NODE) for s in src):
+                stated = [found.get(s) or await self.get(mid, s) for s in src]
+                if all(s and (s.get("written_by") or {}).get("kind") != "provider" and keep(s) for s in stated):
+                    for s in stated:
+                        if s["id"] not in placed:
+                            placed.add(s["id"])
+                            out.append(s)
+                    continue
+            if x["id"] not in placed:
+                placed.add(x["id"])
+                out.append(x)
+        return out
