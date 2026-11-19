@@ -307,18 +307,25 @@ export function patchSessionMember(patch: Partial<Member>): void {
 }
 
 /** Re-fetch the principal and merge it into the stored session so getSession()
- *  reflects server-side changes (e.g. avatar). Offline-tolerant. */
+ *  reflects server-side changes (e.g. avatar). Offline-tolerant. The merge goes
+ *  onto the session that is current when the answer lands, not the one read
+ *  before the request: an organization switch made in the meantime has changed
+ *  the token, and writing the earlier copy back would undo it. A session that
+ *  changed underneath is left alone. */
 export async function refreshMe(): Promise<Session | null> {
-  const current = getSession();
-  if (!current) return null;
+  const startedWith = getSession();
+  if (!startedWith) return null;
+  let fresh: { member: Member; orgId: string | null; orgs: Org[] };
   try {
-    const fresh = await fetchMe();
-    const next: Session = { ...current, member: fresh.member, orgs: fresh.orgs ?? current.orgs };
-    setSession(next);
-    return next;
+    fresh = await fetchMe();
   } catch {
-    return current;
+    return getSession();
   }
+  const latest = getSession();
+  if (!latest || latest.token !== startedWith.token) return latest;
+  const next: Session = { ...latest, member: fresh.member, orgs: fresh.orgs ?? latest.orgs };
+  setSession(next);
+  return next;
 }
 
 /**
@@ -333,14 +340,18 @@ export async function refreshMe(): Promise<Session | null> {
  * reconciled session, or null if not authenticated.
  */
 export async function reconcileSession(): Promise<Session | null> {
-  const current = getSession();
-  if (!current) return null;
+  const startedWith = getSession();
+  if (!startedWith) return null;
   let fresh: { member: Member; orgId: string | null; orgs: Org[] };
   try {
     fresh = await fetchMe();
   } catch {
-    return current; // offline or token issue, don't destroy the session here
+    return getSession(); // offline or token issue, don't destroy the session here
   }
+  // Same rule as refreshMe: the answer belongs to the session the request was made
+  // with; if the user switched organization meanwhile, that newer session stands.
+  const current = getSession();
+  if (!current || current.token !== startedWith.token) return current;
   const orgs = fresh.orgs ?? [];
   const stillValid = !!current.orgId && orgs.some((o) => o.id === current.orgId);
 
