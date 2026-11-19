@@ -96,6 +96,23 @@ def test_with_limit_one_the_best_hit_is_the_stated_record_and_brings_the_other_s
     assert rows == [(mg.NODE + UY, 1.0, ["query"]), (mg.NODE + UX, None, ["contradicts"])]     # ME-12, as the suite reads it
 
 
+def test_a_record_the_server_revised_on_its_writers_behalf_is_still_the_stated_record(monkeypatch):
+    # Writing Y, which contradicts X, adds the mirror reference to X as a revise by the server on the member's behalf,
+    # so X's latest version is written_by the provider. A fact drawn from X that ranks first is still answered as X,
+    # and X brings Y. Judging the record by its writer left that fact answered alone (ME-12, 2 recalls in 4 live).
+    by_server = {"kind": "provider", "id": "graphiti", "on_behalf_of": "member:ada@example.com"}
+    revised = dict(X, attributes={**X["attributes"], "hr_version": 2, "hr_writer": json.dumps(by_server)})
+    _server(monkeypatch, edges=[_edge("e1", SIGNED, [EPX])], nodes=[Y, revised, ENTITY], stored={UX: revised, UY: Y, UN: ENTITY})
+    g = mg.Graphiti("http://graphiti.test", "k")
+
+    async def provider_of(_m):
+        return g
+    monkeypatch.setattr(mp, "provider_of", provider_of)
+    res = run(mp.recall("org", [{"id": MID, "provider": "graphiti"}], {"query": "did Hollin sign the lease?", "limit": 1}))
+    rows = [(r["record"]["id"], r["score"], r["why"]) for r in res["results"]]
+    assert rows == [(mg.NODE + UX, 1.0, ["query"]), (mg.NODE + UY, None, ["contradicts"])]
+
+
 def test_a_stated_record_the_search_did_not_answer_is_read_for_its_fact(monkeypatch):
     calls = _server(monkeypatch, edges=[_edge("e1", NEVER, [EPY])], nodes=[ENTITY])
     assert _recall({"query": "Hollin lease", "limit": 5}) == [(mg.NODE + UY, "fact"), (mg.NODE + UN, "entity")]
