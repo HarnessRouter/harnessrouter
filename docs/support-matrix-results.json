@@ -232980,5 +232980,1289 @@
    "kept": "hsess847934028b4141a7a51c62618cb65680",
    "deleted": 0
   }
+ },
+ "byok|jiuwenswarm|claude-sonnet-5": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "claude-sonnet-5",
+  "at": "2026-11-19T01:21:01.694Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "Reply with exactly: M1-claude-sonnet-5 M1-claude-sonnet-5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 9.4 s",
+   "answer": "M1-claude-sonnet-5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess636840910e1b46af842e143c6fc43520",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.75,
+   "tail": "Reply with exactly: M2-claude-sonnet-5 M2-claude-sonnet-5 JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 8.1 s",
+   "answer": "M2-claude-sonnet-5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.75,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.76,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 10.7 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-sonnet-5 JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 7.7 s",
+   "answer": "M1-claude-sonnet-5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess636840910e1b46af842e143c6fc43520\",\"checkpoint_sha\":\"1249c12e84f0d875dbbccd857cddadd605e17e63f4e8187d9b2d6a240e3e9fe0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "anthropic/claude-sonnet-5",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 135851,
+   "cache_read": 49325,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|gemini-3.5-flash": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "gemini-3.5-flash",
+  "at": "2026-11-19T01:22:11.466Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.75,
+   "tail": "Reply with exactly: M1-gemini-3.5-flash M1-gemini-3.5-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 9.5 s",
+   "answer": "M1-gemini-3.5-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessdc9cbf2eb8a443d88c5e135dda4d405c",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M2-gemini-3.5-flash M2-gemini-3.5-flash JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 8.1 s",
+   "answer": "M2-gemini-3.5-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u51c6\u5907\u5728\u5f53\u524d\u9879\u76ee\u76ee\u5f55\u4e0b\u521b\u5efa\u540d\u4e3a hello-jiuwenswarm.txt \u7684\u6587\u4ef6\uff0c\u5e76\u5199\u5165\u5185\u5bb9 HELLO\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE. txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 14.7 s",
+   "answer": "\u6211\u51c6\u5907\u5728\u5f53\u524d\u9879\u76ee\u76ee\u5f55\u4e0b\u521b\u5efa\u540d\u4e3a hello-jiuwenswarm.txt \u7684\u6587\u4ef6\uff0c\u5e76\u5199\u5165\u5185\u5bb9 HELLO\u3002\n\nDONE.",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.81,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.5-flash JiuwenSwarm \u00b7 gemini-3.5-flash \u00b7 Done in 9.4 s",
+   "answer": "M1-gemini-3.5-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdc9cbf2eb8a443d88c5e135dda4d405c\",\"checkpoint_sha\":\"f83988123a78c8da3e9613cb11f2e66083fc38e9b60ff78ab67f158ca1bf5861\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "google/gemini-3.5-flash",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 93293,
+   "cache_read": 31200,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|grok-4.5": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "grok-4.5",
+  "at": "2026-11-19T01:23:27.144Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M1-grok-4.5 M1-grok-4.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 9.1 s",
+   "answer": "M1-grok-4.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessbc9ea39b7227451a93fc7f5d75ef129d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-grok-4.5 M2-grok-4.5 JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 8.2 s",
+   "answer": "M2-grok-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.79,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6b63\u5728\u521b\u5efa hello-jiuwenswarm.txt\u3002 Edited hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 10.8 s",
+   "answer": "\u6b63\u5728\u521b\u5efa `hello-jiuwenswarm.txt`\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.77,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-grok-4.5 JiuwenSwarm \u00b7 grok-4.5 \u00b7 Done in 8.8 s",
+   "answer": "M1-grok-4.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessbc9ea39b7227451a93fc7f5d75ef129d\",\"checkpoint_sha\":\"0b9e684bd24f7425aa216bad5f97692e3d02bda3a34be48c534296e43ef6d180\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "spacexai/grok-4.5",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 84571,
+   "cache_read": 47360,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|muse-spark-1.1": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "muse-spark-1.1",
+  "at": "2026-11-19T01:24:51.771Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.71,
+   "tail": "Reply with exactly: M1-muse-spark-1.1 M1-muse-spark-1.1 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 10.9 s",
+   "answer": "M1-muse-spark-1.1",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessb0bd20aa56554a898ef71559c8843180",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M2-muse-spark-1.1 M2-muse-spark-1.1 JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 7.4 s",
+   "answer": "M2-muse-spark-1.1",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.65,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.1 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.78,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6b63\u5728\u521b\u5efa hello-jiuwenswarm.txt \u5e76\u5199\u5165 HELLO\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 12.4 s",
+   "answer": "\u6b63\u5728\u521b\u5efa `hello-jiuwenswarm.txt` \u5e76\u5199\u5165 HELLO\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.73,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-muse-spark-1.1 JiuwenSwarm \u00b7 muse-spark-1.1 \u00b7 Done in 8.7 s",
+   "answer": "M1-muse-spark-1.1",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb0bd20aa56554a898ef71559c8843180\",\"checkpoint_sha\":\"de38b1cbd7605cc2c468d7f3c585ec922d241c23a74249e8f96cf2995d803944\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "meta/muse-spark-1.1",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 92352,
+   "cache_read": 36533,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|deepseek-v4-flash": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "deepseek-v4-flash",
+  "at": "2026-11-19T01:26:22.321Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.66,
+   "tail": "Reply with exactly: M1-deepseek-v4-flash M1-deepseek-v4-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 7.6 s",
+   "answer": "M1-deepseek-v4-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess5f06d2e6319549a9b0cf47fd420d59a9",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-deepseek-v4-flash M2-deepseek-v4-flash JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 7.3 s",
+   "answer": "M2-deepseek-v4-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.4 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.76,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 9.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-deepseek-v4-flash JiuwenSwarm \u00b7 deepseek-v4-flash \u00b7 Done in 7.2 s",
+   "answer": "M1-deepseek-v4-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess5f06d2e6319549a9b0cf47fd420d59a9\",\"checkpoint_sha\":\"2a93b3a5d7a7916e37df8c62aac9032e5d47a09a775fdf14fe255309289b08f3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "deepseek/deepseek-v4-flash",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 76386,
+   "cache_read": 54656,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|kimi-k3": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "kimi-k3",
+  "at": "2026-11-19T01:27:28.744Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 12.15,
+   "tail": "Reply with exactly: M1-kimi-k3 M1-kimi-k3 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 9.2 s",
+   "answer": "M1-kimi-k3",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessec5ffde9857a4a77bcaf857504ba5232",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "Reply with exactly: M2-kimi-k3 M2-kimi-k3 JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 7.6 s",
+   "answer": "M2-kimi-k3",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 11.0 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-kimi-k3 JiuwenSwarm \u00b7 kimi-k3 \u00b7 Done in 8.1 s",
+   "answer": "M1-kimi-k3",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessec5ffde9857a4a77bcaf857504ba5232\",\"checkpoint_sha\":\"a463444a7a49bc742b1645c3da465b9dc0194f5bffe02d656a9e3449464e449b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "moonshotai/kimi-k3",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 35263,
+   "cache_read": 87808,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|qwen3.8-flash": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "qwen3.8-flash",
+  "at": "2026-11-19T01:28:36.662Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.74,
+   "tail": "Reply with exactly: M1-qwen3.8-flash M1-qwen3.8-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 11.2 s",
+   "answer": "M1-qwen3.8-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess811c20a1db2d4c23b3b1a5c91bde63f0",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.75,
+   "tail": "Reply with exactly: M2-qwen3.8-flash M2-qwen3.8-flash JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 11.2 s",
+   "answer": "M2-qwen3.8-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.77,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 8.2 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.93,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 18.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.83,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen3.8-flash JiuwenSwarm \u00b7 qwen3.8-flash \u00b7 Done in 10.8 s",
+   "answer": "M1-qwen3.8-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess811c20a1db2d4c23b3b1a5c91bde63f0\",\"checkpoint_sha\":\"8b67882bf39f0ac7dbe5a59eb20fb31fb81684f88367eb3621b1d88a9a72924a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "alibaba/qwen3.8-flash",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 32288,
+   "cache_read": 99968,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|glm-5.3-flash": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "glm-5.3-flash",
+  "at": "2026-11-19T01:29:58.612Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M1-glm-5.3-flash M1-glm-5.3-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 8.2 s",
+   "answer": "M1-glm-5.3-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess9271e56c03164f7eb853064813e7e4db",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.75,
+   "tail": "Reply with exactly: M2-glm-5.3-flash M2-glm-5.3-flash JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 7.5 s",
+   "answer": "M2-glm-5.3-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.74,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 8.3 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.93,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 13.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.79,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-glm-5.3-flash JiuwenSwarm \u00b7 glm-5.3-flash \u00b7 Done in 8.8 s",
+   "answer": "M1-glm-5.3-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess9271e56c03164f7eb853064813e7e4db\",\"checkpoint_sha\":\"7c8fa90e17848ae61e40399d69a5a17d0881cefe6ca7daeb83e73de69a178237\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "zai/glm-5.3-flash",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 53816,
+   "cache_read": 73856,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|mistral-medium-3.5": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "mistral-medium-3.5",
+  "at": "2026-11-19T01:31:08.470Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "Reply with exactly: M1-mistral-medium-3.5 M1-mistral-medium-3.5 md JIUWENSWARM.md MD JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 11.7 s",
+   "answer": "M1-mistral-medium-3.5",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessb7bd20bd7c534e85afa4e8c1b3689d13",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.7,
+   "tail": "Reply with exactly: M2-mistral-medium-3.5 M2-mistral-medium-3.5 JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 10.8 s",
+   "answer": "M2-mistral-medium-3.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.72,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 8.2 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.79,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 14.0 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.79,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-mistral-medium-3.5 JiuwenSwarm \u00b7 mistral-medium-3.5 \u00b7 Done in 11.8 s",
+   "answer": "M1-mistral-medium-3.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb7bd20bd7c534e85afa4e8c1b3689d13\",\"checkpoint_sha\":\"d9177c088b0a265dbce0c46b99477790a9e41565f8f982a121bf707ca40edef8\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "mistral/mistral-medium-3.5",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 65848,
+   "cache_read": 69888,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|step-3.7-flash": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "step-3.7-flash",
+  "at": "2026-11-19T01:32:27.214Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.7,
+   "tail": "Reply with exactly: M1-step-3.7-flash M1-step-3.7-flash md JIUWENSWARM.md MD JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 12.6 s",
+   "answer": "M1-step-3.7-flash",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessd211c4d5e7884462bf2e51e128429138",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.76,
+   "tail": "Reply with exactly: M2-step-3.7-flash M2-step-3.7-flash JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 11.3 s",
+   "answer": "M2-step-3.7-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.87,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 16.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-step-3.7-flash JiuwenSwarm \u00b7 step-3.7-flash \u00b7 Done in 11.9 s",
+   "answer": "M1-step-3.7-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd211c4d5e7884462bf2e51e128429138\",\"checkpoint_sha\":\"de576e8dae7644157a59a140c12569f9f93e35c6e0e64399b8d571be8d7a7b3f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "stepfun/step-3.7-flash",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 69265,
+   "cache_read": 61952,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|hunyuan-4-preview": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "hunyuan-4-preview",
+  "at": "2026-11-19T01:33:51.827Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.69,
+   "tail": "Reply with exactly: M1-hunyuan-4-preview M1-hunyuan-4-preview md JIUWENSWARM.md MD JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 12.8 s",
+   "answer": "M1-hunyuan-4-preview",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsessf158edaba58248ddbd66a42b251349b3",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.8,
+   "tail": "Reply with exactly: M2-hunyuan-4-preview M2-hunyuan-4-preview JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 11.2 s",
+   "answer": "M2-hunyuan-4-preview",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.75,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 44.04,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. Created a file, ran 3 commands +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 41.0 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.77,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-hunyuan-4-preview JiuwenSwarm \u00b7 hunyuan-4-preview \u00b7 Done in 13.9 s",
+   "answer": "M1-hunyuan-4-preview",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessf158edaba58248ddbd66a42b251349b3\",\"checkpoint_sha\":\"54ce38b25d85eddcb4038b496f2d18186301fa71df04de5a6d4f7781851af149\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "tencent/hy4-preview",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 13494,
+   "cache_read": 181632,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|nemotron-3-super": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "nemotron-3-super",
+  "at": "2026-11-19T01:35:43.785Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M1-nemotron-3-super M1-nemotron-3-super md JIUWENSWARM.md MD JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 7.6 s",
+   "answer": "M1-nemotron-3-super",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess7e4ad13c052a40b6a012c288060896a8",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M2-nemotron-3-super M2-nemotron-3-super JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 7.8 s",
+   "answer": "M2-nemotron-3-super",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-5.4-mini",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Reply with exactly: M3-gpt-5.4-mini M3-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.77,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. I will create the file hello-jiuwenswarm.txt containing exactly \"HELLO\" and then reply DONE. Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 11.0 s",
+   "answer": "I will create the file hello-jiuwenswarm.txt containing exactly \"HELLO\" and then reply DONE.\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.76,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-nemotron-3-super JiuwenSwarm \u00b7 nemotron-3-super \u00b7 Done in 8.1 s",
+   "answer": "M1-nemotron-3-super",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess7e4ad13c052a40b6a012c288060896a8\",\"checkpoint_sha\":\"474528b88624b69f23bf394ae8e4f1761c5d2e3b36bc6269abf47d02119f4432\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "nvidia/nemotron-3-super-120b-a12b",
+   "openai/gpt-5.4-mini"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-5.4-mini"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 125306,
+   "cache_read": 16000,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "byok|jiuwenswarm|gpt-5.4-mini": {
+  "provider": "byok",
+  "harness": "jiuwenswarm",
+  "model": "gpt-5.4-mini",
+  "at": "2026-11-19T01:40:03.819Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.62,
+   "tail": "Reply with exactly: M1-gpt-5.4-mini M1-gpt-5.4-mini md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.6 s",
+   "answer": "M1-gpt-5.4-mini",
+   "turn_files": [
+    "JIUWENSWARM.md"
+   ],
+   "why": ""
+  },
+  "sid": "hsess421ca6633ed249e9833da0ab4a8d12fb",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.67,
+   "tail": "Reply with exactly: M2-gpt-5.4-mini M2-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.1 s",
+   "answer": "M2-gpt-5.4-mini",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-sonnet-5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.68,
+   "tail": "Reply with exactly: M3-claude-sonnet-5 M3-claude-sonnet-5 JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 7.7 s",
+   "answer": "M3-claude-sonnet-5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.83,
+   "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5148\u521b\u5efa\u6587\u4ef6\u5e76\u5199\u5165\u6307\u5b9a\u5185\u5bb9\u3002 Created hello-jiuwenswarm.txt +1 \u22120 DONE txt hello-jiuwenswarm.txt TXT JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 10.5 s",
+   "answer": "\u6211\u5148\u521b\u5efa\u6587\u4ef6\u5e76\u5199\u5165\u6307\u5b9a\u5185\u5bb9\u3002\n\nDONE",
+   "turn_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "why": "",
+   "files": [
+    "JIUWENSWARM.md",
+    "hello-jiuwenswarm.txt"
+   ],
+   "record_files": [
+    "hello-jiuwenswarm.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 7.7 s",
+   "answer": "M1-gpt-5.4-mini",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess421ca6633ed249e9833da0ab4a8d12fb\",\"checkpoint_sha\":\"72f43322f7a94fccfcf9ca29d229102de41e854b89d407c59d53f1800b334e7e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "byok",
+  "connections": [
+   "byok"
+  ],
+  "served": [
+   "openai/gpt-5.4-mini",
+   "anthropic/claude-sonnet-5"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "anthropic/claude-sonnet-5"
+  ],
+  "foreign": [],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 64064,
+   "cache_read": 67712,
+   "turns_with_usage": 5
+  },
+  "deleted": 200,
+  "first_try": {
+   "first": {
+    "ok": true,
+    "status": "completed",
+    "pill": "done",
+    "s": 14.04,
+    "tail": "Reply with exactly: M1-gpt-5.4-mini M1-gpt-5.4-mini md JIUWENSWARM.md MD JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 11.0 s",
+    "answer": "M1-gpt-5.4-mini",
+    "turn_files": [
+     "JIUWENSWARM.md"
+    ],
+    "why": ""
+   },
+   "followup": {
+    "ok": true,
+    "status": "completed",
+    "pill": "done",
+    "s": 10.7,
+    "tail": "Reply with exactly: M2-gpt-5.4-mini M2-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 8.3 s",
+    "answer": "M2-gpt-5.4-mini",
+    "turn_files": [],
+    "why": ""
+   },
+   "switch": {
+    "to": "claude-sonnet-5",
+    "ok": true,
+    "status": "completed",
+    "pill": "done",
+    "s": 10.72,
+    "tail": "Reply with exactly: M3-claude-sonnet-5 M3-claude-sonnet-5 JiuwenSwarm \u00b7 claude-sonnet-5 \u00b7 Done in 8.7 s",
+    "answer": "M3-claude-sonnet-5",
+    "turn_files": [],
+    "why": ""
+   },
+   "artifact": {
+    "ok": false,
+    "status": "completed",
+    "pill": "done",
+    "s": 62.59,
+    "tail": "Create a file named hello-jiuwenswarm.txt containing exactly the word HELLO, then reply DONE. \u6211\u5c06\u521b\u5efa\u6307\u5b9a\u6587\u4ef6\u5e76\u5199\u5165\u7cbe\u786e\u5185\u5bb9\uff0c\u7136\u540e\u786e\u8ba4\u5b8c\u6210\u3002 Created a file, read a file I\u2019m unable to comply with that request. JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 10.2 s",
+    "answer": "\u6211\u5c06\u521b\u5efa\u6307\u5b9a\u6587\u4ef6\u5e76\u5199\u5165\u7cbe\u786e\u5185\u5bb9\uff0c\u7136\u540e\u786e\u8ba4\u5b8c\u6210\u3002\n\nI\u2019m unable to comply with that request.",
+    "turn_files": [],
+    "why": "no file card (files: JIUWENSWARM.md);  HELLO, then reply DONE. \u6211\u5c06\u521b\u5efa\u6307\u5b9a\u6587\u4ef6\u5e76\u5199\u5165\u7cbe\u786e\u5185\u5bb9\uff0c\u7136\u540e\u786e\u8ba4\u5b8c\u6210\u3002 Created a file, read a file I\u2019m unable to comply with that request. JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 10.2 s",
+    "files": [
+     "JIUWENSWARM.md"
+    ],
+    "record_files": [],
+    "cards_agree": true
+   },
+   "recycle": {
+    "ok": true,
+    "status": "completed",
+    "pill": "done",
+    "s": 13.88,
+    "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4-mini JiuwenSwarm \u00b7 gpt-5.4-mini \u00b7 Done in 10.5 s",
+    "answer": "M1-gpt-5.4-mini",
+    "turn_files": [],
+    "why": "",
+    "recycled": {
+     "code": 200,
+     "body": "{\"session_id\":\"hsess2ec065a036de48e1978a221ed2755f07\",\"checkpoint_sha\":\"c5edb75857e1c56da9d506e70515eee6df0129a05c3d2e1ea104df58c3a299b9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    }
+   }
+  }
  }
 }

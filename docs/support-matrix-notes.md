@@ -129,6 +129,37 @@ for, which is a fact beside the column's one retest rather than an explanation o
 answered from the environment's own copy — the module's path under the mount, `require.resolve`'s
 path, jq's version — with `installs=0` in the trace on all three and 15 s each.
 
+**Step 5, the second column: 13 pairs, 65 of 65, on a BRING-YOUR-OWN endpoint — and it is a second
+CONNECTION, not a second vendor.** The order asks for a fresh connection of a second provider, and
+the provider meant here was Google. That column cannot be run on this machine: the Google key is
+refused by Google itself — 401 `ACCESS_TOKEN_TYPE_UNSUPPORTED` on
+`generativelanguage.googleapis.com`'s native endpoint and 401 "API key not valid" on its
+OpenAI-compatible one, both measured directly with curl, so the refusal is the key's and not this
+product's. (`check.sh` reports that key as "set", which is presence, not validity.) The honest
+substitute is a different connection TYPE on an instance of its own: a `custom` endpoint in the
+OpenAI format, declaring thirteen canonical -> wire rows of its own, which reaches the runner through
+`openai-api` rather than the `tokenrouter` path the first column used, and whose model ids are the
+operator's rows rather than a vendor table. The write-up says so rather than calling it Google.
+
+| | |
+|---|---|
+| pairs / scenario runs | 13 / 65, all passed (one pair retested once) |
+| rule 1, ran where you said | `connections = ['byok']` on every row, `foreign` empty on all 13 |
+| rule 2, ran what you asked | `substituted` empty, `unlabelled` **0 turns**, and every row's `served` list is the pair's own model plus its switch partner, in the operator's own wire spelling (`anthropic/claude-sonnet-5`, `nvidia/nemotron-3-super-120b-a12b`) |
+| rule 3, cards are the stored files | the artifact row passed on all 13 |
+| tokens | 941,797 input with 877,890 cache reads (48%) |
+
+**The retest, recorded in the table:** `gpt-5.4-mini`'s artifact turn completed, the trace shows it
+created and read a file, and then the model answered "I'm unable to comply with that request" with
+no file handed back. The retest passed all five in 32 s. Not reproduced, so the cause is unmeasured;
+what is worth noting is that this is the second model-side refusal in this base's runs (hunyuan's, in
+the first column), both on turns whose prompt asks for an exact string.
+
+**This column is also what the custom-connection fix was measured on.** Before it, the same
+connection offered all 60 ids of the base's catalog as available instead of the 13 it declared, and
+sent the canonical id on the wire instead of the operator's; both halves are in the commit that
+fixed it, and the `served` column above is the evidence the rows now reach the provider.
+
 **The browser column is NOT RUN here, and the reason is the rig, not the base.** That column needs
 `BROWSER_USE_API_KEY` in the instance's environment; this machine has no such key, and the operator's
 own browser (`HR_BROWSER_CDP_URL`) takes the vendor's place with "no vendor session, no live view, no

@@ -710,6 +710,26 @@ Not run in this column, 43 pairs the provider serves that the harness did not ru
 - qwen x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - qwen x gpt-6.2-sol: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 
+## Provider: byok
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| jiuwenswarm | claude-sonnet-5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 27% of input |
+| jiuwenswarm | deepseek-v4-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 42% of input |
+| jiuwenswarm | gemini-3.5-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 25% of input |
+| jiuwenswarm | glm-5.3-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 58% of input |
+| jiuwenswarm | gpt-5.4-mini | pass | pass | pass (claude-sonnet-5) | pass | pass | byok | retested once; first try: artifact no file card (files: JIUWENSWARM.md);  HELLO, then reply DONE. 我将创建指定文件并写入精确内容，然 ; cache 51% of input |
+| jiuwenswarm | grok-4.5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 36% of input |
+| jiuwenswarm | hunyuan-4-preview | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 93% of input |
+| jiuwenswarm | kimi-k3 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 71% of input |
+| jiuwenswarm | mistral-medium-3.5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 51% of input |
+| jiuwenswarm | muse-spark-1.1 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 28% of input |
+| jiuwenswarm | nemotron-3-super | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 11% of input |
+| jiuwenswarm | qwen3.8-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 76% of input |
+| jiuwenswarm | step-3.7-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 47% of input |
+
+13 pairs, 65 of 65 scenario runs passed.
+
 ## Provider: cheetahclaws-tokenrouter
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
