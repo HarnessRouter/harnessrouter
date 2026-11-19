@@ -203,6 +203,10 @@ five scripted steps cannot judge, because each of them reads a token, a file or 
   `hermes` base the builder runs on (`setup_builder.BASE`). The message blames the key for a
   missing base — left alone here, since it belongs to that flow and not to this batch.
 
+Every column and dimension above was run BEFORE the language default changed, and they stand: each
+one is judged on a token, a produced file or a tool name, and none of those is language-bound (the
+scenario answers were Chinese at the time and passed; the fix only makes the prose match the console).
+
 **The browser column is NOT RUN here, and the reason is the rig, not the base.** That column needs
 `BROWSER_USE_API_KEY` in the instance's environment; this machine has no such key, and the operator's
 own browser (`HR_BROWSER_CDP_URL`) takes the vendor's place with "no vendor session, no live view, no
