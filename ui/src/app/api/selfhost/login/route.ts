@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   } catch {
     return Response.json(REJECT, { status: 401 });
   }
-  if (!credentialsValid(String(body.username || ''), String(body.password || ''))) {
+  if (!credentialsValid(String(body.username || '').trim(), String(body.password || ''))) {
     // A small delay costs an honest user nothing and makes online guessing tediously slow.
     await new Promise((r) => setTimeout(r, 400));
     return Response.json(REJECT, { status: 401 });

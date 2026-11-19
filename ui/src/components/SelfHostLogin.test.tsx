@@ -64,6 +64,18 @@ test('a refusal is the server’s own words, and the button can be pressed again
   expect(assign).not.toHaveBeenCalled();
 });
 
+test('surrounding username spaces are removed without changing the password', async () => {
+  fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+  await open('/start');
+  await type('sh-user', ' alice ');
+  await type('sh-pass', ' password with spaces ');
+  await submit();
+  expect(fetchMock).toHaveBeenCalledWith('/api/selfhost/login', expect.objectContaining({
+    body: JSON.stringify({ username: 'alice', password: ' password with spaces ' }),
+  }));
+  expect(assign).toHaveBeenCalledWith('/start');
+});
+
 test.each([
   ['/studio/chrn_1?test=s1', '/studio/chrn_1?test=s1'],
   ['https://evil.example/', '/start'],
