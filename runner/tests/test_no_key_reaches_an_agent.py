@@ -62,6 +62,29 @@ for _backend, _spec in sorted(server.BACKENDS.items()):
             CASES.append(pytest.param(_backend, _provider, _auth, id=f"{_backend}-{_provider}-{_label}"))
 
 
+@pytest.fixture(autouse=True)
+def _jiuwenswarm_has_its_template(monkeypatch, tmp_path_factory):
+    """jiuwenswarm's builder reads the package's own config.yaml, which only the image installs.
+
+    Without it the builder stops the turn with a 503 before any key is placed — a refusal, and so
+    not a leak, but it would take this base's eight rows out of this test wherever the 1.6 GB
+    package is absent, which is everywhere but the image: CI, a contributor's box, here. A base that
+    silently stops being checked by the credential test is the failure mode this file exists to
+    prevent, so the template is supplied the way the image supplies it and the rows run for real.
+    `${API_KEY}` is the placeholder the relay resolves, and the written config is one of the files
+    this test then reads back looking for the canary."""
+    d = tmp_path_factory.mktemp("jw-template")
+    (d / "config.yaml").write_text(json.dumps({            # JSON is YAML, and needs no yaml import
+        "progressive_tool_enabled": True,
+        "modes": {"code": {"tools": ["web_fetch_webpage", "user_todos", "skill_toolkit"]}},
+        "models": {"defaults": [{"model_client_config": {"api_base": "${API_BASE}",
+                                                         "api_key": "${API_KEY}",
+                                                         "model_name": "${MODEL_NAME}",
+                                                         "client_provider": "${MODEL_PROVIDER}"}}]},
+    }))
+    monkeypatch.setenv("HR_JIUWENSWARM_CONFIG_TEMPLATE", str(d / "config.yaml"))
+
+
 class _Proc:
     """A process that starts, says nothing and exits: what the turn would have run, recorded."""
     def __init__(self, cmd, **kw):
