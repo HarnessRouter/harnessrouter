@@ -24,7 +24,7 @@ The run started on v0.13.5 and finished on v0.13.13. Every release between them 
 
 The chat-only bases keep gpt-6.1-sol's channel refusals for 6.2-sol until that path is measured on its own. No default changed.
 
-## The Antigravity Agent, opt-in and still qualifying (2026-11-13)
+## The Antigravity Agent, opt-in (2026-11-13, measured live 2026-11-19)
 
 The `antigravity` base drives Google's managed Antigravity agent (`antigravity-preview-09-2026`)
 through the Gemini API's Interactions and Environments APIs, on the instance's Google AI Studio
@@ -77,6 +77,22 @@ environments deleted after; the recorded stream is `runner/tests/fixtures/antigr
 - There is no list of interactions (`GET /v1beta/interactions` is a 404): an interaction whose id is
   lost cannot be found again. The first probe run lost one that way; it ran in an environment the
   run then deleted, and is left at Google under its retention.
+
+**Measured live (2026-11-19)** with `scripts/support-matrix/antigravity-e2e.py --base antigravity`, on an
+instance built from this branch with a plain `docker build .` and a Google AI Studio key:
+
+- Every model (gemini-4-hydrogen, -carbon and -argon, gemini-3.8-flash, 3.6-flash and 3.5-flash-lite)
+  wrote a file that the files API read back, recalled it in a follow-up and ran code: 18 of 18. The model
+  takes no thinking level here.
+- The record names each step (Write with its file, Bash with its code); a web search's result reaches
+  the record; a harness's instructions are followed; the agent has no key to show; with every built-in
+  tool off the turn is refused before anything is sent to Google. 7 of 7, with the catalog check.
+- UHP conformance at class full (suite 2026.10.19.post11): 110 of 111. The one failure, ME-12, is the
+  memory engine's: it writes two records that contradict each other and recalls them, with no harness
+  involved. It fails on the instance's Graphiti engine and passes with Hindsight, and fails the same
+  way on the released 0.41.21 with no Antigravity base.
+- `scripts/support-matrix/ui-antigravity.mjs`, the console as a person uses it (Antigravity's mark,
+  the model menu, a first task that writes a file, a follow-up answered from it, four widths): 11 of 11.
 
 ## dsh on the runner's relay (2026-10-27, #382)
 
