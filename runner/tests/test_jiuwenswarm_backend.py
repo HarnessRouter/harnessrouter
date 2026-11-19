@@ -347,6 +347,27 @@ def test_the_servers_are_asserted_as_structure_and_not_as_text(monkeypatch):
     assert servers[0]["headers"]["Authorization"] == "Bearer t0ken"
 
 
+def test_the_answer_follows_the_console_rather_than_the_packages_own_language(monkeypatch):
+    """The template ships `preferred_language: zh` and the runtime turns it into an instruction to
+    reply in that language, so this base answered in Chinese whatever language the task was written
+    in — measured by hand in the console, where an English task came back "缺少 fetch_webpage 工具"
+    and, with this default, "I created hello-browser.txt containing exactly HELLO." A Chinese task
+    still gets a Chinese answer (measured in the same conversation): the rail is an instruction, and
+    the person's own words win."""
+    monkeypatch.setenv("HR_JIUWENSWARM_CONFIG_TEMPLATE", _template({"preferred_language": "zh"}))
+    ws = _ws()
+    path, _ = _jiuwenswarm_config(ws, [])
+    assert yaml.safe_load(path.read_text())["preferred_language"] == "en"
+    # an operator who wants the upstream behaviour says so
+    monkeypatch.setenv("HR_JIUWENSWARM_LANGUAGE", "zh")
+    path, _ = _jiuwenswarm_config(ws, [])
+    assert yaml.safe_load(path.read_text())["preferred_language"] == "zh"
+    # and a value the runtime does not take is left to the runtime, not written through
+    monkeypatch.setenv("HR_JIUWENSWARM_LANGUAGE", "fr")
+    path, _ = _jiuwenswarm_config(ws, [])
+    assert yaml.safe_load(path.read_text())["preferred_language"] == "zh"   # the template's own
+
+
 def test_a_plugins_stdio_server_is_written_as_stdio_and_enabled(monkeypatch):
     # A plugin package's server is a COMMAND, not a url, and `build_mcp_server_config` reads
     # `command`/`args`/`env` only when the transport says stdio — an entry it cannot read is

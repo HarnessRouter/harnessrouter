@@ -13,7 +13,8 @@ The run started on v0.13.5 and finished on v0.13.13. Every release between them 
 step 2 the custom-harness dimension, a pass after the two faults it found were fixed; step 3 the
 plugin matrix, 5 of 5 columns after two more; step 4 the family tour, 13 of 13 families in one
 conversation; step 5 a second column, 13 pairs / 65 of 65, on a bring-your-own endpoint rather than
-Google, whose key this machine cannot use. The environments column passes; the browser column is not
+Google, whose key this machine cannot use; step 6, the hand pass through the console, which found
+the answer language and checked the tool switch from the person's side. The environments column passes; the browser column is not
 run here and the reason is the rig. Four product faults came out of steps 2 and 3, and a fifth —
 a scripted custom connection's model rows being ignored — out of bringing step 5 up; each one is
 written up below where it was found.
@@ -169,6 +170,38 @@ the first column), both on turns whose prompt asks for an exact string.
 connection offered all 60 ids of the base's catalog as available instead of the 13 it declared, and
 sent the canonical id on the wire instead of the operator's; both halves are in the commit that
 fixed it, and the `served` column above is the evidence the rows now reach the provider.
+
+**Step 6, one pass through the console by hand** (2026-11-19, the local rig in a browser). What the
+five scripted steps cannot judge, because each of them reads a token, a file or a tool name:
+
+* **every answer came back in Chinese, whatever language the task was written in.** The package's
+  own template ships `preferred_language: zh` and its code rail turns that into an instruction to
+  reply in that language; this runner starts from that template, so an English task got a Chinese
+  reply ("缺少 fetch_webpage 工具。"). No judge here could see it: a token is the same string in
+  either language, and the family tour's deck is a file. The runner now writes `en` by default — the
+  console, this base's system prompt and JIUWENSWARM.md are English — with `HR_JIUWENSWARM_LANGUAGE`
+  for an operator who wants the upstream behaviour. Measured after the change, in the same
+  conversation: the English task answered "I created hello-browser.txt containing exactly HELLO."
+  and a Chinese follow-up ("用中文回答：…") still answered in Chinese, because the rail is an
+  instruction and the person's own words win.
+* **the tool policy, end to end, as a person does it.** The Capabilities panel lists this base's 14
+  tools with On switches and the human labels the catalog carries ("Used Fetch webpage" is how the
+  trace names a call). Switching `fetch_webpage` off and running the same task twice: with it on,
+  the trace shows the call and the answer is the page's own title ("Example Domain", 16.4 s); with
+  it off and SAVED, there is no tool row at all and the agent answers "缺少 fetch_webpage 工具"
+  (9.8 s), which is the hard allowlist from the person's side. Worth knowing for the next base: a
+  tool toggle is a DRAFT until Save — the server holds no `disabledTools` until then, which reads
+  like a policy that did not take if the panel's own "Unsaved changes" mark is missed.
+* **what else the console gets right on this base**, checked rather than assumed: the picker offers
+  it by its label, the model menu lists the 58 ids this connection serves with gpt-5.4 marked
+  default, the harness card falls back to the generic brick illustration rather than a broken image
+  (no logo is shipped for this base on purpose), the instruction file reads `JIUWENSWARM.md`, and a
+  produced file arrives as a card with a diff ("Created hello-browser.txt +1 −0") and a download.
+* **one thing that is not this base's**: on an instance that installs one base only, the
+  harness-BUILDER flow ("What should it do for your users?") answers "Connect a model key first.
+  Your setup is built with one of your models." The instance has a key; what it lacks is the
+  `hermes` base the builder runs on (`setup_builder.BASE`). The message blames the key for a
+  missing base — left alone here, since it belongs to that flow and not to this batch.
 
 **The browser column is NOT RUN here, and the reason is the rig, not the base.** That column needs
 `BROWSER_USE_API_KEY` in the instance's environment; this machine has no such key, and the operator's

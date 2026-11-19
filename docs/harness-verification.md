@@ -149,6 +149,18 @@ depends on what the last proved, so a failure found early is a failure not paid 
    nothing else (see "One provider at a time" below). A column is one connection's measurement; a
    second provider is what separates "this base works" from "this base works on that key".
 
+6. **One pass through the console BY HAND**, in a browser, after the five scripted steps are green:
+   create a harness, read the model menu, run a task, read the answer, switch a tool off, save, and
+   run a task that needs it. Every step above is judged by a script against a token, a file or a
+   tool name — true things, and blind to everything a person actually sees. The pass is quick (five
+   minutes) and it is the only step where the question is "would someone paying for this be happy
+   with what they got?" On the base this step was added for it found two things in one sitting that
+   all five scripted steps had passed over: every answer came back in Chinese whatever language the
+   task was written in (the package's own `preferred_language: zh`, which no token-matching judge
+   can see), and the tools panel's own flow — toggle, then Save — had to be walked to confirm that
+   what the console shows a person and what the server stores are the same thing. Write down what
+   the console shows for a switched-off tool: that sentence is what a customer will quote back.
+
 The other columns — browser, thinking, environments — are run when a base claims those surfaces.
 Every step's findings go to `docs/support-matrix-notes.md` under that base, including the steps that
 were NOT run, by name. A harness with step 1 green and nothing else is reported as exactly that.

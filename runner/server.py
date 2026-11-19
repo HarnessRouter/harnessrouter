@@ -16088,6 +16088,18 @@ def _jiuwenswarm_config(cwd: str, mcp_servers: list[dict] | None,
     if not isinstance(loaded, dict):
         raise HTTPException(503, "jiuwenswarm's config template is not a mapping")
     base: dict = loaded
+    # THE ANSWER'S LANGUAGE. The package's template ships `preferred_language: zh`, and its code
+    # rail turns that into an instruction to reply in that language — so this base answered in
+    # Chinese whatever language the task was written in, while every other base here answers in the
+    # task's. Found by driving the console by hand: the scripted judges read tokens and files, and a
+    # token is the same string in any language. The console, this harness's system prompt and
+    # JIUWENSWARM.md are English, so that is the default; an operator who wants the upstream
+    # behaviour sets HR_JIUWENSWARM_LANGUAGE=zh. The runtime takes `zh` or `en` and nothing else
+    # (`resolve_language`, SUPPORTED_LANGUAGES), so an unknown value is left to its own default
+    # rather than written through.
+    want = os.environ.get("HR_JIUWENSWARM_LANGUAGE", "en").strip().lower()
+    if want in ("en", "zh"):
+        base["preferred_language"] = want
     names: list[str] = []
     servers: list[dict] = []
     for server in (mcp_servers or []):
