@@ -10100,6 +10100,39 @@ def _channel_refuses(provider: str, backend: str, model: str) -> bool:
     return (model or "").strip() in _CHANNEL_REFUSES.get((str(provider or "").lower(), backend), frozenset())
 
 
+def _chain_custom_models(conn: dict) -> dict[str, str]:
+    """A scripted `custom` connection's own canonical -> wire rows, which ARE its model list.
+
+    The integrations form says exactly this (`_integration_models`: "The custom provider is the
+    exception: it has no vendor table, so its stored rows ARE the list"), and the console path acts
+    on it — `_mapped_integration_conn` pre-resolves the wire id and sets `_model_resolved` so no
+    vendor table is consulted. A connection written into the ENVIRONMENT, the scripted-deploy path
+    the self-hosting guide documents, took neither door. MEASURED with a recording proxy in front of
+    the gateway (2026-11-19): a connection whose rows mapped `claude-sonnet-5` ->
+    `anthropic/claude-sonnet-5` sent `claude-sonnet-5` on the wire, and the picker reported all 60
+    ids of the base's catalog as available rather than the 13 the rows declared. So an endpoint
+    whose wire ids are its own — a proxy with its own SKUs, a deployment alias — was unreachable
+    from that path, and every id it does not serve was offered as if it were.
+
+    Read under the connection's OWN provider name: `_chain_wired` renames `custom` to the runner's
+    `openai-api` and keeps the vendor beside it, so a conn that has already been through it still
+    answers here."""
+    if str(conn.get("_vendor") or conn.get("provider") or "").lower() != "custom":
+        return {}
+    rows: dict[str, str] = {}
+    for m in (conn.get("models") or []):
+        if not isinstance(m, dict):
+            continue
+        canonical = str(m.get("canonical") or "").strip()
+        if canonical:
+            rows[canonical] = str(m.get("provider_id") or "").strip() or canonical
+    # An endpoint saved before rows existed carries one `model_id`, its own name for its one model.
+    one = str(conn.get("model_id") or "").strip()
+    if not rows and one:
+        rows[one] = one
+    return rows
+
+
 def _conn_serves(conn: dict, friendly: str) -> bool:
     """Whether this connection's vendor actually serves the requested model.
 
@@ -10111,7 +10144,9 @@ def _conn_serves(conn: dict, friendly: str) -> bool:
     A vendor we have no table for cannot be filtered at all; that is stated here rather than
     happening by accident, and it is NOT the path the model catalog uses (see
     _provider_model_id, which is a pure lookup and refuses anything unlisted)."""
-    table = _vendor_models(conn.get("provider") or "")
+    # A custom endpoint's own rows first: there is no vendor table to fall back on, and "no table"
+    # must not read as "serves everything" when the operator has said what it serves.
+    table = _chain_custom_models(conn) or _vendor_models(conn.get("provider") or "")
     if not table:
         return True
     m = (friendly or "").strip()
@@ -10291,7 +10326,10 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         if conn and _chain_refusal(conn, backend):
             continue
         provider = str((conn or {}).get("provider") or "").lower()
-        table = _vendor_models(provider)
+        # A custom endpoint's rows are its table (see _chain_custom_models): without this the
+        # picker fell through to "unknown vendor, no restriction" and offered the base's whole
+        # catalog on a connection that had declared thirteen ids.
+        table = _chain_custom_models(conn or {}) or _vendor_models(provider)
         if not table:
             return None
         servable |= set(table) - _CHANNEL_REFUSES.get((provider, backend), frozenset())
@@ -11262,6 +11300,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 rec["tried"].append({"connection": name, "error": why})
                 continue
             conn = _chain_wired(conn, backend)
+            # The operator's own wire id for this canonical, where they gave one: the same
+            # pre-resolution the console path does (_mapped_integration_conn), so `_map_model`,
+            # which has no table for a custom endpoint and would send the canonical verbatim, is
+            # not consulted for an id its owner has already named.
+            pid = _chain_custom_models(conn).get(model_req or "")
+            if pid:
+                conn = {**conn, "model": pid, "_model_resolved": True}
         sandbox_auth = _auth_from_conn(conn, sid, effort)
         if sandbox_auth is None:
             # Refusing beats running: the only alternative is handing the sandbox a real provider
