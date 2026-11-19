@@ -6,7 +6,17 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
-## The jiuwenswarm backend: JiuwenSwarm (workswarm 0.2.8), and its first column
+## The jiuwenswarm backend: JiuwenSwarm (workswarm 0.2.8), its columns and its dimensions
+
+**Where the five-step order stands** (the order itself is in
+[harness-verification.md](harness-verification.md)): step 1 the Vercel column, 58 pairs / 290 of 290;
+step 2 the custom-harness dimension, a pass after the two faults it found were fixed; step 3 the
+plugin matrix, 5 of 5 columns after two more; step 4 the family tour, 13 of 13 families in one
+conversation; step 5 a second column, 13 pairs / 65 of 65, on a bring-your-own endpoint rather than
+Google, whose key this machine cannot use. The environments column passes; the browser column is not
+run here and the reason is the rig. Four product faults came out of steps 2 and 3, and a fifth —
+a scripted custom connection's model rows being ignored — out of bringing step 5 up; each one is
+written up below where it was found.
 
 Added 2026-11-18. Everything below was measured against the published PyPI wheel — against the
 Vercel AI Gateway through a recording proxy, then through the runner's own builder and relay, and

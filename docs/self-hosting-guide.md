@@ -1132,8 +1132,17 @@ connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, Harne
 OpenAI-compatible surface, or a custom endpoint with `api_format=openai`). A direct Anthropic
 connection does not drive it: its Anthropic dialect has not been measured here. Its instruction file
 is `JIUWENSWARM.md`. Its first support-matrix column (Vercel, 58 pairs, 290 of 290 scenario runs)
-is in [support-matrix.md](support-matrix.md); [support-matrix-notes.md](support-matrix-notes.md)
-says what that column found and which steps of the verification order have NOT run yet.
+is in [support-matrix.md](support-matrix.md), beside a second column on a bring-your-own endpoint
+(13 pairs, 65 of 65); [support-matrix-notes.md](support-matrix-notes.md) says what each column found
+and what is still unmeasured here (the browser plane, and a Google column, for want of a working
+key).
+
+**One limit worth knowing before you switch a tool off on this base:** on workswarm 0.2.8 the
+runtime's own tool allowlist cannot be installed on a turn that also declares an MCP server — its
+ability list holds the server configs and the allowlist reads a field they do not have — so a
+harness with an MCP server can switch off `fetch_webpage` (which the config withholds on its own)
+and nothing else. Any other combination is refused with that reason rather than reported as off
+while it is still callable. A harness with no MCP server can switch off any of the fourteen.
 
 Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
 archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv
