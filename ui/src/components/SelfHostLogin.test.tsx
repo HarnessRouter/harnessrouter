@@ -64,6 +64,16 @@ test('a refusal is the server’s own words, and the button can be pressed again
   expect(assign).not.toHaveBeenCalled();
 });
 
+test('a username typed with surrounding spaces is sent without them', async () => {
+  fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+  await open('/start');
+  await type('sh-user', '  admin ');
+  await type('sh-pass', ' right ');
+  await submit();
+  // Only the username is trimmed: a password may legitimately start or end with a space.
+  expect(fetchMock).toHaveBeenCalledWith('/api/selfhost/login', expect.objectContaining({ body: JSON.stringify({ username: 'admin', password: ' right ' }) }));
+});
+
 test.each([
   ['/studio/chrn_1?test=s1', '/studio/chrn_1?test=s1'],
   ['https://evil.example/', '/start'],

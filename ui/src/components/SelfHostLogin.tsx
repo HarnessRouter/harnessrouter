@@ -31,7 +31,7 @@ export function SelfHostLogin({ next, go = assignTo }: { next: string; go?: (hre
       const r = await fetch('/api/selfhost/login', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username: username.trim(), password }),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => null);
