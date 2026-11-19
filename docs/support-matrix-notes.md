@@ -84,10 +84,36 @@ dispatcher chain this base's catalog warns about: `tool_search`, then `tool_call
 {mcp_deepwiki_read_wiki_structure}`, then the server's own tool. The turn's produced files were
 `stamp.txt` and `JIUWENSWARM.md` and nothing else, so the machinery door holds here too.
 
-**Not yet run**, by name: the plugin matrix, the family tour, the environments column, the browser
-column, and the support matrix on a SECOND provider. Steps 3 to 5 of the order are open. The 58-pair
-column above does not need re-running for the two fixes: no scenario in it declares an MCP server or
-switches a tool off, so neither fix can touch a recorded row.
+**Step 3, the plugin matrix: 5 of 5 columns, after two more faults in the same writer.** The
+package is an Agent Plugins 1.0.0 unit and the harness carries nothing else, so what each column
+measures is the plugin path. Two of the five could not have worked before this batch, because the
+config writer kept only servers that had a `url` and wrote every one of them as `streamable-http`:
+
+* **a plugin's server is a COMMAND**, and an entry without a url was skipped entirely — a declared
+  server that is simply absent. The runtime takes stdio (`build_mcp_server_config` reads
+  `command`/`args`/`env` when the transport says so, and returns None for a transport it cannot
+  read, which is how an entry gets dropped);
+* **an SSE server was relabelled.** Measured as a one-variable A/B against the public probe's `/sse`
+  end, same config and same prompt: with `transport: sse` the turn called the server's tool and
+  answered `PROBE-SSE-…`; with `transport: streamable-http` the model ran `tool_search` twice, found
+  nothing, and said "No suitable tool is available in this session" — **no error anywhere, just zero
+  tools**, which is the shape this file keeps calling declared-is-not-enabled.
+
+| column | what it proves | result |
+|---|---|---|
+| skills | the package's Skill is loaded | pass, `PLUGIN_SKILL_OK`, 11 s |
+| mcp | its stdio server is spawned and its tool called | pass, `PLUGIN_MCP_OK`, 15 s |
+| rows | a list of free-form objects arrives whole through that tool | pass, `PLUGIN_ROWS_OK first=1 second=2`, 15 s |
+| sse | an SSE server is reached | pass, `PROBE-SSE-ef8e44614954`, 15 s |
+| http | a streamable-HTTP server is reached | pass, `PROBE-HTTP-ef8e44614954`, 15 s |
+
+The `rows` column is worth one line of its own: this is the argument shape that arrived as `[{}, {}]`
+on two other bases, and here both rows arrived with both fields.
+
+**Not yet run**, by name: the family tour, the environments column, the browser column, and the
+support matrix on a SECOND provider. Steps 4 and 5 of the order are open. The 58-pair column above
+does not need re-running for any fix in this batch: no scenario in it declares an MCP server or
+switches a tool off, so none of them can touch a recorded row.
 
 **What it is.** A general agent platform whose code work mode is a coding agent over a workspace;
 its other surfaces (web, TUI, desktop, chat channels) are not driven here. The turn runs through its
