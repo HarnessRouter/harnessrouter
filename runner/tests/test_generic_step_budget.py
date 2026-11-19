@@ -160,7 +160,9 @@ def test_a_remote_base_is_stopped_gracefully_and_its_charge_kept(tmp_path, monke
 
 def test_the_budget_set_covers_exactly_the_unbounded_bases():
     assert rs._GENERIC_STEP_BUDGET == {"codex", "dsh", "pi", "omp", "qwen", "gemini",
-                                       "cline", "opencode", "mimo", "kilo", "qoder", "roder"}
+                                       "cline", "opencode", "mimo", "kilo", "qoder", "roder",
+                                       # agy's ACP server takes no step limit of its own
+                                       "agy"}
     # and every entry is a backend the registry offers
     assert rs._GENERIC_STEP_BUDGET <= set(rs.BACKENDS)
 

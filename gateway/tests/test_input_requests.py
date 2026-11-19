@@ -378,5 +378,6 @@ def _items(body):
 def test_the_capability_is_declared_and_the_base_that_has_it_is_named():
     assert gw.UHP_CAPABILITIES["input_requests"] is True
     assert gw._BASE_CATALOG["claude-code"]["input_requests"] is True
-    assert gw._INPUT_REQUEST_BASES == {"claude"}
-    assert all(not b.get("input_requests") for k, b in gw._BASE_CATALOG.items() if k != "claude-code")
+    assert gw._BASE_CATALOG["agy"]["input_requests"] is True
+    assert gw._INPUT_REQUEST_BASES == {"claude", "agy"}
+    assert all(not b.get("input_requests") for k, b in gw._BASE_CATALOG.items() if k not in ("claude-code", "agy"))

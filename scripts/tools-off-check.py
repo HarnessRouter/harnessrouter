@@ -473,7 +473,7 @@ def main() -> int:
     items = b.get("data") or b.get("bases") or []
     only = [x for x in args.only.split(",") if x]
     items = [x for x in items if (not only or x.get("id") in only) and x.get("id") not in NOT_RUN
-             and x.get("status") != "not_installed"]
+             and x.get("status") not in ("not_installed", "unavailable")]
     print(f"bases {[x.get('id') for x in items]}", flush=True)
     srv = QuietServer(("127.0.0.1", 0), StandHandler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
