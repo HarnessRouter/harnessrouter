@@ -5564,7 +5564,7 @@ and a local address standing in for Google, which added the real key and logged 
   (`gemini-4-carbon` low to high, `gemini-4-hydrogen` low to xhigh): Google's shared model table, and so
   every other base on a Google key, does not list them. An unknown id is refused before any call.
   gemini-3.8-flash ran at low, medium and high, gemini-3.1-pro at low and gemini-4-hydrogen at low;
-  Argon, Carbon and 3.6 Flash are listed and not yet measured on this base.
+  all six were measured at every level on 2026-11-19 (below).
 - **Helper model.** A new conversation's title and each web search call
   `gemini-3.1-flash-lite-preview` on the same key; those calls are not in the CLI's reported usage.
 - **Usage.** The prompt's usage counts thinking inside `outputTokens` (a one-word answer that thought:
@@ -5582,8 +5582,23 @@ and a local address standing in for Google, which added the real key and logged 
   enforce `permissions.deny`, even under `--dangerously-skip-permissions`, but cannot be run without
   telemetry.)
 
-Live provider columns, the five console scenarios, the family tour and the browser and environment
-columns have not been run on this base.
+**Measured live (2026-11-19)** with `scripts/support-matrix/antigravity-e2e.py --base agy`, on an
+instance built from this branch with a plain `docker build .` and a Google AI Studio key:
+
+- Every offered model at its middle level wrote a file that the files API read back, recalled it in a
+  follow-up and ran a shell command, and answered one turn at each of its other levels: 30 of 30
+  (Argon, Carbon and Hydrogen, 3.8 Flash, 3.6 Flash and 3.1 Pro).
+- The record names each step's file and command; a harness's instructions are followed; the agent has
+  no key to show; with the shell switched off it cannot run one. 6 of 6, with the catalog check.
+- UHP conformance at class full (suite 2026.10.19.post11): 110 of 111. The one failure, ME-12, is the
+  memory engine's: it writes two records that contradict each other and recalls them, with no harness
+  involved. It fails on the instance's Graphiti engine and passes with Hindsight on the same harness, and
+  fails the same way on the released 0.41.21 with no Antigravity base.
+- `scripts/support-matrix/ui-antigravity.mjs`, the console as a person uses it (Antigravity's mark,
+  the model menu, a first task that writes a file, a follow-up answered from it, four widths): 11 of 11.
+
+The support matrix's provider columns, the family tour and the browser and environment columns have
+not been run on this base.
 
 ### Claude Code 2.1.311 (0.41.12)
 
