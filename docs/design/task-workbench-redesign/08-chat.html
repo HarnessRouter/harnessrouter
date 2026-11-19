@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 对话</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="chat-workspace.css" />
+  </head>
+  <body class="prototype-page">
+    <div class="artboard" id="conversation">
+      <div class="app" data-shell data-active="chat">
+        <main class="chat-workspace" aria-label="对话工作台">
+          <section class="chat-main" aria-label="会话内容">
+            <header class="chat-main-head">
+              <div class="chat-title">
+                <span class="chat-title-mark"><svg class="icon"><use href="#i-message"></use></svg></span>
+                <span class="chat-title-copy">
+                  <strong>安全事件调查</strong>
+                  <small>调查分析师 · GPT-5.1 · 今天 16:08</small>
+                </span>
+              </div>
+              <div class="chat-head-actions">
+                <span class="badge badge-amber"><span class="status-dot amber"></span>等待确认</span>
+                <button class="icon-button icon-button-bare" type="button" aria-label="搜索当前对话"><svg class="icon"><use href="#i-search"></use></svg></button>
+                <button class="icon-button icon-button-bare" type="button" aria-label="更多对话操作"><svg class="icon"><use href="#i-more"></use></svg></button>
+                <span class="chat-head-divider"></span>
+                <button class="icon-button" type="button" aria-label="收起上下文栏" data-collapse-context><svg class="icon"><use href="#i-chevron-right"></use></svg></button>
+              </div>
+            </header>
+
+            <div class="chat-thread">
+              <div class="chat-thread-inner">
+                <div class="chat-day"><span>今天 16:08</span></div>
+
+                <div class="chat-user-row">
+                  <div class="chat-user-bubble">
+                    帮我调查这次异常登录事件，重点关注横向移动和受影响资产。必要时可以直接建任务。
+                  </div>
+                  <span class="chat-avatar user" aria-label="用户 A">A</span>
+                </div>
+
+                <article class="chat-reply">
+                  <div class="chat-reply-head">
+                    <span class="chat-avatar agent"><svg class="icon"><use href="#i-agent"></use></svg></span>
+                    <div class="chat-reply-identity"><strong>调查分析师</strong><small>GPT-5.1 · 2 条工具调用</small></div>
+                    <time>16:12</time>
+                  </div>
+                  <div class="chat-reply-body">
+                    <p>我先并行检查告警、身份日志、终端记录和资产清单，再把高风险线索汇总给你确认。</p>
+                  </div>
+                </article>
+
+                <div class="chat-run-card">
+                  <div class="chat-run-head">
+                    <span class="chat-run-icon"><svg class="icon"><use href="#i-bolt"></use></svg></span>
+                    <div><strong>并行调查完成</strong><small>4 个节点 · 38 秒 · Run #18</small></div>
+                    <span class="badge badge-green"><span class="status-dot green"></span>4 / 4</span>
+                  </div>
+                  <div class="chat-run-grid">
+                    <div class="chat-run-node"><span class="table-mark red"><svg class="icon"><use href="#i-shield"></use></svg></span><span><strong>告警分析</strong><small>3 条高风险登录</small></span></div>
+                    <div class="chat-run-node"><span class="table-mark blue"><svg class="icon"><use href="#i-terminal"></use></svg></span><span><strong>日志取证</strong><small>2 台主机横向移动</small></span></div>
+                    <div class="chat-run-node"><span class="table-mark purple"><svg class="icon"><use href="#i-server"></use></svg></span><span><strong>资产核查</strong><small>7 台主机受影响</small></span></div>
+                    <div class="chat-run-node"><span class="table-mark amber"><svg class="icon"><use href="#i-globe"></use></svg></span><span><strong>情报检索</strong><small>2 个恶意 IP 命中</small></span></div>
+                  </div>
+                  <button class="chat-run-link" type="button">查看完整运行轨迹 <svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+                </div>
+
+                <article class="chat-reply">
+                  <div class="chat-reply-body chat-findings">
+                    <p><strong>初步结论：</strong>攻击者使用泄露凭据完成登录，并在 2 台核心主机之间横向移动。建议优先隔离 <code>db-core-02</code>，再确认进入汇总的调查结果。</p>
+                    <div class="chat-finding-row"><span class="status-dot red"></span><span>3 条高风险登录来自同一可疑 IP</span><time>高置信</time></div>
+                    <div class="chat-finding-row"><span class="status-dot amber"></span><span>横向移动路径涉及 2 台核心主机</span><time>待确认</time></div>
+                    <div class="chat-finding-row"><span class="status-dot blue"></span><span>7 台资产受影响，2 台数据库需要隔离</span><time>建议</time></div>
+                  </div>
+                </article>
+
+                <div class="chat-approval">
+                  <div class="chat-approval-head">
+                    <span class="chat-approval-icon"><svg class="icon"><use href="#i-branch"></use></svg></span>
+                    <div><strong>需要你确认汇总输入</strong><small>已选择 2 / 5 个调查结果，确认后继续生成报告</small></div>
+                    <span class="badge badge-gray mono">Run #18</span>
+                  </div>
+                  <div class="chat-approval-chips">
+                    <span class="is-selected"><svg class="icon"><use href="#i-check"></use></svg>告警分析</span>
+                    <span><svg class="icon"><use href="#i-target"></use></svg>威胁狩猎</span>
+                    <span class="is-selected"><svg class="icon"><use href="#i-check"></use></svg>日志取证</span>
+                    <span><svg class="icon"><use href="#i-server"></use></svg>资产核查</span>
+                    <span><svg class="icon"><use href="#i-globe"></use></svg>情报检索</span>
+                  </div>
+                  <div class="chat-approval-actions">
+                    <button class="button button-sm" type="button">在任务中查看</button>
+                    <button class="button button-primary button-sm" type="button">确认并继续 <svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="chat-composer-wrap">
+              <div class="chat-composer">
+                <label class="chat-composer-input" aria-label="消息输入">
+                  <textarea placeholder="继续追问，或让我解释某个节点…"></textarea>
+                </label>
+                <div class="chat-composer-actions">
+                  <button class="chat-tool-button" type="button" aria-label="添加附件"><svg class="icon"><use href="#i-plus"></use></svg></button>
+                  <button class="chat-tool-button" type="button"><svg class="icon"><use href="#i-agent"></use></svg>调查分析师<svg class="icon chevron"><use href="#i-chevron-down"></use></svg></button>
+                  <button class="chat-tool-button" type="button"><svg class="icon"><use href="#i-bolt"></use></svg>工具 4</button>
+                  <span class="chat-composer-spacer"></span>
+                  <button class="chat-send" type="button" aria-label="发送消息"><svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+                </div>
+              </div>
+              <p class="chat-composer-hint">Enter 发送 · Shift + Enter 换行 · Agent 输出请核验</p>
+            </div>
+          </section>
+
+          <aside class="chat-context" aria-label="会话上下文">
+            <header class="chat-context-head">
+              <div><strong>会话上下文</strong><small>3 个文件 · 1 个关联任务</small></div>
+              <button class="icon-button icon-button-bare" type="button" aria-label="更多上下文操作"><svg class="icon"><use href="#i-more"></use></svg></button>
+            </header>
+
+            <div class="chat-context-scroll">
+              <div class="chat-agent-card">
+                <span class="chat-agent-avatar"><svg class="icon"><use href="#i-agent"></use></svg></span>
+                <div class="chat-agent-copy">
+                  <strong>调查分析师</strong>
+                  <small>安全调查 · 可调用本地工具</small>
+                </div>
+                <span class="badge badge-green"><span class="status-dot green"></span>已连接</span>
+              </div>
+              <div class="chat-agent-meta">
+                <span><small>模型</small><strong>GPT-5.1</strong></span>
+                <span><small>运行环境</small><strong>本地</strong></span>
+                <span><small>上下文</small><strong>18.4k</strong></span>
+              </div>
+
+              <div class="chat-context-tabs" role="tablist" aria-label="上下文分类">
+                <button class="is-active" type="button" role="tab" aria-selected="true">上下文</button>
+                <button type="button" role="tab" aria-selected="false">文件 <span>3</span></button>
+                <button type="button" role="tab" aria-selected="false">运行 <span>1</span></button>
+              </div>
+
+              <div class="chat-context-section">
+                <div class="chat-context-section-head"><strong>关联任务</strong><button type="button">全部任务</button></div>
+                <div class="chat-task-card">
+                  <div class="chat-task-title"><span class="status-dot amber"></span><strong>安全事件调查</strong><span class="mono">Run #18</span></div>
+                  <div class="chat-task-progress"><span style="width: 56%"></span></div>
+                  <div class="chat-task-meta"><span>等待你确认 · 5 / 9 节点</span><button type="button">打开任务 <svg class="icon"><use href="#i-chevron-right"></use></svg></button></div>
+                </div>
+              </div>
+
+              <div class="chat-context-section">
+                <div class="chat-context-section-head"><strong>已引用文件</strong><button type="button">添加</button></div>
+                <div class="chat-file-list">
+                  <div class="chat-file-row"><span class="chat-file-icon red"><svg class="icon"><use href="#i-doc"></use></svg></span><span><strong>告警导出.csv</strong><small>3 条高风险登录 · 84 KB</small></span><button type="button" aria-label="移除告警导出"><svg class="icon"><use href="#i-more"></use></svg></button></div>
+                  <div class="chat-file-row"><span class="chat-file-icon blue"><svg class="icon"><use href="#i-terminal"></use></svg></span><span><strong>auth.log</strong><small>身份日志 · 1.2 MB</small></span><button type="button" aria-label="移除 auth.log"><svg class="icon"><use href="#i-more"></use></svg></button></div>
+                  <div class="chat-file-row"><span class="chat-file-icon green"><svg class="icon"><use href="#i-server"></use></svg></span><span><strong>资产清单.xlsx</strong><small>7 台受影响主机 · 46 KB</small></span><button type="button" aria-label="移除资产清单"><svg class="icon"><use href="#i-more"></use></svg></button></div>
+                </div>
+              </div>
+
+              <div class="chat-context-section">
+                <div class="chat-context-section-head"><strong>工具与能力</strong><button type="button">管理</button></div>
+                <div class="chat-tool-chips">
+                  <span><svg class="icon"><use href="#i-search"></use></svg>日志检索</span>
+                  <span><svg class="icon"><use href="#i-terminal"></use></svg>本地命令</span>
+                  <span><svg class="icon"><use href="#i-globe"></use></svg>情报查询</span>
+                  <span><svg class="icon"><use href="#i-server"></use></svg>资产核查</span>
+                </div>
+              </div>
+
+              <div class="chat-context-section">
+                <div class="chat-context-section-head"><strong>本轮统计</strong><span>实时</span></div>
+                <div class="chat-context-stats">
+                  <div><span>输入</span><strong>12.6k</strong></div>
+                  <div><span>输出</span><strong>5.8k</strong></div>
+                  <div><span>轮次</span><strong>4</strong></div>
+                  <div><span>事件</span><strong>18</strong></div>
+                </div>
+              </div>
+
+              <div class="chat-context-section">
+                <div class="chat-context-section-head"><strong>最近工具调用</strong><span>4 次</span></div>
+                <div class="chat-tool-call-list">
+                  <div class="chat-tool-call"><span class="status-dot green"></span><code>log.search</code><span>3 条高风险登录</span><time>00:08</time></div>
+                  <div class="chat-tool-call"><span class="status-dot green"></span><code>terminal.exec</code><span>auth.log 时间线</span><time>00:12</time></div>
+                  <div class="chat-tool-call"><span class="status-dot green"></span><code>asset.lookup</code><span>7 台主机受影响</span><time>00:09</time></div>
+                  <div class="chat-tool-call"><span class="status-dot green"></span><code>threat.intel</code><span>2 个恶意 IP 命中</span><time>00:07</time></div>
+                </div>
+              </div>
+
+              <div class="chat-context-section">
+                <div class="chat-context-section-head"><strong>上下文预算</strong><span>29%</span></div>
+                <div class="chat-budget">
+                  <div class="chat-budget-bar"><span style="width: 29%"></span></div>
+                  <div class="chat-budget-meta"><span>18.4k 已使用</span><span>上限 64k</span></div>
+                </div>
+              </div>
+
+              <div class="chat-context-note">
+                <svg class="icon"><use href="#i-lock"></use></svg>
+                <span>会话与附件保存在当前工作区，不会上传到 hosted provider。</span>
+              </div>
+            </div>
+
+            <footer class="chat-context-foot">
+              <button class="button button-sm" type="button"><svg class="icon"><use href="#i-refresh"></use></svg>清空上下文</button>
+              <button class="button button-sm button-primary" type="button"><svg class="icon"><use href="#i-plus"></use></svg>新建对话</button>
+            </footer>
+          </aside>
+
+          <div class="chat-context-handle">
+            <button type="button" aria-label="展开上下文栏" data-expand-context><svg class="icon"><use href="#i-chevron-left"></use></svg></button>
+            <span>会话上下文</span>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script src="design-kit.js"></script>
+    <script>
+      const workspace = document.querySelector('.chat-workspace');
+      document.querySelector('[data-collapse-context]')?.addEventListener('click', () => workspace?.classList.add('is-context-collapsed'));
+      document.querySelector('[data-expand-context]')?.addEventListener('click', () => workspace?.classList.remove('is-context-collapsed'));
+    </script>
+  </body>
+</html>

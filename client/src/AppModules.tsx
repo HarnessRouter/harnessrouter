@@ -3,6 +3,8 @@ import { Button, Tag } from 'antd';
 import { DeleteOutlined, NodeIndexOutlined, PlusOutlined } from '@ant-design/icons';
 import type { ClientTemplate, TemplateNode } from './app-types';
 import { NODE_HEIGHT, NODE_WIDTH, clamp, connectionIssue, edgePath, graphBounds, nodeRole } from './template-graph';
+import { WorkflowCanvas } from './workflow-canvas';
+import { appListAgentModels, appModelSelection, type AppAgent } from './app-api';
 
 const defaultTemplate: ClientTemplate = {
   id: 'product-evaluation',
@@ -17,6 +19,13 @@ const defaultTemplate: ClientTemplate = {
     { id: 'node-5', name: '最终总结', x: 620, y: 210, deps: ['node-4'] },
   ],
 };
+export function createTemplate(overrides: Partial<ClientTemplate> = {}): ClientTemplate {
+  return {
+    ...defaultTemplate,
+    ...overrides,
+    nodes: overrides.nodes?.map(node => ({ ...node, deps: [...node.deps] })) || defaultTemplate.nodes.map(node => ({ ...node, deps: [...node.deps] })),
+  };
+}
 function fallbackNode(name: string, index: number, count: number): TemplateNode {
   if (index === 0) return { id: 'node-1', name, x: 20, y: 210, deps: [] };
   if (count > 2 && index <= 2) return { id: `node-${index + 1}`, name, x: 220, y: index === 1 ? 60 : 360, deps: ['node-1'] };
@@ -46,9 +55,14 @@ function normalizeTemplate(value: unknown): ClientTemplate {
   };
 }
 export function loadTemplate(): ClientTemplate { try { return normalizeTemplate(JSON.parse(localStorage.getItem('hexa.client.template') || '')); } catch { return defaultTemplate; } }
-export function Templates({ template, onSave, onUse }: { template: ClientTemplate; onSave: (template: ClientTemplate) => void; onUse: () => void }) {
+export function Templates({ template, onSave, onUse, onBack, persist = true, mode = 'template', agents = [] }: { template: ClientTemplate; onSave: (template: ClientTemplate) => void | Promise<void>; onUse: () => void; onBack?: () => void; persist?: boolean; mode?: 'task' | 'template'; agents?: AppAgent[] }) {
   const [draft, setDraft] = useState(template);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [modelOptions, setModelOptions] = useState<Array<{ id: string; label: string }>>([]);
+  const [modelError, setModelError] = useState('');
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelRetry, setModelRetry] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [orchestration, setOrchestration] = useState<'manual' | 'ai'>('manual');
   const [aiPrompt, setAiPrompt] = useState('');
@@ -60,7 +74,6 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
   const worldRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ id: string; clientX: number; clientY: number; originX: number; originY: number } | null>(null);
-  const panRef = useRef<{ clientX: number; clientY: number; originX: number; originY: number } | null>(null);
   const draftRef = useRef(draft);
   const zoomRef = useRef(zoom);
   const panStateRef = useRef(pan);
@@ -77,6 +90,25 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
   const edgeWidth = Math.max(1, edgeRight - edgeLeft);
   const edgeHeight = Math.max(1, edgeBottom - edgeTop);
   const selected = nodes.find(node => node.id === selectedId) || null;
+  useEffect(() => {
+    let alive = true;
+    setModelOptions([]); setModelError('');
+    if (!selected?.agent_id) { setModelLoading(false); return; }
+    const id = selected.id;
+    setModelLoading(true);
+    void appListAgentModels(selected.agent_id).then(catalog => {
+      if (!alive) return;
+      const selection = appModelSelection(catalog);
+      setModelOptions(selection.models);
+      if (!selection.models.length) setModelError('该 Agent 暂无可用模型。');
+      setDraft(current => ({ ...current, nodes: current.nodes.map(node => node.id === id && !node.model ? { ...node, model: selection.model } : node) }));
+    }).catch(cause => { if (alive) setModelError(cause instanceof Error ? cause.message : '模型读取失败。'); })
+      .finally(() => { if (alive) setModelLoading(false); });
+    return () => { alive = false; };
+  }, [selected?.id, selected?.agent_id, modelRetry]);
+  const updateConfig = (patch: Partial<TemplateNode>) => {
+    if (selected) setDraft(current => ({ ...current, nodes: current.nodes.map(node => node.id === selected.id ? { ...node, ...patch } : node) }));
+  };
   const selectedIndex = selected ? nodes.findIndex(node => node.id === selected.id) : -1;
   const edgeCount = nodes.reduce((count, node) => count + node.deps.length, 0);
   const pointAt = (clientX: number, clientY: number) => {
@@ -96,7 +128,7 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
   };
   const removeDependency = (targetId: string, sourceId: string) => {
     setError('');
-    setDraft({ ...draftRef.current, nodes: draftRef.current.nodes.map(node => node.id === targetId ? { ...node, deps: node.deps.filter(dep => dep !== sourceId) } : node) });
+    setDraft({ ...draftRef.current, nodes: draftRef.current.nodes.map(node => node.id === targetId ? { ...node, deps: node.deps.filter(dep => dep !== sourceId), inputRefs: node.inputRefs?.filter(ref => ref !== sourceId) } : node) });
   };
   const updateNode = (id: string, value: string) => setDraft({ ...draft, nodes: draft.nodes.map(node => node.id === id ? { ...node, name: value } : node) });
   const addNode = () => {
@@ -116,7 +148,7 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
   };
   const removeNode = (id: string) => {
     setError('');
-    setDraft({ ...draft, nodes: draft.nodes.filter(node => node.id !== id).map(node => ({ ...node, deps: node.deps.filter(dep => dep !== id) })) });
+    setDraft({ ...draft, nodes: draft.nodes.filter(node => node.id !== id).map(node => ({ ...node, deps: node.deps.filter(dep => dep !== id), inputRefs: node.inputRefs?.filter(ref => ref !== id) })) });
     setSelectedId(null);
   };
   const beginDrag = (event: React.PointerEvent<HTMLDivElement>, node: TemplateNode) => {
@@ -135,13 +167,6 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
     setError('');
     setConnectingSource(node.id);
     setConnectingPoint({ x: node.x + NODE_WIDTH, y: node.y + NODE_HEIGHT / 2 });
-  };
-  const beginPan = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || event.target !== event.currentTarget) return;
-    event.preventDefault();
-    setSelectedId(null);
-    panRef.current = { clientX: event.clientX, clientY: event.clientY, originX: pan.x, originY: pan.y };
-    setPanning(true);
   };
   const zoomAt = (nextZoom: number, clientX?: number, clientY?: number) => {
     const viewport = viewportRef.current;
@@ -178,39 +203,8 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
     });
   };
   useEffect(() => {
-    const move = (event: PointerEvent) => {
-      const current = panRef.current;
-      if (!current) return;
-      setPan({ x: current.originX + event.clientX - current.clientX, y: current.originY + event.clientY - current.clientY });
-    };
-    const up = () => {
-      panRef.current = null;
-      setPanning(false);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    return () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-  }, []);
-  useEffect(() => {
     const frame = window.requestAnimationFrame(fitCanvas);
     return () => window.cancelAnimationFrame(frame);
-  }, []);
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const wheel = (event: WheelEvent) => {
-      event.preventDefault();
-      if (event.ctrlKey || event.metaKey) {
-        zoomAt(zoomRef.current + (event.deltaY > 0 ? -0.1 : 0.1), event.clientX, event.clientY);
-        return;
-      }
-      setPan(current => ({ x: current.x - event.deltaX, y: current.y - event.deltaY }));
-    };
-    viewport.addEventListener('wheel', wheel, { passive: false });
-    return () => viewport.removeEventListener('wheel', wheel);
   }, []);
   useEffect(() => {
     const move = (event: PointerEvent) => {
@@ -259,12 +253,17 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
       window.removeEventListener('keydown', cancel);
     };
   }, [connectingSource]);
-  const save = () => {
-    if (!draft.title.trim() || !draft.nodes.length || draft.nodes.some(node => !node.name.trim())) { setError('模板标题和节点不能为空。'); return; }
+  const save = async () => {
+    if (saving) return;
+    if (!draft.title.trim() || !draft.nodes.length || draft.nodes.some(node => !node.name.trim())) { setError('名称和节点不能为空。'); return; }
     setError('');
+    setSaving(true);
     const next = { ...draft, version: draft.version + 1, nodes: draft.nodes.map(node => ({ ...node, name: node.name.trim() })) };
-    localStorage.setItem('hexa.client.template', JSON.stringify(next));
-    onSave(next);
+    try {
+      await onSave(next);
+      if (persist) localStorage.setItem('hexa.client.template', JSON.stringify(next));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败，草稿已保留。'); }
+    finally { setSaving(false); }
   };
   const generateFlow = () => {
     if (!aiPrompt.trim()) return;
@@ -290,27 +289,27 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
   };
   return <section className="page">
     <header className="editor-header">
-      <button className="icon-btn" aria-label="返回模板列表" onClick={() => setSelectedId(null)}>←</button>
+      <button className="icon-btn" disabled={saving} aria-label={mode === 'task' ? '返回任务详情' : '返回模板列表'} onClick={() => { if (onBack) onBack(); else setSelectedId(null); }}>←</button>
       <div className="head-title">
-        <small>模板 / 编辑</small>
+        <small>{mode === 'task' ? '任务流程 / 编辑' : '模板 / 编辑'}</small>
         <h1>{draft.title}</h1>
-        <span className={`pill ${orchestration === 'ai' ? 'amber' : 'green'}`}>{orchestration === 'ai' ? 'AI 预览' : `已发布 v${draft.version}`}</span>
+        <span className="pill amber">{`草稿 · 基于 v${template.version}`}</span>
         <span className="muted-count">{draft.nodes.length} 个节点</span>
       </div>
       <div className="header-actions">
-        <Button onClick={onUse}>使用模板</Button>
-        <Button type="primary" onClick={save}>保存新版本</Button>
+        {mode === 'template' && <Button disabled={saving} onClick={onUse}>使用已保存版本</Button>}
+        <Button type="primary" loading={saving} onClick={() => void save()}>{mode === 'task' ? '保存任务流程' : '保存模板新版本'}</Button>
       </div>
     </header>
     {error && <p className="error-banner" role="alert">{error}</p>}
-    <div className="editor-body">
+    <div className="editor-body" inert={saving}>
       <aside className="org-panel" aria-label="对话编排">
         <div className="org-head"><strong>对话编排</strong><p>选择节点编辑属性，或描述目标让系统先生成流程草稿。</p></div>
         <div className="org-tabs" role="tablist" aria-label="编排方式">
           <button className={orchestration === 'manual' ? 'active' : ''} role="tab" aria-selected={orchestration === 'manual'} onClick={() => setOrchestration('manual')}>拖拽编辑</button>
           <button className={orchestration === 'ai' ? 'active' : ''} role="tab" aria-selected={orchestration === 'ai'} onClick={() => setOrchestration('ai')}>AI 生成</button>
         </div>
-        {orchestration === 'manual' ? <><div className="org-quick"><button onClick={addNode}><PlusOutlined /> 添加节点</button></div><div className="org-label">节点 {nodes.length}</div><div className="org-list">{nodes.map(node => <button key={node.id} className={node.id === selectedId ? 'active' : ''} onClick={() => setSelectedId(node.id)}><span className="status-dot" /><span className="t">{node.name}</span><span className="a">{nodeRole(nodes, node)}</span></button>)}</div><div className="org-tip"><span className="status-dot" />{edgeCount} 条连接 · 点击画布节点编辑</div></> : <><textarea aria-label="AI 生成要求" placeholder="例如：市场与技术并行分析，风险评审汇总，最后输出方案" value={aiPrompt} onChange={event => setAiPrompt(event.target.value)} /><Button type="primary" onClick={generateFlow}>生成流程图</Button></>}
+        {orchestration === 'manual' ? <><div className="org-quick"><button onClick={addNode}><PlusOutlined aria-hidden="true" /> 添加节点</button></div><div className="org-label">节点 {nodes.length}</div><div className="org-list">{nodes.map(node => <button key={node.id} className={node.id === selectedId ? 'active' : ''} onClick={() => setSelectedId(node.id)}><span className="status-dot" /><span className="t">{node.name}</span><span className="a">{nodeRole(nodes, node)}</span></button>)}</div><div className="org-tip"><span className="status-dot" />{edgeCount} 条连接 · 点击画布节点编辑</div></> : <><textarea aria-label="AI 生成要求" placeholder="例如：市场与技术并行分析，风险评审汇总，最后输出方案" value={aiPrompt} onChange={event => setAiPrompt(event.target.value)} /><Button type="primary" onClick={generateFlow}>生成流程图</Button></>}
       </aside>
       <div className="canvas-area">
         <div className="canvas-toolbar">
@@ -325,13 +324,20 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
           </div>
         </div>
         <div className="template-canvas" role="region" aria-label="模板节点画布">
-          <div
-            className={`canvas-viewport${panning ? ' panning' : ''}`}
-            ref={viewportRef}
-            style={{ backgroundPosition: `${pan.x}px ${pan.y}px`, backgroundSize: `${18 * zoom}px ${18 * zoom}px` }}
-            onPointerDown={beginPan}
+          <WorkflowCanvas
+            scale={zoom}
+            pan={pan}
+            onScaleChange={setZoom}
+            onPanChange={setPan}
+            onPanningChange={setPanning}
+            onBackgroundPointerDown={() => setSelectedId(null)}
+            viewportRef={viewportRef}
+            worldRef={worldRef}
+            wheelMode="pan"
+            viewportClassName={`canvas-viewport${panning ? ' panning' : ''}`}
+            viewportStyle={{ backgroundPosition: `${pan.x}px ${pan.y}px`, backgroundSize: `${18 * zoom}px ${18 * zoom}px` }}
+            worldClassName="canvas-world"
           >
-              <div className="canvas-world" ref={worldRef} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
                 <svg
                   className="canvas-edges"
                   style={{ left: edgeLeft, top: edgeTop }}
@@ -360,23 +366,30 @@ export function Templates({ template, onSave, onUse }: { template: ClientTemplat
                   return <div key={node.id} data-node-id={node.id} role="group" aria-label={`节点 ${node.name}`} tabIndex={0} style={{ left: node.x, top: node.y }} className={`template-node ${node.id === selectedId ? 'selected' : ''}${target ? ' connect-target' : ''}`} onPointerDown={event => beginDrag(event, node)} onClick={() => setSelectedId(node.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(node.id); } }}>
                     <button type="button" className="node-port input" data-input-node={node.id} aria-label={`连接到 ${node.name}`} onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); if (connectingSource) connectNodes(connectingSource, node.id); }} />
                     <div className="node-title"><span className="node-index">{index + 1}</span><span>{node.name}</span><span className="node-role">{role}</span></div>
-                    <small>{node.deps.length ? `依赖 ${node.deps.length} 个节点` : '并行起点'}</small>
-                    <div className="node-foot"><span>{nodes.some(item => item.deps.includes(node.id)) ? '已连接下游' : '流程末端'}</span><span>{node.x}, {node.y}</span></div>
+                    <small>{(node.node_type === 'human' || node.node_type === 'human_gate') ? '等待结果选择后继续' : node.deps.length ? `依赖 ${node.deps.length} 个节点` : '并行起点'}</small>
+                    <div className="node-foot"><span>{(node.node_type === 'human' || node.node_type === 'human_gate') ? '人工处理节点' : nodes.some(item => item.deps.includes(node.id)) ? '已连接下游' : '流程末端'}</span><span>{node.x}, {node.y}</span></div>
                     <button type="button" className="node-port output" aria-label={`从 ${node.name} 开始连接`} onPointerDown={event => beginConnection(event, node)} />
                   </div>;
                 })}
-              </div>
-          </div>
+          </WorkflowCanvas>
           <div className="canvas-tip">拖动节点调整位置 · 空白处拖动平移 · 从右侧圆点拖到目标节点创建连接 · 点击连线可移除</div>
         </div>
       </div>
-      <aside className="template-inspector" aria-label="模板检查器">
+      <aside className="template-inspector" aria-label={mode === 'task' ? '任务节点检查器' : '模板检查器'}>
         <div className="inspector-head"><b>节点属性</b><span>{selected ? `${nodeRole(nodes, selected)}节点` : '未选择节点'}</span></div>
         <div className="inspector-body">
           {selected ? <>
-            <div className="field"><label htmlFor="template-title">模板名称</label><input id="template-title" aria-label="模板标题" value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></div>
-            <div className="field"><label htmlFor="template-description">模板说明</label><textarea id="template-description" aria-label="模板说明" value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></div>
+            {mode === 'template' && <><div className="field"><label htmlFor="template-title">模板名称</label><input id="template-title" aria-label="模板标题" value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></div>
+            <div className="field"><label htmlFor="template-description">模板说明</label><textarea id="template-description" aria-label="模板说明" value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></div></>}
             <div className="field"><label htmlFor="node-name">节点名称</label><input id="node-name" aria-label="节点名称" value={selected.name} onChange={event => updateNode(selected.id, event.target.value)} /></div>
+            <label className="dep"><input type="checkbox" checked={selected.node_type === 'human' || selected.node_type === 'human_gate'} onChange={event => updateConfig({ node_type: event.target.checked ? 'human' : 'agent', human_action: event.target.checked ? 'select_outputs' : undefined, requires_human: false })} />人工处理节点（不调用 Agent）</label>
+            {(selected.node_type !== 'human' && selected.node_type !== 'human_gate') && <><div className="field"><label htmlFor="node-agent">Agent</label><select id="node-agent" aria-label="节点 Agent" value={selected.agent_id || ''} onChange={event => updateConfig({ agent_id: event.target.value, model: '' })}><option value="">请选择 Agent</option>{selected.agent_id && !agents.some(a => a.id === selected.agent_id) && <option value={selected.agent_id}>{selected.agent_id}（不可用）</option>}{agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+            <div className="field"><label htmlFor="node-model">模型</label><select id="node-model" aria-label="节点模型" disabled={modelLoading || !!modelError} value={selected.model || ''} onChange={event => updateConfig({ model: event.target.value })}><option value="">请选择模型</option>{selected.model && !modelOptions.some(m => m.id === selected.model) && <option value={selected.model}>{selected.model}（不可用）</option>}{modelOptions.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</select>{modelLoading && <small role="status">正在加载模型…</small>}{modelError && <p role="alert">{modelError}<button onClick={() => setModelRetry(v => v + 1)}>重试模型</button></p>}</div>
+            <div className="field"><label htmlFor="node-prompt">提示词</label><textarea id="node-prompt" aria-label="节点提示词" value={selected.prompt || ''} onChange={event => updateConfig({ prompt: event.target.value })} /></div></>}
+            <div className="field"><label>输入结果</label>{nodes.filter(node => selected.deps.includes(node.id)).map(node => <label className="dep" key={node.id}><input type="checkbox" checked={selected.inputRefs?.includes(node.id) || false} onChange={event => updateConfig({ inputRefs: event.target.checked ? [...(selected.inputRefs || []), node.id] : selected.inputRefs?.filter(id => id !== node.id) })} />{node.name}</label>)}</div>
+            {(selected.node_type !== 'human' && selected.node_type !== 'human_gate') && <label className="dep"><input type="checkbox" checked={!!selected.requires_human} onChange={event => updateConfig({ requires_human: event.target.checked })} />执行 Agent 前人工确认输入</label>}
+            <label className="dep"><input type="checkbox" checked={!!selected.final_report} onChange={event => updateConfig({ final_report: event.target.checked })} />最终报告</label>
+            <label className="dep"><input type="checkbox" checked={!!selected.allow_skip} onChange={event => updateConfig({ allow_skip: event.target.checked })} />允许跳过</label>
             <div className="field"><label>前置依赖</label><div className="dep-list">{nodes.filter(node => node.id !== selected.id).map(node => <label key={node.id} className="dep"><input type="checkbox" checked={selected.deps.includes(node.id)} onChange={event => { if (event.target.checked) connectNodes(node.id, selected.id); else removeDependency(selected.id, node.id); }} /><span>{node.name}</span></label>)}</div><small className="field-warning">拖动节点右侧端点到另一个节点，或勾选上游节点。</small></div>
             <div className="node-stats"><span>入边 {selected.deps.length}</span><span>出边 {nodes.filter(node => node.deps.includes(selected.id)).length}</span></div>
             <button className="danger-btn" aria-label={`删除 节点 ${selectedIndex + 1}`} disabled={nodes.length <= 1} onClick={() => removeNode(selected.id)}><DeleteOutlined /> 删除节点</button>

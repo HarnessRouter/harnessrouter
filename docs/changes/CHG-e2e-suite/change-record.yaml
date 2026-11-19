@@ -1,0 +1,165 @@
+id: CHG-e2e-suite
+status: verifying
+status_reason: 2026-11-19 新增全栈 E2E 套件并完成 Chromium/Edge 执行；真实 Gateway 凭据与 PostgreSQL 不在本套件范围。
+owner: Codex
+source: 用户要求在其他并行会话完成后设计并执行完整 E2E 测试
+goal: 用真实浏览器、真实 Vite、真实 FastAPI App API 和一次性 HTTP Gateway 夹具覆盖 Hexa 主要用户流程，而不是只用路由拦截的受控夹具。
+non_goals:
+  - 连接开发/生产 Gateway 或写入真实数据库
+  - 验证真实 BYOK 模型输出质量
+  - PostgreSQL 迁移、Docker 部署与多实例调度
+reuse_decision: extend
+references:
+  - docs/changes/CHG-e2e-suite/spec.md
+  - docs/changes/CHG-task-centric-workflow/spec.md#版本关系与保存边界
+  - docs/changes/CHG-hexa-app-backend/spec.md
+  - client/README.md#端到端测试
+acceptance:
+  - id: E2E-1
+    entry: / 登录与退出
+    action: 错误密码、正确密码、清 Cookie、重登、退出、刷新草稿
+    expected: HttpOnly Cookie 生效且不可脚本读取；草稿保留；退出回到登录页
+    verification: client/tests/e2e/auth-workspace.spec.ts
+  - id: E2E-2
+    entry: 工作区菜单
+    action: 新建、切换、重命名工作区并深链访问其他工作区任务
+    expected: 任务/模板/运行按工作区隔离，跨区不可读
+    verification: client/tests/e2e/auth-workspace.spec.ts
+  - id: E2E-3
+    entry: 对话页
+    action: 选择 Agent/模型、附件、两轮对话、刷新、产物预览下载、取消长时间生成
+    expected: SSE 与追问持久化；产物经服务端代理；取消结束生成态
+    verification: client/tests/e2e/chat-agents.spec.ts
+  - id: E2E-4
+    entry: 对话页 Markdown 回复
+    action: 渲染 GFM、复制代码、切换深色与移动端
+    expected: 标题/表格/高亮/复制可用且无横向溢出
+    verification: client/tests/e2e/chat-agents.spec.ts
+  - id: E2E-5
+    entry: 智能体详情
+    action: 切换五个设置层级
+    expected: Gateway 字段完整展示；环境变量值隐藏
+    verification: client/tests/e2e/chat-agents.spec.ts
+  - id: E2E-6
+    entry: 智能体与模板库
+    action: 另存模板、创建/删除 Agent、删除模板
+    expected: 真实 API/数据库持久化，刷新与删除后结果一致
+    verification: client/tests/e2e/chat-agents.spec.ts
+  - id: E2E-7
+    entry: 任务主链路
+    action: 建任务、保存流程、运行、产物下载、采用结果、保存为模板并复用
+    expected: 版本、快照、Artifact 权限与来源模板关系正确
+    verification: client/tests/e2e/tasks-lifecycle.spec.ts
+  - id: E2E-8
+    entry: 并行调查与人工门控
+    action: 五个并行结果、部分选择、继续、暂停、取消与活动 Run 锁定
+    expected: inputRefs 只含选中结果；状态与锁定符合契约
+    verification: client/tests/e2e/tasks-lifecycle.spec.ts
+  - id: E2E-9
+    entry: 运行版本与重放
+    action: 先后运行 v2/v3、拖动节点、重放、刷新
+    expected: 历史 Run 使用各自快照，查看操作零写入
+    verification: client/tests/e2e/tasks-lifecycle.spec.ts
+  - id: E2E-10
+    entry: 模板版本
+    action: 保存 v1、编辑 v2、用 v2 建任务、追加任务版本
+    expected: 旧模板版本和旧任务不被隐式改写
+    verification: client/tests/e2e/tasks-lifecycle.spec.ts
+  - id: E2E-11
+    entry: 失败恢复
+    action: 节点失败、重开任务、保存新版本并运行
+    expected: 新 Run 成功且旧失败 Run 保留
+    verification: client/tests/e2e/tasks-lifecycle.spec.ts
+  - id: E2E-12
+    entry: 运行记录
+    action: 归档/取消归档、节点重跑、中断 SSE
+    expected: 状态持久化；重跑新 Run；断线只读轮询恢复
+    verification: client/tests/e2e/tasks-recovery.spec.ts
+  - id: E2E-13
+    entry: 390×844 视口
+    action: 任务工作台与对话
+    expected: 单列、抽屉不超屏、触控与字号达标
+    verification: client/tests/e2e/tasks-lifecycle.spec.ts
+  - id: E2E-14
+    entry: Microsoft Edge
+    action: 对话 Markdown 与任务运行
+    expected: 与 Chromium 相同结果且无运行时错误
+    verification: client/tests/e2e/cross-browser.spec.ts
+impact:
+  direct:
+    - client/playwright.e2e.config.ts（新增）
+    - client/tests/e2e/（新增 helpers、auth-workspace、chat-agents、tasks-lifecycle、tasks-recovery、cross-browser）
+    - hexa-api/tests/serve_e2e.py（夹具扩展：工作区写接口、模板列表、Agent 详情字段、任务上下文输出、失败/慢速/阻塞响应、可配置端口）
+    - client/package.json（test:e2e 脚本）
+    - client/README.md（运行说明）
+    - client/tests/integration-ui/tasks.spec.ts（运行前确认弹窗）
+  transitive:
+    - 任务工作台选择器与可访问名称
+    - Artifact 下载与 SSE 断线轮询
+  unknown:
+    - 未来新增页面或选择器变化需要同步维护 E2E
+test_scope:
+  selection_reason: 用户要求完整端到端回归；套件覆盖认证、工作区、对话、Agent、任务、模板、运行记录与移动端，故执行整份新增 E2E，并回归后端 API 与既有集成套件。
+  selected:
+    - cd client && npx playwright test -c playwright.e2e.config.ts --workers=1
+    - python -m pytest -q hexa-api/tests
+    - npx tsc --noEmit -p client/tsconfig.json
+    - cd client && npx playwright test -c playwright.integration.config.ts tasks.spec.ts --workers=1
+  excluded:
+    - 根仓库 runner/gateway 全量测试：本次未修改其运行时代码
+    - 真实 Gateway/BYOK：缺少可用凭据，且现有开发 Gateway 会写入真实工作区
+verification:
+  - acceptance_ids: [E2E-1, E2E-2, E2E-3, E2E-4, E2E-5, E2E-6, E2E-7, E2E-8, E2E-9, E2E-10, E2E-11, E2E-12, E2E-13, E2E-14]
+    status: passed
+    command_or_steps: "cd client; npx playwright test -c playwright.e2e.config.ts --workers=1 --reporter=line"
+    exit_code: 0
+    revision: dirty worktree after parallel sessions
+    environment: Windows 11; Chromium (Playwright bundled) + Microsoft Edge; Vite 4020; FastAPI 4022; HTTP Gateway fixture 4021; disposable SQLite
+    evidence: "18 passed in 5.4m：17 Chromium + 1 Edge；覆盖登录/会话恢复、工作区隔离、对话 SSE 与取消、Markdown、Agent 详情与模板、任务主链路、人工门控、暂停/取消/活动运行锁定、版本快照与重放无写入、模板版本固定、失败重开、归档、节点重跑、SSE 断线轮询、移动端布局"
+    reason: passed
+    next_action: 真实 Gateway 与 PostgreSQL 另行验收
+  - acceptance_ids: [E2E-7, E2E-8, E2E-9, E2E-11, E2E-12]
+    status: passed
+    command_or_steps: "python -m pytest -q hexa-api/tests"
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows; SQLite test factory; fake Gateway
+    evidence: "72 passed in 42.81s"
+    reason: 验证 serve_e2e.py 扩展未破坏后端契约
+    next_action: null
+  - acceptance_ids: [E2E-1, E2E-3, E2E-14]
+    status: passed
+    command_or_steps: "cd client; npx playwright test -c playwright.integration.config.ts --workers=1（9/10），随后单独复跑 tests/integration-ui/backend.spec.ts -g \"Agent management\" --project=edge"
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows; Chromium + Edge; real FastAPI and HTTP Gateway fixture
+    evidence: "tasks.spec.ts 2/2 passed；全量 integration-ui 9/10，唯一失败为 Edge 进程被关闭的环境抖动（browser.newContext），单独复跑该用例 1/1 passed"
+    reason: 既有真实 HTTP 集成任务链路改为显式确认运行后恢复通过；Edge 失败可隔离复现为环境层
+    next_action: 环境稳定后可按需再跑一次全量 integration-ui
+  - acceptance_ids: [E2E-1, E2E-4, E2E-13]
+    status: passed
+    command_or_steps: "cd client; npm test; npx tsc --noEmit -p tsconfig.json"
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows local workspace
+    evidence: "31 unit tests passed; typecheck passed"
+    reason: 新增 helpers 与配置未破坏客户端类型与既有单测
+    next_action: null
+  - acceptance_ids: [E2E-EDGE]
+    status: passed
+    command_or_steps: "npx tsc --noEmit -p client/tsconfig.json"
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows local workspace
+    evidence: "typecheck passed"
+    reason: passed
+    next_action: null
+remaining:
+  - 真实 Gateway / BYOK 模型链路未在本次 E2E 中执行；夹具只证明协议与持久化边界。
+  - PostgreSQL 迁移与部署环境 E2E 未执行。
+  - 全量 integration-ui 的 Edge `backend.spec.ts` 出现一次浏览器进程关闭（非断言失败）；该用例单独复跑通过，仍建议在更稳定的 Edge 环境重跑全量。
+pagination_followup:
+  date: "2026-11-19"
+  scope: 补齐 plan.md，并新增真实 HTTP task-pagination.spec.ts；具体功能和执行证据统一引用 CHG-task-centric-workflow/change-record.yaml 的 workbench_pagination_closure。
+  process_note: plan.md 是接手发现缺失后事后整理，不作为原先已执行事前方案设计的证据。
+  evidence: ../CHG-task-centric-workflow/change-record.yaml

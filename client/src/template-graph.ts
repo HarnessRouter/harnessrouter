@@ -19,6 +19,7 @@ export function graphBounds(nodes: TemplateNode[]) {
 }
 
 export function nodeRole(nodes: TemplateNode[], node: TemplateNode) {
+  if (node.node_type === 'human' || node.node_type === 'human_gate') return '人工处理';
   if (!node.deps.length) return '起点';
   return nodes.some(item => item.deps.includes(node.id)) ? 'Agent' : '总结';
 }

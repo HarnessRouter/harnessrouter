@@ -1,6 +1,18 @@
 import time
 
 from app.db.models import NodeRun, Run, WorkflowRevision
+from app.tasks.service import is_human_node
+
+
+def test_human_node_predicate_covers_explicit_and_legacy_gate_configs():
+    assert is_human_node({'node_type': 'human'})
+    assert is_human_node({'node_type': 'human', 'requires_human': False})
+    assert is_human_node({'node_type': 'human_gate'})
+    assert is_human_node({'node_type': 'human_gate', 'requires_human': False})
+    assert is_human_node({'requires_human': True})
+    assert is_human_node({'node_type': 'agent', 'requires_human': True})
+    assert not is_human_node({'node_type': 'agent', 'requires_human': False})
+    assert not is_human_node({})
 
 
 def authenticated(client):

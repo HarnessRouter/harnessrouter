@@ -1,6 +1,7 @@
 # 实施方案
 
 - 行为、边界与验收依据：`spec.md`。
+- 任务、模板、运行快照和查看布局的保存语义统一以 [spec.md 的版本关系与保存边界](spec.md#版本关系与保存边界) 为准；实现步骤 1、3、5、6 均须覆盖该节验收，不将保存任务流程等同于保存模板。
 - 视觉验收：`visual-contract.md`。
 - 平台验收：`platform-matrix.md`。
 - 执行记录：`change-record.yaml`。
@@ -10,6 +11,7 @@
 - 任务后端新增在 `hexa-api/app/tasks/`，复用现有认证、SQLAlchemy session factory、`AppWorkspace` 权限边界和 `GatewayClient`。
 - `hexa-api` 负责状态机和调度；`client` 通过 app API 读写，不在 `main.tsx` 保存权威运行状态，不直接调用 Gateway 执行任务。
 - 数据库使用新增迁移文件 `hexa-api/migrations/002_tasks.sql`；SQLite 测试工厂继续使用 SQLAlchemy metadata，生产 PostgreSQL 按部署流程执行迁移。
+- 领域身份由服务端保存：Task.current_revision_id 指向 WorkflowRevision，Run.workflow_revision_id 固定执行版本，模板任务保留 TemplateVersion 来源引用；Run.execution_snapshot 保存执行快照，旧数据库迁移按版本号回填这些身份。
 - 先实现领域状态与 API 契约测试，再实现持久化和执行器，最后接入 client 页面。每个行为按 Red → Green → Refactor 推进。
 - 运行调度采用 `hexa-api` 进程内异步任务，首版按单实例部署；进程恢复时将无法确认的活动节点标记失败，不自动重放外部 Agent 请求。
 
@@ -30,3 +32,39 @@
 - 新接口采用新增路径，旧 Gateway 接口不修改。任务功能异常时，client 保留任务列表和错误重试入口；服务端保留已写入的 Run 历史。
 - 进程重启恢复采用“标记不确定失败、不自动重放”的安全策略；用户可以通过终态重跑显式开始新的 Agent 请求。
 - 文档完成后，`spec.md` 作为任务领域长期契约；`plan.md` 和 `change-record.yaml` 保留实施证据，接口稳定后同步到 `hexa-api/README.md`。
+
+## 2026-11-18 工作台 API 接入批次
+
+复用现有任务、模板、运行 REST/SSE 和工作台全高分栏样式，替换 `AppTasks` 中演示数据。列表按当前工作区分页读取；详情、模板编辑与运行快照分别加载。复用画布编辑器，增加任务/模板保存文案、异步保存和节点执行配置；任务草稿保存成功后才退出，失败保留草稿。运行只使用已保存版本，活动运行锁定语义编辑。SSE 生命周期交给 effect 管理，断线以只读轮询恢复。模板操作独立调用模板接口，不写本地演示模板。
+
+| 步骤 | 改动与依赖 | 对应验收及验证方式 |
+| --- | --- | --- |
+| A | API 客户端分页、工作区、结构化错误和保存版本参数；真实数据展示转换 | API 客户端与工作台数据单测；AC-1、AC-7、AC-13 |
+| B | 任务创建、工作流编辑/保存、模板列表/版本/显式使用；补来源模板固定关系响应 | FastAPI 集成测试、浏览器受控接口测试；AC-1、AC-2、AC-11 |
+| C | Run 历史、SSE/恢复、控制/人工继续、只读快照画布与脱敏调试 | 真实 HTTP App API + SQLite + HTTP Gateway 夹具 E2E；AC-3、AC-6、AC-7、AC-10 |
+| D | 桌面/移动状态和现有导航回归、自查 | Chromium/Edge 目标 E2E、截图、类型检查与构建；AC-14 |
+
+本批次不扩展 Artifact 存储、部署或生产 PostgreSQL 验收。执行证据及未覆盖场景写入同目录 Change；此前历史验证不能作为本批次的证据。
+
+## 2026-11-18 剩余功能全量接入批次
+
+本批次继续复用现有任务 REST/SSE、WorkflowRevision、Run 快照和 Gateway 文件代理。Artifact 采用 Gateway 文件引用，新增任务权限元数据和服务端下载代理；新增 005 迁移，PostgreSQL 由部署命令按 001 至 005 顺序执行，SQLite 仅由测试工厂自动建表。任务、Run、节点、调试尝试、模板和 Artifact 列表统一返回分页元数据，客户端按页读取并在详情/调试视图按需加载。Compose 验收配置只新增 hexa-api 与 PostgreSQL，不改变现有自托管 Gateway 入口。
+
+实施顺序为：先写 Artifact、权限和分页 API 的失败测试；再实现模型、执行器产物落库、REST 下载和清理重试；随后接入客户端 Artifact/分页显示；最后验证迁移脚本、Compose、完整后端/客户端回归和真实 HTTP 集成。真实 PostgreSQL 与真实 BYOK 模型服务需要运行时凭据，缺失时记录 `not_evaluated`，不能由 SQLite 或 fake Gateway 代替。
+
+## 2026-11-19 人工节点分层回归
+
+围绕 spec.md 的人工门控契约补充 Unit、Integration、E2E 三层证据。项目未定义名为 L3 的正式标准，本批按三层覆盖解释用户要求，不能据此声明生产环境验证完成。
+
+- Unit：显式 `human`、`human_gate`、旧 `requires_human` 和普通 Agent 分支。
+- Integration：两种显式人工节点依赖完成后保持等待；非法选择不写入决定、不执行下游；合法选择仅推进同一个 Run，记录输入引用；重复幂等请求不追加决定。
+- E2E：浏览器编辑并保存人工节点、启动、刷新后恢复等待、勾选结果、确认并继续，检查快照和决定；复用真实本地 HTTP App API、SQLite 与 HTTP Gateway 夹具。
+- 复用已通过的任务生命周期 E2E 作为辅助函数回归；发生用例修改时仅重跑受影响旅程。执行命令、实际数量与限制统一写入 change-record.yaml。
+
+## 2026-11-19 分页闭环改造
+
+复用现有列表协议和保存边界，删除工作台自动耗尽分页的读取方式。任务、模板和跨任务 Run 列表每批最多 20 条；下一批由用户翻页触发。搜索与状态筛选在服务端先过滤再分页，Run 列表通过带任务权限的联表查询读取，不遍历所有任务历史。详情深链独立读取，不受列表首批范围限制。列表及详情追加页失败保留已加载内容，并允许重试；工作区切换或新查询后忽略旧响应。
+
+模板响应另提供最新版本摘要，编辑与使用前重新读取该摘要，不遍历历史。历史版本、产物、调试尝试按服务端游标单批追加，按 ID 去重；游标按服务端 offset/limit 推进，不按去重后的数组长度推算。正常阅读、翻页和重放不写业务数据。
+
+验证顺序：分页合并与游标单测 Red、服务端搜索/隔离/跨任务 Run/模板最新版本集成测试 Red、浏览器按需加载与失败重试 Red；再实现 API 与工作台。最终执行相关后端回归、客户端单测、Chromium/Edge 工作台回归、真实 HTTP App API＋SQLite E2E、桌面和移动截图检查、类型检查和构建。执行证据统一记录在 change-record.yaml；不扩展 PostgreSQL、真实模型凭据或生产部署范围。

@@ -1,0 +1,35 @@
+export const designTokens = {
+  primary: '#2563eb',
+  primaryDark: '#4c9dff',
+  primarySoft: '#eff4ff',
+  bg: '#f6f7f9',
+  surface: '#ffffff',
+  surfaceDark: '#16161a',
+  surfaceMutedDark: '#1f1f25',
+  ink: '#111827',
+  inkDark: '#f3f3f5',
+  inkMuted: '#667085',
+  inkMutedDark: '#98a2b3',
+  line: '#e4e7ec',
+  lineDark: '#2a2a32',
+  lineStrongDark: '#465064',
+  rail: '#0b1220',
+  radiusControl: 8,
+  fontUi: '"Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif',
+} as const;
+
+export const antdTheme = (dark: boolean) => ({
+  token: {
+    colorPrimary: dark ? designTokens.primaryDark : designTokens.primary,
+    colorTextLightSolid: dark ? designTokens.rail : designTokens.surface,
+    colorBgBase: dark ? '#0c0c0f' : designTokens.surface,
+    colorBgContainer: dark ? designTokens.surfaceDark : designTokens.surface,
+    colorBgElevated: dark ? designTokens.surfaceMutedDark : designTokens.surface,
+    colorTextBase: dark ? designTokens.inkDark : designTokens.ink,
+    colorTextSecondary: dark ? designTokens.inkMutedDark : designTokens.inkMuted,
+    colorBorder: dark ? designTokens.lineStrongDark : designTokens.line,
+    colorBorderSecondary: dark ? designTokens.lineDark : designTokens.line,
+    borderRadius: designTokens.radiusControl,
+    fontFamily: designTokens.fontUi,
+  },
+});

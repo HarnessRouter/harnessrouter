@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import json
 import hashlib
 import asyncio
+import time
 from typing import Any
 
 from fastapi import Cookie, Depends, FastAPI, File, UploadFile, Header, HTTPException, Request, Response, status
@@ -19,6 +20,7 @@ from app.db.models import AppWorkspace, AuthSession, Conversation, ConversationM
 from app.gateway.client import GatewayClient, GatewayError, response_text
 from app.tasks.router import build_router
 from app.tasks.service import TaskError, TaskExecutor
+from app.agents.router import build_agent_router
 
 
 class LoginBody(BaseModel):
@@ -27,8 +29,8 @@ class LoginBody(BaseModel):
 
 
 class WorkspaceBody(BaseModel):
-    name: str
-    description: str = ""
+    name: str | None = None
+    description: str | None = None
 
 
 class WorkspaceSelectionBody(BaseModel):
@@ -74,7 +76,7 @@ class ContinueRunBody(BaseModel):
 
 def create_app(settings: Settings | None = None, gateway: Any | None = None) -> FastAPI:
     resolved = settings or Settings.from_env()
-    adapter = gateway or GatewayClient(resolved.gateway_url, resolved.gateway_api_key)
+    adapter = gateway or GatewayClient(resolved.gateway_url, resolved.gateway_api_key, cookie=resolved.gateway_cookie)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -171,6 +173,7 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message) from exc
 
     app.include_router(build_router(app, require_session, user_id))
+    app.include_router(build_agent_router(app, require_session, user_id))
 
     @app.exception_handler(TaskError)
     async def invalid_task(request, exc):
@@ -211,16 +214,36 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
 
     @app.post("/api/hexa/workspaces", status_code=status.HTTP_201_CREATED)
     async def create_workspace(body: WorkspaceBody, session: AuthSession = Depends(require_session)) -> dict[str, Any]:
-        name = body.name.strip()
+        name = (body.name or "").strip()
         if not name:
             raise HTTPException(status_code=422, detail="工作区名称不能为空。")
         try:
-            remote = await app.state.gateway.create_workspace(name, body.description.strip())
+            remote = await app.state.gateway.create_workspace(name, (body.description or "").strip())
         except Exception:
             raise HTTPException(502, '工作空间创建失败。') from None
         with app.state.session_factory() as db:
             workspace = AppWorkspace(user_id=user_id(session), gateway_id=remote['id'], name=remote['name'], description=remote.get('description', ''))
             db.add(workspace)
+            db.commit()
+            db.refresh(workspace)
+            return workspace_json(workspace)
+
+    @app.patch("/api/hexa/workspaces/{workspace_id}")
+    async def update_workspace(workspace_id: int, body: WorkspaceBody, session: AuthSession = Depends(require_session)) -> dict[str, Any]:
+        with app.state.session_factory() as db:
+            workspace = db.scalar(select(AppWorkspace).where(AppWorkspace.id == workspace_id, AppWorkspace.user_id == user_id(session)))
+            if workspace is None:
+                raise HTTPException(status_code=404, detail="工作区不存在。")
+            name = body.name.strip() if body.name is not None else workspace.name
+            if not name:
+                raise HTTPException(status_code=422, detail="工作区名称不能为空。")
+            description = body.description.strip() if body.description is not None else workspace.description
+            try:
+                remote = await app.state.gateway.update_workspace(workspace.gateway_id, name, description)
+            except Exception:
+                raise HTTPException(502, '工作空间保存失败。') from None
+            workspace.name = remote.get('name', name)
+            workspace.description = remote.get('description', description)
             db.commit()
             db.refresh(workspace)
             return workspace_json(workspace)
@@ -262,6 +285,8 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
             if conversation is None:
                 raise HTTPException(status_code=404, detail="会话不存在。")
             messages = db.scalars(select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.id)).all()
+            records = db.scalars(select(IdempotencyRequest).where(IdempotencyRequest.conversation_id == conversation.id)).all()
+            executions = {record.key: json.loads(record.execution_json) for record in records if record.execution_json}
             return {
                 "id": conversation.id,
                 "title": conversation.title,
@@ -269,7 +294,7 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                 "agent_id": conversation.agent_id,
                 "model": conversation.model,
                 "status": conversation.response_status,
-                "messages": [{"id": row.id, "role": row.role, "text": row.text} for row in messages],
+                "messages": [{"id": row.id, "role": row.role, "text": row.text, **({'execution': executions[row.idempotency_key]} if row.role == 'assistant' and row.idempotency_key in executions else {})} for row in messages],
             }
 
     @app.get("/api/hexa/conversations/{conversation_id}/status")
@@ -294,6 +319,19 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                             conversation.response_status = final
                             conversation.response_error = 'Gateway 执行失败。' if final == 'failed' else None
                             text = response_text(result)
+                            if pending.execution_json:
+                                from app.gateway.execution import PublicExecution
+                                execution = json.loads(pending.execution_json)
+                                public = PublicExecution()
+                                public.consume({'response': result})
+                                details = public.snapshot()
+                                if details['reasoning'] or details['steps']:
+                                    execution.update(details)
+                                execution['status'] = final
+                                execution.pop('elapsed_ms', None)
+                                if isinstance(result.get('completed_at'), (int, float)) and execution.get('started_at'):
+                                    execution['elapsed_ms'] = max(0, round((result['completed_at'] - execution['started_at']) * 1000))
+                                pending.execution_json = json.dumps(execution, ensure_ascii=False)
                             if text:
                                 db.add(ConversationMessage(conversation_id=conversation_id, role='assistant', text=text, idempotency_key=pending.key))
                             pending.http_status = 502 if final == 'failed' else 200
@@ -314,6 +352,8 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                     row = db.get(Conversation, conversation_id)
                     pending = db.scalar(select(IdempotencyRequest).where(IdempotencyRequest.conversation_id == conversation_id).order_by(IdempotencyRequest.id.desc()))
                     snapshot = {'status': row.response_status, 'response_id': pending.response_id if pending else row.previous_response_id, 'text': pending.partial_text if pending else ''}
+                    if pending and pending.execution_json:
+                        snapshot['execution'] = json.loads(pending.execution_json)
                 encoded = json.dumps(snapshot, ensure_ascii=False)
                 if encoded != last:
                     yield f'data: {encoded}\n\n'
@@ -441,7 +481,9 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                 db.rollback()
                 raise HTTPException(status_code=409, detail="请求状态不确定，请先刷新会话状态。")
             previous = conversation.previous_response_id
-            request_record = IdempotencyRequest(user_id=uid, key=idempotency_key, conversation_id=conversation_id, request_hash=fingerprint, status="pending")
+            started_at = time.time()
+            execution = {'started_at': started_at, 'harness_id': conversation.agent_id, 'model': conversation.model, 'status': 'running'}
+            request_record = IdempotencyRequest(user_id=uid, key=idempotency_key, conversation_id=conversation_id, request_hash=fingerprint, status="pending", execution_json=json.dumps(execution))
             message = ConversationMessage(conversation_id=conversation.id, role="user", text=text, idempotency_key=idempotency_key)
             db.add_all([message, request_record])
             for row in attachments:
@@ -461,13 +503,22 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
                             record.response_id = rid
                         record.partial_text = partial
                         progress_db.commit()
+            async def save_execution(details):
+                execution.update(details)
+                with app.state.session_factory() as progress_db:
+                    record = progress_db.get(IdempotencyRequest, request_record.id)
+                    if record:
+                        record.execution_json = json.dumps(execution, ensure_ascii=False)
+                        progress_db.commit()
             try:
                 content = ([{'type': 'input_text', 'text': text}] if text else []) + [{'type': 'input_image' if row.media_type.startswith('image/') else 'input_file', 'file_id': row.gateway_id} for row in attachments]
-                result = await app.state.gateway.create_response(text, previous, remote_key, agent_id=conversation.agent_id, model=conversation.model, workspace_id=space.gateway_id if space else '', content=content, on_progress=save_progress)
+                result = await app.state.gateway.create_response(text, previous, remote_key, agent_id=conversation.agent_id, model=conversation.model, workspace_id=space.gateway_id if space else '', content=content, on_progress=save_progress, on_execution=save_execution)
             except Exception as exc:
                 definite = isinstance(exc, GatewayError) and not exc.uncertain
                 message_text = "Gateway 请求失败。" if definite else "连接中断，请刷新会话确认状态；请勿重复提交。"
                 request_record.status = "failed" if definite else "unknown"
+                execution.update(status=request_record.status, elapsed_ms=round((time.time() - started_at) * 1000))
+                request_record.execution_json = json.dumps(execution, ensure_ascii=False)
                 if isinstance(exc, GatewayError):
                     request_record.response_id = exc.response_id
                 request_record.http_status = 502
@@ -480,13 +531,16 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
             response_id = result.get("response_id")
             conversation.previous_response_id = response_id
             conversation.response_status = result.get("status", "completed")
+            execution.update(result.get('execution') or {})
+            execution.update(status=conversation.response_status, elapsed_ms=round((time.time() - started_at) * 1000))
+            request_record.execution_json = json.dumps(execution, ensure_ascii=False)
             assistant = ConversationMessage(conversation_id=conversation.id, role="assistant", text=result.get("text", ""), idempotency_key=idempotency_key)
             db.add(assistant)
             for file in result.get('files', []):
                 if file.get('file_id') and file.get('container_id'):
                     db.add(ConversationFile(user_id=uid, conversation_id=conversation_id, gateway_id=file['file_id'], container_id=file['container_id'], filename=file.get('filename', '输出文件'), media_type=file.get('media_type', 'application/octet-stream'), bytes=file.get('bytes', 0), direction='output'))
             db.flush()
-            payload = {"accepted": True, "message": {"id": message.id, "role": message.role, "text": message.text}, "assistant": {"id": assistant.id, "role": assistant.role, "text": assistant.text}, "response_id": response_id, "status": result.get("status", "completed"), "previous_response_id": response_id}
+            payload = {"accepted": True, "message": {"id": message.id, "role": message.role, "text": message.text}, "assistant": {"id": assistant.id, "role": assistant.role, "text": assistant.text, "execution": execution}, "response_id": response_id, "status": result.get("status", "completed"), "previous_response_id": response_id}
             request_record.response_id = response_id
             request_record.status = result.get("status", "completed")
             request_record.http_status = 200

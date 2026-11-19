@@ -1,0 +1,23 @@
+id: CHG-chat-reply-details
+status: verified_locally
+owner: Codex
+baseline: existing dirty working tree; preserve unrelated changes
+reuse: extend existing Gateway SSE, idempotency records, chat reply components
+scope: inline reply execution details; restore mistakenly changed inspector
+spec: spec.md
+plan: plan.md
+validation:
+  red: Gateway and conversation tests failed with missing execution; UI test failed at per-reply elapsed label before implementation
+  unit: elapsed formatter 1 passed; Gateway SSE adapter tests included in backend suite
+  integration: python -m pytest tests/test_gateway_sse.py tests/test_conversations.py -q; 17 passed
+  browser: Chromium chat suite 5 passed; Edge inline details test 1 passed
+  e2e: Chromium reply execution details cross SSE and database reload; 1 passed using real API and SQLite with controlled HTTP Gateway fixture
+  build: npm run typecheck and npm run build passed; existing bundle size advisory
+  diff: git diff --check passed
+  live: backend restarted using existing dev database; healthz and frontend both HTTP 200
+  visual: desktop 1440x900 and mobile 390x844 inspected; inline flow, no overlay or horizontal overflow
+  security: text rendered by React; tool arguments excluded; details served through existing conversation ownership checks; no secrets in evidence
+remaining:
+  - PostgreSQL migration supplied but not executed locally; current development environment is SQLite
+  - Live model reasoning not requested to avoid sending an unsolicited conversation; HTTP Gateway event contract verified through E2E fixture
+document_exit: preserve spec and evidence summary for reply execution API contract

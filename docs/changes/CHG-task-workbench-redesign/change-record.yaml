@@ -1,0 +1,284 @@
+id: CHG-task-workbench-redesign
+status: verified_locally
+status_reason: 三页统一 720px 全高详情、可拖拽宽度、列表/卡片视图和截图已完成本地实现与 Chromium/Edge 验证；未提交、未合入远端。
+owner: Codex
+source: 用户要求按当前任务作战台方案开始升级前端（2026-11-17）
+goal: 将我的任务、运行记录、模板管理和对话页升级为用户确认的全高工作台布局，同时保留既有业务行为并移除四栏模式。
+non_goals:
+  - 新增或修改 Task / Run / Template / Conversation 后端接口
+  - 恢复 Cloud 部署、hosted provider、目标工作区、余额或密钥入口
+  - 新增 Team、权限、外部队列或任务执行语义
+behavior:
+  before: 任务详情使用抽屉，模板为卡片网格，运行记录以独立画布为主视图，对话检查器覆盖在主区右侧。
+  after: 三个管理页统一使用 720px 全高、可拖拽并可分别记忆宽度的详情栏，支持列表/卡片视图；任务详情直接显示已采用结果与最近运行节点输出，并可在“我的任务”内打开流程图，无需跳转运行记录；对话页使用全高上下文栏，检查器不再覆盖主线程。
+acceptance:
+  - id: AC-1
+    entry: 我的任务
+    action: 查看、筛选、搜索和点选任务
+    expected: 白底单一 table，无分组行，选中行与右侧详情同步
+    verification: client/tests/app-ui/workbench-redesign.spec.ts、tasks.spec.ts
+  - id: AC-2
+    entry: 我的任务桌面视口
+    action: 测量、拖拽、键盘调整并收起/展开详情栏
+    expected: 详情栏全高，1440px 下展开 720px，窄桌面按 clamp(400px, 64%, 720px) 收缩且列表至少 280px；拖拽和键盘调整生效，收起 44px 后恢复本页宽度
+    verification: client/tests/app-ui/workbench-redesign.spec.ts
+  - id: AC-3
+    entry: 运行记录
+    action: 选择 Run、查看详情、打开流程图
+    expected: 全高详情 1440px 下 720px、窄桌面按容器收缩，轨迹与事件双列，流程图次级入口可用
+    verification: client/tests/app-ui/workbench-redesign.spec.ts、run-history.spec.ts
+  - id: AC-4
+    entry: 模板管理
+    action: 选择模板并进入编辑器
+    expected: 全高详情 1440px 下 720px、可拖拽且窄桌面按容器收缩，列表/卡片视图，编辑器可返回并保存
+    verification: client/tests/app-ui/workbench-redesign.spec.ts、tasks.spec.ts
+  - id: AC-5
+    entry: 对话
+    action: 查看会话和上下文，收起上下文
+    expected: 主线程和上下文全高，上下文 304px，收起后 44px，composer 可见
+    verification: client/tests/app-ui/workbench-redesign.spec.ts、navigation.spec.ts、chat.spec.ts
+  - id: AC-6
+    entry: 1440×900、1280×900、1024×900 与 390×844
+    action: 打开四个页面并切换详情
+    expected: 桌面无横向滚动，窄桌面三页详情与列表按容器宽度收缩且列表至少 280px、无内部溢出，移动端可访问抽屉且无页面横向溢出
+    verification: client/tests/app-ui/workbench-redesign.spec.ts
+  - id: AC-7
+    entry: 既有任务、模板和对话操作
+    action: 运行既有筛选、编辑器、发送与恢复用例
+    expected: 原有业务行为仍可用
+    verification: client/tests/app-ui/tasks.spec.ts、chat.spec.ts、run-history.spec.ts、navigation.spec.ts
+  - id: AC-8
+    entry: 我的任务 → 任务详情
+    action: 查看任务结果，打开流程图并返回任务详情
+    expected: 详情直接显示已采用结果与最近运行节点输出（只读快照、按节点去重）；“查看流程图”在“我的任务”内打开最近运行快照，返回后回到原详情，侧栏不切换到运行记录；草稿任务显示只读结构预览
+    verification: client/tests/app-ui/tasks.spec.ts、client/tests/task-workbench.test.mjs
+baseline: worktree before CHG-task-workbench-redesign
+reuse_decision: extend
+discovery_evidence:
+  - docs/design/task-workbench-redesign/design-spec.md
+  - docs/design/task-workbench-redesign/screens/01-tasks-overview.png
+  - docs/design/task-workbench-redesign/screens/03-run-history.png
+  - docs/design/task-workbench-redesign/screens/04-template-library.png
+  - docs/design/task-workbench-redesign/screens/08-chat.png
+references:
+  - spec.md
+  - plan.md
+  - visual-contract.md
+  - docs/changes/CHG-task-centric-workflow/spec.md
+impact:
+  direct:
+    - client/src/AppTasks.tsx
+    - client/src/ApiTaskWorkbench.tsx
+    - client/src/task-workbench.ts
+    - client/src/AppBackendClient.tsx
+    - client/src/styles.css
+    - client/tests/app-ui/task-cards.spec.ts
+    - client/tests/task-workbench.test.mjs
+    - client/tests/app-ui/workbench-redesign.spec.ts
+    - client/tests/app-ui/tasks.spec.ts
+    - client/tests/app-ui/run-history.spec.ts
+    - client/tests/app-ui/navigation.spec.ts
+    - client/tests/app-ui/chat.spec.ts
+  transitive:
+    - client/src/AppModules.tsx
+    - client/src/NavigationRail.tsx
+    - client/src/ChatInspector.tsx
+    - client/src/WorkspaceMenu.tsx
+  unknown:
+    - 真实 Gateway 与 Provider 环境下的完整会话链路
+dependencies:
+  - 现有 AppBackendClient 会话、Agent、模型、附件 API
+  - 现有 AppTasks 样例数据和 Templates 编辑器
+test_scope:
+  selection_reason: 变更集中在四个工作台页面及其共享应用壳，使用定向 Playwright 覆盖结构和断点，类型检查与构建覆盖编译边界。
+  selected:
+    - client/tests/app-ui/task-cards.spec.ts
+    - client/tests/app-ui/workbench-redesign.spec.ts
+    - client/tests/app-ui/tasks.spec.ts
+    - client/tests/app-ui/run-history.spec.ts
+    - client/tests/app-ui/navigation.spec.ts
+    - client/tests/app-ui/chat.spec.ts
+    - npm run typecheck
+    - npm test
+    - npm run build
+  excluded:
+    - hexa-api 与 Gateway 后端测试：本次未修改后端行为
+  full_suite_trigger: 共享应用壳、工作台样式和导航入口影响会话、Agent、模板与设置模块，按全量 Chromium 回归复核
+verification:
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts tests/app-ui/workbench-redesign.spec.ts --project=chromium
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Chromium, 1440x900, 1280x900, 1024x900 and 390x844
+    evidence: 9/9 passed（Chromium + Edge）；覆盖单一 table、任务行铺满至底部状态栏、三页 1440 下统一 720px 全高详情、1024 下列表至少 280px、鼠标拖拽与键盘调整、各页宽度独立记忆、44px 收起恢复、列表/卡片切换、筛选与列表无内部溢出、模板分类计数、对话 304px 全高上下文和移动端抽屉
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-3, AC-4, AC-5, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts tests/app-ui/tasks.spec.ts tests/app-ui/run-history.spec.ts tests/app-ui/navigation.spec.ts tests/app-ui/chat.spec.ts --project=chromium
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Chromium, 1440x900 and 390x844
+    evidence: 26/26 passed（Chromium + Edge）；任务筛选、模板编辑与分类计数、运行选择与重放、窄桌面分栏、导航状态、对话发送/恢复和上下文抽屉保持可用；供应商风险评估与竞品功能对比分别映射到 Run #13 / Run #15，详情操作与选中 Run 同源；运行记录改由 table 行与流程图内“选择运行记录”切换，侧栏不再渲染重复运行列表
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts tests/app-ui/workbench-redesign.spec.ts tests/app-ui/tasks.spec.ts tests/app-ui/run-history.spec.ts tests/app-ui/navigation.spec.ts tests/app-ui/chat.spec.ts --project=edge
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Microsoft Edge
+    evidence: 20/20 passed；完整目标集与既有任务、运行、导航、对话回归在 Edge 同版本通过
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7]
+    status: passed
+    command_or_steps: 在 client 下执行 TypeScript 检查、客户端单测与生产构建（使用 Node 24.22.0；默认 Node 18 不满足 Vite 要求）
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Node.js 24.22.0, TypeScript, Vite 7.3.8
+    evidence: tsc --noEmit 通过；客户端单测 20/20；tsc -b 与 vite build 成功，仅保留既有大于 500kB chunk advisory
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6]
+    status: passed
+    command_or_steps: node client/.artifacts/task-workbench-redesign/capture.mjs + visual inspection
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Chromium, 1440x900 and 390x844
+    evidence: 9 张生产截图已按最终实现重生成并逐张核对（4 桌面列表、3 桌面卡片、2 移动端）；SHA-256 见 evidence.screenshots 与 design-spec 10.2
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts --project=chromium
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Chromium, 4 workers
+    evidence: 30/30 passed；目标工作台用例与登录、会话、Agent、模板、工作区设置等相邻模块全量回归通过
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-6, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts --project=chromium tests/app-ui/task-cards.spec.ts
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Chromium, 1440x900, 1280x900, 1024x900, 900x900 and 390x844
+    evidence: 4/4 passed；卡片网格改为 max-content 行高后，单列/窄列下标题、说明和元数据完整位于卡片内且无内部滚动；缩略图按容器等比缩放，节点宽度不小于 40px 且不越出可视化区；running/succeeded/queued/failed 节点与 done/active/ready/pending 连线使用独立语义色，running 节点呼吸、active 连线虚线流动，reduce motion 下均关闭
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-6, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts --project=chromium --workers=4
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Chromium, 4 workers
+    evidence: 44/44 passed；新增卡片与流程图状态用例和既有登录、对话、Agent、模板、任务、运行、工作区、视觉 token 回归全部通过
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-6, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts --project=edge tests/app-ui/task-cards.spec.ts tests/app-ui/workbench-redesign.spec.ts
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Microsoft Edge
+    evidence: 8/8 passed；Edge 下卡片单列塌缩、缩略图适配、状态动画与 reduced-motion 均通过
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7]
+    status: passed
+    command_or_steps: npm run typecheck && npm test && npm run build
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Node.js 24.22.0, TypeScript, Vite 7.3.8
+    evidence: tsc --noEmit 通过；客户端单测 31/31，含 nodeStatusTone / nodeStatusLive / flowEdgeTone；生产构建成功，仅保留既有 >500kB chunk advisory
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-8, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts --project=edge --workers=1 tests/app-ui/tasks.spec.ts tests/app-ui/task-cards.spec.ts
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Microsoft Edge, 1440x900 and 390x844
+    evidence: 12/12 passed；任务详情直接显示“最近运行节点输出”只读快照；点击“查看流程图”后在“我的任务”内显示 Run #18 快照，侧栏仍选中“我的任务”，返回后回到原详情；草稿任务显示“尚未运行”的只读结构预览；卡片单列塌缩与状态动画同时通过
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-8]
+    status: passed
+    command_or_steps: npm run typecheck && npm test && npm run build
+    exit_code: 0
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Node.js 24.22.0, TypeScript, Vite 7.3.8
+    evidence: tsc --noEmit 通过；客户端单测 33/33，新增 latestRunOutputs 过滤空输出、保留空对象输出和空 Run；生产构建成功，仅保留既有 >500kB chunk advisory
+    reason: null
+    next_action: null
+  - acceptance_ids: [AC-8]
+    status: failed
+    command_or_steps: npx playwright test -c playwright.app.config.ts --project=chromium --workers=4
+    exit_code: 1
+    revision: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + dirty worktree
+    environment: Windows, Chromium, 4 workers
+    evidence: 42/45 passed；任务工作台与新增用例通过。失败项为 agents.spec.ts:81 模型切换、agents.spec.ts:113 Agent 详情“开始对话”、navigation.spec.ts:102 检查器“参与 Agent”；逐文件串行复跑仍失败，均为既有 Agent/导航问题
+    reason: 本轮未修改 Agent/导航路径；失败与任务结果/流程图改动无关，不在本 Change 范围内修复
+    next_action: 由 Agent/导航改动后续单独处理
+  - acceptance_ids: [AC-8, AC-7]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts --project=chromium --workers=1 tests/app-ui/tasks.spec.ts -g "human node can be operated|human decision selects"；npx playwright test -c playwright.app.config.ts --project=edge --workers=1 tests/app-ui/tasks.spec.ts tests/app-ui/task-cards.spec.ts；npm run typecheck
+    exit_code: 0
+    revision: dirty worktree
+    environment: Windows, Chromium/Edge, 1440x900, Node.js 24.22.0
+    evidence: Chromium 人工节点操作与既有人工确认 2/2；Edge 任务与卡片回归 13/13；TypeScript 检查通过。流程图选中人工节点后可在运行属性中勾选上游结果并确认继续，终止动作也可用；未跳转运行记录。
+    reason: null
+    next_action: null
+evidence:
+  screenshots:
+    - path: docs/screenshots/task-workbench-redesign/app-tasks-overview.png
+      viewport: 1440x900
+      sha256: ee50f5714cbe5a2321dc4ea05fe20de60e6e8fe630be886aeffc7dcd236fd9ae
+    - path: docs/screenshots/task-workbench-redesign/app-runs.png
+      viewport: 1440x900
+      sha256: e3d1a57d429cacf316aceaa0b0676a2ccc64e928c0d3d2151aa3396b7c05bbae
+    - path: docs/screenshots/task-workbench-redesign/app-templates.png
+      viewport: 1440x900
+      sha256: cef94931a500098a24665a646aa50f0f78d4c73a16a661a8f8f7d9a9e0e2a0b6
+    - path: docs/screenshots/task-workbench-redesign/app-chat.png
+      viewport: 1440x900
+      sha256: 5f1c79ba6f475c9a917413f5e53bcd75a14ac996cc7e100180690afe3362e6cf
+    - path: docs/screenshots/task-workbench-redesign/app-tasks-mobile.png
+      viewport: 390x844
+      sha256: f26439bc9ae63fd6a9e05520817a582987f468172e32be4d80cab8ca145077b3
+    - path: docs/screenshots/task-workbench-redesign/app-chat-mobile.png
+      viewport: 390x844
+      sha256: b5d496e0d28c718a298d4bb02898253e3cbe7d36cdfbe5344a63118a7dabf6ab
+    - path: docs/screenshots/task-workbench-redesign/app-tasks-cards.png
+      viewport: 1440x900
+      sha256: c43c348664a2db0e1132d05f81b0be2ca71401ba5e1e76c6dda2a0d52f143240
+    - path: docs/screenshots/task-workbench-redesign/app-runs-cards.png
+      viewport: 1440x900
+      sha256: 60ab328d9688dd08b77a469c8d0be667f0c24cd056339ac25a1f9d0e6f0ac1eb
+    - path: docs/screenshots/task-workbench-redesign/app-templates-cards.png
+      viewport: 1440x900
+      sha256: da0cf317b4e7e3cde620166bc828e95c6089cc2517558ec2dc5dfc31ea7a8f38
+    - path: docs/screenshots/task-workbench-redesign/app-run-graph-states.png
+      viewport: 1440x900
+      sha256: 4eab3198c5cd1783bd2a6b741f42b6943e5ea6b03db3356fc7c4b4a01283e1ea
+    - path: docs/screenshots/task-workbench-redesign/app-task-detail-direct.png
+      viewport: 1440x900
+      sha256: aa84851badb245d29299d61dc5813a90d5b04faf22bce27c4116f3adf6fd8720
+    - path: docs/screenshots/task-workbench-redesign/app-task-flow-direct.png
+      viewport: 1440x900
+      sha256: 298e01b56dcf0433779ee990d732ed3442593d626e7bc146a9c7a3c68d10b130
+remaining:
+  - 真实 Gateway、Provider 与持久化 Task / Run / Template 数据联调（外部环境未提供，not_evaluated）
+  - 非 Windows 平台字体与分栏几何补验
+  - loading、empty、error、权限不足和版本冲突的专用视觉基线
+review: null
+handoff: null
+rollback: 恢复前端三个实现文件和对应测试；不涉及数据迁移或后端状态。
+closure:
+  outcome: 本地实现与验证完成，未提交、未合入远端
+  merge_commit: null
+  release_evidence: []
+  superseded_by: null
+document_exit: 工作台布局长期保留在设计规范；本 Change 保留验证证据与剩余事项。

@@ -5,6 +5,25 @@ from app.gateway.client import GatewayClient
 
 
 @pytest.mark.anyio
+async def test_public_reasoning_and_tool_events_are_separate_from_reply(monkeypatch):
+    import json
+    events = [
+        {'type': 'response.reasoning_summary_text.delta', 'delta': '先核对公开资料。'},
+        {'type': 'response.output_item.added', 'item': {'id': 'call-1', 'type': 'function_call', 'name': 'web_search', 'status': 'in_progress', 'arguments': 'secret-input'}},
+        {'type': 'response.output_item.done', 'item': {'id': 'call-1', 'type': 'function_call', 'name': 'web_search', 'status': 'completed'}},
+        {'type': 'response.completed', 'response': {'id': 'trace-response', 'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '最终结果'}]}]}},
+    ]
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=''.join(f'data: {json.dumps(event)}\n\n' for event in events)))
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(transport=transport, **kwargs))
+    result = await GatewayClient('http://gateway.test', 'test-key').create_response('hi', None, 'trace')
+    assert result['text'] == '最终结果'
+    assert result['execution']['reasoning'] == '先核对公开资料。'
+    assert result['execution']['steps'] == [{'id': 'call-1', 'name': 'web_search', 'status': 'completed'}]
+    assert 'secret-input' not in json.dumps(result)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize('status,event_type', [('completed', 'response.completed'), ('incomplete', 'response.incomplete'), ('cancelled', 'response.failed')])
 async def test_terminal_only_replay_keeps_output_and_cancellation(monkeypatch, status, event_type):
     import json

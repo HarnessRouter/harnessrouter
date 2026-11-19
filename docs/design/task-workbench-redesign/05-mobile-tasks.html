@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 移动端我的任务</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="prototype-page">
+    <div class="mobile-artboard" id="mobile-tasks">
+      <div class="mobile-statusbar">
+        <span>9:41</span>
+        <span class="mobile-status-icons">
+          <span class="mobile-signal"><i></i><i></i><i></i><i></i></span>
+          <span>5G</span>
+          <span class="mobile-battery"></span>
+        </span>
+      </div>
+      <header class="mobile-appbar">
+        <span class="mobile-brand"><svg class="icon"><use href="#i-hex"></use></svg></span>
+        <span class="mobile-apptitle">任务工作台</span>
+        <button class="icon-button icon-button-bare" type="button" aria-label="通知">
+          <svg class="icon"><use href="#i-bell"></use></svg>
+        </button>
+        <span class="mobile-avatar">A</span>
+      </header>
+
+      <main class="mobile-content" aria-label="移动端我的任务">
+        <div class="mobile-heading">
+          <div>
+            <h1>我的任务</h1>
+            <p>先处理需要你介入的事项</p>
+          </div>
+          <button class="mobile-new" type="button" aria-label="新建任务">
+            <svg class="icon"><use href="#i-plus"></use></svg>
+          </button>
+        </div>
+
+        <button class="mobile-attention" type="button">
+          <span class="attention-symbol"><svg class="icon"><use href="#i-alert"></use></svg></span>
+          <span class="mobile-attention-copy">
+            <small>需要你确认</small>
+            <strong>安全事件调查</strong>
+            <span>5 个结果已就绪 · 已选 2 / 5</span>
+          </span>
+          <svg class="icon"><use href="#i-chevron-right"></use></svg>
+        </button>
+
+        <div class="mobile-filters" aria-label="任务筛选">
+          <button class="mobile-chip is-active" type="button">全部 <span>8</span></button>
+          <button class="mobile-chip" type="button">待处理 <span>1</span></button>
+          <button class="mobile-chip" type="button">运行中 <span>2</span></button>
+          <button class="mobile-search" type="button" aria-label="搜索任务">
+            <svg class="icon"><use href="#i-search"></use></svg>
+          </button>
+        </div>
+
+        <div class="mobile-group-label"><span class="status-dot amber"></span>需要你处理<span>1</span></div>
+        <button class="mobile-task-card is-attention" type="button">
+          <span class="task-mark amber"><svg class="icon"><use href="#i-shield"></use></svg></span>
+          <span class="mobile-task-copy">
+            <span class="mobile-task-title-line"><strong>安全事件调查</strong><span>#18</span></span>
+            <p>5 个调查结果可选用，下游 3 个节点已就绪</p>
+            <span class="mobile-task-foot"><span class="badge badge-amber">等待确认</span><time>已等待 12 分钟</time></span>
+          </span>
+          <span class="mobile-chevron"><svg class="icon"><use href="#i-chevron-right"></use></svg></span>
+        </button>
+
+        <div class="mobile-group-label"><span class="status-dot blue"></span>运行中<span>2</span></div>
+        <button class="mobile-task-card" type="button">
+          <span class="task-mark blue"><svg class="icon"><use href="#i-message"></use></svg></span>
+          <span class="mobile-task-copy">
+            <span class="mobile-task-title-line"><strong>客服工单归因</strong><span>#21</span></span>
+            <p>正在归纳 18 条重复工单，预计 2 分钟完成</p>
+            <span class="mobile-task-foot"><span class="badge badge-blue">运行中 · 2/5</span><time>01:36</time></span>
+          </span>
+          <span class="mobile-chevron"><svg class="icon"><use href="#i-chevron-right"></use></svg></span>
+        </button>
+        <button class="mobile-task-card" type="button">
+          <span class="task-mark blue"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+          <span class="mobile-task-copy">
+            <span class="mobile-task-title-line"><strong>代码仓库巡检</strong><span>#20</span></span>
+            <p>3 个仓库并行扫描依赖、密钥和许可证风险</p>
+            <span class="mobile-task-foot"><span class="badge badge-blue">运行中 · 3/8</span><time>00:58</time></span>
+          </span>
+          <span class="mobile-chevron"><svg class="icon"><use href="#i-chevron-right"></use></svg></span>
+        </button>
+
+        <div class="mobile-group-label"><span class="status-dot gray"></span>最近更新<span>5</span></div>
+        <button class="mobile-task-card" type="button">
+          <span class="task-mark green"><svg class="icon"><use href="#i-layers"></use></svg></span>
+          <span class="mobile-task-copy">
+            <span class="mobile-task-title-line"><strong>产品方案评估</strong><span>#19</span></span>
+            <p>最终建议已生成，结论与 2 项风险已归档</p>
+            <span class="mobile-task-foot"><span class="badge badge-green">已完成</span><time>昨天 18:10</time></span>
+          </span>
+          <span class="mobile-chevron"><svg class="icon"><use href="#i-chevron-right"></use></svg></span>
+        </button>
+        <button class="mobile-task-card" type="button">
+          <span class="task-mark gray"><svg class="icon"><use href="#i-doc"></use></svg></span>
+          <span class="mobile-task-copy">
+            <span class="mobile-task-title-line"><strong>Q3 复盘材料</strong><span>草稿</span></span>
+            <p>已收集业务数据，等待补充目标达成情况</p>
+            <span class="mobile-task-foot"><span class="badge badge-gray">草稿</span><time>11月15日</time></span>
+          </span>
+          <span class="mobile-chevron"><svg class="icon"><use href="#i-chevron-right"></use></svg></span>
+        </button>
+        <div class="mobile-list-more">上滑查看其余 3 个任务</div>
+      </main>
+
+      <nav class="mobile-tabbar" aria-label="移动端导航">
+        <button class="mobile-tab is-active" type="button">
+          <svg class="icon"><use href="#i-tasks"></use></svg><span>任务</span>
+        </button>
+        <button class="mobile-tab" type="button">
+          <svg class="icon"><use href="#i-message"></use></svg><span>对话</span>
+        </button>
+        <button class="mobile-tab" type="button">
+          <svg class="icon"><use href="#i-agent"></use></svg><span>智能体</span>
+        </button>
+        <button class="mobile-tab" type="button">
+          <svg class="icon"><use href="#i-layers"></use></svg><span>模板</span>
+        </button>
+        <button class="mobile-tab" type="button">
+          <svg class="icon"><use href="#i-settings"></use></svg><span>设置</span>
+        </button>
+      </nav>
+    </div>
+    <script src="design-kit.js"></script>
+  </body>
+</html>

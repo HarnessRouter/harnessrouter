@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 任务详情 / 人工确认</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="prototype-page">
+    <div class="artboard" id="task-detail">
+      <div class="app" data-shell data-active="tasks">
+        <main class="workspace detail-workspace" aria-label="任务详情">
+          <header class="detail-page-head">
+            <div>
+              <div class="breadcrumb">
+                <span>我的任务</span>
+                <svg class="icon"><use href="#i-chevron-right"></use></svg>
+                <span>安全事件调查</span>
+              </div>
+              <div class="detail-title-line">
+                <h1>安全事件调查</h1>
+                <span class="badge badge-amber"><span class="status-dot amber"></span>等待确认</span>
+              </div>
+              <div class="detail-subline">
+                <span>Run #18</span>
+                <span>Workflow v7</span>
+                <span>运行 04:12</span>
+                <span>最后更新于刚刚</span>
+              </div>
+            </div>
+            <div class="detail-actions">
+              <button class="button" type="button">
+                <svg class="icon"><use href="#i-clock"></use></svg>
+                运行记录
+              </button>
+              <button class="button button-danger" type="button">
+                <svg class="icon"><use href="#i-stop"></use></svg>
+                取消运行
+              </button>
+              <button class="icon-button" type="button" aria-label="更多任务操作">
+                <svg class="icon"><use href="#i-more"></use></svg>
+              </button>
+            </div>
+          </header>
+
+          <div class="phase-strip" aria-label="任务阶段进度">
+            <div class="phase-step done">
+              <span class="phase-icon"><svg class="icon"><use href="#i-check"></use></svg></span>
+              <span class="phase-copy"><strong>并行调查</strong><small>5 / 5 完成</small></span>
+            </div>
+            <span class="phase-line done"></span>
+            <div class="phase-step current">
+              <span class="phase-icon">2</span>
+              <span class="phase-copy"><strong>人工确认</strong><small>选择汇总输入</small></span>
+            </div>
+            <span class="phase-line current"></span>
+            <div class="phase-step future">
+              <span class="phase-icon">3</span>
+              <span class="phase-copy"><strong>汇总</strong><small>等待输入</small></span>
+            </div>
+            <span class="phase-line"></span>
+            <div class="phase-step future">
+              <span class="phase-icon">4</span>
+              <span class="phase-copy"><strong>双重校验</strong><small>2 个并行节点</small></span>
+            </div>
+            <span class="phase-line"></span>
+            <div class="phase-step future">
+              <span class="phase-icon">5</span>
+              <span class="phase-copy"><strong>最终报告</strong><small>待生成</small></span>
+            </div>
+          </div>
+
+          <section class="task-detail-grid" aria-label="工作流画布与节点检查器">
+            <div class="panel canvas-panel" aria-label="运行状态画布">
+              <div class="canvas-head">
+                <div class="canvas-head-copy">
+                  <strong>运行状态</strong>
+                  <span class="badge badge-gray">Workflow v7</span>
+                  <span class="live-indicator"><span class="status-dot amber"></span>实时同步</span>
+                </div>
+                <div class="canvas-tools">
+                  <button class="icon-button" type="button" aria-label="切换布局">
+                    <svg class="icon"><use href="#i-layout"></use></svg>
+                  </button>
+                  <button class="icon-button" type="button" aria-label="缩小">
+                    <svg class="icon"><use href="#i-zoom-out"></use></svg>
+                  </button>
+                  <span class="zoom-label">90%</span>
+                  <button class="icon-button" type="button" aria-label="放大">
+                    <svg class="icon"><use href="#i-zoom-in"></use></svg>
+                  </button>
+                  <button class="icon-button" type="button" aria-label="适应画布">
+                    <svg class="icon"><use href="#i-fit"></use></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="canvas-body">
+                <svg class="canvas-edges" aria-hidden="true">
+                  <path class="graph-edge done" d="M144 57 C162 57 160 213 178 213" />
+                  <path class="graph-edge done" d="M144 135 C162 135 160 213 178 213" />
+                  <path class="graph-edge done" d="M144 213 H178" />
+                  <path class="graph-edge done" d="M144 291 C162 291 160 213 178 213" />
+                  <path class="graph-edge done" d="M144 369 C162 369 160 213 178 213" />
+                  <path class="graph-edge waiting" d="M292 213 C304 213 314 213 326 213" />
+                  <path class="graph-edge future" d="M462 213 C478 213 480 163 496 163" />
+                  <path class="graph-edge future" d="M462 213 C478 213 480 260 496 260" />
+                  <path class="graph-edge future" d="M578 163 C591 163 590 219 602 219" />
+                  <path class="graph-edge future" d="M578 260 C591 260 590 219 602 219" />
+                  <text class="graph-edge-label" x="301" y="203">待选择</text>
+                </svg>
+
+                <button class="graph-node collector-node is-done" type="button" style="left: 18px; top: 34px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                  <span class="node-copy"><strong>告警分析</strong><small>已完成 · 00:38</small></span>
+                  <span class="node-state"><svg class="icon"><use href="#i-check"></use></svg></span>
+                </button>
+                <button class="graph-node collector-node is-done" type="button" style="left: 18px; top: 112px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-target"></use></svg></span>
+                  <span class="node-copy"><strong>威胁狩猎</strong><small>已完成 · 00:44</small></span>
+                  <span class="node-state"><svg class="icon"><use href="#i-check"></use></svg></span>
+                </button>
+                <button class="graph-node collector-node is-done" type="button" style="left: 18px; top: 190px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                  <span class="node-copy"><strong>日志取证</strong><small>已完成 · 00:51</small></span>
+                  <span class="node-state"><svg class="icon"><use href="#i-check"></use></svg></span>
+                </button>
+                <button class="graph-node collector-node is-done" type="button" style="left: 18px; top: 268px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-server"></use></svg></span>
+                  <span class="node-copy"><strong>资产核查</strong><small>已完成 · 00:47</small></span>
+                  <span class="node-state"><svg class="icon"><use href="#i-check"></use></svg></span>
+                </button>
+                <button class="graph-node collector-node is-done" type="button" style="left: 18px; top: 346px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-globe"></use></svg></span>
+                  <span class="node-copy"><strong>情报检索</strong><small>已完成 · 00:42</small></span>
+                  <span class="node-state"><svg class="icon"><use href="#i-check"></use></svg></span>
+                </button>
+
+                <button class="graph-node gate-node is-waiting" type="button" style="left: 178px; top: 185px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-branch"></use></svg></span>
+                  <span class="node-copy"><strong>人工确认</strong><small>已选 2 / 5 结果</small></span>
+                  <span class="node-state">2</span>
+                </button>
+                <button class="graph-node summary-node is-future" type="button" style="left: 326px; top: 185px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                  <span class="node-copy"><strong>汇总调查结果</strong><small>等待人工输入</small></span>
+                  <span class="node-state"><svg class="icon"><use href="#i-lock"></use></svg></span>
+                </button>
+                <button class="graph-node validator-node is-future" type="button" style="left: 496px; top: 140px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                  <span class="node-copy"><strong>校验 A</strong><small>待执行</small></span>
+                </button>
+                <button class="graph-node validator-node is-future" type="button" style="left: 496px; top: 237px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-target"></use></svg></span>
+                  <span class="node-copy"><strong>校验 B</strong><small>待执行</small></span>
+                </button>
+                <button class="graph-node report-node is-future" type="button" style="left: 602px; top: 196px">
+                  <span class="node-icon"><svg class="icon"><use href="#i-doc"></use></svg></span>
+                  <span class="node-copy"><strong>报告</strong><small>待执行</small></span>
+                </button>
+
+                <span class="canvas-note"><svg class="icon"><use href="#i-drag"></use></svg>拖动画布 · 滚轮缩放</span>
+              </div>
+
+              <div class="canvas-foot">
+                <div class="legend">
+                  <span><i class="status-dot green"></i>已完成</span>
+                  <span><i class="status-dot amber"></i>等待人工</span>
+                  <span><i class="status-dot gray"></i>待执行</span>
+                </div>
+                <div class="canvas-foot-actions">
+                  <button class="icon-button" type="button" aria-label="展开画布">
+                    <svg class="icon"><use href="#i-expand"></use></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <aside class="inspector" aria-label="节点检查器">
+              <header class="inspector-head">
+                <div class="inspector-title"><small>人工门控</small><strong>选择汇总输入</strong></div>
+                <span class="badge badge-amber"><span class="status-dot amber"></span>等待选择</span>
+              </header>
+              <div class="inspector-body">
+                <div class="decision-help">
+                  <strong>5 个调查结果可用。</strong>勾选要传给「汇总调查结果」的输出；未勾选的结果不会进入下游上下文。
+                </div>
+                <div class="selection-line">
+                  <span>候选结果 · 已选 2 / 5</span>
+                  <button type="button">全选</button>
+                </div>
+                <div class="candidate-list">
+                  <div class="candidate is-selected">
+                    <span class="checkbox"><svg class="icon"><use href="#i-check"></use></svg></span>
+                    <span class="candidate-avatar"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                    <span class="candidate-copy">
+                      <span class="candidate-title-line"><strong>告警分析</strong><span class="candidate-id">collect-a</span></span>
+                      <p>确认 3 条高风险登录行为，关联 2 个 C2 域名。</p>
+                      <span class="candidate-meta">12.4k 字 · 00:38 · 输出 v3</span>
+                    </span>
+                    <button class="candidate-eye" type="button" aria-label="预览告警分析输出">
+                      <svg class="icon"><use href="#i-eye"></use></svg>
+                    </button>
+                  </div>
+                  <div class="candidate">
+                    <span class="checkbox"></span>
+                    <span class="candidate-avatar"><svg class="icon"><use href="#i-target"></use></svg></span>
+                    <span class="candidate-copy">
+                      <span class="candidate-title-line"><strong>威胁狩猎</strong><span class="candidate-id">collect-b</span></span>
+                      <p>发现 1 个可疑 PowerShell 下载链，尚未确认影响。</p>
+                      <span class="candidate-meta">9.8k 字 · 00:44 · 输出 v2</span>
+                    </span>
+                    <button class="candidate-eye" type="button" aria-label="预览威胁狩猎输出">
+                      <svg class="icon"><use href="#i-eye"></use></svg>
+                    </button>
+                  </div>
+                  <div class="candidate is-selected">
+                    <span class="checkbox"><svg class="icon"><use href="#i-check"></use></svg></span>
+                    <span class="candidate-avatar"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                    <span class="candidate-copy">
+                      <span class="candidate-title-line"><strong>日志取证</strong><span class="candidate-id">collect-c</span></span>
+                      <p>还原攻击时间线，定位初始入口与横向移动路径。</p>
+                      <span class="candidate-meta">15.1k 字 · 00:51 · 输出 v4</span>
+                    </span>
+                    <button class="candidate-eye" type="button" aria-label="预览日志取证输出">
+                      <svg class="icon"><use href="#i-eye"></use></svg>
+                    </button>
+                  </div>
+                  <div class="candidate">
+                    <span class="checkbox"></span>
+                    <span class="candidate-avatar"><svg class="icon"><use href="#i-server"></use></svg></span>
+                    <span class="candidate-copy">
+                      <span class="candidate-title-line"><strong>资产核查</strong><span class="candidate-id">collect-d</span></span>
+                      <p>受影响主机 7 台，其中 2 台为核心生产数据库。</p>
+                      <span class="candidate-meta">8.2k 字 · 00:47 · 输出 v2</span>
+                    </span>
+                    <button class="candidate-eye" type="button" aria-label="预览资产核查输出">
+                      <svg class="icon"><use href="#i-eye"></use></svg>
+                    </button>
+                  </div>
+                  <div class="candidate">
+                    <span class="checkbox"></span>
+                    <span class="candidate-avatar"><svg class="icon"><use href="#i-globe"></use></svg></span>
+                    <span class="candidate-copy">
+                      <span class="candidate-title-line"><strong>情报检索</strong><span class="candidate-id">collect-e</span></span>
+                      <p>命中 2 个恶意 IP 情报，置信度 92%。</p>
+                      <span class="candidate-meta">6.7k 字 · 00:42 · 输出 v1</span>
+                    </span>
+                    <button class="candidate-eye" type="button" aria-label="预览情报检索输出">
+                      <svg class="icon"><use href="#i-eye"></use></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <footer class="inspector-foot">
+                <div class="selection-summary">
+                  <span class="status-dot blue"></span>
+                  <span>已选择 <strong>2 个结果</strong>，将作为汇总节点输入</span>
+                </div>
+                <button class="button button-primary" type="button">
+                  确认并继续
+                  <svg class="icon"><use href="#i-arrow-right"></use></svg>
+                </button>
+              </footer>
+            </aside>
+          </section>
+
+          <section class="panel timeline-panel" aria-label="运行事件">
+            <div class="timeline-head">
+              <strong>运行事件</strong><span>18 个事件</span>
+              <button type="button">展开时间线 <svg class="icon"><use href="#i-chevron-right"></use></svg></button>
+            </div>
+            <div class="timeline-events">
+              <div class="timeline-event">
+                <span class="event-dot green"><svg class="icon"><use href="#i-play"></use></svg></span>
+                <strong>5 个调查节点并行启动</strong>
+                <small>03:58 · run.running</small>
+              </div>
+              <div class="timeline-event">
+                <span class="event-dot green"><svg class="icon"><use href="#i-check"></use></svg></span>
+                <strong>调查结果全部生成</strong>
+                <small>04:12 · node.succeeded × 5</small>
+              </div>
+              <div class="timeline-event">
+                <span class="event-dot amber"><svg class="icon"><use href="#i-clock"></use></svg></span>
+                <strong>进入人工确认</strong>
+                <small>04:12 · run.waiting_human</small>
+              </div>
+              <div class="timeline-event">
+                <span class="event-dot blue"><svg class="icon"><use href="#i-check"></use></svg></span>
+                <strong>已选择 2 个结果</strong>
+                <small>刚刚 · decision.updated</small>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+    <script src="design-kit.js"></script>
+  </body>
+</html>

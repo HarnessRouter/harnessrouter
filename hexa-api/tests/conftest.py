@@ -29,6 +29,13 @@ class FakeGateway:
         self.workspaces.append(row)
         return row
 
+    async def update_workspace(self, workspace_id, name, description):
+        for row in self.workspaces:
+            if row['id'] == workspace_id:
+                row.update(name=name, description=description)
+                return row
+        raise AssertionError(f'unknown workspace {workspace_id}')
+
     async def list_agents(self, api_key: str) -> list[dict[str, str]]:
         assert api_key == self.api_key
         return [{"id": "agent-1", "name": "产品分析师", "base": "openai", "default_model": "gpt-6.1"}]

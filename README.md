@@ -1,408 +1,130 @@
-<h1 align="center">
-  <a href="https://harnessrouter.ai/open-source#gh-light-mode-only">
-    <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
-  </a>
-  <a href="https://harnessrouter.ai/open-source#gh-dark-mode-only">
-    <img alt="HarnessRouter" src=".github/images/logo-dark.png" width="280">
-  </a>
-<br>
-The unified interface for agent harnesses.
-</h1>
+# Hexa2
 
-<p align="center">
-<a href="https://github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository"><img src="https://raw.githubusercontent.com/HarnessRouter/harnessrouter/readme-badges/docs/images/github-stars.svg" alt="GitHub Stars, exact count" title="Back to the top, then click GitHub’s Star button. Official GitHub data, periodically refreshed; the last successful count is retained if refresh fails."></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-285AFF?logo=apache&amp;logoColor=white&amp;style=flat&amp;labelColor=444c56" alt="License: Apache 2.0"></a>
-  <a href="https://hub.docker.com/r/harnessrouter/harnessrouter"><img src="https://img.shields.io/docker/pulls/harnessrouter/harnessrouter?style=flat&amp;logo=docker&amp;logoColor=white&amp;label=Docker+pulls&amp;labelColor=444c56&amp;color=285aff" alt="Docker pulls"></a>
-  <a href="protocol/conformance"><img src="https://img.shields.io/badge/UHP-Full-16824B?style=flat&amp;labelColor=444c56" alt="UHP conformance: Full"></a>
-  <a href="#the-unified-harness-protocol"><img src="https://img.shields.io/badge/OpenAI%20Responses-Compatible-2247D5?style=flat&amp;labelColor=444c56" alt="OpenAI Responses: Compatible"></a>
-</p>
+Hexa2 是一个面向自托管环境的 Agent 工作流应用。它把 Agent、模型、工具、文件、任务流程和运行记录放在同一套本地应用中，帮助用户创建任务、编排多个 Agent、启动运行、处理人工选择并查看结果。
 
-**Build agent products without handling harness engineering.** HarnessRouter is the infrastructure layer that turns existing harnesses like Codex and Claude Code into plug-and-play agent backends, letting your product run tasks, retrieve results, and switch harnesses through one API.
+Hexa2 不依赖云端控制面。普通 BYOK 模型服务商（包括 Azure OpenAI 和 AWS 兼容服务）、第三方 Agent 运行时、浏览器运行时、UHP 连接和 Runner 管理继续由自托管 Gateway 提供；应用层通过服务端代理调用 Gateway，浏览器不直接持有 Gateway 凭据。
 
-<a href="https://github.com/HarnessRouter/harnessrouter#top" title="Back to the top to star this repository">
-  <picture>
-    <source media="(max-width: 600px)" srcset="docs/images/github-readme-star-cta-mobile.svg">
-    <img src="docs/images/github-readme-star-cta-desktop.svg" width="100%" alt="Help grow the HarnessRouter community. Star this repo →">
-  </picture>
-</a>
-
-<a id="what-it-is"></a>
-
-<a id="one-integration"></a>
-
-<img src="docs/images/2026-09-13-harnessrouter-integration-comparison-cropped-v5.gif" width="100%" alt="Animated diagram comparing separate harness integrations with one HarnessRouter API. Without HarnessRouter, four harnesses require 36 integration responsibilities, increasing to 45 with a fifth. With HarnessRouter, the product keeps one integration as harnesses are added.">
-
-HarnessRouter implements the [Unified Harness Protocol (UHP)](#the-unified-harness-protocol) and provides an OpenAI Responses-compatible API, handling persistent sessions, streaming progress, files, artifacts, cancellation, and structured failures.
-
-<a id="one-interface-the-freedom-to-choose"></a>
-
-## Switch harnesses. Optimize cost and latency.
-
-<picture>
-  <source media="(max-width: 600px)" srcset="docs/images/benchmark-summary-mobile.svg">
-  <img src="docs/images/benchmark-summary.svg" width="100%" alt="Cost: 99.8% lower, from 223 to 0.47 credits. End-to-end latency: 3.2 times faster, from 4m 36s to 1m 25s. Eight harness and model configurations on the same task. Each metric compares its best and worst results. The lowest-cost and fastest configurations vary by task.">
-</picture>
-
-Eight harness × model configurations on the same task. Each metric compares its best and worst results. The lowest-cost and fastest configurations vary by task. [Methodology](https://harnessrouter.ai/benchmarks)
-
-**31 harness bases today:** Codex, Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Aider, OpenHands, CheetahClaws, Grok Build, Agent Zero, System One, Qoder Cloud Agent, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Mistral Vibe, Docker Agent, fast-agent, Deep Agents Code and Roder. The [support matrix](docs/support-matrix.md) shows which run on which provider.
-
-> [!TIP]
-> **Get started:** [Run locally](#quickstart) · [Integrate into your product](#use-the-api-directly) · [Starter kits](#starter-kits)
-
-<a id="install"></a>
-
-<br>
-
-## Quickstart
-
-Self-host Community Edition with your own provider keys, on infrastructure you control.
-
-Start with one Docker command, wait for the first launch, then connect a model provider and run your first task.
-
-<a id="what-you-need"></a>
-
-**You need:** Docker · About **4 GB** of disk · A **provider API key**
-
-No HarnessRouter account required. No bundled model or trial key.
-
-### 1. Start HarnessRouter
-
-```bash
-docker run -d --name harnessrouter \
-  -p 127.0.0.1:3000:3000 \
-  -v harnessrouter:/data \
-  harnessrouter/harnessrouter
-```
-
-Docker pulls the image if needed. The named volume preserves your database, files, installed harness CLIs, and workspaces between restarts.
-
-<details>
-<summary>Existing installation or custom setup</summary>
-
-**Already installed?** `docker pull harnessrouter/harnessrouter` downloads the latest image but does not upgrade a running container. Follow the [upgrade and backup guide](docs/self-hosting-guide.md#restarts-upgrades-and-backups).
-
-**Port 3000 busy?** Use `-p 127.0.0.1:3100:3000` and open port 3100 instead. Keep the loopback binding while using the initial credentials.
-
-**Do not add `--user`.** The entrypoint and Runner need root to manage per-session users. The Console and Gateway run unprivileged; agent processes run as their session’s user.
-
-For version pinning, Compose, and scripted setup, see the [setup guide](docs/self-hosting-guide.md#install).
-
-</details>
-
-### 2. Wait for the first launch
-
-```bash
-docker logs -f harnessrouter
-```
-
-The first launch installs the enabled harness CLIs. Continue when the logs show:
+## 当前架构
 
 ```text
-[harnessrouter] ready on :3000
+浏览器
+  │  同源 /api/hexa，HttpOnly hexa_session Cookie
+  ▼
+Hexa App API（hexa-api，FastAPI）
+  │  任务、工作流、模板、运行记录和权限的权威来源
+  ▼
+Gateway（UHP / OpenAI Responses-compatible API）
+  │
+  ▼
+Runner 与第三方 Agent 运行时
 ```
 
-Press **Ctrl+C** to stop following logs. The container keeps running.
+- `client/`：Hexa2 前端，负责任务列表、工作流画布、运行状态、模板和结果展示。
+- `hexa-api/`：应用后端，负责认证、工作区、Agent、任务、模板、WorkflowRevision、Run、NodeRun 和 Artifact 的持久化与状态转换。
+- `gateway/`：自托管 Agent 执行网关，负责 UHP 接口、会话、文件、工具、浏览器、UHP 连接和 Runner 协作。
+- `runner/`：在隔离工作区中运行 Agent harness 和第三方运行时。
+- `protocol/`：Unified Harness Protocol（UHP）的协议定义、OpenAPI/JSON Schema 和一致性测试。
 
-<details>
-<summary>Console not ready or a harness missing?</summary>
+任务和运行记录以 `hexa-api` 保存的数据为准。Gateway 只负责执行 Agent 请求，不作为 Hexa 任务历史的权威来源。
 
-If the browser refuses the connection, retry after a few seconds while the Console finishes starting. For a missing harness, check `backends available:` and any `requested but not installed` warning in the logs.
+## 本地开发
 
-</details>
+### 1. 配置应用后端
 
-### 3. Open the console
+先准备 PostgreSQL，并参考 [hexa-api/.env.example](hexa-api/.env.example) 设置应用后端变量。开发验证可以使用 SQLite；生产环境使用 PostgreSQL。
 
-Open [http://localhost:3000](http://localhost:3000), or your chosen host port, and sign in as `harnessrouter`. Your instance made its own password at first start; read it with:
+至少需要配置：
 
-```bash
-docker exec harnessrouter cat /data/selfhost-initial-password
+- `HEXA_DATABASE_URL`：应用数据库连接。
+- `HEXA_GATEWAY_URL`：自托管 Gateway 的 UHP 地址，例如 `http://127.0.0.1:3000/api/harness`。
+- `HEXA_GATEWAY_API_KEY`：仅注入 `hexa-api` 进程，不写入前端、URL、localStorage 或错误提示。
+- `HEXA_ADMIN_USERNAME` 和 `HEXA_ADMIN_PASSWORD_HASH`：应用管理员账户。
+
+生成管理员密码哈希：
+
+```powershell
+python -c "import sys; sys.path.insert(0, 'hexa-api'); from app.auth.passwords import hash_password; print(hash_password(sys.argv[1]))" "your-password"
 ```
 
-If you set `HR_AUTH_PASSWORD` when you started the container, sign in with that instead.
+生产数据库启动前，按顺序执行 `hexa-api/README.md` 中列出的迁移文件。应用不会自动为 PostgreSQL 创建表。
 
-> [!WARNING]
-> **Set your own password in Profile.** Keep the instance local until you do. Saving briefly restarts the Console and signs out other browsers.
+### 2. 启动 Hexa App API
 
-<details>
-<summary>See the sign-in screen</summary>
-
-![HarnessRouter Community Edition sign-in screen](docs/images/01-login.png)
-
-</details>
-
-Using an existing volume or custom credentials? [Check credential precedence and setup](docs/self-hosting-guide.md#install).
-
-These credentials sign you into the Console. You do not need a HarnessRouter API key to run tasks here.
-
-### 4. Connect a model provider
-
-Open the account menu at the bottom of the rail and choose **Bring your own key**. Find your provider, press **Add key**, and paste its API key. Its supported models become available in the Console.
-
-This provider key authorizes model requests. API keys created in this Console are used by your applications to call this instance.
-
-<details>
-<summary>See the provider setup screen</summary>
-
-![Adding an OpenAI key under Bring your own key](docs/images/console-add-key.png)
-
-</details>
-
-<a id="5-run-your-first-task"></a>
-
-### 5. Set up your first agent
-
-Open **Start**, say what your agent should do for your users, and press **Continue**. In **Set up an agent harness**, leave the agent harness and model on **Auto** or choose them, then save. HarnessRouter builds the setup on one of your own models: it writes the agent's instructions, picks the harness, model, skills, plugins and tools the job needs, and leaves an example request in the box. Send it to run the first task.
-
-![A setup HarnessRouter built from one sentence, with its example request waiting in the box](docs/images/console-setup-built.png)
-
-**Try an example first.** Under **Start in HarnessRouter**, pick one of the three example jobs. Its request plays back a recorded run, so you see a finished task without spending tokens. Write under it to carry on with your own model.
-
-![The product image example: a recorded run and the image it made](docs/images/console-example-run.png)
-
-<a id="configure-a-custom-harness"></a>
-
-### Change a setup (optional)
-
-Open the setup in **Studio** and choose **Settings** to change its model, instructions, skills, plugins, tools, environment and limits. Add plugins, skills, MCP servers and environments for the whole workspace under **Add-ons**. The agent harness is fixed once a setup is saved: make a new setup to use another.
-
-<details>
-<summary>See New setup</summary>
-
-![Set up an agent harness: one sentence, with the agent harness and model on Auto](docs/images/console-new-setup.png)
-
-</details>
-
-<a id="using-the-api"></a>
-
-<a id="use-the-api-directly"></a>
-
-<a id="integrate-into-your-product-with-one-api"></a>
-
-<a id="integrate-into-your-product-backend-with-one-api"></a>
-
-<br>
-
-## Integrate your harness into your product backend with one API
-
-Run product tasks with built-in or custom harnesses as pluggable agent backends. Call your self-hosted instance’s OpenAI Responses-compatible API and select the harness with `metadata.harness_id`. No Cloud deployment is required.
-
-Once your harness runs successfully in the Console:
-
-1. Open **API Keys** in the Console rail of the same CE instance ([default local address](http://localhost:3000/keys)), name the key, and press **Create**.
-2. Store the secret shown once as `HARNESSROUTER_API_KEY` in your product backend. Never expose it in browser code. This CE-issued key is separate from your Console password and provider key.
-3. Call the API with the Harness ID shown in the Console and a model served by your connected provider.
-
-```bash
-export HARNESSROUTER_BASE_URL=http://localhost:3000/api/harness
-
-curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
-  -H "Authorization: Bearer ${HARNESSROUTER_API_KEY:?}" \
-  -H 'content-type: application/json' \
-  -d '{
-    "input":"Reply with exactly: it works.",
-    "metadata":{"harness_id":"codex"},
-    "model":"gpt-5.4-mini",
-    "stream":false
-  }'
+```powershell
+python -m uvicorn app.main:app --app-dir hexa-api --host 127.0.0.1 --port 4010 --reload
 ```
 
-The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events.
+### 3. 启动客户端
 
-**Join a caller's trace to the task.**
+另开终端：
 
-Send the W3C Trace Context headers `traceparent` and `tracestate` on the request, and the task's model calls carry a child of that trace: the same trace id, a new span id and the sampled flag, so the provider's log and yours are one trace. A value that is not valid W3C syntax is dropped, never refused: a broken tracing header does not fail a task. `baggage` is never read and never leaves the instance.
-
-**Retry a task without running it twice.**
-
-Send the same request with the same `Idempotency-Key` when retrying a task. For example, send this request twice using the URL and API key above (key generation needs Python 3):
-
-```bash
-IDEMPOTENCY_KEY=$(python3 -c 'import uuid; print(uuid.uuid4())')
-
-for attempt in 1 2; do
-  curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
-    -H "Authorization: Bearer ${HARNESSROUTER_API_KEY:?}" \
-    -H 'content-type: application/json' \
-    -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
-    -d '{
-      "input":"Reply with exactly: it works.",
-      "metadata":{"harness_id":"codex"},
-      "model":"gpt-5.4-mini",
-      "stream":false
-    }'
-  printf '\n'
-done
+```powershell
+$env:HEXA_API_PROXY = "http://127.0.0.1:4010"
+npm run dev --prefix client
 ```
 
-Both responses have the same `id`, and the session contains one turn: the retry returns the first request's result without starting another execution. If the first request is still running, the retry waits for it. Use a new key for each new logical request. Reusing a key with a different request body returns `409`; changing only `stream` still counts as the same request. See [Tasks §6: Idempotency](protocol/versions/2026-10-19/tasks.md#6-idempotency).
+访问 [http://127.0.0.1:4173](http://127.0.0.1:4173)，使用应用管理员账户登录。浏览器只访问同源 `/api/hexa`，不需要 Gateway 地址、Gateway API Key、组织成员或模型凭据。
 
-Never put a long exact value such as a token, an id or a hash in the prompt: the agent retypes what it reads, and a model drops and swaps characters in strings like that. Attach it as a file (`POST /v1/files`, then an `input_file` block; the file lands in the agent's working directory under its filename before every turn that carries it) or hand it to the agent through the harness's environment. A harness takes an `env` map whose values resolve on every turn: `$headers.X-Name` takes that header from the request (declare it in `additional_headers`), `vault:name` takes a stored secret, anything else is used as written. The agent's shell and tools start with those variables set, so a task can say "the token is in $DEPLOY_TOKEN", and a value that came through a reference is redacted from everything that leaves the sandbox, the response, the stream, the trace and the stored record, even when the agent prints it. A `vault:` reference reads only a secret your own workspace stored through `PUT /v1/mcp-secrets/{ref}`. The redaction protects the record, not the agent: a value the agent can read it can also send elsewhere if a prompt or a page tells it to, so hand it a token scoped to the user and the task, short-lived and least privilege.
+更完整的应用后端说明见 [hexa-api/README.md](hexa-api/README.md)，前端说明见 [client/README.md](client/README.md)。
 
-The whole API is described at `$HARNESSROUTER_BASE_URL/v1/openapi.json`, generated from the routes, with a browsable copy at `/v1/docs`.
+## 任务、工作流和运行记录
 
-The default URL works when your backend and CE run on the same computer. From another machine or container, use a reachable URL for the CE instance. [Read the complete self-hosted API and networking guide →](docs/self-hosting-guide.md#using-the-api)
-
-<a id="one-interface-for-the-agent-lifecycle"></a>
-
-<table>
-        <thead><tr><th scope="col">Your application can…</th><th scope="col">How</th></tr></thead>
-        <tbody>
-          <tr><th scope="row">Start tasks</th><td>Send instructions and check execution status</td></tr>
-          <tr><th scope="row">Continue sessions</th><td>Send follow-up instructions with <code>previous_response_id</code></td></tr>
-          <tr><th scope="row">Stream progress</th><td>Receive live updates as the agent works</td></tr>
-          <tr><th scope="row">Work with files</th><td>Attach input files and retrieve generated outputs</td></tr>
-          <tr><th scope="row">Cancel tasks</th><td>Stop work that is no longer needed</td></tr>
-          <tr><th scope="row">Inspect execution</th><td>Review structured errors and execution traces</td></tr>
-        </tbody>
-      </table>
-
-<a id="starter-kits"></a>
-
-<br>
-
-## Agent harnesses as pluggable backends for your product
-
-Power agentic features in your product with agent harnesses, including knowledge-work tasks such as creating content and analyzing data. Explore these ready-to-use kits to see harnesses in action as pluggable backends.
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/images/kit-slides.png" width="100%" alt="HarnessRouter Slides Starter Kit">
-      <h3>Slides</h3>
-      <p>An agent harness turns your brief into slide content and layouts for an editable deck.</p>
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/images/kit-sheets.png" width="100%" alt="HarnessRouter Sheets Starter Kit">
-      <h3>Sheets</h3>
-      <p>An agent harness uses each row’s data to execute a task and writes the result back into the sheet.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/images/kit-dashboard.png" width="100%" alt="HarnessRouter Dashboards Starter Kit">
-      <h3>Dashboards</h3>
-      <p>An agent harness reads your database schema and writes SQL queries to power dashboard charts.</p>
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/images/kit-video.png" width="100%" alt="HarnessRouter Videos Starter Kit">
-      <h3>Videos</h3>
-      <p>An agent harness turns your brief into a shot plan and calls video tools to generate clips for the timeline.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/images/kit-harness-bot.png" width="100%" alt="HarnessRouter Harness Bot Starter Kit">
-      <h3>Harness Bot</h3>
-      <p>A recruiter harness interviews you and installs each teammate as a harness of its own; teammates work together in groups, hand each other files and @mentions, and leave what they make in a shared library.</p>
-    </td>
-    <td width="50%" valign="top"></td>
-  </tr>
-</table>
-
-[**Explore the Starter Kits →**](https://github.com/HarnessRouter/starter-kit)
-
-<details>
-<summary>Setup notes &amp; licensing</summary>
-
-**Start:** Open **Shop** in the Console, pick a kit, and select a harness and model supported by your connected providers.
-
-**Dashboards:** use a reachable database and a read-only database account, and review the sample-row setting before connecting. Stored connections are encrypted at rest; set `HR_SECRET_KEY` to keep the key apart from the data volume.
-
-**Licensing:** Starter Kits use [different terms](https://github.com/HarnessRouter/starter-kit#licensing) from Community Edition.
-
-[Setup guide →](docs/self-hosting-guide.md#starter-kits)
-
-</details>
-
-<br>
-
-## Deployment choices
-
-<a id="why-self-host-community-edition"></a>
-
-<a id="why-self-host"></a>
-
-### Self-host for control
-
-- **Your infrastructure.** One Docker deployment for the Console, Gateway, and Runner.
-- **Your credentials and state.** Provider keys, sessions, files, and workspaces stay under your control. Model requests still go to your configured provider.
-- **Real workspaces.** Native filesystem, shell, and Git workflows, with separate session workspaces.
-- **No Console product analytics.** Community Edition disables the Console analytics pipeline.
-
-<a id="architecture"></a>
-
-### Inside Community Edition
+Hexa2 用以下对象保存一项工作的完整过程：
 
 ```text
-┌─ HarnessRouter container ─────────────────────────────────┐
-│  Console :3000   ← only published port                    │
-│       │ same-origin proxy                                 │
-│       ▼                                                   │
-│  Gateway :8080   Responses API + harness lifecycle        │
-│       │ loopback                                          │
-│       ▼                                                   │
-│  Runner  :8081   runs harnesses in session workspaces     │
-│                                                           │
-│  /data volume   database · files · secrets · workspaces   │
-└───────────────────────────────────────────────────────────┘
+Template → TemplateVersion
+                └── 显式使用模板创建 Task
+Task → WorkflowRevision
+          ├── Run A → NodeRun / Artifact
+          └── Run B → NodeRun / Artifact
 ```
 
-The Gateway and Runner listen on loopback inside the container. Sessions use separate workspaces and operating-system users, not separate containers. The Console is the entry point for both UI and API.
+- `Task` 是用户看到的任务身份和当前结果指针。
+- `WorkflowRevision` 是不可变的节点图、依赖、输入声明和执行配置。
+- `Run` 是一次执行，固定绑定启动时的 WorkflowRevision 和执行配置快照。
+- `NodeRun` 是 Run 中一个节点的一次执行尝试，追加保存输入、输出、日志和错误。
+- `TemplateVersion` 只保存可复用的工作流定义，不保存运行记录、结果、产物或密钥。
 
-Running the Gateway and Runner as two containers on one data volume is also supported; see [Two containers instead of one](docs/self-hosting-guide.md#two-containers-instead-of-one).
+编辑任务草稿不会改变已有运行。点击“保存任务流程”才会生成新的 WorkflowRevision；点击“运行”才会创建新的 Run；“保存为模板”和“重放”是独立操作。重放运行记录只回看历史事件，不重新执行 Agent。详细的版本关系和保存边界见 [任务模块设计规范](docs/changes/CHG-task-centric-workflow/spec.md#版本关系与保存边界)。
 
-See [configuration](docs/self-hosting-guide.md#configuration), [upgrades and backups](docs/self-hosting-guide.md#restarts-upgrades-and-backups), and [public deployment with TLS](docs/self-hosting-guide.md#putting-it-on-a-public-url).
+## 能力范围
 
-<a id="unified-harness-protocol"></a>
+- Agent 和模型配置，以及可复用的 Agent 模板。
+- 任务创建、工作流画布编辑、依赖和输入映射。
+- 并行和串行 Agent 节点、人工门控、重试、跳过、暂停、取消和终态重跑。
+- 运行历史、节点调试、结构化错误、SSE 状态更新和断线恢复。
+- 文件、Artifact、会话、浏览器运行时、第三方 Agent 运行时、UHP 连接和 Runner 管理。
+- BYOK 模型服务商，包括 Azure OpenAI、AWS 兼容服务和其他 OpenAI-compatible 服务。
 
-<br>
+Hexa2 不提供云端部署、上传、目标工作区、云端账号余额、云端密钥握手或 hosted provider 入口。相关边界见 [云端能力删除契约](docs/changes/CHG-hexa-remove-cloud-contract/spec.md)。
 
-## The Unified Harness Protocol
+## 安全边界
 
-[Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) is the public, versioned contract implemented by Hexa. Its task surface is deliberately compatible with the **OpenAI Responses API**, so existing Responses SDKs, streaming parsers, and UI components can work with a UHP server. UHP defines harness execution semantics for harness selection, persistent sessions, files, cancellation, and harness-managed tools and skills.
+- 浏览器只持有 `hexa_session` HttpOnly Cookie。
+- Gateway 地址和 Gateway API Key 只配置在 `hexa-api` 服务端进程。
+- 应用后端不把授权头、API Key 或敏感请求头写入任务、运行记录或客户端响应。
+- 每次 Run 保存执行配置快照，但不保存密钥、授权头或 API Key。
+- 调试输入、输出和错误在写入数据库前脱敏，读取时再次按字段过滤。
+- 任务、模板、运行记录和 Artifact 按应用用户与工作区检查权限。
 
-This repository contains the Apache 2.0 reference implementation, machine-readable schemas, and the conformance suite.
+## 验证
 
-<table>
-        <thead><tr><th>Resource</th><th>Purpose</th></tr></thead>
-        <tbody>
-          <tr><td><a href="protocol/versions/2026-09-12">Specification</a></td><td>Normative protocol behavior</td></tr>
-          <tr><td><a href="protocol/README.md#relationship-to-the-openai-responses-api">OpenAI Responses compatibility</a></td><td>Compatibility with existing OpenAI Responses API clients</td></tr>
-          <tr><td><a href="protocol/schema">OpenAPI and JSON Schema</a></td><td>Machine-readable contracts</td></tr>
-          <tr><td><a href="protocol/conformance">Conformance suite</a></td><td>Testable compatibility requirements</td></tr>
-          <tr><td><a href="protocol/GOVERNANCE.md">Governance</a></td><td>How the standard evolves</td></tr>
-        </tbody>
-      </table>
+```powershell
+npm run typecheck --prefix client
+npm test --prefix client
+npm run build --prefix client
+python -m pytest hexa-api/tests gateway/tests
+```
 
-<br>
+根据改动范围选择相关测试；完整命令、接口范围和迁移说明分别见 [client/README.md](client/README.md) 与 [hexa-api/README.md](hexa-api/README.md)。
 
-## Resources
+## UHP
 
-| Goal | Resources |
-|---|---|
-| **Build** | [Integration and self-hosting docs](docs/self-hosting-guide.md) · [API guide](#use-the-api-directly) · [Starter kits](https://github.com/HarnessRouter/starter-kit) |
-| **Deploy** | [Setup & operations](docs/self-hosting-guide.md) |
-| **Protocol** | [Unified Harness Protocol (UHP)](https://unifiedharnessprotocol.org) |
-| **Community** | [Join the community (Discord)](https://discord.gg/nPcbwqVPb2) · [Contribute](CONTRIBUTING.md) · [LinkedIn](https://linkedin.com/company/harnessrouter/) · [X](https://x.com/HARNESSROUTER) · [Security](SECURITY.md) |
+[Unified Harness Protocol（UHP）](https://unifiedharnessprotocol.org) 是 Hexa Gateway 对外提供的版本化 Agent 执行协议。它定义了 harness 选择、持久会话、文件、取消、流式进度以及工具和技能的执行语义，并兼容 OpenAI Responses API 的任务接口。
 
-<br>
+本仓库包含协议文档、机器可读 Schema 和一致性测试：
 
-## Star History
-
-<p align="center">
-  <a href="https://www.star-history.com/#HarnessRouter/harnessrouter&amp;Date" title="Explore the full star history">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;theme=dark&amp;legend=top-left">
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left">
-      <img alt="HarnessRouter GitHub star history. Open the full interactive chart." src="https://api.star-history.com/chart?repos=harnessrouter/harnessrouter&amp;type=date&amp;legend=top-left" width="640" height="427">
-    </picture>
-  </a>
-</p>
-<br>
-
-## License
-
-HarnessRouter Community Edition is licensed under [Apache 2.0](LICENSE). Agent harness CLIs are installed on first launch and remain subject to their respective upstream licenses. See [NOTICE](NOTICE) for third-party notices and the [Starter Kits repository](https://github.com/HarnessRouter/starter-kit#licensing) for its separate licensing terms.
-
-<p><a href="https://harnessrouter.ai">HarnessRouter</a> is the world's first unified interface for agent harnesses.</p>
+- [协议说明](protocol/README.md)
+- [OpenAPI 和 JSON Schema](protocol/schema)
+- [一致性测试](protocol/conformance)
+- [协议治理](protocol/GOVERNANCE.md)

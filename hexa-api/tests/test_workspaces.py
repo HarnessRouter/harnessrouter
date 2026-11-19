@@ -22,6 +22,16 @@ def test_workspace_selection_is_scoped_to_authenticated_user(client):
     current = client.get("/api/hexa/workspaces")
     assert current.json()["selected_id"] == workspace["id"]
 
+    renamed = client.patch(f"/api/hexa/workspaces/{workspace['id']}", json={"name": "研究空间", "description": "论文与实验"})
+    assert renamed.status_code == 200
+    assert renamed.json() == {"id": workspace["id"], "name": "研究空间", "description": "论文与实验"}
+    current = client.get("/api/hexa/workspaces")
+    assert current.json()["workspaces"][0]["name"] == "研究空间"
+    assert current.json()["workspaces"][0]["description"] == "论文与实验"
+
+    assert client.patch("/api/hexa/workspaces/9999", json={"name": "不存在"}).status_code == 404
+    assert client.patch(f"/api/hexa/workspaces/{workspace['id']}", json={"name": "   "}).status_code == 422
+
 
 def test_real_gateway_workspace_mapping_is_used_for_execution(client, app):
     login(client)

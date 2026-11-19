@@ -3,6 +3,26 @@ def login(client):
     assert response.status_code == 200
 
 
+def test_reply_execution_is_per_message_and_survives_reload(client, app):
+    async def traced_response(*args, **kwargs):
+        return {'response_id': 'traced', 'text': '回答', 'status': 'completed', 'execution': {'reasoning': '公开摘要', 'steps': [{'id': 'tool-1', 'name': 'search', 'status': 'completed'}]}}
+    app.state.gateway.create_response = traced_response
+    login(client)
+    cid = client.post('/api/hexa/conversations', json={'title': '执行详情', 'agent_id': 'agent-1', 'model': 'gpt-6.1'}).json()['id']
+    first = client.post(f'/api/hexa/conversations/{cid}/messages', headers={'Idempotency-Key': 'trace-first'}, json={'text': '首轮'})
+    assert first.status_code == 202
+    execution = first.json()['assistant']['execution']
+    assert execution['harness_id'] == 'agent-1'
+    assert execution['model'] == 'gpt-6.1'
+    assert execution['elapsed_ms'] >= 0
+    assert execution['reasoning'] == '公开摘要'
+    assert execution['steps'][0]['name'] == 'search'
+    client.post(f'/api/hexa/conversations/{cid}/messages', headers={'Idempotency-Key': 'trace-second'}, json={'text': '追问'})
+    restored = client.get(f'/api/hexa/conversations/{cid}').json()['messages']
+    assert restored[1]['execution'] == execution
+    assert restored[3]['execution']['started_at'] >= execution['started_at']
+
+
 def test_conversation_message_persists_previous_response_and_replays_idempotency(client):
     login(client)
     created = client.post("/api/hexa/conversations", json={"title": "产品讨论"})
@@ -169,3 +189,5 @@ def test_status_recovers_known_response_without_posting_again(client, app):
         assert client.get(f'/api/hexa/conversations/{cid}/status').json()['status'] == 'completed'
     snapshot = client.get(f'/api/hexa/conversations/{cid}').json()
     assert [m['text'] for m in snapshot['messages']] == ['hello', '恢复的答案']
+    assert snapshot['messages'][1]['execution']['status'] == 'completed'
+    assert 'elapsed_ms' not in snapshot['messages'][1]['execution']

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 移动端人工确认</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="prototype-page">
+    <div class="mobile-artboard mobile-detail" id="mobile-detail">
+      <div class="mobile-statusbar">
+        <span>9:41</span>
+        <span class="mobile-status-icons">
+          <span class="mobile-signal"><i></i><i></i><i></i><i></i></span>
+          <span>5G</span>
+          <span class="mobile-battery"></span>
+        </span>
+      </div>
+      <header class="mobile-appbar">
+        <button class="mobile-back" type="button" aria-label="返回任务列表">
+          <svg class="icon"><use href="#i-chevron-left"></use></svg>
+        </button>
+        <span class="mobile-detail-title"><strong>安全事件调查</strong><span>Run #18 · Workflow v7</span></span>
+        <button class="icon-button icon-button-bare" type="button" aria-label="更多任务操作">
+          <svg class="icon"><use href="#i-more"></use></svg>
+        </button>
+      </header>
+
+      <main class="mobile-detail-content" aria-label="移动端任务详情">
+        <section class="mobile-detail-summary">
+          <div class="mobile-detail-status-row">
+            <span class="badge badge-amber"><span class="status-dot amber"></span>等待你确认</span>
+            <span class="mono" style="font-size: 7px; color: #98a2b3">04:12 · 12 分钟前</span>
+          </div>
+          <h1>安全事件调查</h1>
+          <p>5 个调查结果已生成。选择要传给汇总节点的输出。</p>
+          <div class="mobile-mini-progress">
+            <div class="mobile-mini-progress-top"><strong>5 / 9 节点完成</strong><span>已选 2 / 5</span></div>
+            <div class="progress-track"><span style="width: 56%"></span></div>
+          </div>
+          <div class="mobile-phase-scroll" aria-label="任务阶段">
+            <span class="mobile-phase done"><span class="status-dot green"></span>并行调查</span>
+            <span class="mobile-phase current"><span class="status-dot amber"></span>人工确认</span>
+            <span class="mobile-phase">汇总</span>
+            <span class="mobile-phase">校验</span>
+            <span class="mobile-phase">报告</span>
+          </div>
+        </section>
+
+        <section class="mobile-graph" aria-label="运行流程缩略图">
+          <div class="mobile-graph-head">
+            <strong>运行流程</strong>
+            <span class="badge badge-gray" style="height: 17px; padding: 0 5px; font-size: 6.5px">Workflow v7</span>
+            <span>5 个调查节点已完成</span>
+          </div>
+          <div class="mobile-graph-body">
+            <div class="mobile-graph-row">
+              <div class="mobile-graph-stack">
+                <span class="mobile-graph-chip"><span class="status-dot green"></span>告警分析</span>
+                <span class="mobile-graph-chip"><span class="status-dot green"></span>威胁狩猎</span>
+                <span class="mobile-graph-chip"><span class="status-dot green"></span>日志取证</span>
+                <span class="mobile-graph-chip"><span class="status-dot green"></span>资产核查</span>
+                <span class="mobile-graph-chip"><span class="status-dot green"></span>情报检索</span>
+              </div>
+              <span class="mobile-graph-arrow">
+                <svg viewBox="0 0 20 12" aria-hidden="true"><path d="M0 6h17M13 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <div class="mobile-graph-gate">
+                <strong>人工确认</strong>
+                <span>已选 2 / 5 个结果</span>
+                <span>等待提交</span>
+              </div>
+              <span class="mobile-graph-arrow">
+                <svg viewBox="0 0 20 12" aria-hidden="true"><path d="M0 6h17M13 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <div class="mobile-graph-downstream">
+                <span class="mobile-graph-box"><svg class="icon" style="width: 9px; height: 9px"><use href="#i-layers"></use></svg>汇总</span>
+                <span class="mobile-graph-box"><svg class="icon" style="width: 9px; height: 9px"><use href="#i-shield"></use></svg>校验 A/B</span>
+                <span class="mobile-graph-box"><svg class="icon" style="width: 9px; height: 9px"><use href="#i-doc"></use></svg>报告</span>
+              </div>
+            </div>
+            <div class="mobile-graph-note"><svg class="icon"><use href="#i-lock"></use></svg>下游 3 个节点将在确认后执行</div>
+          </div>
+        </section>
+      </main>
+
+      <section class="mobile-sheet" aria-label="选择汇总输入">
+        <div class="mobile-sheet-handle"></div>
+        <header class="mobile-sheet-head">
+          <div>
+            <h2>选择汇总输入</h2>
+            <p>未勾选的结果不会进入下游上下文</p>
+          </div>
+          <span class="badge badge-amber"><span class="status-dot amber"></span>2 / 5</span>
+        </header>
+        <div class="mobile-candidate-list">
+          <div class="mobile-candidate is-selected">
+            <span class="checkbox"><svg class="icon"><use href="#i-check"></use></svg></span>
+            <span class="candidate-avatar"><svg class="icon"><use href="#i-shield"></use></svg></span>
+            <span class="candidate-copy">
+              <span class="candidate-title-line"><strong>告警分析</strong><span class="candidate-id">collect-a</span></span>
+              <p>3 条高风险登录行为，关联 2 个 C2 域名</p>
+            </span>
+            <button class="candidate-eye" type="button" aria-label="预览告警分析结果"><svg class="icon"><use href="#i-eye"></use></svg></button>
+          </div>
+          <div class="mobile-candidate">
+            <span class="checkbox"></span>
+            <span class="candidate-avatar"><svg class="icon"><use href="#i-target"></use></svg></span>
+            <span class="candidate-copy">
+              <span class="candidate-title-line"><strong>威胁狩猎</strong><span class="candidate-id">collect-b</span></span>
+              <p>1 个可疑 PowerShell 下载链</p>
+            </span>
+            <button class="candidate-eye" type="button" aria-label="预览威胁狩猎结果"><svg class="icon"><use href="#i-eye"></use></svg></button>
+          </div>
+          <div class="mobile-candidate is-selected">
+            <span class="checkbox"><svg class="icon"><use href="#i-check"></use></svg></span>
+            <span class="candidate-avatar"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+            <span class="candidate-copy">
+              <span class="candidate-title-line"><strong>日志取证</strong><span class="candidate-id">collect-c</span></span>
+              <p>攻击时间线、初始入口与横向移动路径</p>
+            </span>
+            <button class="candidate-eye" type="button" aria-label="预览日志取证结果"><svg class="icon"><use href="#i-eye"></use></svg></button>
+          </div>
+          <div class="mobile-candidate">
+            <span class="checkbox"></span>
+            <span class="candidate-avatar"><svg class="icon"><use href="#i-server"></use></svg></span>
+            <span class="candidate-copy">
+              <span class="candidate-title-line"><strong>资产核查</strong><span class="candidate-id">collect-d</span></span>
+              <p>7 台主机受影响，其中 2 台核心库</p>
+            </span>
+            <button class="candidate-eye" type="button" aria-label="预览资产核查结果"><svg class="icon"><use href="#i-eye"></use></svg></button>
+          </div>
+          <div class="mobile-candidate">
+            <span class="checkbox"></span>
+            <span class="candidate-avatar"><svg class="icon"><use href="#i-globe"></use></svg></span>
+            <span class="candidate-copy">
+              <span class="candidate-title-line"><strong>情报检索</strong><span class="candidate-id">collect-e</span></span>
+              <p>2 个恶意 IP 命中，置信度 92%</p>
+            </span>
+            <button class="candidate-eye" type="button" aria-label="预览情报检索结果"><svg class="icon"><use href="#i-eye"></use></svg></button>
+          </div>
+        </div>
+        <footer class="mobile-sheet-foot">
+          <span class="mobile-sheet-count"><strong>已选 2 / 5</strong><span>汇总输入</span></span>
+          <button class="button button-primary" type="button">确认并继续 <svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+        </footer>
+      </section>
+    </div>
+    <script src="design-kit.js"></script>
+  </body>
+</html>

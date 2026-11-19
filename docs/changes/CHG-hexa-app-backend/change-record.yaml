@@ -39,6 +39,11 @@ acceptance:
     action: 创建、失败重试、删除确认、列表重读、切换 Agent 和模型加载
     expected: 只展示 Gateway 返回的真实列表；失败保留原状态；过期模型响应不能覆盖当前 Agent；模型不可用时禁止发送
     verification: client/tests/app-api.test.mjs; client/tests/app-ui/agents.spec.ts; client/tests/integration-ui/backend.spec.ts
+  - id: AC-8
+    entry: app 模式工作空间入口与设置
+    action: 打开工作空间浮层、工作区设置、新建工作区，并打开应用设置的两个书签标签
+    expected: 380px 白色浮层展示工作空间与当前勾选；两个 480px 表单居中，更新走 PATCH，创建后自动选择；设置使用左栏书签标签，连接页说明 Gateway 由应用后端管理；390px 无横向溢出
+    verification: client/tests/app-ui/workspace-settings.spec.ts; client/tests/app-api.test.mjs; hexa-api/tests/test_workspaces.py
 baseline: 脏工作树；保留既有 Gateway、UI、client 和 Cloud 删除改动。
 reuse_decision: new
 discovery_evidence: [历史 client/src/api.ts 的 Gateway 直接调用, gateway/app.py 的 /v1/harnesses 和 /v1/responses, 用户确认的 FastAPI/PostgreSQL/HttpOnly Cookie 决策, 本轮移除静态版本的要求]
@@ -132,6 +137,32 @@ verification:
     evidence: 39 client tests, build/typecheck, direct UI full 32, app UI Chromium/Edge 6, integration Chromium 2 passed; HttpOnly cookie and no /v1 app requests asserted. Workspace geometry wait fixed.
     reason: null
     next_action: Edge integration environment rerun and real configured Provider acceptance
+  - acceptance_ids: [AC-8]
+    status: passed
+    command_or_steps: npx playwright test -c playwright.app.config.ts tests/app-ui/workspace-settings.spec.ts; npm test; npm run typecheck; npm run build; python -m pytest hexa-api/tests/test_workspaces.py -q
+    exit_code: 0
+    revision: dirty-worktree; 2026-11-17 App-only workspace and settings correction
+    environment: Windows; Chromium and Edge; 1007x780 and 390x844; controlled /api/hexa fixture
+    evidence: workspace/settings Playwright 8/8 across Chromium and Edge; repeated Chromium runs passed. 380px popover, 480px centered dialogs (2px tolerance), PATCH update, create-and-select, failed save/create input retention, vertical bookmark tabs with active white tab seam, horizontal mobile tabs and 390px overflow check all passed. Client unit tests 20/20, typecheck and production build passed; FastAPI workspace tests 2/2 passed including PATCH, 404 and empty-name 422.
+    reason: 用户要求在 App-only 版本按既有要求恢复工作空间浮层/居中表单和设置书签页。
+    next_action: null
+    screenshots:
+      - path: docs/screenshots/app-workspace-menu-popover.png
+        sha256: 8E8FFDF7E6B7CBEE79D3212A0E8C94242F865EBE458AFB0091B43392A0C557AA
+      - path: docs/screenshots/app-workspace-settings-centered.png
+        sha256: B5BC6BE605759A43EA96F6C94F30B9ADD3CB3EC57B7D2DC05F7F8740B92573AA
+      - path: docs/screenshots/app-workspace-create-centered.png
+        sha256: B340D8AD27D2930B2E4A27AE29C2085BC9426DCDEAD46EC82D63A0EE8F0236CE
+      - path: docs/screenshots/app-workspace-menu-mobile.png
+        sha256: 5989314C319C8D9A4BAEF8F648CF24D7967A9F3BBB2EFBF1489DAD201CE62C9F
+      - path: docs/screenshots/app-workspace-settings-mobile.png
+        sha256: 3CF2175E3E25A5B05FD8C4AAFDB49AD11208F22CAB197F95E84BC6D2AD5AFFFA
+      - path: docs/screenshots/app-settings-bookmark-connection.png
+        sha256: BCE3B7B4561695D57F250BE9762E508F306F674F121533A8E9A8E3D209288805
+      - path: docs/screenshots/app-settings-bookmark-interface.png
+        sha256: 8804A23B305BB563E1B294D5A8565438CB7D5E79C40B49A4258C20E6234AEB50
+      - path: docs/screenshots/app-settings-bookmark-mobile.png
+        sha256: 85A9FC4FAF0892BBB543F52CF7CEA96FEB0E230F482307D9AC2A3545E290D046
   - acceptance_ids: [AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7]
     status: not_evaluated
     command_or_steps: PostgreSQL migration execution, Docker/Compose deployment, real BYOK Provider, Edge integration Agent-management context stability
@@ -141,7 +172,7 @@ verification:
     evidence: SQL migration and environment configuration are present; app Edge UI passed, while the second Edge integration case exited during browser context creation twice; no deployment or real Provider claim made.
     reason: external runtime and credentials are outside this local implementation pass.
     next_action: configure approved PostgreSQL/Provider and run production-shaped validation.
-remaining: [PostgreSQL migration and production-shaped FastAPI deployment, app mode production rollout decision, Memory/Template/Workflow backend APIs deferred outside current chat scope, full Edge integration suite rerun after browser context instability, real file input/output and stream interruption acceptance, local runtime Gateway key cleanup when services are stopped, local FastAPI hot reload restart because current shell has no HEXA_* credentials]
+remaining: [PostgreSQL migration and production-shaped FastAPI deployment, app mode production rollout decision, Memory/Template/Workflow backend APIs deferred outside current chat scope, full Edge integration suite rerun after browser context instability, real file input/output and stream interruption acceptance, local runtime Gateway key cleanup when services are stopped, local FastAPI hot reload restart because current shell has no HEXA_* credentials, existing tasks.spec.ts run-history test still looks for 运行记录 inside 任务菜单 while the app places it in the sidebar]
 review: self_review_pending_external_runtime
 handoff: null
 rollback: 停止独立 hexa-api 服务并移除本 Change 新增文件；保留 Gateway Cloud 删除契约。

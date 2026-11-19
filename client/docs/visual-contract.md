@@ -1,5 +1,144 @@
 # Hexa Client UI 视觉契约与审查记录
 
+## 流程图内人工节点操作（2026-11-19）
+
+- 设计来源与状态：用户反馈“人工节点怎么操作”；沿用任务工作台 v1.4 的运行属性、人工确认和状态色契约，明确人工节点不调用 Agent。
+- 交互：在任务详情点击“查看流程图”后，选择人工节点，右侧“运行属性”显示“人工节点 · 不会调用 Agent”；用户可勾选已完成的上游结果，直接点击“确认并继续”或“终止任务”，不必跳转运行记录。
+- 视觉与可访问性：人工确认区域使用等待状态的琥珀色提示块，候选结果保留节点状态与可展开输出；区域、候选复选框和操作按钮均有语义名称，忙碌时禁用重复提交。
+- 自动验收：`tasks.spec.ts` 新增流程图选中人工节点、勾选上游结果并发送 continue 的用例；Chromium 目标用例 2/2、Edge 任务工作台回归 13/13，`npm run typecheck` 通过。
+- 结论：通过。人工节点的选择、确认、终止路径在流程图属性面板内闭环，任务详情原有人工确认入口保持兼容。
+- 未评估：真实 Gateway 持久化下的人工节点长输出、移动端抽屉内的多候选滚动和高频状态刷新。
+
+## 任务详情直达最近运行结果与流程图（2026-11-19）
+
+- 设计来源与状态：用户反馈任务列表应能直接查看流程图和任务结果，不必先跳转运行记录；沿用 design-spec v1.4 的任务详情、结果快照与流程图视觉，不改变 Task / Run 版本与保存语义。
+- 结果：任务详情“任务结果”同时展示已采用结果和最近运行各节点输出；运行输出标注 `Run #N · Workflow vN` 与“只读快照”，与已采用节点按 `nodeId` 去重，未采用输出不进入 `current_result`，也不改变结果状态。
+- 流程图：工作流区块新增“查看流程图”，在“我的任务”内打开“任务流程图”区域，使用所选任务最近一次 `RunSnapshot`；`返回任务详情` 回到原详情，“查看运行记录”保留为次级入口，侧栏选中项始终为“我的任务”。
+- 草稿与边界：从未运行的任务显示只读工作流结构预览和“尚未运行”，不伪造节点状态；无 Run 时不展示“查看运行记录”。
+- 自动验收：`tasks.spec.ts` 新增最近运行输出、流程图原位打开、侧栏不跳转和草稿预览用例；`task-workbench.test.mjs` 新增 `latestRunOutputs` 过滤空输出和空 Run 用例。Edge 目标集 12/12、Chromium 全量 42/45；3 项失败为既有 Agent/导航用例（`agents.spec.ts:81`、`agents.spec.ts:113`、`navigation.spec.ts:102`），与本改动无关，串行复跑仍失败，记录为既有问题。客户端单测 33/33，`npm run typecheck`、`npm run build` 通过（仅既有 >500kB chunk advisory）。
+- 截图与哈希（1440×900，Chromium）：`docs/screenshots/task-workbench-redesign/app-task-detail-direct.png` `AA84851BADB245D29299D61DC5813A90D5B04FAF22BCE27C4116F3ADF6FD8720`，展示任务详情中的“最近运行节点输出”只读快照；`app-task-flow-direct.png` `298E01B56DCF0433779EE990D732ED3442593D626E7BC146A9C7A3C68D10B130`，展示“任务流程图”在“我的任务”内打开及返回入口。
+- 结论：通过。任务结果和流程图可在任务页闭环查看，未采用结果不会误写为已采用，也未引入运行记录跳转。
+- 未评估：真实 SSE 高频更新时结果与快照的刷新连续性、超长节点输出和移动端流程图操作。
+
+## 任务卡片单列塌缩与流程图状态动态（2026-11-18）
+
+- 设计来源与状态：用户反馈任务页卡片状态样式在窄列/单列时错位，并要求流程图按节点状态增加动态效果；沿用 design-spec v1.4 的卡片、状态色与 reduced-motion 约束，不改变业务状态语义。
+- 结构：卡片网格使用 `grid-auto-rows: max-content` 与顶部对齐，卡片高度随内容增长，不再被等高行压缩后裁掉标题行；缩略图按可用宽度等比缩放并居中，单节点与多节点卡片保持接近的节点尺寸。
+- 状态样式：卡片顶部 2px 状态条和缩略图背景分别使用蓝/橙/绿/红语义色；任务、Run 状态点的运行中状态使用呼吸动画；任务列表卡片、运行记录卡片和模板卡片共用同一套状态表达。
+- 流程图动态：任务详情缩略图与运行快照按节点状态渲染 succeeded/running/queued/failed/canceled/idle 色调；运行中节点有 ring 呼吸，运行中连线虚线流动；已完成链路使用绿色实线，就绪链路蓝色呼吸，失败链路红色虚线，待执行链路灰色虚线。箭头颜色与连线一致。
+- 可访问性与降级：所有动效仅为状态过渡，`prefers-reduced-motion: reduce` 下统一关闭；状态同时保留文字与圆点，不只依赖颜色。
+- 自动验收：新增 `task-cards.spec.ts` 覆盖 1440/1280/1024/900/390 单列塌缩、卡片内容不越界、缩略图不溢出、状态色调与动画、reduced-motion 关闭；先确认旧实现失败后修复。新增 `node and edge tones` 单测覆盖色调映射。
+- 验证结果：Chromium `task-cards` 4/4，全量 `app-ui` 44/44；Edge `task-cards` + `workbench-redesign` 8/8；客户端单测 31/31；`npm run typecheck` 与 `npm run build` 通过（仅保留既有 >500kB chunk advisory）。
+- 截图与哈希：`docs/screenshots/task-workbench-redesign/app-tasks-cards.png` `C43C348664A2DB0E1132D05F81B0BE2CA71401BA5E1E76C6DDA2A0D52F143240`；`app-runs-cards.png` `60AB328D9688DD08B77A469C8D0BE667F0C24CD056339AC25A1F9D0E6F0AC1EB`；`app-templates-cards.png` `DA0CF317B4E7E3CDE620166BC828E95C6089CC2517558EC2DC5DFC31EA7A8F38`；`app-run-graph-states.png` `4EAB3198C5CD1783BD2A6B741F42B6943E5EA6B03DB3356FC7C4B4A01283E1EA`（均为 1440×900 Chromium）。
+- 结论：功能与视觉通过；卡片在单列和窄列下不再裁切，流程图状态可区分且动态克制。
+- 未评估：真实 SSE 高频更新下的动画连续性、非 Windows 字体渲染和超长节点名称。
+
+## 智能体二级导航详情页（2026-11-18）
+
+- 设计来源与状态：用户要求智能体页面的二级导航在点击某个智能体后，右侧显示详情页，内容层级参考 Gateway 的 Agent 设置：Instructions、Agent harness、Capabilities、Memory、Environment & limits。
+- 结构：二级导航中的智能体项改为选择态，不再直接新建对话；主区域在选中后显示全宽详情卡片，顶部为名称、运行时、模型、Memory 摘要和“返回列表 / 开始对话 / 删除”，主体为 220px 层级导航与详情面板。未选中时保留原有 Agent 卡片列表。
+- 内容：Instructions 显示系统提示词与字符数；Agent harness 显示智能体 ID、名称、运行时、默认模型、Reasoning effort 和创建时间；Capabilities 显示 Skills、MCP servers、Disabled tools、Plugins 及计数；Memory 显示状态、名称、引擎、范围、原因、Observe 和 Provisioned；Environment & limits 显示环境变量、请求头、最大步数、超时和绑定环境。
+- 数据边界：字段来自 `GET /api/hexa/agents` 返回的 Gateway harness 记录，同时兼容 camelCase 与 snake_case。缺失字段显示“Gateway 未返回”，不以空值或演示值冒充；环境变量只展示名称及“已保存的引用 / 已设置（值已隐藏）/ 空值”，不渲染值本身。
+- 交互：点击二级导航智能体或 Agent 卡片进入详情；点击“模板库”清除选择并返回模板列表；“返回列表”回到 Agent 卡片；详情内“开始对话”沿用既有会话 Agent/模型锁定与路由。层级导航使用 `role="tablist"`、`role="tab"`、`role="tabpanel"`，支持方向键、Home、End 切换。
+- 响应式：980px 以下层级导航改为横向可滚动标签，640px 以下详情头与操作按钮纵向排列；390px 视口无页面横向溢出。
+- 自动验收：新增 `agent-detail.test.mjs` 覆盖 camelCase、snake_case、缺失字段、Memory 关闭/原因和敏感环境变量引用；新增 Playwright 用例覆盖二级导航进入详情、五个层级内容、敏感值不显示、390px 无横向溢出和“开始对话”返回会话页。结果：客户端单测 30/30，Chromium `agent-templates` 3/3、`agents` 3/3、`navigation` 5/5，Edge 详情用例 1/1；`npm run typecheck` 与 `npm run build` 通过（仅保留既有 >500kB chunk advisory）。
+- 截图与哈希（Chromium，1440×900 / 390×844）：`docs/screenshots/agent-detail-desktop.png` `19D6170F7CB8DE87265C9FD9E6212018FA69B05A68E6577D5D5BE09B9FB6EC9C`；`docs/screenshots/agent-detail-mobile.png` `01FC7675C5B0203251A28E599740B3641D135E1575CB0671FF233358C40FFA17`。
+- 结论：功能与视觉通过。详情页层级、选中态、只读字段和响应式布局符合目标。
+- 未评估：真实 Gateway 中缺少字段、超长 Instructions、数百项 Capabilities 以及受限权限 Agent 的线上组合；当前由单元测试和受控接口夹具验证字段映射与边界。
+
+## 对话滚动条贴分栏与可拖拽上下文宽度（2026-11-18）
+
+- 设计来源与状态：用户截图要求对话滚动条靠近会话区与上下文栏之间的分割线，并让分割线支持拖动调整右侧上下文栏宽度。
+- 结构：会话主列增加全宽 `.chat-scroll` 滚动容器，正文 `.chat` 仍保持 820px 最大宽度居中；滚动条固定在会话主列右缘，与上下文栏分隔线相邻。上下文栏左侧新增 `role="separator"` 拖拽手柄。
+- 交互：拖动手柄向左扩大上下文栏、向右缩窄；支持 `ArrowLeft` / `ArrowRight` 每次 24px 调整，`Home` / `End` 跳到最小 / 最大宽度。宽度范围 280–560px，且始终为会话区保留至少 420px；宽度持久化到 `localStorage['hexa.chat.context-width']`，刷新后恢复。640px 以下隐藏手柄，继续使用固定上下文抽屉。
+- 消息层级：用户气泡保留浅色底、细边框和圆角，但移除阴影；Agent 回复使用 30px 头像、独立名称/模型行和 8px 行后间距，Markdown 正文从同一列开始，不再使用卡片边框、底色或内边距。代码块、表格等内部元素仍保留各自的局部容器；输入 composer 继续保留轻微抬升。
+- 可访问性：手柄名称为“调整上下文宽度”，提供垂直方向、最小 / 最大 / 当前宽度，并有清晰焦点环；拖动期间使用列调整光标并禁止文本选择。
+- 自动验收：新增用例断言滚动容器右缘与上下文栏左缘对齐，拖动后上下文栏增宽且滚动条仍贴分栏线，键盘调整生效，刷新后宽度保持；同时断言用户气泡 `box-shadow` 为 `none`，回复正文无边框、无内边距、背景透明，Agent 头像位于名称左侧，名称与正文左对齐且正文下间距不少于 7px。Chromium 全量 `app-ui` 39/39，Edge 对话 4/4；`npm run typecheck` 与 `npm run build` 通过。
+- 截图与哈希：`docs/screenshots/chat-scroll-divider-resize.png` `BA63654107D494520447D467AFF3A0001DECFA748EEBE4BD25D145E082463409`，1440×900 Chromium，展示长对话、贴分栏线滚动区域、拖宽后的上下文栏和带头像/元信息行的回复正文。
+- 短回复消息头：`docs/screenshots/chat-message-header.png` `B7CE0BDFD3CAFC18BB99789AC284BCB2A47255EDBAD48DA862C5188EC78046EC`，1440×900 Chromium，展示头像、Agent 名称、模型标签与正文的层级关系。
+- 结论：通过。分栏线拖拽和滚动区域边界符合目标；构建仅保留既有大 chunk advisory。
+
+## 对话长内容滚动修复（2026-11-18）
+
+- 问题与复现：长回复会把 `.main` 从 720px 视口高度撑到 3019px，而外层 `.app` 保持固定高度并裁剪；`.chat` 的 `scrollHeight` 与 `clientHeight` 相等，底部内容不可达。
+- 修复：主工作区 `.main` 固定为可用高度的 100%，补 `min-height: 0` 与 `overflow: hidden`；对话页同步约束高度，滚动只发生在 `.chat-thread .chat`。该滚动容器使用稳定的细滚动条、可视轨道和语义色滑块。
+- 验收：新增长回复用例，先确认旧实现无法滚动并失败；修复后断言 `scrollHeight > clientHeight`、`scrollTop > 0`、底部标记进入视口，并验证可滚回首个段落。
+- 回归结果：Chromium 全量 `app-ui` 38/38，Edge 对话 3/3；`npm run typecheck` 与 `npm run build` 通过（仅保留既有大 chunk advisory）。
+- 截图与哈希：`docs/screenshots/chat-long-reply-scroll.png` `0E65B88289FC6CAE8526DA72371A1DCFB03AD0769F91FC8596C50F824FF6644F`，1440×900 Chromium，展示长回复滚动到底部后的末尾内容与 composer。
+- 结论：通过。内容区和输入区高度稳定，长回复可完整滚动查看。
+
+## 对话内容区 Markdown 渲染（2026-11-18）
+
+- 设计来源与状态：用户要求只优化对话内容区，并参考 Gateway 工作台的 `TaskThread`、`CodeBlock` 能力；不改动侧栏、上下文检查器和整体布局。沿用现有白底表面、细边框、主色与等宽字体 token。
+- 目标页面与视口：对话主线程；Chromium / Edge，桌面 1440×900，移动 390×844。
+- 结构：Agent 回复按 GFM Markdown 渲染标题、段落、强调、列表、任务列表、引用、分隔线、图片、链接和表格；表格在自身容器内横向滚动。围栏代码块显示语言、语法高亮和复制按钮；每条完整回复提供“复制回复”。用户消息仍按原文显示，不执行 Markdown。
+- 交互与恢复：流式生成内容同样按 Markdown 增量渲染并显示光标；仅当用户接近底部时自动跟随最新输出。链接在新标签打开并带 `noopener noreferrer`；原始 HTML 经 `rehype-sanitize` 过滤，不渲染脚本或外部对象。
+- 视觉：标题、正文、列表与代码采用明确层级；代码卡头部与正文分离，亮暗主题分别使用语义 token；表格、行内代码和链接在窄屏保持可读。390px 下内容区无页面横向溢出。
+- 自动验收：先新增 `chat.spec.ts` 用例并确认旧实现因缺少 Markdown 标题、表格和代码复制入口失败；实现后目标用例通过，`chat.spec.ts` Chromium 2/2、Edge 2/2；客户端单测 27/27；`npm run typecheck`、`npm run build` 通过；`npm audit --omit=dev` 为 0 漏洞。
+- 截图与哈希：亮色 `docs/screenshots/chat-markdown-content.png` `4544DA6688B7FB1D31E8851F2CC0531221BB238F39C94F2AADBCC1036D4FB7CB`；深色 `docs/screenshots/chat-markdown-dark.png` `275D8BD9CE2FF0C2DFEE1B3A212CD99C10932EC95139D292E679EFCBFA374867`；移动端 `docs/screenshots/chat-markdown-mobile.png` `7A2073EFF9D56D4CF20B36350FA7089B96798BA4BFE05194C5EBD55EB485BD3B`。
+- 结论：功能与视觉通过。构建保留既有大于 500kB chunk advisory。
+- 未评估：真实 Gateway/Provider 的超长回复、超大表格与非 Windows 字体渲染。
+
+## 全量界面回归验收（2026-11-18）
+
+- 验收范围：客户端 `app-ui` 全部 36 条用例，Chromium 与 Edge；集成 UI 全部 10 条用例，覆盖登录、会话过期、Agent、模板、任务、运行记录、SSE、HTTP Gateway、空状态、失败恢复和移动端断点。
+- 结果：Chromium `app-ui` 36/36、Edge `app-ui` 36/36；客户端单测 26/26；`npm run typecheck` 通过；`npm run build` 通过，仅保留既有大 chunk advisory。
+- 集成结果：Chromium 串行 5/5、Edge 串行 5/5。首次 2 worker 并发运行出现模板数据未及时可见、Edge 上下文提前关闭和任务详情等待超时；对应失败用例逐条以 1 worker 隔离复跑全部通过，判定为 FastAPI/数据库/Edge 进程并发争用，不是可复现的界面回归。
+- 验收结论：结构、交互、可访问性、内容溢出、亮暗主题、键盘焦点、`prefers-reduced-motion`、移动端输入字号和触控尺寸均通过；未发现当前样式改动引入的可复现 UI bug。
+- 复验命令：`npx playwright test -c playwright.app.config.ts --project=chromium --workers=4`、`npx playwright test -c playwright.app.config.ts --project=edge --workers=2`、`npx playwright test -c playwright.integration.config.ts --workers=1`、`npm test`、`npm run typecheck`、`npm run build`。
+
+## 视觉 Token 与任务工作台可读性校正（2026-11-18）
+
+- 设计来源与状态：`docs/design/task-workbench-redesign/design-spec.md` v1.4 §5（颜色、字体、几何）与 §8（可访问性）；用户确认按上一轮评审的最小补丁范围推进，不修改布局和交互。
+- 目标页面与视口：我的任务、运行记录、模板管理及其右侧详情；Chromium / Edge，桌面 1440×900。
+- Token 真源：新增 `client/src/tokens.css` 与 `client/src/theme.ts`。亮色主色统一为 `#2563eb`，暗色主色为同色系 `#4c9dff`；Ant Design `colorPrimary`、`borderRadius` 与 CSS token 共用同一来源。亮色背景 `#f6f7f9`、主文字 `#111827`、辅助文字 `#667085`、分隔线 `#e4e7ec`、导航底 `#0b1220`，字体栈统一为 `Segoe UI Variable / Segoe UI / Microsoft YaHei UI / Microsoft YaHei`。
+- 字号收敛：工作台表头 10.5px、行标题 13px、行描述 11.5px、状态 10.5px、Run ID/时间 10.5px 等宽、详情正文 11px、运行事件 10px、模板版本与最近使用 10.5px；半像素字号不再出现在任务工作台的关键信息层。
+- 对比度：辅助文字从 `#98a2b3`（白底 2.58:1）与 `#a0aaba`（2.35:1）改为 `#667085`（4.97:1），次级强调使用 `#475467`（7.69:1）；表头、表尾、Run ID、行描述均满足小字号文本 4.5:1 的 AA 下限。
+- 暗色表面：工作台表头/表尾、行 hover/selected、分隔线、详情提示块、运行告警、模板缩略图、状态圆点改用 `--hx-surface*`、`--hx-line`、`--hx-primary-soft`、`--hx-status-*` 等语义 token；修复暗色下仍出现 `#fbfcfd/#f7faff/#fffaeb` 亮块的问题。
+- 附带修正：运行轨迹项由三列网格改为单列，避免唯一的文本列被 27px 图标列挤压成多行；测试夹具补齐 task/run artifacts 空分页响应，避免产物请求返回 `{}` 导致 `ArtifactList` 渲染异常。
+- 自动验收：目标用例 `visual-tokens.spec.ts` 3/3 在 Chromium 与 Edge 通过；全量 `app-ui` Chromium 33/33 通过（`--workers=4`）；客户端单测 26/26；`npm run typecheck` 与 `npm run build` 通过（仅保留既有 >500kB chunk advisory）。8 worker 全量运行时 `chat` 与 `run-history` 各出现一次 30s 超时，单测与 4 worker 全量均通过，按并发负载波动记录为 advisory。
+- 截图与哈希（1440×900，Chromium）：`client/.artifacts/task-api/visual-tokens-light.png` `0B938E14D8A56646388904850FC9E8A153C14F3CC56FB4B9069F7B6A12FACCED`；`visual-tokens-dark.png` `A255563C19B21E0C0F69E11915AAD584BD092BCA5F1872AD3DBA24D3D717B230`；`visual-tokens-dark-runs.png` `60E4800AEE6B9B35A5743B7FEE05E98CFD7ED4B6CBBEF71E187369D739B495C7`；`visual-tokens-dark-templates.png` `4CA807056EC702AE2ED93679AAC0C87EFC55282CABCECBC0FB2289DAA2BDFE93`。
+- 视觉结论：通过。任务工作台在亮/暗主题下的表头、表尾、详情与运行轨迹保持可读，主色与 Ant Design 控件一致。
+- 第二批落地（同一日期）：全站 `:focus-visible` 统一为 3px 主色 ring，列表行、卡片、模板节点、节点端口、详情/上下文拖拽把手、设置书签和面板都使用 `--hx-focus-ring` / `--hx-focus-ring-rail`，不再混用 2px、半透明色或 `box-shadow` 假焦点；`prefers-reduced-motion: reduce` 下全局关闭动画、过渡与平滑滚动（含工作台脉冲、流动连线与工作空间 spinner）；移动端 640px 以下输入/多行输入/下拉框统一 16px，筛选、视图切换、主操作、composer 操作和“上下文”入口不小于 34px。Ant Design 暗色 token 补齐 `colorBgContainer`、`colorBgElevated`、`colorTextBase`、`colorTextSecondary`、`colorBorder` 与 `colorBorderSecondary`，修复切换深色瞬间刷新/次要按钮白底或低对比的问题。
+- 第二批自动验收：`visual-tokens.spec.ts` 6/6（Chromium 与 Edge），新增焦点环、reduced-motion、移动端输入字号/触控尺寸和暗色次要按钮对比度断言；全量 `app-ui` Chromium 36/36（`--workers=4`）；客户端单测 26/26；`npm run typecheck` 与 `npm run build` 通过（仅既有 >500kB chunk advisory）。
+- 第二批截图与哈希（1440×900 / 390×844，Chromium）：`client/.artifacts/task-api/visual-tokens-light.png` `3AF5987D7253F371050FE1056FBB41CF93E24EA0B16B4FA61660FB4D4F704251`；`visual-tokens-dark.png` `6DCD9CE51E602FBA5521C16533223B41A97E8CADC8490838166C6537B05D2976`；`visual-tokens-dark-runs.png` `C829414FB5D4F83541405451E3698C487DFA7C7913F8ADECFBFC6D3774C9EF1B`；`visual-tokens-dark-templates.png` `2E8CE37C62D5E149A57660D1BF03C18958A7F189DDC2A33372815EECC26F09EB`；`visual-tokens-mobile.png` `1478140EEC35CEB1B23D907E1092517593CFE6A48CD24100DA5869A95484DF4A`。
+- 视觉结论（第二批）：通过。暗色主题下工具栏次要按钮恢复深色表面与可读文字，焦点在键盘遍历时保持一致的 3px 蓝色轮廓；390px 下筛选与视图按钮增高后仍无横向溢出。
+- 剩余事项：`styles.css` 分层与失效规则清理、剩余硬编码颜色逐页迁移，以及真实触控设备上的手势验证仍待后续处理。
+
+## 任务作战台全高工作台（2026-11-18）
+
+- 设计来源与状态：`docs/design/task-workbench-redesign/design-spec.md` v1.4，用户确认的 table/卡片 + 全高可拖拽详情和对话全高上下文栏方案。
+- 目标页面与视口：我的任务、运行记录、模板管理、对话；Chromium/Edge，桌面 1440×900，中间宽度 1280×900 / 1024×900，移动 390×844。
+- 结构：管理页使用顶部筛选 + table 或卡片列表 + 右侧全高 `complementary` 详情；三页详情在 1440px 下统一 720px；对话主线程与 304px 上下文栏同级全高。
+- 几何：任务行按可用高度拉伸，最后一行贴合底部状态栏；三页详情在窄桌面统一按 `clamp(400px, 64%, 720px)` 收缩，最小 400px 且列表至少保留 280px，筛选独占工具条首行，列表按容器宽度隐藏耗时/进度列；详情收起为 44px 把手。
+- 交互：任务/运行/模板选中同步详情；三页详情都可拖动左边缘调整、分别记忆本页宽度，并支持键盘调整；列表/卡片切换后选中项同步详情；供应商风险评估与竞品功能对比分别映射到 Run #13 / Run #15，筛选后不会落回默认 Run；运行详情保留“执行轨迹 + 实时事件”双列和“打开流程图”次级入口；模板编辑器保留返回与保存；对话 composer 始终可见。
+- 响应式：900px 以下隐藏固定详情/上下文栏并通过右侧抽屉打开；390px 下页面 `scrollWidth` 保持视口宽度。
+- 自动验收：工作台专项 7/7、目标集 Chromium 20/20、Edge 20/20，Chromium 全量 30/30；客户端单测 20/20；`npm run typecheck` 与 `npm run build` 通过（仅保留既有 >500kB chunk advisory）。
+- 截图与哈希：`docs/screenshots/task-workbench-redesign/`，完整哈希见 `docs/changes/CHG-task-workbench-redesign/change-record.yaml`。
+- 视觉结论：通过。全高分栏连续、表格铺满、筛选不截断、对话输入区可见。
+- 未评估：真实 Gateway/Provider 链路、非 Windows 字体渲染、长文本和超长工作流状态。
+
+## App-only 工作空间与设置校正（2026-11-17）
+
+- 设计来源：用户确认的工作空间附图、设置“左侧 tab + 右侧内容”的书签式要求，以及 App-only 客户端“Gateway 由应用后端管理”的边界。
+- 工作空间：左侧 rail 的工作区入口继续使用“切换工作区”可访问名称，点击后在右侧顶部展开 380px 白色圆角浮层；工作空间行为 42px 深海军蓝头像、名称/说明和当前项蓝色勾选，底部为“工作区设置”和“新建工作区”。
+- 工作区表单：两个 480px 表单均使用 `centered` Modal，标题分别为“工作区设置”“新建工作区”；设置保存通过 `PATCH /api/hexa/workspaces/{id}` 更新当前空间，创建成功后自动选择新空间并刷新列表。表单失败时保留输入并显示可读错误。
+- 设置：弹框标题为“设置”，桌面为 176px 左栏和右侧内容面板，左栏使用垂直书签 tab；活动 tab 为白底、细边框且右缘与内容面板左缘连续。“连接”说明 Gateway 由应用后端管理，浏览器不保存地址或 API Key；“界面与导航”提供一级导航文字开关，保存后持久化到 `localStorage`。
+- 响应式：640px 以下设置 tab 改为顶部横向布局；390×844 下工作空间浮层、两个工作区表单和设置弹框均位于视口内，页面 `scrollWidth` 保持 390px。
+- 可访问性：工作空间浮层为 `role="dialog"` 并使用“工作空间”名称，当前项带 `aria-current`；设置 tab 使用 `aria-selected`、`aria-controls` 和 `aria-labelledby`，支持方向键/Home/End 切换。
+- 自动验收：`client/tests/app-ui/workspace-settings.spec.ts` 8/8 通过（Chromium、Edge），覆盖 380px 浮层、480px 居中表单、`PATCH` 更新、创建后自动选择、保存/创建失败保留输入、设置书签 tab、移动横向 tab 与无横向溢出；组件几何使用轮询断言，避免动画期间读取 0 宽或临时边距。
+- 接口与回归：`client/tests/app-api.test.mjs` 通过（含工作空间 PATCH）、`hexa-api/tests/test_workspaces.py` 2/2、`npm run typecheck` 与 `npm run build` 通过。完整 App Playwright 本轮 30/34，通过目标工作空间/设置与导航、Agent、对话、运行历史和模板相关用例；失败项为既有的 `tasks.spec.ts` “任务菜单”内查找“运行记录”（实际入口位于二级导航）2 项，以及 1 次 Chromium 登录用例浏览器上下文超时，均与本次工作空间/设置改动无关，未修改该并行工作。
+- 桌面工作空间浮层：`docs/screenshots/app-workspace-menu-popover.png`，1007×780，SHA-256 `8E8FFDF7E6B7CBEE79D3212A0E8C94242F865EBE458AFB0091B43392A0C557AA`。
+- 桌面工作区设置：`docs/screenshots/app-workspace-settings-centered.png`，1007×780，SHA-256 `B5BC6BE605759A43EA96F6C94F30B9ADD3CB3EC57B7D2DC05F7F8740B92573AA`。
+- 桌面新建工作区：`docs/screenshots/app-workspace-create-centered.png`，1007×780，SHA-256 `B340D8AD27D2930B2E4A27AE29C2085BC9426DCDEAD46EC82D63A0EE8F0236CE`。
+- 移动工作空间浮层：`docs/screenshots/app-workspace-menu-mobile.png`，390×844，SHA-256 `5989314C319C8D9A4BAEF8F648CF24D7967A9F3BBB2EFBF1489DAD201CE62C9F`。
+- 移动工作区设置：`docs/screenshots/app-workspace-settings-mobile.png`，390×844，SHA-256 `3CF2175E3E25A5B05FD8C4AAFDB49AD11208F22CAB197F95E84BC6D2AD5AFFFA`。
+- 桌面设置连接页：`docs/screenshots/app-settings-bookmark-connection.png`，1007×780，SHA-256 `BCE3B7B4561695D57F250BE9762E508F306F674F121533A8E9A8E3D209288805`。
+- 桌面设置界面页：`docs/screenshots/app-settings-bookmark-interface.png`，1007×780，SHA-256 `8804A23B305BB563E1B294D5A8565438CB7D5E79C40B49A4258C20E6234AEB50`。
+- 移动设置界面页：`docs/screenshots/app-settings-bookmark-mobile.png`，390×844，SHA-256 `85A9FC4FAF0892BBB543F52CF7CEA96FEB0E230F482307D9AC2A3545E290D046`。
+- 视觉结论：通过。工作空间浮层、两个居中表单和设置书签布局均与既有附图/要求一致；连接页不再暴露浏览器侧 Gateway 配置入口。
+- 未评估：真实触控设备上的拖动与手势未单独验收；本轮使用 Playwright 的真实 Chromium/Edge 渲染和指针点击。
+
 ## 设置页书签式左侧标签（2026-11-16）
 
 - 设计来源：用户要求“设置页面调整为左侧 tab，右侧内容，类似书签效果”；沿用工作台现有白色表面、浅灰分区、细边框和主色按钮。
@@ -30,6 +169,28 @@
 - 移动截图：`docs/screenshots/template-infinite-canvas-mobile.png`，390×844，SHA-256 `724804B0FC3D8CEB551166546B42254421469D24D0CE8277CA6D8FD835BD6A64`。
 - 视觉结论：通过。编排控件不再出现原生按钮边框，画布不显示固定世界边界，节点、依赖箭头和点阵在平移缩放后保持一致；移动端仅通过画布内部平移大量节点，不撑开页面宽度。
 - 未评估：真实触控设备上的双指缩放未纳入本轮验收；滚轮和鼠标拖拽已在 Chromium 中实测。窄屏下节点较多时仍使用适配按钮和画布平移，不额外引入移动端节点详情抽屉。
+
+### 任务页模板设计入口（2026-11-17）
+
+- 任务页“模板管理”不再只有静态卡片；编辑按钮和新建按钮进入同一套模板设计工作区，复用左侧对话编排、中间无限画布、右侧模板检查器。
+- 设计器由任务主区域全高承载，返回按钮回到模板列表；保存新版本继续写入客户端模板草稿并保留版本递增行为，未新增 Gateway 接口。
+- 桌面验收：模板列表可进入设计器，画布、节点编排和检查器同时可见；新建模板可添加节点、编辑节点名称并保存。
+- 移动验收：三列工作区按编排、画布、检查器纵向排列，390×844 视口无横向溢出。
+- 自动验收：`client/tests/app-ui/tasks.spec.ts` 模板入口、编辑保存和移动布局用例通过；客户端单测、类型检查和生产构建通过。
+
+### 模板与运行记录共享画布基础组件（2026-11-17）
+
+- 模板设计和运行记录统一复用 `client/src/workflow-canvas.tsx` 的视口、世界层、网格承载、平移和缩放基础行为。
+- 模板设计保留可编辑节点、依赖校验、连线删除和模板保存；运行记录保留只读节点状态、重放控制、布局切换和运行属性栏。共享组件不持有模板或运行业务状态。
+- 两个页面的画布均使用 `.workflow-canvas-viewport` 和 `.workflow-canvas-world`，节点、连线、检查器和工具栏仍由各自页面组合。
+- 自动验收：任务页模板/运行记录共享 DOM 契约、模板编辑和移动布局 4/4；运行记录桌面/移动回放 2/2；客户端单测 20/20；类型检查和生产构建通过。
+
+### 运行记录节点自由拖拽（2026-11-17）
+
+- 运行记录沿用模板设计的节点拖拽交互。桌面端可直接拖动节点、同步移动相关依赖线；移动端保留点击节点打开属性抽屉的行为。
+- 拖拽位置只属于当前运行记录画布的临时视图状态，刷新或切换运行记录后恢复布局算法位置，不修改运行快照、任务定义、运行状态或后端数据。
+- 重放、暂停、节点状态、运行属性和画布平移缩放与节点自由布局互不干扰。
+- 自动验收：运行记录桌面拖拽与回放、移动端属性抽屉 2/2 通过；模板设计 UI 3/3 通过；客户端单测 20/20 通过。
 
 ## 工作空间锚定浮层（2026-11-16）
 
@@ -178,6 +339,15 @@
 - 自动验收：颜色断言覆盖工作空间入口、默认与非默认头像背景 `rgb(27, 43, 70)`、描边 `rgb(53, 80, 117)` 和一级导航活动项背景；相关 `workspace.spec.ts` 8/8、`gateway-settings.spec.ts` 11/11 通过，`npm run typecheck` 与生产构建通过。
 - 截图：导航 `docs/screenshots/rail-unified-navy.png`，SHA-256 `168C9129D4BBCB74AD6C9AF5B15B16DD36FE286DAE58DE248A3A16427297A02E`；工作空间浮层 `docs/screenshots/workspace-menu-popover.png`，SHA-256 `91D573ED6EA3F6ADCD0356E4BEACCB6C66A2E3388BB916F1647AC6B6F388F55D`，均为 1007×780 Chromium。
 - 视觉结论：通过。工作空间入口、空间头像和导航活动项形成统一的深蓝卡片层级，与深色 rail 保持足够对比；当前项仍可通过内描边和文字亮度识别。
+
+## 回复详情原位展开（2026-11-19）
+
+- 来源：用户“用时 2分钟 53秒 >”截图，明确要求正文上方原位展开，未知耗时只显示 ›，撤回误改的右侧配置折叠和纯图标标签。
+- 结构：Agent 名称保留，下一行是灰色用时与箭头；无耗时记录时仅箭头，summary 可访问名称“回复详情”。详情默认收起，展开内容处于正常文档流，正文随之下移；无绝对定位、弹层、背景卡片或阴影。
+- 内容：Harness、模型、状态、Gateway 公开思考摘要与工具名称/状态。每条回复独立保存，历史数据缺失时不伪造。复制操作保持图标和悬浮提示。
+- 验证：Chromium 对话回归 5/5、Edge 目标用例 1/1；实测展开后正文向下移动超过 70px，详情 position 为 static；390px 无页面横向溢出；Enter 可展开，刷新恢复每条消息详情。真实 API/SQLite + HTTP Gateway 夹具 E2E 1/1，未发送额外真实模型请求。
+- 截图：`docs/screenshots/chat-reply-details-desktop.png`（1440×900）SHA-256 `DDBE5E9D592B8C266747517C4D76BC6DDD1B9F2F2906E56F33593245FE87CB1C`；`docs/screenshots/chat-reply-details-mobile.png`（390×844）SHA-256 `732CB1FD7CBC1BE93686F12A60AA0C3151DF090ACC8484A1A052543AC4E9DF73`。Windows/Edge 截图检查通过。
+- 当前工作树基线、命令与限制详见 `docs/changes/CHG-chat-reply-details/change-record.yaml`。
 
 ## 一级导航用户菜单（2026-11-16）
 

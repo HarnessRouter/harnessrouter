@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_user_id ON tasks (user_id);
 CREATE INDEX IF NOT EXISTS ix_tasks_workspace_id ON tasks (workspace_id);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS current_revision_id BIGINT;
 
 CREATE TABLE IF NOT EXISTS workflow_revisions (
     id BIGSERIAL PRIMARY KEY,
@@ -21,6 +22,8 @@ CREATE TABLE IF NOT EXISTS workflow_revisions (
     CONSTRAINT uq_workflow_revision_task_revision UNIQUE (task_id, revision)
 );
 CREATE INDEX IF NOT EXISTS ix_workflow_revisions_task_id ON workflow_revisions (task_id);
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS fk_tasks_current_revision;
+ALTER TABLE tasks ADD CONSTRAINT fk_tasks_current_revision FOREIGN KEY (current_revision_id) REFERENCES workflow_revisions(id);
 
 CREATE TABLE IF NOT EXISTS task_runs (
     id BIGSERIAL PRIMARY KEY,
@@ -39,6 +42,9 @@ CREATE TABLE IF NOT EXISTS task_runs (
 CREATE INDEX IF NOT EXISTS ix_task_runs_task_id ON task_runs (task_id);
 CREATE INDEX IF NOT EXISTS ix_task_runs_status ON task_runs (status);
 CREATE INDEX IF NOT EXISTS ix_task_runs_idempotency_key ON task_runs (idempotency_key);
+ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS workflow_revision_id BIGINT;
+ALTER TABLE task_runs DROP CONSTRAINT IF EXISTS fk_task_runs_workflow_revision;
+ALTER TABLE task_runs ADD CONSTRAINT fk_task_runs_workflow_revision FOREIGN KEY (workflow_revision_id) REFERENCES workflow_revisions(id);
 
 CREATE TABLE IF NOT EXISTS node_runs (
     id BIGSERIAL PRIMARY KEY,
@@ -90,3 +96,17 @@ CREATE TABLE IF NOT EXISTS template_versions (
     CONSTRAINT uq_template_version UNIQUE (template_id, version)
 );
 CREATE INDEX IF NOT EXISTS ix_template_versions_template_id ON template_versions (template_id);
+
+UPDATE tasks
+SET current_revision_id = revisions.id
+FROM workflow_revisions revisions
+WHERE revisions.task_id = tasks.id
+  AND revisions.revision = tasks.current_revision
+  AND tasks.current_revision_id IS NULL;
+
+UPDATE task_runs
+SET workflow_revision_id = revisions.id
+FROM workflow_revisions revisions
+WHERE revisions.task_id = task_runs.task_id
+  AND revisions.revision = task_runs.workflow_revision
+  AND task_runs.workflow_revision_id IS NULL;

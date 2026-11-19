@@ -1,0 +1,45 @@
+# Reproducible Hexa App API validation stack.
+# The existing self-hosted Gateway remains the execution boundary. Set
+# HEXA_GATEWAY_URL to a reachable Gateway URL before starting this profile.
+services:
+  hexa-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${HEXA_POSTGRES_DB:-hexa}
+      POSTGRES_USER: ${HEXA_POSTGRES_USER:-hexa}
+      POSTGRES_PASSWORD: ${HEXA_POSTGRES_PASSWORD:?set HEXA_POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - hexa-postgres-data:/var/lib/postgresql/data
+
+  hexa-api:
+    build:
+      context: ./hexa-api
+    environment:
+      HEXA_DATABASE_URL: postgresql+psycopg://${HEXA_POSTGRES_USER:-hexa}:${HEXA_POSTGRES_PASSWORD:?set HEXA_POSTGRES_PASSWORD}@hexa-postgres:5432/${HEXA_POSTGRES_DB:-hexa}
+      HEXA_ADMIN_USERNAME: ${HEXA_ADMIN_USERNAME:-admin}
+      HEXA_ADMIN_PASSWORD_HASH: ${HEXA_ADMIN_PASSWORD_HASH:?set HEXA_ADMIN_PASSWORD_HASH}
+      HEXA_SESSION_SECRET: ${HEXA_SESSION_SECRET:?set HEXA_SESSION_SECRET}
+      HEXA_GATEWAY_URL: ${HEXA_GATEWAY_URL:-http://host.docker.internal:3000/api/harness}
+      HEXA_GATEWAY_API_KEY: ${HEXA_GATEWAY_API_KEY:?set HEXA_GATEWAY_API_KEY}
+      HEXA_COOKIE_SECURE: ${HEXA_COOKIE_SECURE:-false}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["sh", "-c", "python migrate.py && uvicorn app.main:app --host 0.0.0.0 --port 4010"]
+    depends_on:
+      hexa-postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4010:4010"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4010/healthz')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  hexa-postgres-data:

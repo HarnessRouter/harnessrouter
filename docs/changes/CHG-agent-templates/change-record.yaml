@@ -1,0 +1,63 @@
+id: CHG-agent-templates
+status: verified_locally
+owner: Codex
+source: 用户 2026-11-17 Agent 管理需求
+goal: Gateway 基础 Agent 模板与客户自定义模板、列表/卡片模式
+baseline: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + 既有未提交工作树
+reuse_decision: extend
+references: [spec.md, plan.md, visual-contract.md]
+impact:
+  direct: [client/src/AppAgentsPanel.tsx, client/src/app-api.ts, client/src/styles.css, hexa-api/app/agents/, hexa-api/app/db/models.py, hexa-api/app/gateway/client.py, hexa-api/app/main.py]
+  transitive: [Agent 创建和对话入口, PostgreSQL 增量数据库迁移]
+  unknown: [生产 PostgreSQL 执行环境]
+verification:
+  - phase: red
+    command: python -X utf8 -m pytest -q hexa-api/tests/test_agent_templates.py
+    exit_code: 1
+    result: 4 个有效失败；缺少 agent-templates 路由与 Gateway list_agent_templates 映射。
+  - phase: red
+    command: node --experimental-strip-types --test --test-name-pattern="Agent template APIs" tests/app-api.test.mjs; Playwright Chromium agent-templates.spec.ts
+    exit_code: 1
+    result: 缺少模板 API 函数、模板库 tab；符合目标未实现。
+  - phase: green
+    command: python -X utf8 -m pytest -q hexa-api/tests/test_agent_templates.py hexa-api/tests/test_gateway_agents.py hexa-api/tests/test_auth.py hexa-api/tests/test_health.py
+    exit_code: 0
+    result: 21 passed，含 Adapter 单元映射、无效目录、独立失败、用户隔离、持久化重启、认证边界，以及缺少 agent_templates 表时重启自动恢复、当前请求返回可读 503。
+    environment: Windows Python 3.13 + SQLite + HTTP MockTransport
+  - phase: green
+    command: npm test --prefix client; npm run typecheck --prefix client; npm run build --prefix client
+    exit_code: 0
+    result: 20 单测通过，类型与生产构建通过；既有 bundle >500 kB advisory。
+  - phase: green
+    command: npx playwright test --config .artifacts/agents-playwright.config.ts --workers=1
+    exit_code: 0
+    result: Chromium/Edge 共 10 passed；复制/空白创建/编辑/保存失败保留/独立读取/删除失败重试/模板创建 Agent/双视图持久化/键盘 tab/账户过期清理/390px 长模型名无溢出。
+    environment: Windows Chromium/Edge, 1440x900 and 390x844; 原 4175 被并发任务占用，本次临时 ignored config 使用 4189，产品配置未改变。
+  - phase: integration
+    command: npx playwright test --config playwright.integration.config.ts agent-templates.spec.ts --workers=1
+    exit_code: 0
+    result: Chromium/Edge 共 2 passed；浏览器 + Vite + 真实 FastAPI + SQLite + HTTP Gateway 夹具，覆盖 Cookie/重载持久化/模板预填/创建远端 Agent/删除；浏览器无直接 Gateway 请求。
+  - phase: expanded_regression
+    command: npx playwright test --config playwright.app.config.ts agent-templates.spec.ts agents.spec.ts navigation.spec.ts --workers=1
+    exit_code: 1
+    result: 16 passed, 2 failed。navigation.spec.ts:29 的任务页标题“任务”已被工作树并行任务页修改；断言在进入 Agent 页面之前失败。未修改不属本次范围的任务页和测试。最终 Agent 目标集另以 4189 专用端口全部通过。
+security_review:
+  result: passed_self_review
+  evidence:
+    - 所有新增路由强制 session，并按 user_id 查询/更新/删除；跨站写入复用应用 middleware。
+    - Gateway 只访问服务端已配置地址下的固定 /v1/bases；映射白名单字段，凭据/环境/插件不进入模板。
+    - 数据库使用 SQLAlchemy 参数化查询；名称/base/model 去空白并限制长度，说明/提示词限制体积。
+    - 客户文本由 React 普通文本呈现，无 HTML/命令执行；未添加新依赖。
+    - 面板 key 绑定 username，认证清除时销毁模板缓存、编辑器与过期请求；E2E 证明模板隐藏。
+visual_review:
+  functional: passed
+  visual: passed，桌面卡片/列表、深色、390px 手机列表与长文本均已检查；几何断言证明列表单列排列。
+  advisory: build chunk size >500 kB
+  screenshots: 详见 visual-report.md，截图位于工作区外系统临时目录。
+not_evaluated:
+  - scope: 生产 PostgreSQL 003 迁移、Linux 容器、真实用户 Gateway
+    reason: 当前为 Windows 本地实施与隔离测试；没有在本轮部署或读取真实凭据。
+    next: 部署时先执行 migrations/003_agent_templates.sql，再在已配置 Gateway 验证模板读取；不宣称生产可发布。
+remaining: [生产迁移与部署环境实测, 并行任务页面导航旧断言由对应工作修正]
+rollback: 新表独立，不修改既有任务模板和 Gateway 数据；撤销本次入口和新增 router 即停止使用。
+document_exit: 保留 spec/plan/visual-contract 与最终验证摘要为本领域契约。

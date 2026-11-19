@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 我的任务</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="task-workspace.css" />
+    <link rel="stylesheet" href="task-table.css" />
+  </head>
+  <body class="prototype-page">
+    <div class="artboard" id="tasks-overview">
+      <div class="app" data-shell data-active="tasks">
+        <main class="workspace-split task-table-shell" aria-label="我的任务">
+          <section class="tasks-main-column" aria-label="任务列表区域">
+            <section class="panel task-list-panel task-workspace-list" aria-label="任务列表">
+              <div class="list-toolbar">
+                <div class="segmented" role="tablist" aria-label="任务范围">
+                  <button class="is-active" type="button" role="tab" aria-selected="true">全部 <span>8</span></button>
+                  <button type="button" role="tab" aria-selected="false">待我处理 <span>1</span></button>
+                  <button type="button" role="tab" aria-selected="false">运行中 <span>2</span></button>
+                  <button type="button" role="tab" aria-selected="false">已完成 <span>3</span></button>
+                </div>
+                <div class="list-tools">
+                  <label class="compact-search" aria-label="在当前任务中搜索">
+                    <svg class="icon"><use href="#i-search"></use></svg>
+                    <span>搜索标题或 Run ID</span>
+                  </label>
+                  <button class="icon-button icon-button-bare" type="button" aria-label="更多筛选">
+                    <svg class="icon"><use href="#i-filter"></use></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="task-table-wrap">
+                <div class="task-table" role="table" aria-label="任务表格">
+                  <div class="task-table-head" role="row">
+                    <span role="columnheader">任务</span>
+                    <span role="columnheader">状态</span>
+                    <span role="columnheader">进度</span>
+                    <span role="columnheader">最近活动</span>
+                  </div>
+
+                  <button class="task-row is-selected" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark amber"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>安全事件调查</strong><span class="run-id">Run #18</span></span>
+                        <span class="task-description">5 个调查结果可选用，下游 3 个节点已就绪</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status amber"><span class="status-dot amber"></span>等待确认</span>
+                      <span class="task-stage">人工门控</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini amber"><span style="width: 56%"></span></span>
+                      <span class="task-progress-label">5 / 9 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>12 分钟前</span><small>04:12</small></span>
+                  </button>
+
+                  <button class="task-row" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark blue"><svg class="icon"><use href="#i-message"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>客服工单归因</strong><span class="run-id">Run #21</span></span>
+                        <span class="task-description">正在归纳 18 条重复工单，预计 2 分钟完成</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status blue"><span class="status-dot blue"></span>运行中</span>
+                      <span class="task-stage">归纳</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini"><span style="width: 40%"></span></span>
+                      <span class="task-progress-label">2 / 5 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>1 分钟前</span><small>01:36</small></span>
+                  </button>
+                  <button class="task-row" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark blue"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>代码仓库巡检</strong><span class="run-id">Run #20</span></span>
+                        <span class="task-description">3 个仓库并行扫描依赖、密钥和许可证风险</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status blue"><span class="status-dot blue"></span>运行中</span>
+                      <span class="task-stage">并行扫描</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini"><span style="width: 38%"></span></span>
+                      <span class="task-progress-label">3 / 8 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>3 分钟前</span><small>00:58</small></span>
+                  </button>
+
+                  <button class="task-row" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark green"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>产品方案评估</strong><span class="run-id">Run #19</span></span>
+                        <span class="task-description">最终建议已生成，结论与 2 项风险已归档</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status green"><span class="status-dot green"></span>已完成</span>
+                      <span class="task-stage">报告已归档</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini green"><span style="width: 100%"></span></span>
+                      <span class="task-progress-label">9 / 9 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>昨天 18:10</span><small>12:48</small></span>
+                  </button>
+                  <button class="task-row" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark gray"><svg class="icon"><use href="#i-doc"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>Q3 复盘材料</strong><span class="run-id">草稿</span></span>
+                        <span class="task-description">已收集业务数据，等待补充目标达成情况</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status gray"><span class="status-dot gray"></span>草稿</span>
+                      <span class="task-stage">等待补充</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini"><span style="width: 18%"></span></span>
+                      <span class="task-progress-label">1 / 5 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>11月15日</span><small>未运行</small></span>
+                  </button>
+                  <button class="task-row" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark green"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>供应商风险评估</strong><span class="run-id">Run #16</span></span>
+                        <span class="task-description">合规、财务与交付能力复核完成</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status green"><span class="status-dot green"></span>已完成</span>
+                      <span class="task-stage">报告已归档</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini green"><span style="width: 100%"></span></span>
+                      <span class="task-progress-label">7 / 7 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>11月15日</span><small>05:22</small></span>
+                  </button>
+                  <button class="task-row" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark green"><svg class="icon"><use href="#i-globe"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>竞品功能对比</strong><span class="run-id">Run #15</span></span>
+                        <span class="task-description">6 个产品页面已归纳为能力矩阵与差异结论</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status green"><span class="status-dot green"></span>已完成</span>
+                      <span class="task-stage">结果已输出</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini green"><span style="width: 100%"></span></span>
+                      <span class="task-progress-label">6 / 6 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>11月14日</span><small>09:18</small></span>
+                  </button>
+                  <button class="task-row" type="button" role="row">
+                    <span class="task-cell-task" role="cell">
+                      <span class="task-mark gray"><svg class="icon"><use href="#i-message"></use></svg></span>
+                      <span class="task-copy">
+                        <span class="task-title-line"><strong>客户访谈纪要</strong><span class="run-id">草稿</span></span>
+                        <span class="task-description">18 份访谈已导入，等待确认主题归纳维度</span>
+                      </span>
+                    </span>
+                    <span class="task-cell-status" role="cell">
+                      <span class="task-status gray"><span class="status-dot gray"></span>草稿</span>
+                      <span class="task-stage">等待配置</span>
+                    </span>
+                    <span class="task-cell-progress" role="cell">
+                      <span class="task-progress-mini"><span style="width: 12%"></span></span>
+                      <span class="task-progress-label">0 / 4 节点</span>
+                    </span>
+                    <span class="task-cell-time" role="cell"><span>11月14日</span><small>未运行</small></span>
+                  </button>
+                </div>
+              </div>
+              <div class="task-list-footer"><span>按最近活动排序</span><span>已显示 8 个任务</span></div>
+            </section>
+          </section>
+
+          <aside class="task-expansion" aria-label="任务详情扩展栏">
+            <header class="expansion-topbar">
+              <div class="expansion-heading"><small>任务详情</small><strong>安全事件调查</strong></div>
+              <div class="expansion-actions">
+                <button class="icon-button" type="button" aria-label="搜索任务">
+                  <svg class="icon"><use href="#i-search"></use></svg>
+                </button>
+                <button class="button" type="button">
+                  <svg class="icon"><use href="#i-filter"></use></svg>
+                  筛选
+                </button>
+                <button class="button button-primary" type="button">
+                  <svg class="icon"><use href="#i-plus"></use></svg>
+                  新建任务
+                </button>
+                <button class="icon-button expansion-collapse" type="button" aria-label="收起任务详情扩展栏" data-collapse-expansion>
+                  <svg class="icon"><use href="#i-chevron-right"></use></svg>
+                </button>
+              </div>
+            </header>
+
+            <div class="expansion-scroll">
+              <div class="expansion-identity">
+                <span class="badge badge-amber"><span class="status-dot amber"></span>等待你确认</span>
+                <button class="icon-button icon-button-bare" type="button" aria-label="更多任务操作">
+                  <svg class="icon"><use href="#i-more"></use></svg>
+                </button>
+              </div>
+              <h2 class="expansion-title">安全事件调查</h2>
+              <p class="expansion-description">并行收集、人工筛选、双重校验并生成最终报告。</p>
+
+              <div class="preview-progress-block expansion-progress">
+                <div class="preview-progress-top">
+                  <div class="preview-progress-value"><strong>5 / 9</strong><span>节点完成</span></div>
+                  <div class="preview-progress-meta"><span>Run #18</span><span>04:12</span></div>
+                </div>
+                <div class="progress-track"><span style="width: 56%"></span></div>
+                <div class="expansion-runtime">
+                  <span><span class="status-dot amber"></span>等待人工确认</span>
+                  <span>12 分钟前</span>
+                </div>
+              </div>
+
+              <div class="expansion-decision">
+                <div class="expansion-decision-copy">
+                  <strong>选择汇总节点的输入</strong>
+                  <span>只有勾选的结果会进入下游上下文</span>
+                </div>
+                <div class="agent-stack" aria-label="五个调查结果中已选择两个">
+                  <span class="agent-dot is-selected"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                  <span class="agent-dot"><svg class="icon"><use href="#i-target"></use></svg></span>
+                  <span class="agent-dot is-selected"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                  <span class="agent-dot"><svg class="icon"><use href="#i-server"></use></svg></span>
+                  <span class="agent-dot"><svg class="icon"><use href="#i-globe"></use></svg></span>
+                  <span class="agent-stack-more">2/5</span>
+                </div>
+              </div>
+
+              <div class="expansion-inputs">
+                <div class="expansion-inputs-head"><strong>已选为汇总输入</strong><span>2 / 5</span></div>
+                <div class="expansion-input-tags">
+                  <span><span class="status-dot blue"></span>告警分析</span>
+                  <span><span class="status-dot blue"></span>日志取证</span>
+                </div>
+              </div>
+
+              <div class="flow-preview expansion-flow">
+                <div class="section-line">
+                  <strong>当前工作流 · v7</strong>
+                  <button type="button">打开画布 <svg class="icon"><use href="#i-chevron-right"></use></svg></button>
+                </div>
+                <div class="flow-canvas-mini" data-security-flow></div>
+              </div>
+
+              <div class="preview-activity expansion-activity" aria-label="最近活动">
+                <div class="activity-row">
+                  <span class="activity-icon"><svg class="icon"><use href="#i-check"></use></svg></span>
+                  <span>5 个调查节点全部完成</span>
+                  <time>04:12</time>
+                </div>
+                <div class="activity-row">
+                  <span class="activity-icon"><svg class="icon"><use href="#i-clock"></use></svg></span>
+                  <span>Run 进入人工确认</span>
+                  <time>12 分钟前</time>
+                </div>
+                <div class="activity-row">
+                  <span class="activity-icon"><svg class="icon"><use href="#i-check"></use></svg></span>
+                  <span>已选择 2 个调查结果</span>
+                  <time>刚刚</time>
+                </div>
+                <div class="activity-row">
+                  <span class="activity-icon"><svg class="icon"><use href="#i-lock"></use></svg></span>
+                  <span>下游 3 个节点已锁定</span>
+                  <time>等待提交</time>
+                </div>
+              </div>
+
+              <div class="expansion-rule">
+                <svg class="icon"><use href="#i-branch"></use></svg>
+                <span class="expansion-rule-copy">
+                  <strong>5 个节点是执行依赖，只有勾选结果会进入上下文</strong>
+                  <span>deps 已满足 · inputRefs 2 个 · 决定将写入本次 Run</span>
+                </span>
+              </div>
+            </div>
+
+            <footer class="expansion-footer">
+              <button class="button" type="button">查看运行记录</button>
+              <button class="button button-primary" type="button">
+                继续处理
+                <svg class="icon"><use href="#i-arrow-right"></use></svg>
+              </button>
+            </footer>
+
+            <div class="expansion-collapsed-handle">
+              <button type="button" aria-label="展开任务详情扩展栏" data-expand-expansion>
+                <svg class="icon"><use href="#i-chevron-left"></use></svg>
+              </button>
+              <span>任务详情</span>
+            </div>
+          </aside>
+        </main>
+      </div>
+    </div>
+    <script src="design-kit.js"></script>
+    <script>
+      const split = document.querySelector('.workspace-split');
+      document.querySelector('[data-collapse-expansion]')?.addEventListener('click', () => split?.classList.add('is-collapsed'));
+      document.querySelector('[data-expand-expansion]')?.addEventListener('click', () => split?.classList.remove('is-collapsed'));
+    </script>
+  </body>
+</html>

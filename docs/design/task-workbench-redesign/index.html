@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 任务作战台设计板</title>
+    <link rel="stylesheet" href="board.css" />
+  </head>
+  <body class="board-page">
+    <main class="design-board" id="design-board">
+      <header class="board-header">
+        <div>
+          <div class="board-brand">
+            <span class="board-brand-mark">
+              <svg viewBox="0 0 24 24"><path d="M12 2.7 20 7.35v9.3L12 21.3l-8-4.65v-9.3z"/><path d="M8.6 8.2v7.6M15.4 8.2v7.6M8.6 12h6.8"/></svg>
+            </span>
+            Hexa · Task Workbench
+          </div>
+          <h1>任务作战台 / Attention-first cockpit</h1>
+          <p>把“需要人介入的事”放在最前，把运行的证据和下一步放在同一视线上。</p>
+        </div>
+        <div class="board-meta">
+          <span>Design v1.1 · 2026.11.17</span>
+          <span>Desktop 1440 × 900</span>
+          <span>Mobile 390 × 844</span>
+          <span>参考 Linear · GitHub Actions · n8n · Temporal</span>
+        </div>
+      </header>
+
+      <section class="screen-grid" aria-label="桌面端关键页面">
+        <figure class="board-screen">
+          <figcaption><span><span class="screen-number">01</span>我的任务 · 白底表格 + 全高详情栏</span><small>顶部筛选 · 单一 table · 可收缩</small></figcaption>
+          <img class="screen-shot" src="screens/01-tasks-overview.png" alt="我的任务桌面设计稿" />
+        </figure>
+        <figure class="board-screen">
+          <figcaption><span><span class="screen-number">02</span>任务详情 · 人工确认工作台</span><small>画布、候选结果、运行时间线</small></figcaption>
+          <img class="screen-shot" src="screens/02-task-human-review.png" alt="任务详情人工确认桌面设计稿" />
+        </figure>
+        <figure class="board-screen">
+          <figcaption><span><span class="screen-number">03</span>运行记录 · 表格 + 全高运行详情</span><small>顶部状态筛选 · 执行轨迹与事件流</small></figcaption>
+          <img class="screen-shot" src="screens/03-run-history.png" alt="运行记录桌面设计稿" />
+        </figure>
+        <figure class="board-screen">
+          <figcaption><span><span class="screen-number">04</span>模板管理 · 表格 + 全高模板详情</span><small>分类筛选 · 结构摘要与复用入口</small></figcaption>
+          <img class="screen-shot" src="screens/04-template-library.png" alt="模板库桌面设计稿" />
+        </figure>
+      </section>
+
+      <section class="board-chat" aria-label="对话页面">
+        <header class="board-variant-head">
+          <div>
+            <h2>Conversation / 对话与任务同屏</h2>
+            <p>对话历史在上下文侧栏；主线程保留运行卡片、关键发现和人工确认；右侧是 Agent、关联任务、文件与上下文预算。</p>
+          </div>
+          <span>270px 历史 · 剩余对话 · 304px 上下文</span>
+        </header>
+        <figure class="board-screen board-screen-wide">
+          <figcaption><span><span class="screen-number">08</span>对话 · 调查分析师 + 关联 Run #18</span><small>历史、线程、上下文三栏 · 可收起上下文</small></figcaption>
+          <img class="screen-shot screen-shot-wide" src="screens/08-chat.png" alt="对话页面设计稿" />
+        </figure>
+      </section>
+
+      <section class="board-bottom" aria-label="移动端与设计原则">
+        <div>
+          <h2 class="board-section-title">Mobile / 关键状态</h2>
+          <div class="mobile-strip">
+            <figure class="mobile-item">
+              <figcaption>任务分组</figcaption>
+              <img class="mobile-shot" src="screens/05-mobile-tasks.png" alt="移动端我的任务设计稿" />
+            </figure>
+            <figure class="mobile-item">
+              <figcaption>人工确认</figcaption>
+              <img class="mobile-shot" src="screens/06-mobile-human-review.png" alt="移动端人工确认设计稿" />
+            </figure>
+          </div>
+        </div>
+
+        <div>
+          <h2 class="board-section-title">Design principles</h2>
+          <div class="principle-list">
+            <article class="principle-card">
+              <span class="principle-number">01</span>
+              <strong>注意力优先</strong>
+              <p>待处理任务通过顶部筛选与首行状态共同强调同一个下一步，不再重复页头提示。</p>
+            </article>
+            <article class="principle-card">
+              <span class="principle-number">02</span>
+              <strong>证据与动作同屏</strong>
+              <p>人工确认时同时看到 DAG、候选输出、已选数量与继续按钮，不让人来回切页。</p>
+            </article>
+            <article class="principle-card">
+              <span class="principle-number">03</span>
+              <strong>安静但可追溯</strong>
+              <p>用克制的状态语言表达运行、等待和失败；事件流保留每次 Run 的完整证据。</p>
+            </article>
+          </div>
+          <div class="board-footnote">
+            <span>沿用 Hexa 应用壳；列表页统一为白底 table + 全高可收缩右栏</span>
+            <span>不引入 Cloud 部署、上传、余额或 hosted provider 入口</span>
+          </div>
+        </div>
+
+        <div>
+          <h2 class="board-section-title">Visual tokens</h2>
+          <div class="token-panel">
+            <div class="token-row"><span class="swatch" style="background:#0b1220"></span><span class="token-copy"><strong>Rail / Ink</strong><span>#0B1220</span></span></div>
+            <div class="token-row"><span class="swatch" style="background:#f6f7f9"></span><span class="token-copy"><strong>Workspace</strong><span>#F6F7F9</span></span></div>
+            <div class="token-row"><span class="swatch" style="background:#2563eb"></span><span class="token-copy"><strong>Action</strong><span>#2563EB</span></span></div>
+            <div class="token-row"><span class="swatch" style="background:#f79009"></span><span class="token-copy"><strong>Human gate</strong><span>#F79009</span></span></div>
+            <div class="token-row"><span class="swatch" style="background:#12b76a"></span><span class="token-copy"><strong>Succeeded</strong><span>#12B76A</span></span></div>
+            <div class="token-row"><span class="swatch" style="background:#e4e7ec"></span><span class="token-copy"><strong>Hairline</strong><span>#E4E7EC</span></span></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

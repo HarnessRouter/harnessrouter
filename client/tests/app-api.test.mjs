@@ -2,6 +2,52 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { appConversationStatus, appCreateConversation, appCreateTask, appGetRun, appListAgents, appLogin, appSendMessage, appStartTaskRun, AppApiError } from '../src/app-api.ts';
 
+test('conversation watch waits for new execution and reconnects without dropping progress', async () => {
+  const { appWatchConversation } = await import('../src/app-api.ts');
+  const previous = globalThis.EventSource;
+  let source;
+  globalThis.EventSource = class {
+    closed = false;
+    constructor() { source = this; }
+    close() { this.closed = true; }
+  };
+  try {
+    const seen = [];
+    const stop = appWatchConversation(1, value => seen.push(value), { waitForStart: true });
+    source.onmessage({ data: JSON.stringify({ status: 'completed', response_id: 'old', text: 'old' }) });
+    assert.equal(source.closed, false);
+    assert.equal(seen.length, 0);
+    source.onmessage({ data: JSON.stringify({ status: 'running', response_id: 'new', text: 'partial' }) });
+    source.onerror?.({});
+    assert.equal(source.closed, false);
+    source.onmessage({ data: JSON.stringify({ status: 'completed', response_id: 'new', text: 'done' }) });
+    assert.equal(source.closed, true);
+    assert.deepEqual(seen.map(value => value.text), ['partial', 'done']);
+    stop();
+  } finally { globalThis.EventSource = previous; }
+});
+
+test('Agent template APIs use session transport and keep workflow templates separate', async () => {
+  const api = await import('../src/app-api.ts');
+  const original = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => { seen.push({ url, init }); return init.method === 'DELETE' ? new Response(null, { status: 204 }) : Response.json({ templates: [] }); };
+  try {
+    await api.appListAgentTemplates();
+    await api.appListGatewayAgentTemplates();
+    const body = { name: '模板', description: '', base: 'codex', default_model: 'm1', system_prompt: '严谨' };
+    await api.appSaveAgentTemplate(body);
+    await api.appSaveAgentTemplate(body, 7);
+    await api.appDeleteAgentTemplate(7);
+    assert.deepEqual(seen.map(row => [row.url, row.init.method || 'GET']), [
+      ['/api/hexa/agent-templates', 'GET'], ['/api/hexa/agent-templates/gateway', 'GET'],
+      ['/api/hexa/agent-templates', 'POST'], ['/api/hexa/agent-templates/7', 'PUT'], ['/api/hexa/agent-templates/7', 'DELETE'],
+    ]);
+    assert.deepEqual(JSON.parse(seen[2].init.body), body);
+    assert.ok(seen.every(row => row.init.credentials === 'include' && !row.init.headers.has('authorization')));
+  } finally { globalThis.fetch = original; }
+});
+
 function withFetch(handler) {
   const previous = globalThis.fetch;
   globalThis.fetch = handler;
@@ -114,6 +160,24 @@ test('app Agent mutations use Cookie credentials, encode IDs and propagate safe 
   } finally { restore(); }
 });
 
+test('app workspace update uses PATCH, cookie credentials and an encoded local id', async () => {
+  const api = await import('../src/app-api.ts');
+  let seen;
+  const restore = withFetch(async (input, init) => {
+    seen = { input, init };
+    return Response.json({ id: 7, name: '研究空间', description: '论文与实验' });
+  });
+  try {
+    const updated = await api.appUpdateWorkspace(7, '研究空间', '论文与实验');
+    assert.equal(updated.name, '研究空间');
+  } finally { restore(); }
+  assert.equal(seen.input, '/api/hexa/workspaces/7');
+  assert.equal(seen.init.method, 'PATCH');
+  assert.equal(seen.init.credentials, 'include');
+  assert.equal(seen.init.headers.get('content-type'), 'application/json');
+  assert.deepEqual(JSON.parse(seen.init.body), { name: '研究空间', description: '论文与实验' });
+});
+
 test('Agent model catalog excludes unavailable models and preserves only fixed conversation models', async () => {
   const api = await import('../src/app-api.ts');
   assert.equal(typeof api.appModelSelection, 'function');
@@ -121,4 +185,57 @@ test('Agent model catalog excludes unavailable models and preserves only fixed c
   assert.deepEqual(api.appModelSelection(catalog), { models: [{ id: 'new', label: '新模型' }], model: 'new' });
   assert.equal(api.appModelSelection(catalog, 'old-fixed').model, 'old-fixed');
   assert.deepEqual(api.appModelSelection({ models: [] }), { models: [], model: '' });
+});
+
+test('task lists page explicitly within the selected workspace and template saves select a revision', async () => {
+  const api = await import('../src/app-api.ts');
+  const seen = [];
+  const restore = withFetch(async (input, init) => { seen.push({ input, init }); return Response.json({ tasks: [], runs: [], templates: [] }); });
+  try {
+    await api.appListTasks({ workspaceId: 7, offset: 100, limit: 100 });
+    await api.appListTaskRuns(9, { offset: 30, limit: 30 });
+    await api.appSaveTaskAsTemplate(9, { workflow_revision: 3, template_id: 4 });
+  } finally { restore(); }
+  assert.equal(seen[0].input, '/api/hexa/tasks?offset=100&limit=100&workspace_id=7');
+  assert.equal(seen[1].input, '/api/hexa/tasks/9/runs?offset=30&limit=30');
+  assert.deepEqual(JSON.parse(seen[2].init.body), { workflow_revision: 3, template_id: 4 });
+});
+
+test('structured task errors preserve their code and safe message', async () => {
+  const api = await import('../src/app-api.ts');
+  const restore = withFetch(async () => Response.json({ detail: { code: 'revision_conflict', message: '工作流版本已变化。' } }, { status: 409 }));
+  try { await assert.rejects(() => api.appSaveTaskWorkflow(1, 1, { nodes: [] }), { code: 'revision_conflict', status: 409, message: '工作流版本已变化。' }); }
+  finally { restore(); }
+});
+
+test('workbench search and every detail page retain server cursors and cookie authorization', async () => {
+  const api = await import('../src/app-api.ts');
+  const seen = [];
+  const restore = withFetch(async (input, init) => {
+    seen.push({ input, init });
+    return Response.json({ tasks: [], runs: [], artifacts: [], versions: [], pagination: { offset: 50, limit: 50, has_more: true } });
+  });
+  try {
+    await api.appListTasksPage({ workspaceId: 7, offset: 20, limit: 20, q: ' %_调查 ', status: 'failed' });
+    await api.appListRuns({ workspaceId: 7, offset: 20, limit: 20, q: '调查', status: 'all' });
+    await api.appListTaskArtifacts(1, { offset: 50, limit: 50 });
+    await api.appListRunArtifacts(2, { offset: 50, limit: 50 });
+    await api.appListNodeArtifacts(3, { offset: 50, limit: 50 });
+    await api.appDebugNode(3, { offset: 50, limit: 50 });
+    await api.appGetTemplate(4, { versionsOffset: 20, versionsLimit: 20 });
+  } finally { restore(); }
+  const taskQuery = new URL(seen[0].input, 'http://localhost').searchParams;
+  assert.equal(taskQuery.get('q'), '%_调查');
+  assert.equal(taskQuery.get('status'), 'failed');
+  assert.equal(taskQuery.get('workspace_id'), '7');
+  assert.equal(new URL(seen[1].input, 'http://localhost').searchParams.has('status'), false);
+  assert.deepEqual(seen.slice(2).map(row => row.input), [
+    '/api/hexa/tasks/1/artifacts?offset=50&limit=50', '/api/hexa/runs/2/artifacts?offset=50&limit=50',
+    '/api/hexa/node-runs/3/artifacts?offset=50&limit=50', '/api/hexa/node-runs/3?offset=50&limit=50',
+    '/api/hexa/templates/4?versions_offset=20&versions_limit=20',
+  ]);
+  for (const { init } of seen) {
+    assert.equal(init.credentials, 'include');
+    assert.equal(init.headers.has('authorization'), false);
+  }
 });

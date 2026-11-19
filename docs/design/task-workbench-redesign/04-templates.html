@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 模板管理</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="task-workspace.css" />
+    <link rel="stylesheet" href="list-detail.css" />
+  </head>
+  <body class="prototype-page">
+    <div class="artboard" id="templates">
+      <div class="app" data-shell data-active="templates">
+        <main class="workspace-split detail-list-split" aria-label="模板管理">
+          <section class="tasks-main-column" aria-label="模板列表区域">
+            <section class="list-workspace-panel" aria-label="模板表格">
+              <div class="list-toolbar">
+                <div class="segmented" role="tablist" aria-label="模板分类">
+                  <button class="is-active" type="button" role="tab" aria-selected="true">全部 <span>8</span></button>
+                  <button type="button" role="tab" aria-selected="false">调查 <span>3</span></button>
+                  <button type="button" role="tab" aria-selected="false">产品 <span>2</span></button>
+                  <button type="button" role="tab" aria-selected="false">内容 <span>2</span></button>
+                  <button type="button" role="tab" aria-selected="false">风险 <span>1</span></button>
+                </div>
+                <div class="list-tools">
+                  <label class="compact-search" aria-label="搜索模板">
+                    <svg class="icon"><use href="#i-search"></use></svg>
+                    <span>搜索模板名称</span>
+                  </label>
+                  <button class="button" type="button">
+                    <svg class="icon"><use href="#i-plus"></use></svg>
+                    新建模板
+                  </button>
+                </div>
+              </div>
+
+              <div class="list-table-wrap">
+                <div class="template-table" role="table" aria-label="模板表格">
+                  <div class="data-table-head template-table-head" role="row">
+                    <span role="columnheader">模板</span>
+                    <span role="columnheader">分类</span>
+                    <span role="columnheader">版本</span>
+                    <span role="columnheader">结构</span>
+                  </div>
+                  <div class="data-table-body">
+                    <button class="template-table-row is-selected" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark blue"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>安全事件调查</strong></span>
+                          <span class="table-description">5 个角色并行调查 · 人工筛选后汇总</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">调查分析</span>
+                      <span class="template-version" role="cell">v3</span>
+                      <span class="template-structure" role="cell">9 节点 · 5 并行</span>
+                    </button>
+                    <button class="template-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark purple"><svg class="icon"><use href="#i-target"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>产品方案评估</strong></span>
+                          <span class="table-description">产品、技术、风险、用户与市场并行</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">产品决策</span>
+                      <span class="template-version" role="cell">v2</span>
+                      <span class="template-structure" role="cell">5 节点 · 5 并行</span>
+                    </button>
+                    <button class="template-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark amber"><svg class="icon"><use href="#i-chart"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>竞品市场研究</strong></span>
+                          <span class="table-description">资料、财报、渠道与舆情并行收集</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">市场研究</span>
+                      <span class="template-version" role="cell">v2</span>
+                      <span class="template-structure" role="cell">7 节点 · 5 并行</span>
+                    </button>
+                    <button class="template-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark green"><svg class="icon"><use href="#i-doc"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>资料核查与报告</strong></span>
+                          <span class="table-description">收集、清洗、核验、引用与报告</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">内容运营</span>
+                      <span class="template-version" role="cell">v4</span>
+                      <span class="template-structure" role="cell">6 节点 · 4 并行</span>
+                    </button>
+                    <button class="template-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark amber"><svg class="icon"><use href="#i-server"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>供应商风险评估</strong></span>
+                          <span class="table-description">财务、法务、供应链与合规复核</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">风险合规</span>
+                      <span class="template-version" role="cell">v1</span>
+                      <span class="template-structure" role="cell">7 节点 · 5 并行</span>
+                    </button>
+                    <button class="template-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark green"><svg class="icon"><use href="#i-message"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>周报自动汇编</strong></span>
+                          <span class="table-description">筛选进展，摘要、校对与排版</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">内容运营</span>
+                      <span class="template-version" role="cell">v2</span>
+                      <span class="template-structure" role="cell">4 节点 · 4 并行</span>
+                    </button>
+                    <button class="template-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark blue"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>代码仓库巡检</strong></span>
+                          <span class="table-description">依赖、密钥与许可证并行扫描</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">工程巡检</span>
+                      <span class="template-version" role="cell">v2</span>
+                      <span class="template-structure" role="cell">8 节点 · 4 并行</span>
+                    </button>
+                    <button class="template-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark purple"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>客户访谈主题归纳</strong></span>
+                          <span class="table-description">归纳主题、痛点与机会点</span>
+                        </span>
+                      </span>
+                      <span class="template-category" role="cell">用户研究</span>
+                      <span class="template-version" role="cell">v1</span>
+                      <span class="template-structure" role="cell">5 节点 · 4 并行</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="task-list-footer"><span>按最近使用排序</span><span>已显示 8 个模板</span></div>
+            </section>
+          </section>
+
+          <aside class="task-expansion detail-aside" aria-label="模板详情扩展栏">
+            <header class="expansion-topbar">
+              <div class="expansion-heading"><small>模板详情</small><strong>调查分析 · v3</strong></div>
+              <div class="expansion-actions">
+                <span class="badge badge-gray">只读定义</span>
+                <button class="icon-button" type="button" aria-label="预览模板"><svg class="icon"><use href="#i-eye"></use></svg></button>
+                <button class="icon-button expansion-collapse" type="button" aria-label="收起模板详情扩展栏" data-collapse-expansion>
+                  <svg class="icon"><use href="#i-chevron-right"></use></svg>
+                </button>
+              </div>
+            </header>
+
+            <div class="detail-template-head">
+              <div class="detail-run-title">
+                <h2>安全事件调查</h2>
+                <div class="detail-meta-row"><span>更新于 11月12日</span><span>Workflow v7</span><span>只读定义</span></div>
+              </div>
+              <div class="detail-run-actions">
+                <button class="button" type="button"><svg class="icon"><use href="#i-star"></use></svg>收藏</button>
+                <button class="icon-button icon-button-bare" type="button" aria-label="更多模板操作"><svg class="icon"><use href="#i-more"></use></svg></button>
+              </div>
+            </div>
+
+            <div class="detail-template-scroll">
+              <p class="detail-template-desc">5 个调查 Agent 并行执行，人工选择结果后进行总结、双校验与报告。</p>
+              <div class="template-detail-map" data-flow="incident"></div>
+              <div class="template-stats">
+                <div class="template-stat"><span>工作流节点</span><strong>9 个</strong></div>
+                <div class="template-stat"><span>并行调查</span><strong>5 个</strong></div>
+                <div class="template-stat"><span>人工门控</span><strong>1 个</strong></div>
+                <div class="template-stat"><span>累计使用</span><strong>6 次</strong></div>
+              </div>
+              <div class="template-detail-columns">
+                <div>
+                  <div class="template-section-head"><strong>包含阶段</strong><span>4 组</span></div>
+                  <div class="template-stages">
+                    <div class="template-stage"><span>01</span><span>并行调查</span><small>5 个 Agent</small></div>
+                    <div class="template-stage"><span>02</span><span>人工确认</span><small>选择 1–5 个结果</small></div>
+                    <div class="template-stage"><span>03</span><span>汇总与双校验</span><small>3 个节点</small></div>
+                    <div class="template-stage"><span>04</span><span>最终报告</span><small>1 个产物</small></div>
+                  </div>
+                  <div class="template-note">
+                    <svg class="icon"><use href="#i-lock"></use></svg>
+                    <span>模板只包含工作流定义与配置摘要，不包含运行记录、结果文件或任何密钥。</span>
+                  </div>
+                </div>
+                <div>
+                  <div class="template-section-head"><strong>最近使用</strong><span>当前工作区</span></div>
+                  <div class="template-recent">
+                    <div class="template-recent-row"><span class="status-dot amber"></span><span>安全事件调查 · Run #18</span><time>刚刚</time></div>
+                    <div class="template-recent-row"><span class="status-dot green"></span><span>安全事件调查 · Run #12</span><time>11月15日</time></div>
+                    <div class="template-recent-row"><span class="status-dot green"></span><span>安全事件调查 · Run #8</span><time>11月08日</time></div>
+                  </div>
+                  <div class="template-section-head"><strong>模板说明</strong><span>v3</span></div>
+                  <div class="template-note">
+                    <svg class="icon"><use href="#i-file-stack"></use></svg>
+                    <span>新建任务时可选择固定版本；模板更新不会改变已有 Run 的配置快照。</span>
+                  </div>
+                </div>
+              </div>
+              <div class="template-section-head"><strong>版本历史</strong><span>3 个版本</span></div>
+              <div class="template-version-list">
+                <div class="template-version-row"><span class="badge badge-blue mono">v3</span><span>增加情报检索节点，调整人工确认说明</span><time>11月12日 · 当前</time></div>
+                <div class="template-version-row"><span class="badge badge-gray mono">v2</span><span>人工门控支持选择 1–5 个候选结果</span><time>10月28日</time></div>
+                <div class="template-version-row"><span class="badge badge-gray mono">v1</span><span>初始版本：5 个调查角色并行</span><time>10月03日</time></div>
+              </div>
+            </div>
+
+            <footer class="expansion-footer">
+              <button class="button" type="button"><svg class="icon"><use href="#i-branch"></use></svg>编辑</button>
+              <button class="button button-primary" type="button">使用此模板 <svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+            </footer>
+
+            <div class="expansion-collapsed-handle">
+              <button type="button" aria-label="展开模板详情扩展栏" data-expand-expansion>
+                <svg class="icon"><use href="#i-chevron-left"></use></svg>
+              </button>
+              <span>模板详情</span>
+            </div>
+          </aside>
+        </main>
+      </div>
+    </div>
+    <script src="design-kit.js"></script>
+    <script>
+      const split = document.querySelector('.workspace-split');
+      document.querySelector('[data-collapse-expansion]')?.addEventListener('click', () => split?.classList.add('is-collapsed'));
+      document.querySelector('[data-expand-expansion]')?.addEventListener('click', () => split?.classList.remove('is-collapsed'));
+    </script>
+  </body>
+</html>

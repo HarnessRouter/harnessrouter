@@ -1,0 +1,225 @@
+.task-table-shell {
+  background: #fff;
+}
+
+.task-table-shell .tasks-main-column {
+  padding: 0;
+  background: #fff;
+}
+
+.task-table-shell .task-workspace-list {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+.task-table-shell .list-toolbar {
+  height: 64px;
+  flex: 0 0 64px;
+  gap: 10px;
+  padding: 0 20px;
+  background: #fff;
+}
+
+.task-table-shell .compact-search {
+  width: 196px;
+  height: 32px;
+  background: #fff;
+}
+
+.task-table-shell .task-table-wrap {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.task-table-shell .task-table {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  background: #fff;
+}
+
+.task-table-shell .task-table-head {
+  display: grid;
+  height: 38px;
+  flex: 0 0 38px;
+  grid-template-columns: minmax(0, 1fr) 92px 96px 114px;
+  align-items: center;
+  padding: 0 20px 0 18px;
+  border-bottom: 1px solid #e8ecf2;
+  background: #fbfcfd;
+  color: #98a2b3;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.task-table-shell .task-table-head span:nth-child(n + 2) {
+  padding-left: 12px;
+}
+
+.task-table-shell .task-table-head span:last-child {
+  text-align: right;
+}
+
+.task-table-shell .task-table-group {
+  display: flex;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 20px 0 18px;
+  border-bottom: 1px solid #eef1f5;
+  background: #f8fafc;
+  color: #475467;
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.task-table-shell .task-table-group .status-dot {
+  width: 5px;
+  height: 5px;
+  box-shadow: none;
+}
+
+.task-table-shell .task-table-group span:last-child {
+  margin-left: auto;
+  color: #98a2b3;
+  font-size: 8.5px;
+  font-weight: 500;
+}
+
+.task-table-shell .task-row {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: auto;
+  min-height: 68px;
+  flex: 1 1 0;
+  grid-template-columns: minmax(0, 1fr) 92px 96px 114px;
+  align-items: center;
+  gap: 0;
+  padding: 0 20px 0 18px;
+  border-bottom: 1px solid #eef1f5;
+  background: #fff;
+  text-align: left;
+}
+
+.task-table-shell .task-row:hover {
+  background: #fbfcfe;
+}
+
+.task-table-shell .task-row.is-selected {
+  background: #f7faff;
+}
+
+.task-table-shell .task-row.is-selected::before {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  border-radius: 0;
+}
+
+.task-table-shell .task-cell-task {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+  padding-right: 16px;
+}
+
+.task-table-shell .task-mark {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 8px;
+}
+
+.task-table-shell .task-copy {
+  min-width: 0;
+}
+
+.task-table-shell .task-title-line strong {
+  font-size: 12.3px;
+}
+
+.task-table-shell .task-description {
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.task-table-shell .task-cell-status,
+.task-table-shell .task-cell-progress {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 12px;
+}
+
+.task-table-shell .task-cell-status {
+  align-items: flex-start;
+}
+
+.task-table-shell .task-status {
+  font-size: 9.5px;
+}
+
+.task-table-shell .task-stage {
+  color: #98a2b3;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.task-table-shell .task-cell-progress {
+  align-items: flex-start;
+}
+
+.task-table-shell .task-progress-mini {
+  width: 66px;
+  height: 4px;
+  margin: 0;
+}
+
+.task-table-shell .task-progress-label {
+  color: #8a95a7;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.task-table-shell .task-cell-time {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  color: #8a95a7;
+  font-size: 8.5px;
+  white-space: nowrap;
+}
+
+.task-table-shell .task-cell-time small {
+  color: #a0aaba;
+  font-size: 7.8px;
+}
+
+.task-table-shell .task-list-footer {
+  flex: 0 0 38px;
+  min-height: 38px;
+  padding: 0 20px;
+  background: #fbfcfd;
+}
+
+.task-table-shell .task-expansion {
+  transition: width 160ms ease;
+}
+
+.task-table-shell .expansion-collapsed-handle {
+  background: #fff;
+}

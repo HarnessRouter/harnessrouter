@@ -109,3 +109,73 @@ test('Agent model switching ignores stale results and prevents sends after model
   await page.getByRole('textbox', { name: '消息输入' }).fill('新对话');
   await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeEnabled();
 });
+
+test('Agent sidebar opens a settings-style detail page with Gateway configuration layers', async ({ page }) => {
+  const agent = {
+    id: 'a1',
+    name: '产品分析师',
+    base: 'codex',
+    baseLabel: 'Codex',
+    defaultModel: 'gpt-6.1',
+    systemPrompt: '你负责分析产品机会，并给出可验证的结论。',
+    reasoningEffort: 'high',
+    skills: [{ name: 'research', enabled: true }, { name: 'writing', enabled: false }],
+    mcpServers: [{ name: 'docs', url: 'https://docs.example/mcp' }],
+    disabledTools: ['browser'],
+    plugins: [{ name: 'product-kit', enabled: true }],
+    additionalHeaders: ['X-Tenant'],
+    env: { API_KEY: 'vault:harness-mcp-test', REGION: 'cn' },
+    maxStep: 12,
+    timeoutSeconds: 600,
+    memory: { id: 'hmem_1', name: '团队记忆', engine: 'mem0', scope: 'shared', reason: '团队偏好', observe: true, provisioned: true },
+    environment: 'henv_1',
+  };
+  await page.route('**/api/hexa/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/auth/session')) return route.fulfill({ json: { username: 'admin' } });
+    if (path.endsWith('/agents/a1/models')) return route.fulfill({ json: { default: 'gpt-6.1', models: [{ id: 'gpt-6.1', label: 'GPT-6.1' }] } });
+    if (path.endsWith('/agents')) return route.fulfill({ json: { agents: [agent] } });
+    if (path.endsWith('/workspaces')) return route.fulfill({ json: { workspaces: [], selected_id: null } });
+    return route.fulfill({ json: { conversations: [] } });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '智能体', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: '产品分析师', exact: true }).click();
+
+  const detail = page.getByRole('region', { name: '产品分析师详情' });
+  await expect(detail).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '消息输入' })).toHaveCount(0);
+  await expect(detail.getByRole('tab', { name: /Instructions/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(detail.getByRole('tabpanel', { name: 'Instructions' })).toContainText('你负责分析产品机会');
+
+  await detail.getByRole('tab', { name: /Agent harness/ }).click();
+  const harness = detail.getByRole('tabpanel', { name: 'Agent harness' });
+  await expect(harness).toContainText('Codex');
+  await expect(harness).toContainText('gpt-6.1');
+  await expect(harness).toContainText('high');
+
+  await detail.getByRole('tab', { name: /Capabilities/ }).click();
+  const capabilities = detail.getByRole('tabpanel', { name: 'Capabilities' });
+  for (const value of ['research', 'writing', 'docs', 'browser', 'product-kit']) await expect(capabilities).toContainText(value);
+
+  await detail.getByRole('tab', { name: /Memory/ }).click();
+  const memory = detail.getByRole('tabpanel', { name: 'Memory' });
+  for (const value of ['团队记忆', 'mem0', 'shared', '团队偏好']) await expect(memory).toContainText(value);
+
+  await detail.getByRole('tab', { name: /Environment & limits/ }).click();
+  const limits = detail.getByRole('tabpanel', { name: 'Environment & limits' });
+  for (const value of ['API_KEY', '已保存的引用', 'REGION', 'X-Tenant', '12 步', '600 秒', 'henv_1']) await expect(limits).toContainText(value);
+  await expect(limits).not.toContainText('vault:harness-mcp-1');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await expect(detail.getByRole('tab', { name: /Environment & limits/ })).toBeVisible();
+  await page.screenshot({ path: join(tmpdir(), 'hexa-agent-detail-mobile.png') });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({ path: join(tmpdir(), 'hexa-agent-detail-desktop.png') });
+  await detail.getByRole('button', { name: '开始对话', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '消息输入' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '会话 Agent' })).toHaveValue('a1');
+});

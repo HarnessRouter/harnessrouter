@@ -1,0 +1,81 @@
+:root {
+  --hx-font-ui: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --hx-font-mono: "Cascadia Mono", Consolas, "SFMono-Regular", ui-monospace, monospace;
+
+  --hx-bg: #f6f7f9;
+  --hx-surface: #ffffff;
+  --hx-surface-muted: #f2f4f7;
+  --hx-surface-hover: #f8fafc;
+  --hx-ink: #111827;
+  --hx-ink-2: #344054;
+  --hx-ink-muted: #667085;
+  --hx-line: #e4e7ec;
+  --hx-line-strong: #9aa6b8;
+  --hx-edge: #c7cbd3;
+  --hx-primary: #2563eb;
+  --hx-primary-soft: #eff4ff;
+  --hx-rail: #0b1220;
+  --hx-rail-active: #1b2942;
+  --hx-rail-card: #1b2b46;
+  --hx-rail-card-border: #355075;
+  --hx-rail-card-hover: #223a5c;
+  --hx-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 10px 30px rgba(16, 24, 40, .05);
+  --hx-focus-ring: 3px solid var(--hx-primary);
+  --hx-focus-ring-offset: 2px;
+  --hx-focus-ring-rail: 3px solid #8fc2ff;
+
+  --hx-status-blue: #2563eb;
+  --hx-status-blue-soft: #eff4ff;
+  --hx-status-blue-ink: #1d4ed8;
+  --hx-status-amber: #f79009;
+  --hx-status-amber-soft: #fffaeb;
+  --hx-status-amber-ink: #b54708;
+  --hx-status-green: #12b76a;
+  --hx-status-green-soft: #ecfdf3;
+  --hx-status-green-ink: #15803d;
+  --hx-status-red: #f04438;
+  --hx-status-red-soft: #fff1f0;
+  --hx-status-red-ink: #b42318;
+  --hx-status-gray: #667085;
+  --hx-status-gray-soft: #f2f4f7;
+
+  --radius-control: 8px;
+  --radius-panel: 12px;
+  --radius-card: 12px;
+  --radius-modal: 16px;
+  --radius-sheet: 20px;
+  --radius-pill: 999px;
+}
+
+.app.dark {
+  --hx-bg: #0c0c0f;
+  --hx-surface: #16161a;
+  --hx-surface-muted: #1f1f25;
+  --hx-surface-hover: #1c1c22;
+  --hx-ink: #f3f3f5;
+  --hx-ink-2: #d0d5dd;
+  --hx-ink-muted: #98a2b3;
+  --hx-line: #2a2a32;
+  --hx-line-strong: #465064;
+  --hx-edge: #465064;
+  --hx-primary: #4c9dff;
+  --hx-primary-soft: rgba(76, 157, 255, .16);
+  --hx-rail: #070b13;
+  --hx-rail-active: #182339;
+  --hx-status-blue: #4c9dff;
+  --hx-status-blue-soft: rgba(76, 157, 255, .16);
+  --hx-status-blue-ink: #84adff;
+  --hx-status-amber: #fdb022;
+  --hx-status-amber-soft: rgba(247, 144, 9, .14);
+  --hx-status-amber-ink: #fdb022;
+  --hx-status-green: #47cd89;
+  --hx-status-green-soft: rgba(18, 183, 106, .14);
+  --hx-status-green-ink: #47cd89;
+  --hx-status-red: #f97066;
+  --hx-status-red-soft: rgba(240, 68, 56, .14);
+  --hx-status-red-ink: #f97066;
+  --hx-status-gray: #98a2b3;
+  --hx-status-gray-soft: #24242b;
+  --hx-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+  background: var(--hx-bg);
+}

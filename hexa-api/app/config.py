@@ -13,6 +13,7 @@ class Settings:
     session_secret: str = field(default='', repr=False)
     gateway_url: str = "http://127.0.0.1:3000/api/harness"
     gateway_api_key: str = field(default='', repr=False)
+    gateway_cookie: str = field(default='', repr=False)
     cookie_secure: bool = True
     session_ttl_seconds: int = 60 * 60 * 24 * 14
 
@@ -34,6 +35,7 @@ class Settings:
             session_secret=os.getenv("HEXA_SESSION_SECRET", ""),
             gateway_url=os.getenv("HEXA_GATEWAY_URL", cls.gateway_url),
             gateway_api_key=os.getenv("HEXA_GATEWAY_API_KEY", ""),
+            gateway_cookie=os.getenv("HEXA_GATEWAY_COOKIE", ""),
             cookie_secure=os.getenv("HEXA_COOKIE_SECURE", "true").lower() in {"1", "true", "yes"},
             session_ttl_seconds=int(os.getenv("HEXA_SESSION_TTL_SECONDS", str(cls.session_ttl_seconds))),
         )

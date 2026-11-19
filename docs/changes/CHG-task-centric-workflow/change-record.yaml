@@ -1,6 +1,6 @@
 id: CHG-task-centric-workflow
-status: proposed
-status_reason: 已将任务模块统一定义为 client 展示、hexa-api 权威、Gateway 执行依赖的 v1 设计；尚未修改生产代码。
+status: in_progress
+status_reason: 2026-11-19 已完成工作台 REST/SSE 接入与按需分页闭环；本地 SQLite 和受控 HTTP Gateway 验收通过，PostgreSQL、当前源码真实 BYOK 与部署验收仍未完成，不能标记整个 Change 完成。
 owner: Codex
 source: 用户确认的任务模块正式产品方向（2026-11-16）
 goal: 将我的任务、画布编排、并行执行、运行历史、节点调试和模板复用收敛为 hexa-api 驱动的任务系统。
@@ -110,3 +110,427 @@ closure:
   merge_commit: null
   release_evidence: []
 document_exit: 完成后保留 spec 作为任务长期契约，plan 作为实施记录，change-record.yaml 保留实际验证证据；稳定接口同步到 hexa-api/README.md。
+relationship_contract_update:
+  date: "2026-11-18"
+  owner: Codex
+  source: 用户要求将本会话确认的任务、模板和运行记录关系写入开发规范
+  reuse: 扩展既有 spec 的版本关系与保存边界章节作为唯一正文；AGENTS.md 增加必读入口，plan 引用该章节
+  scope: 仅开发规范和契约文档，不修改客户端或后端可执行代码、不部署服务
+  verification:
+    method: 文档交叉引用与保存边界人工审查，以及 git diff --check
+    result: 已核对来源版本固定、任务保存不写模板、显式保存为模板、Run 快照隔离、运行画布临时布局和重放无执行副作用
+    automated_tests: 不适用；本次仅文档变更，无新增可执行行为或接口实现
+  remaining: 新增验收为后续实现门禁；不将该文档更新标记为真实持久化关联已完成，整体实现剩余事项沿用 remaining
+api_workbench_integration:
+  date: "2026-11-18"
+  owner: Codex
+  baseline: 31d60df 加用户既有未提交工作台、Agent 模板和后端改动
+  reuse: extend 现有 App API、任务路由、Templates 画布与工作台样式；替换任务/运行/模板演示数据源
+  scope: plan.md 的工作台 API 接入批次；保存边界沿用 spec.md 唯一正文
+  process_note: 本轮最初接入代码在目标 Red 前写入，且方案补记在首批代码之后；属于流程偏差，不将其描述为已完成测试先行。后续新增边界先确认 Red，再实现；本批最终行为仍需单元、API 集成与 E2E 验证。
+  verification:
+    - command: "python -m pytest -q hexa-api/tests"
+      exit_code: 0
+      result: "65 passed in 32.98s"
+      environment: Windows local workspace; SQLite test database; fake Gateway coverage in the backend suite
+    - command: "npm test --prefix client"
+      exit_code: 0
+      result: "26 passed"
+      environment: Windows local workspace
+    - command: "npm run typecheck --prefix client"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+    - command: "npm run build --prefix client"
+      exit_code: 0
+      result: passed; existing large-chunk warning remains
+      environment: Windows local workspace
+    - command: "cd client; npx playwright test -c playwright.app.config.ts --workers=2"
+      exit_code: 0
+      result: "60 passed in 1.9m across Chromium and Edge"
+      environment: Windows local workspace; app API fixtures; desktop and 390x844 mobile viewports
+    - command: "cd client; npx playwright test -c playwright.integration.config.ts tasks.spec.ts --workers=1"
+      exit_code: 0
+      result: "2 passed in 59.6s across Chromium and Edge"
+      environment: Windows local workspace; real HTTP App API, SQLite, HTTP Gateway fixture, session Cookie and browser refresh
+    - command: "git diff --check"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+  evidence:
+    - client/tests/integration-ui/tasks.spec.ts verifies login, task creation, workflow save, Gateway-backed execution, completed Run, debug output, refresh recovery, save-as-template, template-based task creation, and absence of direct Gateway /v1 calls.
+    - client/tests/app-ui/task-api.spec.ts and client/tests/app-ui/tasks.spec.ts cover empty API lists, editing, revision conflicts, SSE disconnect polling recovery, human gates, deep links, and template version behavior.
+    - client/.artifacts/task-api/ contains Chromium, Edge, and mobile screenshots from the task workbench checks.
+  limitations:
+    - PostgreSQL migrations were not executed in this Windows environment; the documented production order is 001_initial.sql, 002_tasks.sql, 003_agent_templates.sql, then 004_task_template_source.sql.
+    - A real production model service was not evaluated; integration execution uses the local HTTP Gateway fixture.
+    - Artifact long-term storage/download and deployed multi-process scheduling remain outside this batch.
+  remaining: [PostgreSQL migration and upgrade-path smoke test, real model-service evaluation, deployed-environment validation]
+remaining_function_integration:
+  date: "2026-11-18"
+  owner: Codex
+  baseline: api_workbench_integration after local SQLite and HTTP Gateway integration
+  reuse: extend existing Task/Run/NodeRun models, Gateway file proxy, App API client and task workbench
+  scope: Artifact metadata and download, compatible pagination, node listing/debug pagination, cleanup retry, PostgreSQL migration runner and hexa-api Compose validation profile
+  decisions:
+    artifact_storage: Gateway file reference with hexa-api server-side authorization and download proxy; Hexa does not copy file contents.
+    pagination: all task, Run, node, debug-attempt, template and Artifact list endpoints return pagination metadata while preserving existing arrays.
+    deployment: docker-compose.hexa-api.yml provides PostgreSQL and hexa-api; the existing self-hosted Gateway remains external.
+  verification:
+    - command: "python -m pytest -q hexa-api/tests"
+      exit_code: 0
+      result: "69 passed"
+      environment: Windows local workspace; SQLite test database and fake Gateway
+    - command: "npm test --prefix client"
+      exit_code: 0
+      result: "26 passed"
+      environment: Windows local workspace
+    - command: "npm run typecheck --prefix client; npm run build --prefix client"
+      exit_code: 0
+      result: passed; existing bundle size warning remains
+      environment: Windows local workspace
+    - command: "cd client; npx playwright test -c playwright.app.config.ts workbench-redesign.spec.ts tasks.spec.ts run-history.spec.ts task-api.spec.ts --workers=2"
+      exit_code: 0
+      result: "28 passed across Chromium and Edge"
+      environment: Windows local workspace; controlled App API fixtures; desktop and mobile viewports
+    - command: "cd client; npx playwright test -c playwright.app.config.ts --workers=2"
+      exit_code: 0
+      result: "66 passed across Chromium and Edge"
+      environment: Windows local workspace; controlled App API fixtures; full client UI suite
+    - command: "cd client; npx playwright test -c playwright.integration.config.ts tasks.spec.ts --workers=1"
+      exit_code: 0
+      result: "2 passed across Chromium and Edge"
+      environment: Windows local workspace; real HTTP App API, SQLite database, HTTP Gateway fixture, Cookie session and refresh recovery
+    - command: "docker compose -f docker-compose.hexa-api.yml config"
+      exit_code: 0
+      result: passed with temporary validation-only environment variables
+      environment: Windows Docker Compose parser; no files or credentials persisted
+    - command: "git diff --check"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+  evidence:
+    - hexa-api/tests/test_tasks_api.py covers pagination, Artifact persistence, authorization and server-side download.
+    - hexa-api/migrations/005_task_artifacts.sql and hexa-api/migrate.py provide the ordered PostgreSQL migration path.
+    - docker-compose.hexa-api.yml provides PostgreSQL health checks, migration-before-start and hexa-api readiness checks.
+  limitations:
+    - PostgreSQL containers were not started in this environment; Docker Compose syntax was validated only.
+    - No real Gateway API key or BYOK model service was available, so real model execution and production Artifact download remain not_evaluated.
+    - The existing full task UI fixture suite does not yet exercise a non-empty Artifact download interaction; backend and client transport paths are covered separately.
+  remaining: [PostgreSQL fresh/upgrade migration smoke, real Gateway/model E2E, deployed multi-process validation, non-empty Artifact Playwright download scenario]
+sqlite_validation:
+  date: "2026-11-18"
+  owner: Codex
+  scope: 当前 SQLite 开发数据库和受控 HTTP Gateway 环境；按用户要求暂缓 PostgreSQL 验收
+  database: D:/work/Agent/Hexa2/.artifacts/hexa-api/dev.db
+  verification:
+    - command: "python -m pytest -q hexa-api/tests"
+      exit_code: 0
+      result: "69 passed in 43.86s"
+    - command: "npm test --prefix client; npm run typecheck --prefix client; npm run build --prefix client"
+      exit_code: 0
+      result: "26 passed; typecheck passed; build passed with existing large-chunk warning"
+    - command: "cd client; npx playwright test -c playwright.app.config.ts --workers=2"
+      exit_code: 0
+      result: "72 passed across Chromium and Edge"
+    - command: "cd client; npx playwright test -c playwright.integration.config.ts tasks.spec.ts --workers=1"
+      exit_code: 0
+      result: "2 passed across Chromium and Edge using real HTTP App API, SQLite and HTTP Gateway fixture"
+    - command: "GET /api/hexa/tasks?workspace_id=1&limit=100 and GET /api/hexa/templates?workspace_id=1&limit=100"
+      exit_code: 0
+      result: "6 development tasks and 2 development templates readable through the running Cookie API"
+  skipped:
+    - PostgreSQL fresh/upgrade migration execution
+  remaining: [PostgreSQL fresh/upgrade migration remains explicitly deferred; current-source real Gateway Artifact validation remains blocked by missing Gateway self-host session cookie]
+acceptance_followup:
+  date: "2026-11-18"
+  owner: Codex
+  baseline: sqlite_validation after pagination, Artifact and workspace-scope follow-up
+  scope: non-PostgreSQL acceptance requested by the user; existing uncommitted work preserved
+  changes:
+    - hexa-api 调试尝试分页按 limit 截断，避免返回 lookahead 记录
+    - 任务、Run、Artifact 和模板详情统一按当前选中工作区做 404 隔离
+    - 增加 Artifact 远端清理失败后保留记录、重试仅清理失败文件的集成测试
+    - 增加真实 HTTP Gateway fixture 的非空 Artifact 浏览器下载验收，检查服务端代理、附件头和浏览器不直连 Gateway
+  verification:
+    - command: "python -m pytest -q hexa-api/tests/test_tasks_api.py -k \"debug_attempt_pages or cleanup_failure or selected_workspace\""
+      exit_code: 0
+      result: "3 passed"
+      environment: Windows; isolated SQLite; fake Gateway
+    - command: "python -m pytest -q hexa-api/tests"
+      exit_code: 0
+      result: "72 passed in 42.14s"
+      environment: Windows; SQLite test database; fake Gateway
+    - command: "cd client; npx playwright test -c playwright.integration.config.ts tasks.spec.ts --workers=1"
+      exit_code: 0
+      result: "2 passed across Chromium and Edge in 47.6s"
+      environment: Windows; real HTTP App API; isolated SQLite; HTTP Gateway fixture; non-empty Artifact download
+    - command: "npm test --prefix client; npm run typecheck --prefix client; npm run build --prefix client"
+      exit_code: 0
+      result: "26 passed; typecheck passed; build passed with existing 647 kB chunk warning"
+      environment: Windows local workspace
+    - command: "GET /healthz and GET http://127.0.0.1:4173/"
+      exit_code: 0
+      result: "current-source isolated API health and existing frontend both returned 200 during verification"
+      environment: Windows local services
+    - command: "git diff --check"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+  real_gateway_smoke:
+    legacy_running_api: passed
+    evidence: "通过现有 4010 API、当前自托管 Gateway 和真实可用模型完成最小任务；Run/NodeRun succeeded，输出包含预期标记并返回文件引用。"
+    current_source_api: blocked
+    reason: "当前源码隔离 API 已通过 /healthz 和 Cookie 登录，但 Gateway /v1 请求因缺少有效 hr_selfhost 会话 Cookie 返回 401；未将旧运行服务结果冒充当前源码 Artifact API 验收。"
+    security_observation: "受控集成 E2E 检查浏览器没有请求 Gateway /v1；现有 API Key 未写入仓库、前端或测试输出。"
+  limitations:
+    - PostgreSQL fresh/upgrade migration and Compose runtime remain skipped by explicit user instruction.
+    - Client workbench still eagerly drains some compatible pages and does not yet expose a user-facing load-more control for every list.
+    - Template-version pagination beyond the first page and full mobile non-empty Artifact interaction remain not_evaluated.
+    - Deployed multi-process scheduling and a production BYOK credential environment remain not_evaluated.
+  human_node_gate_fix:
+    date: "2026-11-19"
+    owner: Codex
+    scope: 修复显式 node_type human/human_gate 节点被调度器自动执行的问题
+    changes:
+      - hexa-api/app/tasks/service.py 将 node_type human/human_gate 与 requires_human 统一视为人工门控
+      - hexa-api/app/tasks/router.py 的 continue 校验允许显式人工节点并保持合法输入引用校验
+      - hexa-api/tests/test_tasks_api.py 增加纯人工节点等待、无 Gateway 调用和确认后完成回归
+    verification:
+      - command: "pytest -q hexa-api/tests/test_tasks_api.py -k explicit_human_node"
+        exit_code: 0
+        result: "1 passed"
+        environment: Windows; SQLite test database; fake Gateway
+      - command: "pytest -q hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py"
+        exit_code: 0
+        result: "22 passed"
+        environment: Windows; SQLite test database; fake Gateway
+    status: passed
+  l3_human_node_verification:
+    date: "2026-11-19"
+    owner: Codex
+    standard: 项目未定义正式 L3；本次按 Unit、Integration、E2E 三层覆盖解释
+    scope: 显式 node_type human/human_gate 人工节点不得自动执行，必须等待用户确认
+    acceptance_ids: [AC-6, AC-7, AC-13]
+    baseline: 31d60df5c51cf730b832b8ad596595a4683cb8e3 + existing dirty worktree
+    environment: Windows; Python; SQLite; Chromium; local HTTP App API and controlled HTTP Gateway fixture
+    process_note: 补测已有修复，复用人工节点缺陷测试原先 completed 与 waiting_human 不符的 Red；本轮不改生产代码。E2E 首两次因辅助函数操作隐藏控件及假设节点 ID 失败，属于测试错误，修正后通过，不作为产品缺陷 Red。
+    verification:
+      unit:
+        command: "python -m pytest -q hexa-api/tests/test_task_workflows.py::test_human_node_predicate_covers_explicit_and_legacy_gate_configs"
+        exit_code: 0
+        result: "1 passed"
+        evidence: human、human_gate 在 requires_human 为 false 时仍为人工门控；兼容旧 requires_human，普通 Agent 与空配置不误判
+      integration:
+        command: "python -m pytest -q hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py -k 'not human_node_predicate'"
+        exit_code: 0
+        result: "23 passed, 1 deselected"
+        evidence: human/human_gate 参数化集成验证等待状态、空输出、下游阻断、空/未知/重复引用拒绝、无非法决定、合法选择后的输入链路和任务完成、同 Run、幂等重放仅一条决定；普通 Agent 门控与版本回归通过
+      e2e:
+        command: "npx playwright test -c playwright.e2e.config.ts --project=chromium tests/e2e/tasks-lifecycle.spec.ts -g 'explicit human node'"
+        exit_code: 0
+        result: "1 passed (46.9s)"
+        evidence: 浏览器真实编辑保存 node_type human 且 requires_human false；启动后 idle、无输出/决定；打开 /runs/{id} 并刷新后仍等待；勾选来源后确认，原 Run 完成，记录一条决定及选定结果，人工节点无 Agent response_id
+      e2e_regression:
+        command: "npx playwright test -c playwright.e2e.config.ts --project=chromium tests/e2e/tasks-lifecycle.spec.ts"
+        exit_code: 0
+        result: "7 passed (3.1m)，本会话先前执行证据"
+        evidence: 共享辅助函数修改后的完整任务生命周期回归通过；之后仅增强显式人工节点用例并定向复跑通过，复用其余六条未改动用例的证据
+      typecheck:
+        command: "npm run typecheck --prefix client"
+        exit_code: 0
+        result: passed
+    limitations:
+      - E2E 使用真实本地 App API/数据库与受控 HTTP Gateway，不代表真实 BYOK 模型或生产部署验收。
+      - 本轮不新增视觉样式或平台能力；未运行全仓、Edge 或生产数据库测试。
+    status: passed
+  status: in_progress
+  next_action: "提供或恢复 Gateway self-host session cookie 后，用当前源码 API 重跑真实 Artifact 下载；补齐客户端按需分页与模板版本深分页后再评估 AC-12/AC-14 完成度。"
+
+domain_model_baseline:
+  date: "2026-11-19"
+  owner: Codex
+  baseline: acceptance_followup after the existing task API and workflow implementation
+  scope: 将任务、工作流版本、模板来源和运行快照的服务端身份固定为 API 与数据库契约，先于后续 UI 扩展
+  changes:
+    - Task 保存 current_revision_id，并返回 workflow_revision 与 workflow_state=saved
+    - 模板创建任务返回固定 source_template、source_template_id、source_template_version_id 和来源版本号
+    - Run 保存 workflow_revision_id，兼容保留 workflow_revision 数字字段，并返回 workflow_revision_ref
+    - execution_snapshot 固定保存已保存工作流、输入、Agent 配置、版本 ID 和 saved_workflow_revision 来源
+    - SQLite 启动与 PostgreSQL 002 迁移按已有版本号回填可确定的版本身份；补充任务、Run、模板版本引用约束
+    - client AppTask/AppRun 类型消费结构化版本字段，保留现有数字字段兼容工作台
+  verification:
+    - command: "pytest -q hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py"
+      exit_code: 0
+      result: "26 passed"
+      environment: Windows; SQLite test database; fake Gateway
+    - command: "pytest -q hexa-api/tests"
+      exit_code: 0
+      result: "80 passed in 60.27s"
+      environment: Windows; SQLite test database; fake Gateway
+    - command: "pytest -q hexa-api/tests/test_tasks_api.py -k 'domain_payload or snapshot_keeps_revision'"
+      exit_code: 0
+      result: "2 passed during Red-Green verification"
+      environment: Windows; SQLite test database; fake Gateway
+    - command: "npm test --prefix client"
+      exit_code: 0
+      result: "33 passed"
+      environment: Windows local workspace
+    - command: "npm run typecheck --prefix client"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+    - command: "npm run build --prefix client"
+      exit_code: 0
+      result: passed; existing large chunk warning remains
+      environment: Windows local workspace
+    - command: "python -c \"from pathlib import Path; p=Path('hexa-api/migrate.py'); names=['001_initial.sql','002_tasks.sql','003_agent_templates.sql','004_task_template_source.sql','005_task_artifacts.sql','006_conversation_execution.sql']; [(p.parent/'migrations'/n).read_text(encoding='utf-8') for n in names]; print('all migration files readable in order')\""
+      exit_code: 0
+      result: all migration files readable in order
+      environment: Windows local workspace
+    - command: "git diff --check"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+  limitations:
+    - PostgreSQL fresh/upgrade migration execution was not available in this Windows validation environment; the migration order and file readability were checked.
+    - No new UI interaction was introduced; existing task workbench remains the consumer of the API contract and will be extended in a later UI batch.
+    - Full client Playwright regression and real Gateway/model execution were not rerun for this server contract batch; existing evidence remains in prior change entries.
+  status: passed_with_environment_limits
+
+template_version_pagination:
+  date: "2026-11-19"
+  owner: Codex
+  baseline: domain_model_baseline after the existing task workbench API integration
+  scope: 模板详情按服务端版本分页按需加载；模板编辑和使用前补齐剩余版本，避免把首屏版本误认为最新版本
+  changes:
+    - client AppTemplate 增加 versions_pagination 和结构化 AppTemplateVersion 类型
+    - 模板详情在服务端返回 has_more 时显示“加载更多版本”，按版本偏移请求下一页并按版本 ID 去重
+    - 编辑模板和使用模板前补齐剩余版本，确保草稿和新任务固定使用已加载的最新 TemplateVersion
+    - UI 夹具支持分页版本响应，并覆盖首屏和追加页行为
+  acceptance_ids: [AC-11, AC-14]
+  verification:
+    - command: "npx playwright test -c playwright.app.config.ts tasks.spec.ts -g \"template detail loads additional versions|template editing appends\" --project=chromium"
+      exit_code: 0
+      result: "2 passed"
+      environment: Windows local workspace; Chromium; controlled App API fixture with paginated template versions
+      evidence: 模板编辑追加新版本仍只写模板版本接口；模板详情首屏只显示第 1 版，点击加载更多后显示第 2、3 版且按钮消失
+    - command: "npx playwright test -c playwright.app.config.ts tasks.spec.ts --project=chromium"
+      exit_code: 0
+      result: "10 passed"
+      environment: Windows local workspace; Chromium; task workbench UI fixtures
+      evidence: 任务列表、保存冲突、人工门控、模板编辑、分页版本、SSE 恢复和深链错误回归通过
+    - command: "npm test -- --test-name-pattern=\"task lists page explicitly|structured task errors\""
+      exit_code: 0
+      result: "33 passed"
+      environment: Windows local workspace
+      evidence: client API、任务工作台辅助逻辑和错误结构回归通过
+    - command: "npm run typecheck --prefix client"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+    - command: "npm run build --prefix client"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace; existing large bundle advisory remains
+    - command: "git diff --check"
+      exit_code: 0
+      result: passed
+      environment: Windows local workspace
+  limitations:
+    - 本切片只覆盖模板版本详情的按需分页；任务、Run 和 Artifact 列表仍由既有工作台批次加载，未在本次扩大重构范围。
+    - 未运行 Edge、PostgreSQL、真实 BYOK Provider 或部署环境验证；这些限制继续沿用 Change 的 remaining。
+  status: passed
+  next_action: 继续补齐任务与运行列表的服务端分页交互，并在不扩大本 Change 范围的前提下补齐真实 PostgreSQL 和部署验证。
+
+workbench_pagination_closure:
+  date: "2026-11-19"
+  owner: Codex
+  status: passed
+  baseline: 108d534b18d79a996cba40ba99a2257ed7825ed0 plus the existing dirty worktree; unrelated edits preserved
+  reuse_decision: extend
+  scope: client 工作台、hexa-api 任务路由、分页工具及相关测试；不改 Gateway 执行协议，不恢复 Cloud 入口。
+  acceptance_ids: [AC-7, AC-10, AC-11, AC-12, AC-14]
+  references:
+    - spec.md#验收
+    - plan.md#2026-11-19-分页闭环改造
+    - visual-contract.md#分页交互补充
+  changes:
+    - 任务、模板与当前工作区跨任务 Run 列表有界首批读取；点击下一页才读取追加页，服务端先按权限、名称或 ID、状态筛选再分页。
+    - 列表 ID 和深链详情缓存分开；列表按响应顺序展示，独立读取详情不推进列表游标；查询或工作区改变后丢弃旧响应。
+    - Template.latest_version 与历史分页独立；编辑和使用重新读取当前版本摘要，不再遍历耗尽历史。
+    - 任务、Run、NodeRun 产物统一首批 50 条，追加页按 ID 去重；失败保留文件并按原 offset 重试，切换对象和卸载后旧请求失效。
+    - 调试尝试按需追加，首批失败可原位重试；调试兼容产物字段限制为当前 NodeRun 的 50 条并返回 artifacts_pagination。
+    - 运行或节点状态变化后刷新产物；详情读取期间禁用归档、取消归档和重开，避免旧详情覆盖写入结果。
+    - 修复旧 UI 夹具缺失产物分页响应；补齐 CHG-e2e-suite/plan.md，事后整理属性已注明；忽略临时证据目录。
+  tdd_evidence:
+    - 后端新测试确认 55 条产物被无界返回，期望 50 条失败；实现上限后 3 项分页集成测试通过。
+    - 调试首次失败缺少重试按钮、运行完成后产物不刷新，两项 UI 目标测试失败后修复，通过最终双浏览器回归。
+    - 归档竞态最小测试确认详情读取期间按钮仍启用，失败后增加读取期间锁定并通过最终回归。
+    - 初始 PagedArtifacts 缺失是接手时类型错误；本会话先补组件再补追加与隔离 UI 测试，该部分未完整遵循 Red 先行，不能将类型失败冒充行为测试 Red。
+  verification:
+    unit:
+      command: npm test --prefix client
+      exit_code: 0
+      result: 36 passed; includes page merge, server cursor, API query encoding and Cookie transport
+    integration:
+      command: python -X utf8 -m pytest -q hexa-api/tests/test_workbench_pagination.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py
+      exit_code: 0
+      result: 30 passed; final backend source, SQLite, authorization, literal search, latest template and bounded debug artifacts
+    ui:
+      command: cd client; npx playwright test -c playwright.app.config.ts pagination.spec.ts tasks.spec.ts task-api.spec.ts --workers=2 --reporter=json
+      exit_code: 0
+      result: 48 passed; Chromium and Edge; no skipped or flaky tests
+      evidence: client/.artifacts/pagination/app-report.json
+    e2e_regression:
+      command: cd client; npx playwright test -c playwright.e2e.config.ts tasks-lifecycle.spec.ts task-pagination.spec.ts tasks-recovery.spec.ts cross-browser.spec.ts --workers=1
+      exit_code: 1
+      result: 10 passed, 2 failed initially; task lifecycle 7, recovery 2 and Edge 1 passed; failures retained and repaired below
+      explanation: 新分页用例刷新时未等待工作区恢复且移动抽屉已打开后重复点击被遮住的列表；归档详情存在读写竞态。此前选择器和耗时推断未经证实，实际以失败 trace 与目标回归为准。
+    e2e_archive_repair:
+      command: cd client; npx playwright test -c playwright.e2e.config.ts task-pagination.spec.ts tasks-recovery.spec.ts -g "persisted tasks|archiving and unarchiving" --project=chromium --workers=1
+      exit_code: 1
+      result: archive passed; pagination selector failed in that run and was repaired separately
+    e2e_pagination_final:
+      command: cd client; npx playwright test -c playwright.e2e.config.ts task-pagination.spec.ts --project=chromium --workers=1
+      exit_code: 0
+      result: 1 passed; 23 persisted tasks, next page, search outside first batch, workspace restore after reload, global Run title, 390px Artifact download and no overflow
+      environment: Windows, real browser/Vite/FastAPI/Cookie/SQLite, controlled HTTP Gateway
+    typecheck_build:
+      command: npm run typecheck --prefix client; npm run build --prefix client
+      exit_code: 0
+      result: passed; final build main chunk 912.93 kB, existing bundle-size advisory
+      evidence: client/.artifacts/pagination/build.log
+    static_preview:
+      command: temporary hidden vite preview on 127.0.0.1:4185; GET /tasks/71 and /runs/19, referenced built JS and repeated route GET; preview closed afterwards
+      exit_code: 0
+      result: all returned 200; local build fallback only, does not validate production reverse proxy
+    final_records:
+      command: python yaml.safe_load for both changed Change records; git -c core.safecrlf=false diff --check; git check-ignore for temporary evidence directories
+      exit_code: 0
+      result: Change YAML parsed, diff check passed, root .artifacts/.superagent-review and client/.artifacts ignored
+  visual:
+    result: passed
+    environment: Windows Chromium and Edge, 1440x900 and 390x844
+    evidence: client/.artifacts/pagination/visual-report.json
+    inspection: 检查移动失败态和桌面成功态截图，文件、格式/大小、下载与追加/重试按钮可读；自动断言覆盖所有四种浏览器/视口组合，无页面横向溢出，详情不超出视口。
+    advisory: 构建主包超过 500 kB；不影响本轮交互验收，后续可单独优化代码分割。
+  security_review:
+    result: passed_with_environment_limits
+    findings:
+      - 搜索使用 SQLAlchemy 参数化表达式和 autoescape，分页限制在服务端裁剪；百分号按文字搜索测试通过。
+      - Run 列表经 Task 联表检查用户与工作区；Artifact 和调试入口复用 owned_task/owned_run，不暴露 Gateway 文件标识或凭据。
+      - 下载使用固定本地 hexa-api 路径与服务器代理，文件名仅用于浏览器下载属性，文本由 React 转义；无新增依赖或密钥。
+      - 自查覆盖当前路由、客户端 API、工作台和相关未跟踪测试，不冒充独立评审或远端 CI。
+  process_review:
+    requirements: 当前分页切片目标实现并验证；整个 Change 仍受下方外部环境验收限制。
+    wisharness: 配置入口、适用规范、spec/plan、三层验证、视觉证据、平台限制与共享记录已核对；存在上述初始组件未先写行为 Red 的流程偏差，不能声明全程严格 TDD。
+    git: 未提交、推送或合并；保留其他并行改动，本地结果不代表远端 CI 或可发布。
+  limitations:
+    - PostgreSQL fresh/upgrade 和 Linux/Compose 运行仍按既有范围暂缓；SQLite 不能替代生产数据库证据。
+    - 当前源码真实 BYOK/Gateway self-host 会话及真实远端文件下载仍未验证，受控 HTTP Gateway 不证明真实模型环境。
+    - 未部署生产反向代理、未执行多进程调度或远端 CI/合并门禁，本轮不能声明生产可发布。
+    - E2E 生命周期和 Edge 未在最后的归档按钮局部修复后全套重复执行；复用未受影响路径先前证据，最终归档并发由双浏览器目标用例覆盖。
+  remaining: [PostgreSQL fresh/upgrade on target runner, current-source real Gateway/BYOK smoke, production route fallback and deployment acceptance]
+  next_action: 完成本地改造切片；有对应环境后补外部验收，再决定整个 Change 是否可关闭，不再将按需分页列为剩余开发。
+  document_exit: 行为正文继续以 spec.md 为准；Change 保留结果摘要，原始报告、日志与截图留在已忽略目录，E2E 方案补齐记录保留事后整理说明。

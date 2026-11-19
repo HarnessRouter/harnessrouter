@@ -17,18 +17,34 @@ class GatewayError(RuntimeError):
 
 
 class GatewayClient:
-    def __init__(self, base_url: str, api_key: str, timeout: float = 15.0) -> None:
+    def __init__(self, base_url: str, api_key: str, timeout: float = 15.0, cookie: str = '') -> None:
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key
+        self._cookie = cookie
         self.timeout = timeout
 
     def _headers(self) -> dict[str, str]:
-        return {"accept": "application/json", "authorization": f"Bearer {self._api_key}"}
+        headers = {"accept": "application/json", "authorization": f"Bearer {self._api_key}"}
+        if self._cookie:
+            headers['cookie'] = self._cookie
+        return headers
+
+    def _internal_headers(self) -> dict[str, str]:
+        headers = {
+            "accept": "application/json",
+            "x-harness-internal": self._api_key,
+            "x-harness-org": "local",
+            "x-harness-member": "hexa",
+        }
+        if self._cookie:
+            headers['cookie'] = self._cookie
+        return headers
 
     async def json_request(self, method: str, path: str, **kwargs):
         try:
+            headers = kwargs.pop('headers', None) or self._headers()
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.request(method, f'{self.base_url}{path}', headers=self._headers(), **kwargs)
+                response = await client.request(method, f'{self.base_url}{path}', headers=headers, **kwargs)
             if not response.is_success:
                 raise GatewayError('Gateway 请求失败。')
             return response.json() if response.content else {}
@@ -40,6 +56,9 @@ class GatewayClient:
 
     async def create_workspace(self, name: str, description: str):
         return await self.json_request('POST', '/v1/hr/workspaces', json={'name': name, 'description': description})
+
+    async def update_workspace(self, workspace_id: str, name: str, description: str):
+        return await self.json_request('PATCH', f'/v1/hr/workspaces/{quote(workspace_id, safe="")}', json={'name': name, 'description': description})
 
     async def upload_file(self, name, content, media_type):
         return await self.json_request('POST', '/v1/files', data={'purpose': 'user_data'}, files={'file': (name, content, media_type)})
@@ -73,6 +92,26 @@ class GatewayClient:
             raise GatewayError("Gateway 返回的数据格式无效。") from exc
         agents = body.get("harnesses", []) if isinstance(body, dict) else []
         return agents if isinstance(agents, list) else []
+
+    async def list_agent_templates(self) -> list[dict[str, Any]]:
+        body = await self.json_request('GET', '/v1/bases')
+        if not isinstance(body, dict) or not isinstance(body.get('bases'), list):
+            raise GatewayError('Gateway 模板数据格式无效。')
+        templates = []
+        for row in body['bases']:
+            if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not row['id']:
+                raise GatewayError('Gateway 模板数据格式无效。')
+            models = row.get('models', [])
+            available = [item['id'] for item in models if isinstance(item, dict) and isinstance(item.get('id'), str) and item['id'] and item.get('available') is True] if isinstance(models, list) else []
+            preferred = row.get('defaultModel', '')
+            default = preferred if preferred in available else next(iter(available), '')
+            templates.append({
+                'id': row['id'], 'name': row.get('label') if isinstance(row.get('label'), str) and row['label'] else row['id'], 'description': '',
+                'base': row['id'], 'default_model': default,
+                'system_prompt': row.get('systemPrompt') if isinstance(row.get('systemPrompt'), str) else '',
+                'source': 'gateway', 'available': row.get('status') == 'ready' and bool(default),
+            })
+        return templates
 
     async def list_agent_models(self, agent_id: str) -> dict[str, Any]:
         try:
@@ -113,7 +152,9 @@ class GatewayClient:
     async def cancel_response(self, response_id: str):
         return await self.json_request('POST', f'/v1/responses/{quote(response_id, safe="")}/cancel')
 
-    async def create_response(self, text: str, previous_response_id: str | None, idempotency_key: str, *, agent_id: str = '', model: str = '', workspace_id: str = '', content: list | None = None, on_progress=None) -> dict[str, Any]:
+    async def create_response(self, text: str, previous_response_id: str | None, idempotency_key: str, *, agent_id: str = '', model: str = '', workspace_id: str = '', content: list | None = None, on_progress=None, on_execution=None) -> dict[str, Any]:
+        from app.gateway.execution import PublicExecution
+        execution = PublicExecution()
         payload: dict[str, Any] = {"input": [{"role": "user", "content": content or text}], "stream": True, "store": True}
         if agent_id:
             payload['metadata'] = {'harness_id': agent_id}
@@ -146,6 +187,10 @@ class GatewayClient:
                         if not isinstance(event, dict):
                             raise GatewayError("Gateway 返回的数据格式无效。", uncertain=True)
                         nested = event.get("response")
+                        before_execution = execution.snapshot()
+                        execution.consume(event)
+                        if on_execution and execution.snapshot() != before_execution:
+                            await on_execution(execution.snapshot())
                         for citation in citations(event):
                             files[citation['file_id']] = citation
                         if isinstance(nested, dict) and isinstance(nested.get("id"), str):
@@ -163,7 +208,8 @@ class GatewayClient:
                                 raise GatewayError("Gateway 执行失败。", response_id=response_id or None)
                     if not response_id or not final_status:
                         raise GatewayError("Gateway 响应在完成前中断。", uncertain=True, response_id=response_id or None)
-                    return {"response_id": response_id, "text": "".join(text_parts), "status": final_status, **({'files': list(files.values())} if files else {})}
+                    details = execution.snapshot()
+                    return {"response_id": response_id, "text": "".join(text_parts), "status": final_status, **({'files': list(files.values())} if files else {}), **({'execution': details} if details['reasoning'] or details['steps'] else {})}
         except GatewayError:
             raise
         except httpx.HTTPError as exc:

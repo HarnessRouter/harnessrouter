@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hexa · 运行记录</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="task-workspace.css" />
+    <link rel="stylesheet" href="list-detail.css" />
+  </head>
+  <body class="prototype-page">
+    <div class="artboard" id="runs">
+      <div class="app" data-shell data-active="runs">
+        <main class="workspace-split detail-list-split" aria-label="运行记录">
+          <section class="tasks-main-column" aria-label="运行记录列表区域">
+            <section class="list-workspace-panel" aria-label="运行记录表格">
+              <div class="list-toolbar">
+                <div class="segmented" role="tablist" aria-label="运行状态">
+                  <button class="is-active" type="button" role="tab" aria-selected="true">全部 <span>12</span></button>
+                  <button type="button" role="tab" aria-selected="false">等待确认 <span>1</span></button>
+                  <button type="button" role="tab" aria-selected="false">运行中 <span>2</span></button>
+                  <button type="button" role="tab" aria-selected="false">已完成 <span>7</span></button>
+                  <button type="button" role="tab" aria-selected="false">失败 <span>2</span></button>
+                </div>
+                <div class="list-tools">
+                  <label class="compact-search" aria-label="搜索运行记录">
+                    <svg class="icon"><use href="#i-search"></use></svg>
+                    <span>搜索任务或 Run ID</span>
+                  </label>
+                  <button class="icon-button icon-button-bare" type="button" aria-label="更多筛选">
+                    <svg class="icon"><use href="#i-filter"></use></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="list-table-wrap">
+                <div class="run-table" role="table" aria-label="运行记录表格">
+                  <div class="data-table-head" role="row">
+                    <span role="columnheader">运行</span>
+                    <span role="columnheader">状态</span>
+                    <span role="columnheader">节点进度</span>
+                  </div>
+                  <div class="data-table-body">
+                    <button class="run-table-row is-selected" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark amber"><svg class="icon"><use href="#i-branch"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>安全事件调查</strong><span class="table-id">#18</span></span>
+                          <span class="table-description">等待选择 2 / 5 个汇总输入</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status amber"><span class="status-dot amber"></span>等待确认</span>
+                        <span class="table-sub">04:12</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress amber"><span style="width: 56%"></span></span>
+                        <span class="table-sub">5 / 9 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark blue"><svg class="icon"><use href="#i-play"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>客服工单归因</strong><span class="table-id">#21</span></span>
+                          <span class="table-description">归纳 18 条重复工单</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status blue"><span class="status-dot blue"></span>运行中</span>
+                        <span class="table-sub">01:36</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress"><span style="width: 40%"></span></span>
+                        <span class="table-sub">2 / 5 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark blue"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>代码仓库巡检</strong><span class="table-id">#20</span></span>
+                          <span class="table-description">3 个仓库并行扫描</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status blue"><span class="status-dot blue"></span>运行中</span>
+                        <span class="table-sub">00:58</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress"><span style="width: 38%"></span></span>
+                        <span class="table-sub">3 / 8 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark red"><svg class="icon"><use href="#i-alert"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>竞品市场研究</strong><span class="table-id">#17</span></span>
+                          <span class="table-description">事实校验超时</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status red"><span class="status-dot red"></span>失败</span>
+                        <span class="table-sub">02:48</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress red"><span style="width: 67%"></span></span>
+                        <span class="table-sub">4 / 6 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark green"><svg class="icon"><use href="#i-check"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>产品方案评估</strong><span class="table-id">#15</span></span>
+                          <span class="table-description">最终建议已生成</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status green"><span class="status-dot green"></span>已完成</span>
+                        <span class="table-sub">12:48</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress green"><span style="width: 100%"></span></span>
+                        <span class="table-sub">5 / 5 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark green"><svg class="icon"><use href="#i-message"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>周报自动汇编</strong><span class="table-id">#14</span></span>
+                          <span class="table-description">4 个团队周报与摘要</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status green"><span class="status-dot green"></span>已完成</span>
+                        <span class="table-sub">03:11</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress green"><span style="width: 100%"></span></span>
+                        <span class="table-sub">4 / 4 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark green"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>供应商风险评估</strong><span class="table-id">#13</span></span>
+                          <span class="table-description">合规、财务与交付复核完成</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status green"><span class="status-dot green"></span>已完成</span>
+                        <span class="table-sub">05:22</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress green"><span style="width: 100%"></span></span>
+                        <span class="table-sub">7 / 7 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark gray"><svg class="icon"><use href="#i-stop"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>资料核查与报告</strong><span class="table-id">#12</span></span>
+                          <span class="table-description">用户取消，保留 2 个节点输出</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status gray"><span class="status-dot gray"></span>已取消</span>
+                        <span class="table-sub">00:42</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress gray"><span style="width: 33%"></span></span>
+                        <span class="table-sub">2 / 6 节点</span>
+                      </span>
+                    </button>
+                    <button class="run-table-row" type="button" role="row">
+                      <span class="table-cell-main" role="cell">
+                        <span class="table-mark green"><svg class="icon"><use href="#i-globe"></use></svg></span>
+                        <span class="table-main-copy">
+                          <span class="table-title-line"><strong>竞品功能对比</strong><span class="table-id">#11</span></span>
+                          <span class="table-description">能力矩阵与差异结论</span>
+                        </span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-status green"><span class="status-dot green"></span>已完成</span>
+                        <span class="table-sub">09:18</span>
+                      </span>
+                      <span class="table-cell" role="cell">
+                        <span class="table-progress green"><span style="width: 100%"></span></span>
+                        <span class="table-sub">6 / 6 节点</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="task-list-footer"><span>按开始时间倒序 · 保留 30 天</span><span>已显示 9 / 12 个运行</span></div>
+            </section>
+          </section>
+
+          <aside class="task-expansion detail-aside" aria-label="运行详情扩展栏">
+            <header class="expansion-topbar">
+              <div class="expansion-heading"><small>运行详情</small><strong>Run #18</strong></div>
+              <div class="expansion-actions">
+                <span class="badge badge-gray mono">Workflow v7</span>
+                <span class="badge badge-amber"><span class="status-dot amber"></span>等待人工</span>
+                <button class="icon-button expansion-collapse" type="button" aria-label="收起运行详情扩展栏" data-collapse-expansion>
+                  <svg class="icon"><use href="#i-chevron-right"></use></svg>
+                </button>
+              </div>
+            </header>
+
+            <div class="detail-run-head">
+              <div class="detail-run-title">
+                <h2>安全事件调查</h2>
+                <div class="detail-meta-row"><span>Workflow v7</span><span>今天 16:08 开始</span><span>最近事件 12 分钟前</span></div>
+              </div>
+              <div class="detail-run-actions">
+                <button class="button" type="button"><svg class="icon"><use href="#i-refresh"></use></svg>重放</button>
+                <button class="button button-danger" type="button"><svg class="icon"><use href="#i-stop"></use></svg>取消运行</button>
+                <button class="icon-button icon-button-bare" type="button" aria-label="更多运行操作"><svg class="icon"><use href="#i-more"></use></svg></button>
+              </div>
+            </div>
+
+            <div class="detail-metrics detail-run-metrics">
+              <div class="detail-metric"><span>已运行</span><strong>04:12</strong></div>
+              <div class="detail-metric"><span>节点进度</span><strong>5 / 9</strong></div>
+              <div class="detail-metric"><span>人工决定</span><strong>1 项</strong></div>
+              <div class="detail-metric"><span>配置快照</span><strong>Workflow v7</strong></div>
+            </div>
+
+            <div class="detail-tabs detail-run-tabs" role="tablist" aria-label="运行详情标签">
+              <button class="is-active" type="button" role="tab" aria-selected="true">执行轨迹</button>
+              <button type="button" role="tab" aria-selected="false">运行事件 <span>18</span></button>
+              <button type="button" role="tab" aria-selected="false">输入与输出</button>
+              <button type="button" role="tab" aria-selected="false">调试</button>
+            </div>
+
+            <div class="detail-run-body">
+              <div class="detail-alert">
+                <svg class="icon"><use href="#i-clock"></use></svg>
+                <span><strong>此运行正在等待人工确认。</strong> 5 个调查节点已完成，下游 3 个节点将在确认后继续。</span>
+                <button type="button">去确认 →</button>
+              </div>
+
+              <div class="run-detail-columns">
+                <div class="run-trace-column">
+                  <div class="trace-label"><span class="status-dot green"></span><span>并行调查</span><span>5 / 5 完成 · 04:12</span></div>
+                  <div class="trace-list">
+                    <div class="trace-item">
+                      <span class="trace-icon"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                      <span class="trace-copy"><strong>告警分析</strong><small>3 条高风险登录行为 · 输出 v3</small></span>
+                      <span class="trace-meta"><code>00:38</code><span>完成</span></span>
+                    </div>
+                    <div class="trace-item">
+                      <span class="trace-icon"><svg class="icon"><use href="#i-target"></use></svg></span>
+                      <span class="trace-copy"><strong>威胁狩猎</strong><small>1 个可疑 PowerShell 下载链 · 输出 v2</small></span>
+                      <span class="trace-meta"><code>00:44</code><span>完成</span></span>
+                    </div>
+                    <div class="trace-item">
+                      <span class="trace-icon"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                      <span class="trace-copy"><strong>日志取证</strong><small>攻击时间线与横向移动路径 · 输出 v4</small></span>
+                      <span class="trace-meta"><code>00:51</code><span>完成</span></span>
+                    </div>
+                    <div class="trace-item">
+                      <span class="trace-icon"><svg class="icon"><use href="#i-server"></use></svg></span>
+                      <span class="trace-copy"><strong>资产核查</strong><small>7 台主机受影响，2 台核心库 · 输出 v2</small></span>
+                      <span class="trace-meta"><code>00:47</code><span>完成</span></span>
+                    </div>
+                    <div class="trace-item">
+                      <span class="trace-icon"><svg class="icon"><use href="#i-globe"></use></svg></span>
+                      <span class="trace-copy"><strong>情报检索</strong><small>2 个恶意 IP 命中，置信度 92% · 输出 v1</small></span>
+                      <span class="trace-meta"><code>00:42</code><span>完成</span></span>
+                    </div>
+                    <div class="trace-item is-waiting">
+                      <span class="trace-icon"><svg class="icon"><use href="#i-branch"></use></svg></span>
+                      <span class="trace-copy"><strong>人工确认 · 选择汇总输入</strong><small>已选 2 / 5 个候选结果，等待提交</small></span>
+                      <span class="trace-meta"><code>12m</code><span>等待中</span></span>
+                    </div>
+                  </div>
+                </div>
+
+                <aside class="run-event-rail" aria-label="实时事件">
+                  <div class="run-event-head"><span class="status-dot amber"></span><strong>实时事件</strong><button type="button" aria-label="展开事件面板"><svg class="icon"><use href="#i-expand"></use></svg></button></div>
+                  <div class="run-event-list">
+                    <div class="run-event-row"><code>decision.updated</code><span>已选择 2 个汇总输入</span><time>16:12:31</time></div>
+                    <div class="run-event-row"><code>run.waiting_human</code><span>等待人工确认汇总输入</span><time>16:12:08</time></div>
+                    <div class="run-event-row"><code>collect-e.succeeded</code><span>情报检索完成 · 00:42</span><time>16:12:06</time></div>
+                    <div class="run-event-row"><code>collect-d.succeeded</code><span>资产核查完成 · 00:47</span><time>16:11:59</time></div>
+                    <div class="run-event-row"><code>collect-c.succeeded</code><span>日志取证完成 · 00:51</span><time>16:11:41</time></div>
+                    <div class="run-event-row"><code>collect-b.succeeded</code><span>威胁狩猎完成 · 00:44</span><time>16:10:58</time></div>
+                    <div class="run-event-row"><code>collect-a.succeeded</code><span>告警分析完成 · 00:38</span><time>16:10:14</time></div>
+                    <div class="run-event-row"><code>run.running</code><span>5 个调查节点并行启动</span><time>16:08:19</time></div>
+                  </div>
+                  <div class="run-event-foot"><button type="button">查看完整事件 <svg class="icon"><use href="#i-arrow-right"></use></svg></button></div>
+                </aside>
+              </div>
+
+              <div class="run-detail-footer-strip">
+                <div class="run-future-strip">
+                  <svg class="icon"><use href="#i-lock"></use></svg>
+                  <span>确认后继续执行</span>
+                  <div><span>汇总</span><span>校验 A/B</span><span>最终报告</span></div>
+                </div>
+                <div class="run-output"><span>已选为下游输入</span><strong>2 个调查结果</strong><div><span>告警分析</span><span>日志取证</span></div><button type="button">查看选择</button></div>
+              </div>
+            </div>
+
+            <footer class="expansion-footer">
+              <button class="button" type="button">查看完整事件</button>
+              <button class="button button-primary" type="button">继续处理 <svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+            </footer>
+
+            <div class="expansion-collapsed-handle">
+              <button type="button" aria-label="展开运行详情扩展栏" data-expand-expansion>
+                <svg class="icon"><use href="#i-chevron-left"></use></svg>
+              </button>
+              <span>运行详情</span>
+            </div>
+          </aside>
+        </main>
+      </div>
+    </div>
+    <script src="design-kit.js"></script>
+    <script>
+      const split = document.querySelector('.workspace-split');
+      document.querySelector('[data-collapse-expansion]')?.addEventListener('click', () => split?.classList.add('is-collapsed'));
+      document.querySelector('[data-expand-expansion]')?.addEventListener('click', () => split?.classList.remove('is-collapsed'));
+    </script>
+  </body>
+</html>

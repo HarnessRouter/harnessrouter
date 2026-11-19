@@ -26,9 +26,9 @@ test('app mode preserves all four navigation entries, original styling and local
   await expect(nav.getByRole('button', { name: '对话', exact: true })).toHaveCSS('background-color', 'rgb(27, 43, 70)');
   await page.getByRole('textbox', { name: '消息输入' }).fill('切换后保留的草稿');
   await nav.getByRole('button', { name: '任务', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '任务', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: '任务工作区' }).getByRole('button', { name: /新建任务/ })).toBeVisible();
-  await expect(page.getByText('把多个 Agent 组织成可执行、可追溯的工作流程。')).toBeVisible();
+  await expect(page.getByRole('region', { name: '我的任务工作台' })).toBeVisible();
+  await expect(page.getByRole('table', { name: '任务列表' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '任务列表区域' }).getByRole('button', { name: /新建任务/ })).toBeVisible();
   await nav.getByRole('button', { name: '智能体', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent 列表', exact: true })).toBeVisible();
   await nav.getByRole('button', { name: '对话', exact: true }).click();
@@ -118,7 +118,7 @@ test('inspector preserves the reference layout, fills the height and collapses o
   await expect(inspector.getByRole('tab', { name: '会话', exact: true })).toHaveCSS('border-radius', '10px');
   const panelBox = (await inspector.boundingBox())!;
   expect(panelBox.y).toBe(0);
-  expect(panelBox.width).toBe(320);
+  expect(panelBox.width).toBe(304);
   expect(panelBox.height).toBe(900);
   await expect(inspector).toContainText('由应用后端管理');
   await expect(inspector).toContainText('未使用模板');
