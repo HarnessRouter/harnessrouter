@@ -599,7 +599,13 @@ class Graphiti(mp.Provider):
         fact is answered as the stated record it came from, at the fact's place, each record once. A hit on one side
         of a disagreement then brings the other (§6.3), which a fact Graphiti drew from it, carrying no `contradicts`,
         did not (UHP conformance ME-12). A fact that came from an episode, even in part, stays as it is, and so does
-        one whose stated record can't be read or is not one this recall keeps."""
+        one whose stated record can't be read or is not one this recall keeps.
+
+        Only a stated record's copy is named `hr_read:<node>` (_read_copy; observe names none), so a fact's
+        `derived_from` that is a node is a stated record. Who wrote its latest version doesn't change that: a record on
+        one side of a disagreement is revised by the server on its writer's behalf when the other side is written
+        (written_by kind provider, on_behalf_of), and judging by the writer left a fact drawn from it answered as
+        itself, without the other side (ME-12 failed whenever that fact ranked first: 2 recalls in 4 on a live instance)."""
         found = {x["id"]: x for x in rows}
         out: list[dict] = []
         placed: set[str] = set()
@@ -607,7 +613,7 @@ class Graphiti(mp.Provider):
             src = [str(r.get("record_id") or "") for r in x.get("references") or [] if r.get("rel") == "derived_from"]
             if x["id"].startswith(EDGE) and src and all(s.startswith(NODE) for s in src):
                 stated = [found.get(s) or await self.get(mid, s) for s in src]
-                if all(s and (s.get("written_by") or {}).get("kind") != "provider" and keep(s) for s in stated):
+                if all(s and keep(s) for s in stated):
                     for s in stated:
                         if s["id"] not in placed:
                             placed.add(s["id"])
