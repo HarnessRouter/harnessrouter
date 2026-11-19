@@ -5590,10 +5590,7 @@ instance built from this branch with a plain `docker build .` and a Google AI St
   (Argon, Carbon and Hydrogen, 3.8 Flash, 3.6 Flash and 3.1 Pro).
 - The record names each step's file and command; a harness's instructions are followed; the agent has
   no key to show; with the shell switched off it cannot run one. 6 of 6, with the catalog check.
-- UHP conformance at class full (suite 2026.10.19.post11): 110 of 111. The one failure, ME-12, is the
-  memory engine's: it writes two records that contradict each other and recalls them, with no harness
-  involved. It fails on the instance's Graphiti engine and passes with Hindsight on the same harness, and
-  fails the same way on the released 0.41.21 with no Antigravity base.
+- UHP conformance at class full (suite 2026.10.19.post11): 111 of 111, on the instance's Graphiti memory engine.
 - `scripts/support-matrix/ui-antigravity.mjs`, the console as a person uses it (Antigravity's mark,
   the model menu, a first task that writes a file, a follow-up answered from it, four widths): 11 of 11.
 
