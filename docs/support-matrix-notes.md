@@ -110,10 +110,38 @@ config writer kept only servers that had a `url` and wrote every one of them as 
 The `rows` column is worth one line of its own: this is the argument shape that arrived as `[{}, {}]`
 on two other bases, and here both rows arrived with both fields.
 
-**Not yet run**, by name: the family tour, the environments column, the browser column, and the
-support matrix on a SECOND provider. Steps 4 and 5 of the order are open. The 58-pair column above
-does not need re-running for any fix in this batch: no scenario in it declares an MCP server or
-switches a tool off, so none of them can touch a recorded row.
+**Step 4, the family tour: 13 of 13 families in one conversation.** One session, one deliverable
+(`tour.pptx`), the composer's model moved family after family, each turn asking for one more change
+to the same deck and for a footer naming that family. Every turn completed, produced the deck again
+and was served by the family it asked for: `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-5`,
+`google/gemini-3.5-flash`, `spacexai/grok-4.5`, `meta/muse-spark-1.1`, `deepseek/deepseek-v4-flash`,
+`moonshotai/kimi-k3`, `alibaba/qwen3.8-flash`, `zai/glm-5.3-flash`, `mistral/mistral-medium-3.5`,
+`stepfun/step-3.7-flash`, `tencent/hy4-preview`, `nvidia/nemotron-3-super-120b-a12b`. 15 s to 64 s a
+turn, every turn with at least one tool call, and the produced list stayed `tour.pptx` alone
+(`JIUWENSWARM.md` on the first turn) — the machinery never appeared here either. **Thirteen and not
+fourteen**: this connection serves no llama id for this base, so that family has no row to run
+rather than a failing one, and `nemotron-3-super` stands in for the nemotron family the way the
+column has it. `hunyuan-4-preview` passed first try here, writing the footer string it was asked
+for, which is a fact beside the column's one retest rather than an explanation of it.
+
+**The environments column: 1 of 1, 3 of 3 tasks, nothing installed.** The environment carries
+`tabulate` (pip), `qrcode` (npm) and `jq` (apt) and mounts at `/env/matrix-packages`. Each task
+answered from the environment's own copy — the module's path under the mount, `require.resolve`'s
+path, jq's version — with `installs=0` in the trace on all three and 15 s each.
+
+**The browser column is NOT RUN here, and the reason is the rig, not the base.** That column needs
+`BROWSER_USE_API_KEY` in the instance's environment; this machine has no such key, and the operator's
+own browser (`HR_BROWSER_CDP_URL`) takes the vendor's place with "no vendor session, no live view, no
+charge", while the column's own pass rule requires the stop row the vendor's meter writes
+(`unit: browser.usd`). A run on that path would therefore record a refusal about this rig. What the
+column would have asked of THIS base — whether its MCP client will talk to a server on a loopback
+address, the class that left nanobot with no browser at all — is already answered twice above: the
+custom-harness turn's own config carried the gateway's broker at `http://127.0.0.1:34913/…` and the
+server's tool was called through it, and the captured fixture in the runner's tests is a turn that
+answered from a loopback server. What is unmeasured is the browser plane itself on this base.
+
+The 58-pair column above does not need re-running for any fix in this batch: no scenario in it
+declares an MCP server or switches a tool off, so none of them can touch a recorded row.
 
 **What it is.** A general agent platform whose code work mode is a coding agent over a workspace;
 its other surfaces (web, TUI, desktop, chat channels) are not driven here. The turn runs through its

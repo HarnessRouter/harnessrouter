@@ -283,6 +283,12 @@ and need no edit — they were hand-written lists once, and each silently missed
     insertion renumbers every base after it on a volume that already holds them.
     `gateway/tests/test_install_uid.py` is what catches the omission, which is how this point was
     found: it was missing from this list while the list claimed to be complete.
+19. `docs/self-hosting-guide.md`'s "Connection `provider`" table: the row for every provider type
+    that can drive the base, in the operator's own vocabulary. Nothing fails when a base is missing
+    from it — which is why it was missing for a whole batch: an operator reading that table to
+    decide which key to buy is told the base cannot be driven at all. The wiring in point 10 is the
+    source of truth, so the row list is derived from it, and `custom` carries the format the base
+    speaks (point 11).
 
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.
