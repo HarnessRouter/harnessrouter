@@ -23,7 +23,8 @@ The API key is read from the environment, never the command line, where other us
   python3 scripts/support-matrix/antigravity-e2e.py --url http://localhost:3000/api/harness --base agy
 
 It deletes every harness and session it made, prints no credential, and exits 0 only when every check passed.
-`--json <file>` also writes each check's row there.
+`--json <file>` also writes each check's row there. `--only matrix,web,specials,conformance` runs those parts alone
+(the catalog check always runs; the steps checks are part of the matrix).
 """
 import argparse
 import json
@@ -43,11 +44,13 @@ ap.add_argument("--base", required=True, choices=["agy", "antigravity"])
 ap.add_argument("--skip-conformance", action="store_true")
 ap.add_argument("--suite", default="uhp-conformance", help="the conformance suite's executable")
 ap.add_argument("--json", help="write every check's row to this file")
+ap.add_argument("--only", default="matrix,web,specials,conformance", help="the parts to run, comma separated")
 A = ap.parse_args()
 KEY = os.environ.get("HR_API_KEY", "")
 if not KEY:
     sys.exit("set HR_API_KEY to an API key made in the console (API Keys)")
 ROOT = A.url.rstrip("/")
+ONLY = {x.strip() for x in A.only.split(",") if x.strip()}
 PREFIX = f"E2E {A.base} {uuid.uuid4().hex[:6]}"
 GOOGLE_KEY_SHAPE = "AIza"           # how a Google AI Studio key starts
 
@@ -76,7 +79,13 @@ def text_of(r) -> str:
 
 def err_of(r) -> str:
     e = r.get("error") if isinstance(r, dict) else None
-    return str((e.get("code") or e.get("message")) if isinstance(e, dict) else (e or ""))[:80]
+    return str((e.get("message") or e.get("code")) if isinstance(e, dict) else (e or ""))[:80]
+
+
+def last_line(t: str) -> str:
+    """The answer itself: a reply may open with a note of its own paragraph (a tool left out, and why)."""
+    lines = [x for x in t.splitlines() if x.strip()]
+    return lines[-1].strip() if lines else ""
 
 
 ROWS: list[dict] = []
@@ -149,7 +158,7 @@ try:
     # matrix -------------------------------------------------------------------------------------------------
     hid = harness("matrix", default_model=default)
     write_sid = shell_sid = None
-    for model, levels in models if hid else []:
+    for model, levels in models if hid and "matrix" in ONLY else []:
         lv = levels[len(levels) // 2] if levels else None
         word = "ORANGE" + uuid.uuid4().hex[:6].upper()
         c, r, s, t, sid = turn(hid, model, f"Create a file named hello.txt in the current directory containing exactly the "
@@ -174,46 +183,50 @@ try:
                 c4, r4, s4, t4, _ = turn(hid, model, "Reply with exactly the word PONG.", other)
                 check("level answers", c4 == 200 and "PONG" in t4.upper(), model, other, s4, t4[:30] or err_of(r4))
 
-    # steps: the record names what each step did ---------------------------------------------------------------
+    # steps: the record names what each step did (part of the matrix) -------------------------------------------
     st = steps(write_sid) if write_sid else None
-    named = [n for n, i, _ in st or [] if str(i.get("file_path") or "").endswith("hello.txt")]
-    check("steps: the file write names its file", bool(named), default, note=f"steps {[n for n, _, _ in st or []]}"[:90])
-    st = steps(shell_sid) if shell_sid else None
-    ran = [n for n, i, _ in st or [] if str(i.get("command") or i.get("code") or "").strip()]
-    check("steps: the run names its command or code", bool(ran), default, note=f"steps {[n for n, _, _ in st or []]}"[:90])
+    if "matrix" in ONLY:
+        named = [n for n, i, _ in st or [] if str(i.get("file_path") or "").endswith("hello.txt")]
+        check("steps: the file write names its file", bool(named), default, note=f"steps {[n for n, _, _ in st or []]}"[:90])
+        st = steps(shell_sid) if shell_sid else None
+        ran = [n for n, i, _ in st or [] if str(i.get("command") or i.get("code") or "").strip()]
+        check("steps: the run names its command or code", bool(ran), default, note=f"steps {[n for n, _, _ in st or []]}"[:90])
 
     # web (the managed agent searches with Google's own tool) -----------------------------------------------------
-    if A.base == "antigravity" and hid:
+    if A.base == "antigravity" and hid and "web" in ONLY:
         c, r, s, t, sid = turn(hid, default, "Use a web search to find the official website of the Python programming "
                                              "language, and reply with its domain name only.")
         st = steps(sid) or [] if sid else []
         found = [n for n, _, res in st if n in ("WebSearch", "WebFetch") and res.strip() not in ("", "[]", "null")]
-        domain = t.strip().strip("`*. ").lower().split("//")[-1].split("/")[0].removeprefix("www.")   # the answer, as a domain
+        domain = last_line(t).strip("`*. ").lower().split("//")[-1].split("/")[0].removeprefix("www.")   # as a domain
         check("web: a search result reaches the record", c == 200 and domain == "python.org" and found, default,
-              secs=s, note=f"steps {[n for n, _, _ in st]} | {t[:30]}")
+              secs=s, note=f"steps {found or [n for n, _, _ in st]} | {last_line(t)[:30]}")
 
     # instructions, no key, tools off ----------------------------------------------------------------------------
-    hi = harness("instructions", default_model=default, system_prompt="Always end every reply with the word KIWI.")
+    hi = harness("instructions", default_model=default, system_prompt="Always end every reply with the word KIWI.") \
+        if "specials" in ONLY else None
     if hi:
         c, r, s, t, _ = turn(hi, default, "Say hello in three words.")
         check("instructions are followed", c == 200 and t.rstrip(" .!\n").upper().endswith("KIWI"), default, secs=s,
               note=t[-40:] or err_of(r))
-    if hid:
+    if hid and "specials" in ONLY:
         c, r, s, t, _ = turn(hid, default, "List the names (not values) of every environment variable in your shell whose "
                                            "name contains KEY or TOKEN, and print the first 6 characters of each value.")
         check("no key in the session", c == 200 and GOOGLE_KEY_SHAPE not in t, default, secs=s,
               note="no Google key shape in the answer" if GOOGLE_KEY_SHAPE not in t else "A KEY SHAPE WAS SHOWN")
     hard = [x.get("name") for x in doc.get("tools") or [] if x.get("enforcement") == "hard"]
-    if hard:
+    if hard and "specials" in ONLY:
         ho = harness("tools off", default_model=default, disabled_tools=hard)
         if ho:
             c, r, s, t, _ = turn(ho, default, "Run a shell command that prints the result of 6*7, and reply with only the "
                                               "number it printed. If you cannot run commands, reply NOSHELL.")
-            check(f"tools off ({', '.join(hard)})", c in (400, 422) or (c == 200 and "42" not in t), default, secs=s,
-                  note=f"{c} {t[:40] or err_of(r)}")
+            # refused before anything is sent (a 4xx, or the turn failed naming the switches), or it ran and could not
+            refused = c in (400, 422) or (c == 200 and r.get("status") == "failed" and "switched off" in err_of(r))
+            check(f"tools off ({', '.join(hard)})", refused or (c == 200 and r.get("status") == "completed" and "42" not in t),
+                  default, secs=s, note=f"{c} {r.get('status')}: {err_of(r) if refused else last_line(t)[:40]}")
 
     # conformance -------------------------------------------------------------------------------------------------
-    if not A.skip_conformance:
+    if not A.skip_conformance and "conformance" in ONLY:
         suite = shutil.which(A.suite) or (A.suite if os.path.exists(A.suite) else "")
         hc = harness("conformance", default_model=default)
         if not suite:
@@ -229,7 +242,7 @@ try:
             except (OSError, ValueError):
                 d = {}
             sm = d.get("summary") or {}
-            failed = [x.get("id") for x in d.get("checks") or [] if x.get("status") in ("fail", "error")]
+            failed = [x.get("id") for x in d.get("checks") or [] if x.get("outcome") in ("fail", "error")]
             check("conformance (class full)", d.get("conformant") is True and d.get("highest_class_passed") == "full",
                   default, secs=round(time.time() - t),
                   note=f"suite {d.get('suite_version')}: {sm.get('pass')}/{sm.get('total')} pass, {sm.get('fail')} fail, "
