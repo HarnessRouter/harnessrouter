@@ -281,7 +281,12 @@ export async function switchOrg(orgId: string): Promise<Session> {
   });
   if (!res.ok) throw new Error(await readError(res));
   const body = await res.json();
-  const next: Session = { ...current, token: body.token, orgId: body.org_id };
+  // The minted token belongs to the session the request was made with. If that session is
+  // gone (signed out) or its token was replaced meanwhile (another switch, a slide, another
+  // sign-in), storing the answer would bring back a session the user has left: drop it.
+  if (getToken() !== current.token) throw new Error('Session changed. Please try again.');
+  // Merge onto the session as it is now, so a member/org refresh that landed meanwhile stays.
+  const next: Session = { ...(getSession() ?? current), token: body.token, orgId: body.org_id };
   setSession(next);
   return next;
 }
@@ -359,6 +364,7 @@ export async function reconcileSession(): Promise<Session | null> {
     // Active org was deleted/revoked, fall back to the next available org.
     try {
       const switched = await switchOrg(orgs[0].id);
+      if (getToken() !== switched.token) return getSession();
       const next: Session = { ...switched, member: fresh.member, orgs };
       setSession(next);
       return next;
@@ -367,11 +373,15 @@ export async function reconcileSession(): Promise<Session | null> {
     }
   }
 
+  // The switch above was awaited: the session may have changed again (signed out, switched
+  // elsewhere), and the org-less fallback must not write the earlier copy back over it.
+  const now = getSession();
+  if (!now || now.token !== current.token) return now;
   const next: Session = {
-    ...current,
+    ...now,
     member: fresh.member,
     orgs,
-    orgId: stillValid ? current.orgId : null,
+    orgId: stillValid ? now.orgId : null,
   };
   setSession(next);
   return next;
@@ -393,11 +403,17 @@ export async function refreshToken(): Promise<boolean> {
       method: 'POST',
       headers: { authorization: `Bearer ${cur.token}` },
     });
+    // The answer is about the token the request carried. If the session moved on meanwhile
+    // (an organization switch, a sign-out, another sign-in), a 401 for the old token must not
+    // sign the newer session out, and a fresh copy of the old token must not replace it: the
+    // stored orgId would then point at one organization while the token speaks for another.
+    if (getToken() !== cur.token) return false;
     if (res.status === 401) { handleAuthExpired(); return false; }
     if (!res.ok) return false;
     const body = await res.json();
     const now = getSession();
-    if (body?.token && now) setSession({ ...now, token: body.token });
+    if (!now || now.token !== cur.token) return false;
+    if (body?.token) setSession({ ...now, token: body.token });
     return true;
   } catch {
     return false; // offline, keep the session, retry later
