@@ -8515,3 +8515,7 @@ Measured 2026-09-27 on hr-test (self-hosted, 0.25.7-rc.17). One task in plain wo
 
 15 of 15 bases drive the browser.
 
+The Antigravity Agent (`antigravity`, Google's managed agent on a Google AI Studio connection) is
+opt-in. Its request, stream, file and key handling are pinned against a stub of Google's API
+(runner/tests/test_antigravity_backend.py), and it is measured live with its own end-to-end script: six
+models, UHP conformance and the console. Its provider columns have not been run. See the notes.
