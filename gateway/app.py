@@ -8938,7 +8938,10 @@ _OPENROUTER_RESLUG = {
 # confirmed it, and answer since. A user whose own OpenRouter account has not confirmed sees the
 # same 403 on send. (llama-4-scout is not in the catalog at all: OpenRouter has no endpoint for it
 # and on Vercel seven of eight harnesses failed its artifact or recall scenario twice.)
-_OPENROUTER_NO_CHANNEL: set[str] = set()
+# 2026-11-20: OpenRouter's /v1/models no longer lists x-ai/grok-build-0.1 (its Grok ids are
+# grok-4.7, 4.6, 4.5, 4.3, 4.20 and 4.20-multi-agent); xAI itself and Vercel (spacexai/) still
+# serve it, so it stays in the catalog and only comes off OpenRouter's table.
+_OPENROUTER_NO_CHANNEL = {"grok-build-0.1"}
 _VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                                 if c not in _OPENROUTER_NO_CHANNEL}
 # System One models. TypeSafe's Jev is a decision model (typed answers with probabilities, no text)
