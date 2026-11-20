@@ -617,6 +617,28 @@ def _zeroclaw_session_present(cwd: str, cmd: list[str], session_id: str) -> bool
         return False
 
 
+def _jiuwenswarm_home(cwd: str) -> pathlib.Path:
+    """The CLI's data directory for this session (JIUWENSWARM_DATA_DIR).
+
+    Its default is `~/.jiuwenswarm`, one directory for every session on the box; named here so the
+    config, the session store and the per-run diagnostic logs are the session's own."""
+    return pathlib.Path(cwd) / ".harness" / "jiuwenswarm"
+
+
+def _jiuwenswarm_session_dir(cwd: str, session_id: str) -> pathlib.Path:
+    return _jiuwenswarm_home(cwd) / "agent" / "sessions" / session_id
+
+
+def _jiuwenswarm_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Is the conversation the caller named still in the store?
+
+    A direct path lookup, not a search through the store's bytes: the CLI keys a session by its id
+    and writes `metadata.json` beside its history, so the question has an exact answer (the goose
+    lesson — `_goose_has_session` once matched the session NAME inside an unrelated path and failed
+    a turn that could have continued)."""
+    return bool(session_id) and (_jiuwenswarm_session_dir(cwd, session_id) / "metadata.json").is_file()
+
+
 
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
@@ -656,6 +678,9 @@ _SESSION_PRESENT = {
     # fast-agent: the driver asks the agent to load the session, and the session's own file in the
     # store is what says it is there (the same lookup _build_fast_agent makes for resume_known).
     "fast-agent": _fast_agent_session_present,
+    # jiuwenswarm keys a session by its id under <data>/agent/sessions/<id>/, so the probe is a
+    # path lookup rather than a search (its own `SESSION_NOT_FOUND` is the second line of defence).
+    "jiuwenswarm": _jiuwenswarm_session_present,
     # zeroclaw: the driver asks for `session/resume` on every turn that has an id and starts a new
     # session when the store says it is not there, so the store is asked here too.
     "zeroclaw": _zeroclaw_session_present,
@@ -687,11 +712,13 @@ def _git_exclude(ws: str, patterns: list[str], why: str) -> None:
 
     `/produced` is `git status --porcelain -uall` over the session directory, so anything a CLI
     writes into the directory the user collects is handed back as the task's deliverable. Every
-    backend but two keeps its machinery under `.harness/`, which _PRODUCED_EXCLUDE_PREFIX already
-    drops. nanobot cannot (its SkillsLoader reads `<workspace>/skills` and nothing else) and
+    backend but three keeps its machinery under `.harness/`, which _PRODUCED_EXCLUDE_PREFIX already
+    drops. nanobot cannot (its SkillsLoader reads `<workspace>/skills` and nothing else),
     opensquilla cannot (`ensure_agent_workspace` seeds SOUL.md, IDENTITY.md, USER.md and MEMORY.md
     into its workspace unconditionally — `seed_templates` has no caller that passes False and no
-    setting reads it).
+    setting reads it), and jiuwenswarm cannot (its machine entrypoint chdirs into `workspace.cwd`,
+    so its memory store and log handlers resolve their relative paths inside the directory the user
+    collects — measured: a turn asked to write nothing left fourteen of them).
 
     `.git/info/exclude` and NOT a .gitignore: it is per-repository, it is not a file in the
     agent's workspace (so the agent cannot read, edit or be confused by it, and it is not itself a
@@ -1047,6 +1074,15 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # stores beside them MUST travel, so the exclusion is the file.
                       "./.harness/fast-agent/fastagent.config.yaml",
                       "./.harness/docker-agent/agent.yaml",
+                      # jiuwenswarm's config.yaml is rewritten from the package's own template at
+                      # the start of every turn and carries each MCP server's headers as written
+                      # (the standing of fast-agent's file above). The provider key is NOT in it —
+                      # the template's placeholders read the environment — and the SESSION STORE
+                      # beside it must travel, so the exclusion is the file.
+                      "./.harness/jiuwenswarm/config/config.yaml",
+                      # ...and the per-turn machine request, which carries the person's prompt: it
+                      # is read once, before the turn starts, and nothing reads it afterwards.
+                      "./.harness/jiuwenswarm/run.json",
                       # opensquilla stores provider keys in its profile .env and its onboarding
                       # writes api_key straight into config.toml. The driver passes the relay
                       # placeholder in the environment instead, but `opensquilla onboard` or
@@ -1207,7 +1243,10 @@ _PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mc
 _STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/",
                # Roder's store: its threads, SQLite stores (analytics, memory, the code index) and
                # discovery catalog change on every turn, as goose's do
-               ".harness/roder/")
+               ".harness/roder/",
+               # jiuwenswarm's data dir: its session store, its memory and its per-run diagnostic
+               # logs are rewritten every turn, as goose's and roder's are
+               ".harness/jiuwenswarm/")
 
 
 def _git_ensure(ws: str) -> None:
@@ -1791,6 +1830,13 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # (there is no home-directory convention to guess at).
         rootrels = [".harness/fast-agent/skills"]
         entryroot = ".harness/fast-agent/skills"
+    elif backend == "jiuwenswarm":
+        # <data>/agent/workspace/skills/<name>/SKILL.md — the ONE library its loader reads
+        # (`get_agent_skills_dir`), with the data dir under .harness/ so the bundle is not handed
+        # back as a produced file. A skill there is not loaded wholesale: `run.skills` names the
+        # ones this turn gets, which _jiuwenswarm_skills reads back from this directory.
+        rootrels = [".harness/jiuwenswarm/agent/workspace/skills"]
+        entryroot = ".harness/jiuwenswarm/agent/workspace/skills"
     elif backend == "dcode":
         # $HOME/.deepagents/agent/skills/<name>/SKILL.md — the user-level skills directory of its
         # default agent profile (get_user_skills_dir), with $HOME redirected to .harness/home. Not
@@ -2353,6 +2399,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    # file the runner writes is passed as the agent's instruction
                                    # with -i, which is aider's arrangement, so the name is ours.
                                    "fast-agent", "roder")
+        # jiuwenswarm reads its own name from the project root: PROJECT_MEMORY_FILES is
+        # ("JIUWENSWARM.md", ".jiuwen/JIUWENSWARM.md"), and CLAUDE.md appears only in a rail's
+        # DESCRIPTION, not in that tuple. Measured from a turn's own request bytes: a token written
+        # in this file was in the system prompt.
+        else "JIUWENSWARM.md" if backend == "jiuwenswarm"
         else "CLAUDE.md")
 
 
@@ -15866,6 +15917,503 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
 
 
 
+# ── jiuwenswarm (openJiuwen-ai/jiuwenswarm, PyPI `workswarm`) ──────────────────────────────────
+# A general agent platform whose CODE work mode is a coding agent over a workspace (its other
+# surfaces — web, TUI, desktop, chat channels — are not driven here). The turn runs through its own
+# machine protocol: `jiuwenswarm-process --run-json <file>`, one JSON request in, versioned JSONL
+# out, exactly one terminal `result`. Its own docs call that path non-interactive and say it starts
+# no Gateway, AgentServer or resident service, and `protocol.capabilities` reports the features this
+# builder relies on (session_resume, run_model, run_skills, run_mcp, empty_tools, cancel).
+#
+# MEASURED on workswarm 0.2.8 (2026-11-18, macOS arm64 venv) against the Vercel AI Gateway through a
+# recording proxy. Each bullet is a measurement, not a reading of the docs:
+#
+#   * THE MODEL IS OURS, THROUGH THE ENVIRONMENT ALONE. With no `models:` block in config.yaml the
+#     model entry is built from API_BASE / API_KEY / MODEL_NAME / MODEL_PROVIDER (its
+#     `get_default_models` env fallback), so the relay's token is never written to disk — and the
+#     environment is exactly where _relay_served_model and _relay_usage look for the route. Two
+#     turns in one session on two different models were each served the model they asked for.
+#   * CONTINUITY is `run.session_id`, and the store is <data>/agent/sessions/<id>/ with a
+#     metadata.json. A second PROCESS continued the conversation and answered a question only the
+#     conversation carried. An unknown id fails `SESSION_NOT_FOUND` before any model call, which is
+#     this backend's resume probe.
+#   * A FAILURE READS AS A FAILURE. `status: "failed"`, exit code 1 or 2, and
+#     `error: {code, message, retryable, details}` carrying the provider's own sentence (a 401 came
+#     back as code RUNTIME_ERROR with the gateway's text). Nothing is narrated as assistant prose,
+#     so there is no error prefix to strip here — unlike claude's `API Error:` and goose's
+#     `Ran into this error:`. An unknown request field is refused `INVALID_INPUT` with a JSON
+#     pointer, so this builder emits exactly the schema's fields and nothing else.
+#   * TOOL WITHHOLDING IS HARD, and `agent.tools` is an EXACT allowlist: `[]` produced zero tool
+#     calls, no file and an answer saying it had no tools, while the same turn with the tool present
+#     wrote the file (the sensitivity proof). A nine-name list was declared on the wire as exactly
+#     those nine. A custom agent definition does NOT declare the `subagent_*` family, which is why
+#     those six are not offered.
+#   * ITS MCP TOOLS ARRIVE AS `mcp_<server>_<tool>` and are reached through `tool_search` +
+#     `tool_call` when progressive tool exposure is on (the shipped config's default), so those two
+#     are part of the MCP path on this base and not merely conveniences.
+#   * IT WRITES ITS OWN MACHINERY INTO THE WORKSPACE. `channels/process_cli/machine_entry.py`
+#     chdirs into `workspace.cwd`, and the memory store and log handlers then resolve relative
+#     paths there: a turn asked to write NOTHING left daily_memory/, logs/ (nine files) and
+#     memory.db{,-shm,-wal} in the directory the user collects. Pointing the PROCESS cwd elsewhere
+#     does not help — measured, the private cwd stayed empty and the machinery followed
+#     workspace.cwd — so _git_exclude hides them from the produced list, which is nanobot's and
+#     opensquilla's arrangement for the same problem.
+#   * A HAND-WRITTEN PARTIAL config.yaml SILENTLY CHANGES THE AGENT. With a minimal file (one
+#     `mcp:` block) the wire carried 29 tools with no `skill_tool` at all, so a declared skill could
+#     not be reached; with the package's own scaffolded config it carried the stable 21 and the
+#     skill ran. So the config this builder writes STARTS FROM THE PACKAGE'S OWN TEMPLATE and
+#     patches it, rather than being composed from scratch.
+#   * `jiuwenswarm-init` IGNORES JIUWENSWARM_DATA_DIR and scaffolds into the real home directory
+#     (measured: 368 files under ~/.jiuwenswarm while the env var pointed elsewhere), so it is not
+#     used here; the template is copied by this builder instead.
+#   * Its request shape needs NO relay repair: roles system,user,user, no empty content, and only
+#     messages/model/stream/stream_options/tool_choice/tools at the top level.
+#   * `result.usage` is ACCUMULATED across the turn's model calls (97521 = 31184 + 32457 + 33880 on
+#     a three-call turn), so unlike jcode's `done.usage` it can be read as the turn's own total.
+JIUWENSWARM_PROVIDERS = {"openai", "azure", "openai-api", "tokenrouter"}
+JIUWENSWARM_BIN = os.environ.get("HR_JIUWENSWARM_BIN",
+                                 "/data/agent-tools/jiuwenswarm-venv/bin/jiuwenswarm-process")
+JIUWENSWARM_DEFAULT_MODEL = os.environ.get("JIUWENSWARM_DEFAULT_MODEL", "gpt-5.4")
+# Where the CLI's own data directory goes: under .harness/, so its config, its sessions and its
+# diagnostic logs travel in the checkpoint and stay out of the produced-files list.
+_JW_STATE = ".harness/jiuwenswarm"
+# The agent definition's name. It is ours (`agent.name`, 3-50 chars of [A-Za-z0-9_-]).
+_JW_AGENT = "hr-harness"
+# `agent.instructions` is REQUIRED by its schema, and the harness's own instructions already reach
+# the model through JIUWENSWARM.md, which its project-memory rail reads from the workspace root —
+# BOTH were present in one measured request (31,526 characters of system prompt), so putting the
+# contract in both places would send it twice. This line is what goes in the required field.
+_JW_INSTRUCTIONS = ("You are a coding agent working in this workspace. Your instructions are the "
+                    "project's JIUWENSWARM.md, which is already in your context; follow it.")
+# What a person can switch off here, in the CLI's OWN tool names, read off a turn's own request
+# body (never from the docs, the host's permission registry — which lists 52 names, a different set
+# — or the model's narration of its own tools).
+# `ask_user` is deliberately NOT among them: the tool exists, but nobody is attached to a one-shot
+# machine run to answer it, so it is never allowed rather than offered and then failing.
+#
+# _JW_TOOL_DOORS: THE POLICY HAS TWO DOORS, AND A PER-RUN `deny` IS NOT ONE OF THEM.
+# Four single-variable A/Bs on 0.2.8 (2026-11-18), each run with the custom-harness dimension's own
+# fixture — a skill whose script must run, one tool withheld, one MCP server declared:
+#   * `permissions.tools: {<tool>: "deny"}` refuses the named tool AND COSTS THE SHELL. Any run
+#     permissions at all put the permission rail in the path, and `--run-json` has no duplex control
+#     channel, so the CLI sends `supports_user_interaction: false` and the first call the rail would
+#     ASK about comes back `用户拒绝` ("the user refused"). The skill's `python3 …/stamp.py` was
+#     refused on every attempt and stamp.txt was never written; naming the other thirteen tools
+#     "allow" in the same block changed nothing (the rail's `resolve_interrupt` short-cuts `deny`
+#     only). Switching off ONE tool in the console would have taken bash with it, so this door,
+#     which an earlier measurement of the refusal alone had made look right, is shut.
+#   * `agent.tools` IS an exact hard allowlist (a nine-name list was declared on the wire as exactly
+#     those nine, `[]` produced no tool call at all) and it works alongside `max_turns` — but not
+#     alongside an MCP server: `runtime/tool_allowlist.py`'s `limited_list` filters
+#     `[card for card in original_list() if card.name in allowed]` while `ability_manager.list()`
+#     also holds `McpServerConfig`, whose field is `server_name`, so the turn dies with
+#     `'McpServerConfig' object has no attribute 'name'` before the first model call.
+#   * `modes.code.tools` in the config withholds AT REGISTRATION and does work with a server
+#     declared: with `web_fetch_webpage` dropped, the runtime's own resource registry no longer held
+#     `fetch_webpage` and the turn ran the skill, its script and the MCP call. It reaches exactly
+#     ONE of the ids offered here — removing `user_todos` left todo_create/get/list/modify
+#     registered and removing `skill_toolkit` left `skill_tool` registered (both read off the
+#     registry, not inferred from the name), because those are the deep agent's own tools and not
+#     the optional toolkit's.
+# So: no server declared -> `agent.tools`; a server declared -> the config door where it reaches,
+# and otherwise the turn is REFUSED with its reason, rather than reporting a tool as off while it is
+# callable (UHP 4.3) or quietly dropping the person's server.
+#
+# _JW_MAX_TURNS_AND_MCP: the per-run `max_turns` is mutually exclusive with an MCP server too, and
+# this one is not about tools at all. `max_turns` (or a host tool) is what makes the CLI call
+# `configure_process_cli_run`, whose first line is
+# `existing_names = {card.name for card in manager.list()}` (interface_deep.py:11790) — the same
+# `.name` over the same list, so a turn that declared a server and a turn budget died the same way.
+# That was EVERY MCP turn this runner sent, because the budget is always set; the five-scenario
+# column never saw it because not one of those five declares a server. With a server the budget is
+# left off and the turn is bounded by `timeout_seconds` alone.
+ALL_JIUWENSWARM_TOOLS = ("bash", "read_file", "write_file", "edit_file", "glob", "grep",
+                         "fetch_webpage", "skill_tool", "tool_search", "tool_call",
+                         "todo_create", "todo_list", "todo_get", "todo_modify")
+# Its machinery, written into workspace.cwd by the runtime itself (see the header). Hidden from the
+# produced-files list through git's own door, never deleted: the next turn's memory and logs are in
+# there and the session keeps them.
+_JW_MACHINERY = ("daily_memory/", "logs/", "memory.db", "memory.db-shm", "memory.db-wal")
+# The config door (_JW_TOOL_DOORS): which of the ids above an OPTIONAL toolkit of `modes.code.tools`
+# is the sole source of. Read off the runtime's own tool registry with each toolkit dropped in turn,
+# which is why it has one entry and not three: `user_todos` and `skill_toolkit` name themselves
+# after tools the deep agent registers anyway, and dropping them withheld nothing.
+_JW_TOOLKITS = {"web_fetch_webpage": frozenset({"fetch_webpage"})}
+
+
+def _jiuwenswarm_template() -> pathlib.Path | None:
+    """The package's own `resources/config.yaml`, which is what a scaffolded workspace gets.
+
+    Found beside the pinned binary rather than by importing the package (the builder must not pay
+    for a 1.6 GB import to write a file), and overridable for a layout this glob does not predict."""
+    named = os.environ.get("HR_JIUWENSWARM_CONFIG_TEMPLATE", "")
+    if named:
+        p = pathlib.Path(named)
+        return p if p.is_file() else None
+    venv = pathlib.Path(JIUWENSWARM_BIN).parent.parent
+    for hit in sorted(venv.glob("lib/python3.*/site-packages/jiuwenswarm/resources/config.yaml")):
+        return hit
+    return None
+
+
+def _jiuwenswarm_config(cwd: str, mcp_servers: list[dict] | None,
+                        withheld_toolkits: list[str] | None = None,
+                        ) -> tuple[pathlib.Path, list[str]]:
+    """Write this turn's config.yaml from the PACKAGE'S OWN TEMPLATE, and name the servers in it.
+
+    Starting from the template matters: a partial config of our own changed which rails the runtime
+    mounted and took `skill_tool` away entirely (measured), so a declared skill became unreachable
+    while every test passed. The template is parsed and re-dumped rather than edited as text, so the
+    result is a structure this function can be tested against (the fast-agent lesson: a `transport:
+    "http"` assertion was true at any indentation, and the indentation was wrong).
+
+    The model is NOT written here. The template's `${API_BASE}` / `${API_KEY}` / `${MODEL_NAME}` /
+    `${MODEL_PROVIDER}` placeholders are resolved from the environment when the CLI reads the file,
+    so the relay's token stays in the turn's environment and never lands on disk."""
+    home = _jiuwenswarm_home(cwd)
+    cfg_dir = home / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg_dir / "config.yaml"
+    template = _jiuwenswarm_template()
+    if template is None:
+        raise HTTPException(503, "jiuwenswarm's own config template was not found beside its "
+                                 "binary (set HR_JIUWENSWARM_CONFIG_TEMPLATE)")
+    try:
+        loaded = yaml.safe_load(template.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, yaml.YAMLError) as error:
+        # A TEMPLATE THAT CANNOT BE READ STOPS THE TURN, and does not fall back to a config of our
+        # own: measured, a partial config takes `skill_tool` away entirely, so the fallback would be
+        # a turn whose declared skill is silently unreachable. A step that cannot run is not a pass.
+        raise HTTPException(503, f"jiuwenswarm's config template could not be read: {error}") from error
+    if not isinstance(loaded, dict):
+        raise HTTPException(503, "jiuwenswarm's config template is not a mapping")
+    base: dict = loaded
+    # THE ANSWER'S LANGUAGE. The package's template ships `preferred_language: zh`, and its code
+    # rail turns that into an instruction to reply in that language — so this base answered in
+    # Chinese whatever language the task was written in, while every other base here answers in the
+    # task's. Found by driving the console by hand: the scripted judges read tokens and files, and a
+    # token is the same string in any language. The console, this harness's system prompt and
+    # JIUWENSWARM.md are English, so that is the default; an operator who wants the upstream
+    # behaviour sets HR_JIUWENSWARM_LANGUAGE=zh. The runtime takes `zh` or `en` and nothing else
+    # (`resolve_language`, SUPPORTED_LANGUAGES), so an unknown value is left to its own default
+    # rather than written through.
+    want = os.environ.get("HR_JIUWENSWARM_LANGUAGE", "en").strip().lower()
+    if want in ("en", "zh"):
+        base["preferred_language"] = want
+    names: list[str] = []
+    servers: list[dict] = []
+    for server in (mcp_servers or []):
+        name = str(server.get("name") or "").strip()
+        url = str(server.get("url") or "").strip()
+        command = str(server.get("command") or "").strip()
+        if not name or not (url or command):
+            continue
+        # Its loader takes stdio, sse, http and streamable-http (`build_mcp_server_config`), and the
+        # transport decides which half of that entry it reads: `command`/`args`/`env` for stdio,
+        # `url`/`headers` otherwise. An entry whose transport it does not know is DROPPED (that
+        # function returns None), which would be a declared server that is silently absent — so a
+        # plugin's stdio server is written as stdio and nothing is forced to the url shape.
+        if not url:
+            entry = {"name": name, "transport": "stdio", "command": command,
+                     "args": [str(a) for a in (server.get("args") or [])],
+                     "enabled": True, "timeout_s": 60}
+            if isinstance(server.get("env"), dict):
+                entry["env"] = {str(k): str(v) for k, v in server["env"].items()}
+        else:
+            # Its own client reads `headers` into the auth headers the remote server sees (its
+            # source says so in as many words: resolved headers MUST populate auth_headers "or the
+            # remote MCP gets no Authorization and silently returns 0 tools"). An SSE server keeps
+            # its own transport, which this runtime has a client for, rather than being relabelled.
+            declared = str(server.get("transport") or "").strip().lower()
+            entry = {"name": name,
+                     "transport": "sse" if declared == "sse" else "streamable-http",
+                     "url": url, "enabled": True, "timeout_s": 60}
+            headers = _mcp_headers(server)
+            if headers:
+                entry["headers"] = headers
+        servers.append(entry)
+        names.append(name)
+    if servers:
+        mcp = base.get("mcp")
+        base["mcp"] = {**mcp, "servers": servers} if isinstance(mcp, dict) else {"servers": servers}
+    for toolkit in (withheld_toolkits or []):
+        # The config door (_JW_TOOL_DOORS): a toolkit named here is never built, so the tools it is
+        # the sole source of are not in the runtime's registry and cannot be declared or called.
+        # Parsed and re-dumped like everything else, so a test can assert the structure rather than
+        # a line of text.
+        mode = ((base.get("modes") or {}).get("code")
+                if isinstance(base.get("modes"), dict) else None)
+        if isinstance(mode, dict) and isinstance(mode.get("tools"), list):
+            mode["tools"] = [t for t in mode["tools"] if str(t) != toolkit]
+    path.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return path, names
+
+
+def _jiuwenswarm_run_doc(cwd: str, prompt: str, model: str, resume: str, skills: list[str],
+                         servers: list[str], allowed: list[str] | None) -> pathlib.Path:
+    # `allowed` is the hard ALLOWLIST this turn declares, or None for "everything the runtime has"
+    # (see _JW_TOOL_DOORS; an MCP turn's policy travels in the config instead).
+    """This turn's machine request, as a file.
+
+    A FILE and not stdin: the runner starts every turn with stdin at /dev/null (a CLI that inherits
+    a terminal's stdin can sit there reading it forever — measured on two other bases), and
+    `--run-json` takes either. A file and not an argument, too: a prompt on a command line is
+    readable from every process on the box (scripts/prompt-argv-canary.py exists for that), and this
+    one carries the person's own words."""
+    doc: dict = {"schema_version": "0.1", "type": "run", "input": prompt,
+                 # Single-agent code mode: the only mode a non-interactive run supports (its own
+                 # help says Plan and Team are interactive-only).
+                 "mode": "agent.code.normal",
+                 "model": model,
+                 "agent": {"name": _JW_AGENT, "instructions": _JW_INSTRUCTIONS},
+                 # The workspace the person collects IS the agent's working directory, so a
+                 # deliverable written by a relative path lands where /produced can see it.
+                 "workspace": {"cwd": str(pathlib.Path(cwd).resolve()),
+                               "project_dir": str(pathlib.Path(cwd).resolve())},
+                 "timeout_seconds": float(MAX_TURN_SECONDS)}
+    if resume:
+        doc["session_id"] = resume
+    if skills:
+        doc["agent"]["skills"] = skills
+    if allowed is not None:
+        # The tool policy as the runtime's own hard allowlist: a withheld tool is never declared to
+        # the model, so there is nothing to refuse later (_JW_TOOL_DOORS).
+        doc["agent"]["tools"] = allowed
+    if servers:
+        # DECLARED IS NOT ENABLED on this base either: config.yaml declares a server and `run.mcp`
+        # is what turns it on for the turn.
+        doc["mcp"] = servers
+    path = _jiuwenswarm_home(cwd) / "run.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _jiuwenswarm_skills(cwd: str) -> list[str]:
+    """The skill names staged for this turn, which `run.skills` has to name one by one.
+
+    Its loader reads ONE library, <data>/agent/workspace/skills/<name>/SKILL.md
+    (`get_agent_skills_dir`), and a skill in it is selected per run rather than loaded wholesale."""
+    root = _jiuwenswarm_home(cwd) / "agent" / "workspace" / "skills"
+    try:
+        return sorted(e.name for e in os.scandir(root)
+                      if e.is_dir() and os.path.isfile(os.path.join(e.path, "SKILL.md")))
+    except OSError:
+        return []
+
+
+def _jiuwenswarm_usage(obj: dict) -> dict:
+    """Its `result.usage`, in this product's field names.
+
+    The numbers are the TURN's: measured on a three-call turn, `input_tokens` was the sum of the
+    three requests' own, not the last one's (jcode's `done.usage` is the counter-example that makes
+    this worth stating). `cache_tokens` was 0 on every turn measured here — the gateway served no
+    cached prompt — so whether it is a SUBSET of `input_tokens` or a sibling of it is UNVERIFIED,
+    and it is reported as a cache read without being netted out. The relay's own tap is the honest
+    source for both numbers and is what the record prefers."""
+    usage = obj.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    out: dict = {}
+    for ours, theirs in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
+                         ("cache_read_input_tokens", "cache_tokens")):
+        value = usage.get(theirs)
+        if isinstance(value, (int, float)) and value:
+            out[ours] = int(value)
+    return out
+
+
+def _jiuwenswarm_calls(state: dict) -> list[dict]:
+    """Close any tool call this turn opened and never saw a result for."""
+    opened = state.pop("_jw_open", None) or {}
+    return [{"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": call_id, "is_error": True,
+         "content": "no result was reported for this tool call"}]}}
+            for call_id in opened]
+
+
+def _jiuwenswarm_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE machine-protocol line to zero or more canonical claude stream-json events.
+
+    The terminal `result` is authoritative for the answer: `chat.final` carries
+    `final_mode: "patch_segment"`, which says it is a segment of the reply rather than the reply,
+    and `result.output` held the whole answer on every measured turn (the vtcode and docker-agent
+    lesson — "the last assistant message" is not always the answer, and a delta is not a message)."""
+    kind = obj.get("type")
+    if kind == "event":
+        event = obj.get("event_type") or ""
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        if event == "run.started":
+            state["_jw_session"] = obj.get("session_id") or ""
+            return [{"type": "system", "subtype": "init",
+                     "session_id": obj.get("session_id"), "model": state.get("model")}]
+        if event == "chat.delta":
+            text = payload.get("text") or payload.get("content") or ""
+            return ([{"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}]
+                    if text else [])
+        if event == "chat.tool_call":
+            call = payload.get("tool_call") if isinstance(payload.get("tool_call"), dict) else {}
+            call_id = str(call.get("tool_call_id") or "tool")
+            name = str(call.get("name") or "tool")
+            raw = call.get("arguments")
+            try:
+                args = json.loads(raw) if isinstance(raw, str) and raw.strip() else (raw or {})
+            except ValueError:
+                args = {"arguments": raw}
+            use = {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": call_id, "name": name,
+                 "input": args if isinstance(args, dict) else {"arguments": args}}]}}
+            state.setdefault("_jw_open", {})[call_id] = name
+            # No call is held back for a tool policy here: a withheld tool is never declared to the
+            # model (_JW_TOOL_DOORS), so every call that reaches this line is one the harness has.
+            return [use]
+        if event == "chat.tool_result":
+            call_id = str(payload.get("tool_call_id") or "tool")
+            name = (state.get("_jw_open") or {}).pop(call_id, None) or str(payload.get("tool_name") or "")
+            text = payload.get("result")
+            body = "" if text is None else str(text)
+            return [{"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": call_id,
+                 "is_error": payload.get("success") is False,
+                 "content": body[:8000]}]}}]
+        if event == "chat.error":
+            # Kept as THIS turn's reason, but not terminal on its own: the `result` line that
+            # follows carries the same sentence in `error.message` and the status that decides.
+            state["_jw_error"] = str(payload.get("error") or "")[:1000]
+            return []
+        if event in ("interaction.requested", "host_tool.requested"):
+            # The agent asked the caller a question (or for a host tool this product does not
+            # provide) in a run that has nobody to answer it. Reported in words rather than as the
+            # protocol's own complaint — the dcode `ask_user` lesson — and `ask_user` is withheld
+            # from the offer for exactly this reason, so reaching here means the model found another
+            # door and the turn cannot continue.
+            state["_jw_blocked"] = ("the agent asked for input mid-turn, which a one-shot run "
+                                    "cannot answer")
+            return []
+        return []
+    if kind == "result":
+        status = obj.get("status")
+        usage = _jiuwenswarm_usage(obj)
+        error = obj.get("error") if isinstance(obj.get("error"), dict) else {}
+        output = obj.get("output")
+        if isinstance(output, str) and output.strip():
+            state["final"] = output
+        if status == "completed" and not state.get("_jw_blocked"):
+            if not (isinstance(output, str) and output.strip()):
+                # Success with no answer at all is NOT a pass: two other bases presented exactly
+                # this as a completed turn with an empty result before it was caught.
+                return _jiuwenswarm_calls(state) + [
+                    {"type": "result", "subtype": "error", "is_error": True,
+                     "result": "the run reported success and produced no answer", "usage": usage}]
+            return _jiuwenswarm_calls(state) + [
+                {"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": usage}]
+        code = str(error.get("code") or "")
+        if code == "SESSION_NOT_FOUND":
+            # The conversation is gone: the turn says so in the product's own words, and the run
+            # loop starts a new session rather than reporting a silent amnesia.
+            return _jiuwenswarm_calls(state) + [
+                {"type": "system", "subtype": "resume_lost",
+                 "reason": "the conversation named in this turn is not in jiuwenswarm's store"},
+                {"type": "result", "subtype": "error", "is_error": True,
+                 "result": "the conversation could not be continued", "usage": usage}]
+        # `error.message` is the provider's or the runtime's own sentence; the driver adds no frame
+        # of its own, because the gateway already prefixes one.
+        reason = (state.get("_jw_blocked") or str(error.get("message") or "")
+                  or state.get("_jw_error") or f"the run ended {status or 'without a status'}")
+        subtype = "error_max_turns" if code == "TURN_LIMIT_EXCEEDED" else "error"
+        return _jiuwenswarm_calls(state) + [
+            {"type": "result", "subtype": subtype, "is_error": True,
+             "result": reason[:1000], "usage": usage}]
+    return []
+
+
+def _jiuwenswarm_eof(state: dict, rc: int) -> list[dict]:
+    """The stream ended with no terminal `result`: killed, cancelled, or dead before the emitter.
+
+    An EMPTY result on failure, so the run loop's own stderr tail is the reason: this CLI writes a
+    short line there naming its per-run diagnostic log, which is a better reason than anything that
+    could be invented here."""
+    held = _jiuwenswarm_calls(state)
+    if rc == 0 and state.get("final"):
+        return held + [{"type": "result", "subtype": "success", "is_error": False,
+                        "result": state.get("final", ""), "usage": {}}]
+    return held + [{"type": "result", "subtype": "error", "is_error": True,
+                    "result": state.get("_jw_error", ""), "usage": {}}]
+
+
+_jiuwenswarm_to_claude.eof = _jiuwenswarm_eof   # type: ignore[attr-defined]
+
+
+def _build_jiuwenswarm(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                       resume_session_id: str | None = None,
+                       mcp_servers: list[dict] | None = None,
+                       tools_disabled: list[str] | None = None,
+                       max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in JIUWENSWARM_PROVIDERS:
+        raise HTTPException(400, f"unknown jiuwenswarm provider '{pr}' "
+                                 f"(one of {sorted(JIUWENSWARM_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"jiuwenswarm provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, chat_cache=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    # Its machinery follows workspace.cwd, which is the session directory (see the header). Hidden
+    # from the deliverables list, and left in place: the next turn reads its own memory and logs.
+    _git_exclude(cwd, list(_JW_MACHINERY),
+                 "jiuwenswarm's own memory store and logs, never the task's output")
+    # Only this base's own tools are named in the policy: an id matching nothing is dropped on the
+    # way through and disables nothing while the console reports it as off.
+    denied = [t for t in ALL_JIUWENSWARM_TOOLS if t in {str(x) for x in (tools_disabled or ())}]
+    # Which servers this turn has at all, by the same test the config writer applies (a url OR a
+    # stdio command): the run document names them one by one, because DECLARED IS NOT ENABLED here.
+    servers = [str(s.get("name") or "") for s in (mcp_servers or [])
+               if s.get("name") and (s.get("url") or s.get("command"))]
+    # Which door this turn's policy goes through, and whether it can go through one at all
+    # (_JW_TOOL_DOORS).
+    allowed: list[str] | None = None
+    toolkits: list[str] = []
+    if denied and not servers:
+        allowed = [t for t in ALL_JIUWENSWARM_TOOLS if t not in set(denied)]
+    elif denied:
+        covered: set[str] = set()
+        for toolkit, ids in _JW_TOOLKITS.items():
+            if ids <= set(denied):
+                toolkits.append(toolkit)
+                covered |= ids
+        unreachable = [t for t in denied if t not in covered]
+        if unreachable:
+            raise HTTPException(400, (
+                "jiuwenswarm cannot switch off " + ", ".join(unreachable) + " on a turn that also "
+                "declares an MCP server: on workswarm 0.2.8 the runtime's tool allowlist walks the "
+                "same ability list its MCP server configs live in and dies on them, and only "
+                "fetch_webpage can be withheld in the config instead. Switch the tool back on for "
+                "this harness, or take the MCP server off it."))
+    # The run document names exactly the servers the config actually wrote, so the two can never
+    # disagree about what this turn has.
+    _, servers = _jiuwenswarm_config(cwd, mcp_servers, toolkits)
+    env["JIUWENSWARM_DATA_DIR"] = str(_jiuwenswarm_home(cwd))
+    # Its OpenAI-compatible client's own four variables, read by the config template's placeholders.
+    env["API_BASE"] = (auth.base_url or "").rstrip("/")
+    env["API_KEY"] = auth.api_key or ""
+    env["MODEL_NAME"] = model
+    env["MODEL_PROVIDER"] = "OpenAI"
+    known = bool(resume_session_id) and _jiuwenswarm_session_present(cwd, [], resume_session_id)
+    doc = _jiuwenswarm_run_doc(cwd, prompt, model, resume_session_id if known else "",
+                               _jiuwenswarm_skills(cwd), servers, allowed)
+    if max_turns and not servers:
+        # Its own per-run ceiling, so a model that will not stop ends at the turn's budget rather
+        # than at the wall clock. NOT sent on a turn that declares an MCP server, where it is what
+        # kills the turn before the first model call (_JW_MAX_TURNS_AND_MCP).
+        try:
+            request = json.loads(doc.read_text(encoding="utf-8"))
+            request["max_turns"] = int(max_turns)
+            doc.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+    return [JIUWENSWARM_BIN, "--run-json", str(doc)]
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -15988,6 +16536,12 @@ BACKENDS = {
     # The zeroclaw driver emits claude's stream-json itself (see zeroclaw_driver.py).
     "zeroclaw": {"providers": sorted(ZEROCLAW_PROVIDERS), "default_model": ZEROCLAW_DEFAULT_MODEL,
                  "normalize": _claude_passthrough},
+    # jiuwenswarm's machine protocol is its own versioned schema (event/result, one terminal line),
+    # mapped to claude's stream-json by _jiuwenswarm_to_claude; its eof covers a run killed before
+    # that terminal line.
+    "jiuwenswarm": {"providers": sorted(JIUWENSWARM_PROVIDERS),
+                    "default_model": JIUWENSWARM_DEFAULT_MODEL,
+                    "normalize": _jiuwenswarm_to_claude},
 }
 
 
@@ -18840,6 +19394,15 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                  # the harness's own variables and the platform's HR_ ones a turn carries
                                  caller_keys=[*_caller_env(req.env),
                                               *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
+        elif backend == "jiuwenswarm":
+            model = model or JIUWENSWARM_DEFAULT_MODEL
+            # Skills are already in the one library its loader reads, under the data dir, so
+            # nothing is named on the command line; the run document names which of them this turn
+            # gets (pi's and omp's arrangement, with the per-run selection this base adds).
+            cmd = _build_jiuwenswarm(req.provider, auth, model, req.prompt, cwd, env,
+                                     resume_session_id=req.resume_session_id,
+                                     mcp_servers=req.mcp_servers,
+                                     tools_disabled=req.tools_disabled, max_turns=req.max_turns)
         elif backend == "zeroclaw":
             model = model or ZEROCLAW_DEFAULT_MODEL
             cmd = _build_zeroclaw(req.provider, auth, model, req.prompt, cwd, env,

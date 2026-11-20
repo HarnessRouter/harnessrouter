@@ -6,6 +6,347 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## The jiuwenswarm backend: JiuwenSwarm (workswarm 0.2.8), its columns and its dimensions
+
+**Where the six-step order stands** (the order itself is in
+[harness-verification.md](harness-verification.md)): step 1 the Vercel column, 58 pairs / 290 of 290;
+step 2 the custom-harness dimension, a pass after the two faults it found were fixed; step 3 the
+plugin matrix, 5 of 5 columns after two more; step 4 the family tour, 13 of 13 families in one
+conversation; step 5 a second column, 13 pairs / 65 of 65, on a bring-your-own endpoint rather than
+Google, whose key this machine cannot use; step 6, the hand pass through the console, which found
+the answer language and checked the tool switch from the person's side. The environments column passes; the browser column is not
+run here and the reason is the rig. Four product faults came out of steps 2 and 3, and a fifth —
+a scripted custom connection's model rows being ignored — out of bringing step 5 up; each one is
+written up below where it was found.
+
+Added 2026-11-18. Everything below was measured against the published PyPI wheel — against the
+Vercel AI Gateway through a recording proxy, then through the runner's own builder and relay, and
+then as **step 1 of the six-step order in [harness-verification.md](harness-verification.md): the
+support matrix on the first provider**, against a locally built image of this branch.
+
+**The column: 58 pairs, 290 of 290 scenario runs passed** (Vercel, `EXPECT_CONNECTION=vercel`,
+2026-11-18, one worker, about 85 minutes). Every rule had a non-empty input, which is what makes the
+verdict mean anything:
+
+| | |
+|---|---|
+| pairs / scenario runs | 58 / 290, all passed |
+| rule 1, ran where you said | `connections = ['vercel']` on every row; `foreign` empty on all 58 |
+| rule 2, ran what you asked | `substituted` empty, `unlabelled` **0 turns**, and the `served` list is **2 entries on every one of the 58 rows** — the pair's own model and the switch partner, which is what proves the chip's move reached the provider rather than being echoed back |
+| rule 3, cards are the stored files | the artifact row passed on all 58 |
+| recycle | passed on all 58: the sandbox was let go and the follow-up still recalled the first message |
+| tokens | 5,574,252 input with 2,429,085 cache reads (44%) |
+
+**The strongest single line of that column**: across all 290 turns the only files ANY turn handed
+back were `JIUWENSWARM.md` (the instruction file the product itself writes) and
+`hello-jiuwenswarm.txt` (the artifact scenario's deliverable). The machinery described below —
+`daily_memory/`, `logs/`, `memory.db{,-shm,-wal}` — never appeared once, so the `.git/info/exclude`
+door holds through the product's own collection path and not merely in a rig.
+
+**One row was retested once**, which the table records: `hunyuan-4-preview`'s FIRST try answered
+without the scenario's token and said instead that "当前模型是 `tencent/hy4-preview`, so I cannot
+print a model identifier that disagrees with it" — the turn completed, the served model was
+`tencent/hy4-preview` (the same model under the provider's own name, per `samemodel.py`), and the
+model simply refused to echo a string that looked like a claim about its identity. The retest passed
+all five. **Not reproduced, so the cause is unmeasured** — and not simply a property of the prompt
+either: the same model's first turn passed on 36 other base x provider rows already in
+`support-matrix-results.json`. What is specific to this base is the size and content of its own
+system prompt (~31k tokens, and its own `context.usage` names the configured model), which is the
+suspect a second occurrence should start from.
+
+**Three more facts the column produced, none of them failures:** `gemini-3.1-pro-preview` and
+`nemotron-3-super` read no prompt cache at all on this channel (every other id did); the slowest
+scenario in the column was 77 s (`gemini-4-argon`'s artifact turn), well inside the budget; and the
+console menu showed 58 of the 60 ids the catalog offers, the other two not being served to this
+account.
+
+**Step 2, the custom-harness dimension: a pass, after the two faults it found were fixed.** The
+dimension builds one harness carrying a skill whose script must run, one inherited tool switched off
+and one public MCP server, then asks for the build stamp. Its first turn failed with
+`'McpServerConfig' object has no attribute 'name'`, and the tool policy was only half the reason.
+Six runs of the same fixture against workswarm 0.2.8, one variable at a time (every "completed" row
+below also wrote `stamp.txt` carrying the harness's env nonce, which is the proof the skill's script
+ran rather than being read):
+
+| the document sent (same config, same server, same skill) | outcome |
+|---|---|
+| `max_turns` + `mcp` | failed before the first model call: `AttributeError` at `interface_deep.py:11790`, `existing_names = {card.name for card in manager.list()}` |
+| `max_turns`, no `mcp` | completed |
+| `agent.tools` allowlist + `mcp` | failed the same way one frame over, in `tool_allowlist.py`'s `limited_list` |
+| `agent.tools` allowlist + `max_turns`, no `mcp` | completed, and the withheld tool was absent from the runtime's own resource registry |
+| `permissions.tools: {fetch_webpage: deny}`, with or without `mcp`, with or without a budget | completed with NO script: the skill's `python3 …/stamp.py` came back `用户拒绝` and `stamp.txt` was never written. Naming the other thirteen tools `allow` in the same block changed nothing |
+| config `modes.code.tools` minus `web_fetch_webpage` + `mcp`, no budget | completed; skill, script and MCP call all ran, and `fetch_webpage` was absent from the registry |
+
+**The second fault is the one worth stating plainly: the runner always sent `max_turns`, so every
+turn that declared an MCP server was dead on arrival** — and the 58-pair column could not see it,
+because not one of its five scenarios declares a server. The fifth row corrects what this file said
+before it: the deny door does refuse the named tool, which is all the first measurement looked at,
+and it also costs the shell, because any run permission puts the permission rail in the path of a
+`--run-json` run that cannot answer it (the CLI sends `supports_user_interaction: false`).
+
+So the policy now travels through `agent.tools` when no server is declared, through the config when
+one is, and a tool the config cannot reach is REFUSED with its reason rather than reported as off
+while it is callable. **The row, on the fixed build (two consecutive runs, 23 s and 19 s):** skill
+stored, tool policy stored and server stored; the answer carried the bundle's token; `stamp.txt`
+carried the env nonce; the withheld `fetch_webpage` was uncalled — and, read off the live turn's own
+diagnostic log rather than from the absence of a call, **not in the runtime's resource registry at
+all**, while the same log from a column session (no tool switched off) has it. The MCP half is the
+dispatcher chain this base's catalog warns about: `tool_search`, then `tool_call
+{mcp_deepwiki_read_wiki_structure}`, then the server's own tool. The turn's produced files were
+`stamp.txt` and `JIUWENSWARM.md` and nothing else, so the machinery door holds here too.
+
+**Step 3, the plugin matrix: 5 of 5 columns, after two more faults in the same writer.** The
+package is an Agent Plugins 1.0.0 unit and the harness carries nothing else, so what each column
+measures is the plugin path. Two of the five could not have worked before this batch, because the
+config writer kept only servers that had a `url` and wrote every one of them as `streamable-http`:
+
+* **a plugin's server is a COMMAND**, and an entry without a url was skipped entirely — a declared
+  server that is simply absent. The runtime takes stdio (`build_mcp_server_config` reads
+  `command`/`args`/`env` when the transport says so, and returns None for a transport it cannot
+  read, which is how an entry gets dropped);
+* **an SSE server was relabelled.** Measured as a one-variable A/B against the public probe's `/sse`
+  end, same config and same prompt: with `transport: sse` the turn called the server's tool and
+  answered `PROBE-SSE-…`; with `transport: streamable-http` the model ran `tool_search` twice, found
+  nothing, and said "No suitable tool is available in this session" — **no error anywhere, just zero
+  tools**, which is the shape this file keeps calling declared-is-not-enabled.
+
+| column | what it proves | result |
+|---|---|---|
+| skills | the package's Skill is loaded | pass, `PLUGIN_SKILL_OK`, 11 s |
+| mcp | its stdio server is spawned and its tool called | pass, `PLUGIN_MCP_OK`, 15 s |
+| rows | a list of free-form objects arrives whole through that tool | pass, `PLUGIN_ROWS_OK first=1 second=2`, 15 s |
+| sse | an SSE server is reached | pass, `PROBE-SSE-ef8e44614954`, 15 s |
+| http | a streamable-HTTP server is reached | pass, `PROBE-HTTP-ef8e44614954`, 15 s |
+
+The `rows` column is worth one line of its own: this is the argument shape that arrived as `[{}, {}]`
+on two other bases, and here both rows arrived with both fields.
+
+**Step 4, the family tour: 13 of 13 families in one conversation.** One session, one deliverable
+(`tour.pptx`), the composer's model moved family after family, each turn asking for one more change
+to the same deck and for a footer naming that family. Every turn completed, produced the deck again
+and was served by the family it asked for: `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-5`,
+`google/gemini-3.5-flash`, `spacexai/grok-4.5`, `meta/muse-spark-1.1`, `deepseek/deepseek-v4-flash`,
+`moonshotai/kimi-k3`, `alibaba/qwen3.8-flash`, `zai/glm-5.3-flash`, `mistral/mistral-medium-3.5`,
+`stepfun/step-3.7-flash`, `tencent/hy4-preview`, `nvidia/nemotron-3-super-120b-a12b`. 15 s to 64 s a
+turn, every turn with at least one tool call, and the produced list stayed `tour.pptx` alone
+(`JIUWENSWARM.md` on the first turn) — the machinery never appeared here either. **Thirteen and not
+fourteen**: this connection serves no llama id for this base, so that family has no row to run
+rather than a failing one, and `nemotron-3-super` stands in for the nemotron family the way the
+column has it. `hunyuan-4-preview` passed first try here, writing the footer string it was asked
+for, which is a fact beside the column's one retest rather than an explanation of it.
+
+**The environments column: 1 of 1, 3 of 3 tasks, nothing installed.** The environment carries
+`tabulate` (pip), `qrcode` (npm) and `jq` (apt) and mounts at `/env/matrix-packages`. Each task
+answered from the environment's own copy — the module's path under the mount, `require.resolve`'s
+path, jq's version — with `installs=0` in the trace on all three and 15 s each.
+
+**Step 5, the second column: 13 pairs, 65 of 65, on a BRING-YOUR-OWN endpoint — and it is a second
+CONNECTION, not a second vendor.** The order asks for a fresh connection of a second provider, and
+the provider meant here was Google. That column cannot be run on this machine: the Google key is
+refused by Google itself — 401 `ACCESS_TOKEN_TYPE_UNSUPPORTED` on
+`generativelanguage.googleapis.com`'s native endpoint and 401 "API key not valid" on its
+OpenAI-compatible one, both measured directly with curl, so the refusal is the key's and not this
+product's. (`check.sh` reports that key as "set", which is presence, not validity.) The honest
+substitute is a different connection TYPE on an instance of its own: a `custom` endpoint in the
+OpenAI format, declaring thirteen canonical -> wire rows of its own, which reaches the runner through
+`openai-api` rather than the `tokenrouter` path the first column used, and whose model ids are the
+operator's rows rather than a vendor table. The write-up says so rather than calling it Google.
+
+| | |
+|---|---|
+| pairs / scenario runs | 13 / 65, all passed (one pair retested once) |
+| rule 1, ran where you said | `connections = ['byok']` on every row, `foreign` empty on all 13 |
+| rule 2, ran what you asked | `substituted` empty, `unlabelled` **0 turns**, and every row's `served` list is the pair's own model plus its switch partner, in the operator's own wire spelling (`anthropic/claude-sonnet-5`, `nvidia/nemotron-3-super-120b-a12b`) |
+| rule 3, cards are the stored files | the artifact row passed on all 13 |
+| tokens | 941,797 input with 877,890 cache reads (48%) |
+
+**The retest, recorded in the table:** `gpt-5.4-mini`'s artifact turn completed, the trace shows it
+created and read a file, and then the model answered "I'm unable to comply with that request" with
+no file handed back. The retest passed all five in 32 s. Not reproduced, so the cause is unmeasured;
+what is worth noting is that this is the second model-side refusal in this base's runs (hunyuan's, in
+the first column), both on turns whose prompt asks for an exact string.
+
+**This column is also what the custom-connection fix was measured on.** Before it, the same
+connection offered all 60 ids of the base's catalog as available instead of the 13 it declared, and
+sent the canonical id on the wire instead of the operator's; both halves are in the commit that
+fixed it, and the `served` column above is the evidence the rows now reach the provider.
+
+**Step 6, one pass through the console by hand** (2026-11-19, the local rig in a browser). What the
+five scripted steps cannot judge, because each of them reads a token, a file or a tool name:
+
+* **every answer came back in Chinese, whatever language the task was written in.** The package's
+  own template ships `preferred_language: zh` and its code rail turns that into an instruction to
+  reply in that language; this runner starts from that template, so an English task got a Chinese
+  reply ("缺少 fetch_webpage 工具。"). No judge here could see it: a token is the same string in
+  either language, and the family tour's deck is a file. The runner now writes `en` by default — the
+  console, this base's system prompt and JIUWENSWARM.md are English — with `HR_JIUWENSWARM_LANGUAGE`
+  for an operator who wants the upstream behaviour. Measured after the change, in the same
+  conversation: the English task answered "I created hello-browser.txt containing exactly HELLO."
+  and a Chinese follow-up ("用中文回答：…") still answered in Chinese, because the rail is an
+  instruction and the person's own words win.
+* **the tool policy, end to end, as a person does it.** The Capabilities panel lists this base's 14
+  tools with On switches and the human labels the catalog carries ("Used Fetch webpage" is how the
+  trace names a call). Switching `fetch_webpage` off and running the same task twice: with it on,
+  the trace shows the call and the answer is the page's own title ("Example Domain", 16.4 s); with
+  it off and SAVED, there is no tool row at all and the agent answers "缺少 fetch_webpage 工具"
+  (9.8 s), which is the hard allowlist from the person's side. Worth knowing for the next base: a
+  tool toggle is a DRAFT until Save — the server holds no `disabledTools` until then, which reads
+  like a policy that did not take if the panel's own "Unsaved changes" mark is missed.
+* **what else the console gets right on this base**, checked rather than assumed: the picker offers
+  it by its label, the model menu lists the 58 ids this connection serves with gpt-5.4 marked
+  default, the harness card falls back to the generic brick illustration rather than a broken image
+  (no logo is shipped for this base on purpose), the instruction file reads `JIUWENSWARM.md`, and a
+  produced file arrives as a card with a diff ("Created hello-browser.txt +1 −0") and a download.
+* **one thing that is not this base's**: on an instance that installs one base only, the
+  harness-BUILDER flow ("What should it do for your users?") answers "Connect a model key first.
+  Your setup is built with one of your models." The instance has a key; what it lacks is the
+  `hermes` base the builder runs on (`setup_builder.BASE`). The message blames the key for a
+  missing base — left alone here, since it belongs to that flow and not to this batch.
+
+Every column and dimension above was run BEFORE the language default changed, and they stand: each
+one is judged on a token, a produced file or a tool name, and none of those is language-bound (the
+scenario answers were Chinese at the time and passed; the fix only makes the prose match the console).
+
+**The browser column is NOT RUN here, and the reason is the rig, not the base.** That column needs
+`BROWSER_USE_API_KEY` in the instance's environment; this machine has no such key, and the operator's
+own browser (`HR_BROWSER_CDP_URL`) takes the vendor's place with "no vendor session, no live view, no
+charge", while the column's own pass rule requires the stop row the vendor's meter writes
+(`unit: browser.usd`). A run on that path would therefore record a refusal about this rig. What the
+column would have asked of THIS base — whether its MCP client will talk to a server on a loopback
+address, the class that left nanobot with no browser at all — is already answered twice above: the
+custom-harness turn's own config carried the gateway's broker at `http://127.0.0.1:34913/…` and the
+server's tool was called through it, and the captured fixture in the runner's tests is a turn that
+answered from a loopback server. What is unmeasured is the browser plane itself on this base.
+
+The 58-pair column above does not need re-running for any fix in this batch: no scenario in it
+declares an MCP server or switches a tool off, so none of them can touch a recorded row.
+
+**What it is.** A general agent platform whose code work mode is a coding agent over a workspace;
+its other surfaces (web, TUI, desktop, chat channels) are not driven here. The turn runs through its
+own machine protocol — `jiuwenswarm-process --run-json <file>`, one JSON request in, versioned JSONL
+out, one terminal `result` — which starts no Gateway, AgentServer or resident service.
+`protocol.capabilities` reports session_resume, run_model, run_skills, run_mcp, run_permissions,
+empty_tools and cancel, all true.
+
+**The model is ours, through the environment alone.** With no `models:` block in config.yaml the
+model entry is built from `API_BASE` / `API_KEY` / `MODEL_NAME` / `MODEL_PROVIDER`, so the relay's
+token is never written to disk — and the environment is where `_relay_served_model` and
+`_relay_usage` find the route. Measured ids: **claude-haiku-5.5 and gemini-3-flash**, each asked for
+and each served as itself, including across a mid-session switch (its session pins nothing, unlike
+jcode's and vibe's). Every other id in its catalog is offered so the matrix can measure it here and
+has not been measured on this base.
+
+**Continuity.** `run.session_id`, with the store at `<data>/agent/sessions/<id>/`. A second PROCESS
+continued the conversation and answered a question only the conversation carried; an unknown id
+fails `SESSION_NOT_FOUND` before any model call, which is the resume probe.
+
+**A failure reads as a failure.** `status: "failed"`, exit code 1 or 2, and
+`error: {code, message, retryable, details}` carrying the provider's own sentence — a 401 came back
+as `RUNTIME_ERROR` with the gateway's own text. Nothing is narrated as assistant prose, so there is
+no error prefix to strip here. Its stderr is one short line naming a per-run diagnostic log under
+`<data>/agent/process_cli_logs/`, which is kept for the failures that carry no reason of their own.
+
+**It writes its own machinery into the workspace.** Its machine entrypoint chdirs into
+`workspace.cwd`, so the memory store's `memory.db` and the log handlers' `logs/` resolve inside the
+directory the user collects: a turn asked to write NOTHING left `daily_memory/`, `logs/` (nine files)
+and `memory.db{,-shm,-wal}` there. Pointing the process cwd elsewhere does not help — measured, the
+private cwd stayed empty and the machinery followed `workspace.cwd`. `.git/info/exclude` hides them
+from the produced-files list (nanobot's and opensquilla's arrangement), and both halves were
+measured through `git status --porcelain -uall`, which is what `/produced` runs: write-nothing → no
+task file, write-one-file → exactly that file.
+
+**The tool policy, and the upstream defect that decided which door it uses.** `agent.tools` is a
+real, exact, hard allowlist: `[]` produced zero tool calls, no file and an answer saying it had no
+tools, while the same turn with the tool present wrote the file. It cannot be used here, because on
+0.2.8 it is mutually exclusive with an MCP server:
+
+```
+runtime/tool_allowlist.py:43  limited_list
+  return [card for card in original_list() if card.name in allowed]
+AttributeError: 'McpServerConfig' object has no attribute 'name'
+```
+
+`ability_manager.list()` returns tool cards AND `McpServerConfig` objects, whose field is
+`server_name`, so every turn declaring both dies before its first model call. Measured as a
+single-variable A/B: same config, same server, with the agent object the turn failed; without it the
+turn called the server and answered. **Worth filing upstream.**
+
+`permissions.tools: {<tool>: "deny"}` was chosen next and is ALSO wrong, which step 2 found and this
+paragraph used to get wrong (see "Step 2" below): the named tool is indeed refused
+(`[PERMISSION_DENIED] run policy`), but any run permission at all puts the permission rail in the
+path of a run that cannot answer it, and the first call it would ASK about — bash, every time — comes
+back `用户拒绝`. So the door in the shipped build is the `agent.tools` allowlist for a turn with no
+MCP server, and `modes.code.tools` in the config (the only door that reaches `fetch_webpage` while a
+server is declared) otherwise; any other tool switched off beside a server is refused with its
+reason.
+
+**21 tools declared, 14 offered.** Read off a turn's own request body, not from the host permission
+registry (`permission.get` lists 52 names, a different set) and not from the model's narration.
+`ask_user` is declared and not offered — a one-shot run has nobody to answer it. The `subagent_*`
+family is not offered because a custom agent definition, which is how the runner drives this base,
+does not declare those six at all. `tool_search` and `tool_call` ARE offered and are the whole of the
+MCP path: with progressive tool exposure on (the shipped config's default) an MCP server's tools are
+not declared, and the model reaches them through those two, as `mcp_<server>_<tool>`.
+
+**A partial config of our own breaks the skill path silently.** With a hand-written config.yaml
+holding one `mcp:` block the wire carried 29 tools and no `skill_tool` at all, so a declared skill
+could not be reached; with the package's own scaffolded config it carried the stable 21 and the
+skill ran. The builder therefore starts from the package's own `resources/config.yaml` and patches
+it. `jiuwenswarm-init` is not used for that: it IGNORES `JIUWENSWARM_DATA_DIR` and scaffolded 368
+files into the real home directory while the variable pointed elsewhere.
+
+**Skills and MCP, in one turn.** `skill_tool` → `tool_search` → `bash` → `tool_call` →
+`mcp_deepwiki_read_wiki_structure`, with `stamp.txt` carrying the harness's env nonce (so the
+script really ran) and the answer carrying the bundle-only token.
+
+**The loopback-MCP class does not apply.** Its `StreamableHttpClient` dials a loopback host: a
+one-tool MCP server on 127.0.0.1 was initialized and its tool answered on a real turn, on the same
+transport the public probe uses. So this base is not in `_BRIDGE_LOOPBACK_BACKENDS`. Not yet
+confirmed against the product's own `plugs` server, which is what the browser column injects.
+
+**Cost facts, not failures.** Its own system prompt and tool schemas are ~31k input tokens before
+the task's own words (a one-sentence prompt measured 30,929), and a three-call turn reached 97k.
+`result.usage` is ACCUMULATED across the turn's model calls (97,521 = 31,184 + 32,457 + 33,880), so
+unlike jcode's `done.usage` it can be read as the turn's own total. The relay's prompt cache is read
+on this base (24k cache-read tokens on a 48k-input turn).
+
+**Install.** 244 distributions and **1.9 GB** installed in the image (linux/arm64, measured on a
+fresh volume: about four minutes), 1.6 GB on macOS arm64 — more than twice the largest
+base of the default set, so this base is **opt-in**: add `jiuwenswarm` to `HR_BACKENDS`. The lock
+(`docker/locks/jiuwenswarm.lock.txt`) carries the sha256 of the wheel this work measured and of
+every dependency; the installer then runs what it installed, compares the distribution's version and
+requires the five capabilities above, because `jiuwenswarm-process --version` is not a recognised
+argument.
+
+**A direct Anthropic connection does not drive it yet.** The runtime has an Anthropic dialect
+(`client_provider: Anthropic`, `/v1/messages`) and no turn here has run on it, so there is no
+`("anthropic", "jiuwenswarm")` wiring row — absent rather than nearly true.
+
+## durable-harness reviewed, not supported (2026-11-18)
+
+[vercel-labs/durable-harness](https://github.com/vercel-labs/durable-harness) was reviewed at
+`durable-harness@0.0.2` (commit badd648) on the same day and is **not a base here**, for a reason
+that is a property of the product rather than a version of it: it is a durability and orchestration
+layer around the agent CLIs this product already runs — its own description names Claude Code,
+Codex, OpenCode, Pi and fx, and four of those are in `HR_BACKENDS` already. It ships no turn surface
+of its own: its one published bin takes `vercel-json` and `sandbox prepare` and nothing else, a turn
+is started by calling a TypeScript API from inside a Next.js/Node app, and for its two
+Claude-family harnesses that turn runs only in a Vercel Sandbox (`sandbox_required` otherwise).
+The model is fixed on the agent at module scope, `StartOptions` and `SendOptions` carry none, and
+Codex's `model`, `base_url` and `env_key` are reserved keys that throw if an app sets them — so the
+matrix's switch scenario has no API to drive. There is no skill loader, no instruction-file
+convention (Claude runs with `settingSources: []` on purpose) and no per-invocation MCP
+configuration. Apache-2.0, alive (320 stars, pushed 2026-11-11), and explicitly experimental on
+`0.0.x`.
+
+What would reopen it: a one-shot turn subcommand on its own published bin —
+`durable-harness run --session <id> --model <gateway-id>` writing NDJSON to stdout, on a `virtual()`
+workspace under `WORKFLOW_TARGET_WORLD=local`. Even then it would be a durability VARIANT of the
+claude, codex, opencode and pi rows rather than a new base, which is a maintainer's call.
+
+Its row, with the twenty other harnesses reviewed and not supported and the one concrete artifact
+that would reopen each, is in [harness-candidates.md](harness-candidates.md).
+
 ## GPT-6.2 Astra and Sol (2026-11-17, the day OpenAI released them)
 
 **Which connections serve them.** On the test instance (main 8b204a6a plus the 6.2 placement), a real turn per pair on codex and pi (both models) and qwen (Sol, chat-only). A turn passed only if the served model was the one asked for and the turn echoed a unique codeword.

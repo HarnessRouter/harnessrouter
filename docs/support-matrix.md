@@ -710,6 +710,26 @@ Not run in this column, 43 pairs the provider serves that the harness did not ru
 - qwen x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - qwen x gpt-6.2-sol: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 
+## Provider: byok
+
+| Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
+|---|---|---|---|---|---|---|---|---|
+| jiuwenswarm | claude-sonnet-5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 27% of input |
+| jiuwenswarm | deepseek-v4-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 42% of input |
+| jiuwenswarm | gemini-3.5-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 25% of input |
+| jiuwenswarm | glm-5.3-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 58% of input |
+| jiuwenswarm | gpt-5.4-mini | pass | pass | pass (claude-sonnet-5) | pass | pass | byok | retested once; first try: artifact no file card (files: JIUWENSWARM.md);  HELLO, then reply DONE. 我将创建指定文件并写入精确内容，然 ; cache 51% of input |
+| jiuwenswarm | grok-4.5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 36% of input |
+| jiuwenswarm | hunyuan-4-preview | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 93% of input |
+| jiuwenswarm | kimi-k3 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 71% of input |
+| jiuwenswarm | mistral-medium-3.5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 51% of input |
+| jiuwenswarm | muse-spark-1.1 | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 28% of input |
+| jiuwenswarm | nemotron-3-super | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 11% of input |
+| jiuwenswarm | qwen3.8-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 76% of input |
+| jiuwenswarm | step-3.7-flash | pass | pass | pass (gpt-5.4-mini) | pass | pass | byok | cache 47% of input |
+
+13 pairs, 65 of 65 scenario runs passed.
+
 ## Provider: cheetahclaws-tokenrouter
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
@@ -6924,6 +6944,64 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | hermes | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | jcode | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
+| jiuwenswarm | claude-fable-5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-fable-5-1 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-fable-5-2 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-haiku-4.5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-haiku-5.5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-opus-4.7 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-opus-4.8 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-opus-5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-opus-5.5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-sonnet-4.6 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 17% of input |
+| jiuwenswarm | claude-sonnet-5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | claude-sonnet-5.5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 18% of input |
+| jiuwenswarm | deepseek-v4-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 13% of input |
+| jiuwenswarm | deepseek-v4-pro | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 30% of input |
+| jiuwenswarm | deepseek-v4.1-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 36% of input |
+| jiuwenswarm | gemini-3-flash-preview | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 15% of input |
+| jiuwenswarm | gemini-3.1-flash-lite | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 16% of input |
+| jiuwenswarm | gemini-3.1-pro-preview | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 0% of input |
+| jiuwenswarm | gemini-3.5-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 13% of input |
+| jiuwenswarm | gemini-3.5-flash-lite | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 16% of input |
+| jiuwenswarm | gemini-3.6-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 43% of input |
+| jiuwenswarm | gemini-3.7-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 15% of input |
+| jiuwenswarm | gemini-3.8-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 15% of input |
+| jiuwenswarm | gemini-4-argon | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 16% of input |
+| jiuwenswarm | glm-5.3 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 65% of input |
+| jiuwenswarm | glm-5.3-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 13% of input |
+| jiuwenswarm | gpt-5.2 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 58% of input |
+| jiuwenswarm | gpt-5.4 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 65% of input |
+| jiuwenswarm | gpt-5.4-mini | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 59% of input |
+| jiuwenswarm | gpt-5.5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 58% of input |
+| jiuwenswarm | gpt-5.6-luna | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 38% of input |
+| jiuwenswarm | gpt-5.6-sol | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 17% of input |
+| jiuwenswarm | gpt-5.6-terra | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 29% of input |
+| jiuwenswarm | gpt-6-luna | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 29% of input |
+| jiuwenswarm | gpt-6-sol | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 38% of input |
+| jiuwenswarm | gpt-6.1-sol | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 38% of input |
+| jiuwenswarm | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 38% of input |
+| jiuwenswarm | grok-4.20 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 30% of input |
+| jiuwenswarm | grok-4.3 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 24% of input |
+| jiuwenswarm | grok-4.5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 24% of input |
+| jiuwenswarm | grok-4.6 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 40% of input |
+| jiuwenswarm | grok-build-0.1 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 62% of input |
+| jiuwenswarm | hunyuan-4-preview | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | retested once; first try: first answered without M1-hunyuan-4-preview: 根据我的运行时配置，当前模型是 `tencent/hy4-preview`，因此我 ; cache 79% of input |
+| jiuwenswarm | kimi-k2.7-code | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 63% of input |
+| jiuwenswarm | kimi-k3 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 48% of input |
+| jiuwenswarm | mistral-medium-3.5 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 35% of input |
+| jiuwenswarm | muse-glimmer-30b | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 30% of input |
+| jiuwenswarm | muse-spark-1.1 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 33% of input |
+| jiuwenswarm | muse-spark-1.2 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 16% of input |
+| jiuwenswarm | muse-spark-1.3 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 0% of input |
+| jiuwenswarm | muse-wonder-1.0 | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 17% of input |
+| jiuwenswarm | nemotron-3-super | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 0% of input |
+| jiuwenswarm | qwen3.7-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 53% of input |
+| jiuwenswarm | qwen3.7-plus | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 60% of input |
+| jiuwenswarm | qwen3.8-27b | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 33% of input |
+| jiuwenswarm | qwen3.8-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 63% of input |
+| jiuwenswarm | qwen3.8-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 64% of input |
+| jiuwenswarm | step-3.7-flash | pass | pass | pass (gpt-6.2-sol) | pass | pass | vercel | cache 29% of input |
 | kilo | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 69% of input |
 | kilo | gpt-6.2-astra | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
 | kilo | gpt-6.2-sol | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 100% of input |
@@ -7085,7 +7163,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 32% of input |
 | zeroclaw | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 17% of input |
 
-401 pairs, 1893 of 1911 scenario runs passed; 10 pairs served by another connection or as another model are findings, not counted.
+459 pairs, 2183 of 2201 scenario runs passed; 10 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -7122,7 +7200,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - qwen x claude-haiku-5.5: no prompt cache reads over 569929 input tokens (every call paid full price)
 - qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 1366 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 1375 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7831,6 +7909,15 @@ Not run in this column, 1366 pairs the provider serves that the harness did not 
 - jcode x qwen3.8-flash: not run, not run in this column
 - jcode x qwen3.8-max: not run, not run in this column
 - jcode x step-3.7-flash: not run, not run in this column
+- jiuwenswarm x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- jiuwenswarm x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- jiuwenswarm x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- jiuwenswarm x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jiuwenswarm x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jiuwenswarm x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jiuwenswarm x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jiuwenswarm x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jiuwenswarm x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kilo x claude-fable-5: not run, not run in this column
 - kilo x claude-fable-5-1: not run, not run in this column
 - kilo x claude-fable-5-2: not run, not run in this column

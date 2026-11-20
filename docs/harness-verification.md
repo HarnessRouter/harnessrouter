@@ -149,6 +149,18 @@ depends on what the last proved, so a failure found early is a failure not paid 
    nothing else (see "One provider at a time" below). A column is one connection's measurement; a
    second provider is what separates "this base works" from "this base works on that key".
 
+6. **One pass through the console BY HAND**, in a browser, after the five scripted steps are green:
+   create a harness, read the model menu, run a task, read the answer, switch a tool off, save, and
+   run a task that needs it. Every step above is judged by a script against a token, a file or a
+   tool name — true things, and blind to everything a person actually sees. The pass is quick (five
+   minutes) and it is the only step where the question is "would someone paying for this be happy
+   with what they got?" On the base this step was added for it found two things in one sitting that
+   all five scripted steps had passed over: every answer came back in Chinese whatever language the
+   task was written in (the package's own `preferred_language: zh`, which no token-matching judge
+   can see), and the tools panel's own flow — toggle, then Save — had to be walked to confirm that
+   what the console shows a person and what the server stores are the same thing. Write down what
+   the console shows for a switched-off tool: that sentence is what a customer will quote back.
+
 The other columns — browser, thinking, environments — are run when a base claims those surfaces.
 Every step's findings go to `docs/support-matrix-notes.md` under that base, including the steps that
 were NOT run, by name. A harness with step 1 green and nothing else is reported as exactly that.
@@ -193,9 +205,23 @@ build rather than kept.
 ## Adding a harness
 
 A new harness is registered in the places below, and is not finished until it has a measured
-column. Every one of them fails SILENTLY when missed — the harness still builds, still answers, and
-loses one capability without saying so. The single exception is the console's backend union type,
-which fails the type-check, and that is the only one a compiler will find for you.
+column. Most of them fail SILENTLY when missed — the harness still builds, still answers, and loses
+one capability without saying so.
+
+Seven do not, and it is worth knowing which, because they are the cheapest ones to get right: the
+console's backend union type fails the TYPE-CHECK (the only one a compiler will find for you), and
+six fail in the TEST SUITE — `test_install_uid.py` on point 18, `test_console_placeholders.py` when
+the console's placeholder list is not the catalog's own, `test_gpt_6_2.py` on the per-base defaults
+it pins, `test_muse_wonder.py` on the count of bases offering the Meta family, and the two written
+when points 19 and 20 were added, `test_guide_provider_table.py` and `test_readme_base_list.py`,
+each holding its page to the source of truth it is derived from. Run the suite before reading the
+rest of this list as the whole of the work: on the base added on 2026-11-18 those four were the only
+registration points missed, and all four were named by a failing test rather than by a column.
+
+The last two points are a pattern worth naming: both are PAGES, both were missing for a whole batch,
+and neither broke anything. A documentation point is registered the same way a code one is — derived
+from the source of truth in the list above, and held there by a test — or it is not registered at
+all, because nothing will ever tell you.
 
 **The runner** — `runner/server.py`:
 
@@ -269,6 +295,25 @@ and need no edit — they were hand-written lists once, and each silently missed
     never measures this harness at all.
 17. `docs/support-matrix.md`, a column per provider, produced by the suite, with its notes in
     `docs/support-matrix-notes.md`.
+18. `docker/entrypoint.sh`'s `INSTALL_UID_ORDER`: one install uid per base, and
+    `install_as_uid` REFUSES a base that is not in the list, so a base missing from it cannot
+    install at all. A uid is the base's PLACE in that list, so a new name goes on the END — an
+    insertion renumbers every base after it on a volume that already holds them.
+    `gateway/tests/test_install_uid.py` is what catches the omission, which is how this point was
+    found: it was missing from this list while the list claimed to be complete.
+19. `docs/self-hosting-guide.md`'s "Connection `provider`" table: the row for every provider type
+    that can drive the base, in the operator's own vocabulary. Nothing fails when a base is missing
+    from it — which is why it was missing for a whole batch: an operator reading that table to
+    decide which key to buy is told the base cannot be driven at all. The wiring in point 10 is the
+    source of truth, so the row list is derived from it, and `custom` carries the format the base
+    speaks (point 11).
+20. `README.md`'s "N harness bases today" sentence: the base's label among the names, and the count
+    kept with them. Nothing fails when it is missing — the base installs, the console offers it, and
+    the first page anyone reads says the product does not have it. Being opt-in is not a reason to
+    leave it out: Roder is opt-in and was added to this sentence in the pull request that added it
+    (#588), while the base added on 2026-11-18 was not, which is how this point was found — on the
+    day its own pull request was opened. `_BASE_CATALOG` (point 9) is the source of truth, and
+    `gateway/tests/test_readme_base_list.py` holds the sentence to it in both directions.
 
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.

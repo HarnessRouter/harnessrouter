@@ -425,17 +425,17 @@ offers you providers that work.
 | Connection `provider` | Backends that can use it |
 |---|---|
 | `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, fast-agent, Docker Agent, Mistral Vibe |
-| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, System One, CheetahClaws, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Mistral Vibe |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe, JiuwenSwarm, Roder |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, System One, CheetahClaws, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe, JiuwenSwarm, Claude Code, Roder |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe, JiuwenSwarm, Roder |
+| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw, MiMo Code, jcode, OpenSquilla, nanobot, Mistral Vibe, JiuwenSwarm, Docker Agent, fast-agent |
 | `typesafe` | System One (Jev on TypeSafe's own API: `jev-latest`, `jev-preview`) |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits), Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe |
-| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, CheetahClaws (OpenAI format), Deep Agents Code (Responses format), fast-agent (OpenAI format), Docker Agent (OpenAI format), Mistral Vibe (OpenAI format) |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe, JiuwenSwarm, Roder |
+| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits), Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe, JiuwenSwarm, Roder |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe, JiuwenSwarm, Roder |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, Deep Agents Code, fast-agent, Docker Agent, Mistral Vibe, JiuwenSwarm, Roder |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, CheetahClaws (OpenAI format), Deep Agents Code (Responses format), fast-agent (OpenAI format), Docker Agent (OpenAI format), Mistral Vibe (OpenAI format), JiuwenSwarm (OpenAI format), Roder (Responses format) |
 
 </details>
 
@@ -1118,6 +1118,31 @@ docker run -e HR_BACKENDS=opencode ...                             # lean
 Aider, OpenHands and Agent Zero are the largest of the set: each environment is 600-700 MB and takes
 a minute or two to install on a fresh volume. All three are in the default list; leave any of them
 out of `HR_BACKENDS` if you will not use it, and the console stops offering it.
+
+JiuwenSwarm (`jiuwenswarm`) is **not** in the default list, and it is the one base where that is
+about size: its environment is 244 distributions and 1.9 GB, more than twice the largest base
+above. Add it to `HR_BACKENDS` when you want it:
+
+```bash
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode,jiuwenswarm ...
+```
+
+It drives its own machine protocol (`jiuwenswarm-process --run-json`) on an OpenAI-compatible
+connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, Google's
+OpenAI-compatible surface, or a custom endpoint with `api_format=openai`). A direct Anthropic
+connection does not drive it: its Anthropic dialect has not been measured here. Its instruction file
+is `JIUWENSWARM.md`. Its first support-matrix column (Vercel, 58 pairs, 290 of 290 scenario runs)
+is in [support-matrix.md](support-matrix.md), beside a second column on a bring-your-own endpoint
+(13 pairs, 65 of 65); [support-matrix-notes.md](support-matrix-notes.md) says what each column found
+and what is still unmeasured here (the browser plane, and a Google column, for want of a working
+key).
+
+**One limit worth knowing before you switch a tool off on this base:** on workswarm 0.2.8 the
+runtime's own tool allowlist cannot be installed on a turn that also declares an MCP server — its
+ability list holds the server configs and the allowlist reads a field they do not have — so a
+harness with an MCP server can switch off `fetch_webpage` (which the config withholds on its own)
+and nothing else. Any other combination is refused with that reason rather than reported as off
+while it is still callable. A harness with no MCP server can switch off any of the fourteen.
 
 Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
 archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv
