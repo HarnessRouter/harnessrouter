@@ -5550,3 +5550,14 @@ side instance, against the stand-in model:
   ListAgents, SendMessage, ScheduleWakeup, the Cron tools, PushNotification and DesignSync (other sessions, a
   later turn, a Claude account), denies Workflow with subagents and Monitor with Bash.
 - The CLI's own auto memory is still on by default, and still off when the platform's memory is attached.
+
+
+## Opper model provider verification (2026-11-21)
+
+Opper (`https://api.opper.ai/v3/compat`, AWS Stockholm) added as an EU-hosted gateway provider (#370) for operators requiring model traffic to remain inside the EU.
+
+- **Endpoint and Scope:** Fixed `base_url` `https://api.opper.ai/v3/compat`, secret `api_key`. Connects via OpenAI-compatible chat completions at `/v3/compat/chat/completions`.
+- **Harness Wiring:** 24 OpenAI-compatible agent backends wired to `openai-api` (Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, fast-agent, Docker Agent, Mistral Vibe).
+- **Claude Code & Codex:** Claude Code is omitted because Opper places Anthropic Messages at `/v3/compat/v1/messages` which requires a Messages-specific base adjustment. Codex, dcode, and Roder are omitted as Responses API (`/v3/compat/responses`) was not live-verified.
+- **Model Catalogue:** 62 canonical models mapped in `_VENDOR_MODELS["opper"]`, verified against live `GET https://api.opper.ai/v3/models`. Every listed model carries confirmed `tools` capability and text input/output modalities. Verified by automated gate `gateway/tests/test_opper_catalog_capabilities.py` with offline skip.
+
