@@ -47,6 +47,7 @@ import {
   countOn, isOwnSkill, setupPlugins, setupSkills, setupTools,
 } from './setupParts';
 import { PluginSwitches, pluginLines, type PluginsIn } from './PluginSwitches';
+import { parsePluginManifest } from './pluginManifest';
 import { openNewSetup } from '../start/open';
 import { MemoryLayer, memorySummary } from '../memories/MemoryLayer';
 import { announceAgentMemory } from '../memories/AgentMemory';
@@ -233,8 +234,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       }
       const mf = files.find((f) => f.path === 'plugin.json');
       if (!mf || mf.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a plugin package.');
-      let manifest: HarnessPlugin['manifest'] & { $schema?: string } = {};
-      try { manifest = JSON.parse(mf.content) as typeof manifest; } catch { throw new Error('Its plugin.json is not valid JSON.'); }
+      const manifest = parsePluginManifest<HarnessPlugin['manifest'] & { $schema?: string }>(mf.content);
       const name = String(manifest?.name || '');
       if (!name) throw new Error('Its plugin.json names no plugin.');
       if ((rec.plugins || []).some((p) => p.name === name)) throw new Error(`A plugin named ${name} is already installed on this harness.`);
