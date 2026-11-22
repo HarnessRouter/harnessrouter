@@ -8620,6 +8620,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
+        "qwen4-max":          "qwen/qwen4-max",     # 2026-11-16, see the catalog's note
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
         "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
@@ -8760,6 +8761,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
+        "qwen4-max":          "qwen/qwen4-max",
         "kimi-k2.7-code":     "moonshot/kimi-k2.7-code",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
         "minimax-m3":         "minimax/minimax-m3",
@@ -8789,6 +8791,9 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
+    # qwen4-max: 404 model_not_found on qwen, pi and hermes, one real turn each (2026-11-22); OpenRouter and
+    # Vercel served the same three turns as itself
+    "qwen4-max",
     "claude-haiku-5.5",   # not on TokenRouter's /v1/models (2026-10-07): the vendor, OpenRouter and Vercel serve it
     # No Meta id is on TokenRouter's list (2026-09-13).
     "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
@@ -8990,6 +8995,7 @@ _VENDOR_MODELS["qoder"] = {m: m for m in (
 _VERCEL_RESLUG = {
     "qwen3.7-max":        "alibaba/qwen3.7-max",
     "qwen3.8-max":        "alibaba/qwen3.8-max",
+    "qwen4-max":          "alibaba/qwen4-max",
     "qwen3.7-flash":      "alibaba/qwen3.7-flash",
     "qwen3.8-flash":      "alibaba/qwen3.8-flash",
     "qwen3.8-27b":        "alibaba/qwen3.8-27b",
@@ -9066,7 +9072,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     # Moonshot
     "kimi-k3", "kimi-k2.7-code",
     # Alibaba
-    "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
+    "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
     # Zhipu
     "glm-5.3", "glm-5.3-flash",
     # Mistral
@@ -9220,6 +9226,24 @@ _MODEL_CATALOG: dict[str, dict] = {
     # where its predecessor is, gpt-6.2-astra beside gpt-6-astra (the Responses bases,
     # RESPONSES_ONLY_MODELS) and gpt-6.2-sol beside gpt-6.1-sol (every base that offers it, the same
     # channel refusals and exclusions), newest first; no default changed. Real turns prune them.
+    #
+    # qwen4-max (Alibaba, 2026-11-16; Model Studio's model and pricing pages, updated 2026-11-21, and
+    # the aggregators' own /v1/models, read 2026-11-22): the first and so far only model of the Qwen 4
+    # family, closed weights, 1M context, 131,072 output tokens (262,144 thinking), text, image and video
+    # in. Model Studio names no preview, snapshot or -latest alias beside it. openrouter and llmtr name
+    # it `qwen/qwen4-max`, vercel `alibaba/qwen4-max`, and each lists tools for it. TokenRouter answers
+    # 404 model_not_found (one real turn on each of qwen, pi and hermes, 2026-11-22), so it is off
+    # TokenRouter's list (_TOKENROUTER_NO_CHANNEL); OpenRouter and Vercel served the same turns as
+    # itself. llmtr is offered from its published list and was not called (no such connection on the
+    # test instance), as for the gpt-6.2 line. List price, no markup (Model Studio, international, one
+    # tier up to 1M tokens, per 1M tokens): qwen4-max $1.50 in / $4.50 out, cached $0.075, cache write
+    # $1.875 (5 min). Thinking is on by default there (effort high), and thinking tokens bill as output.
+    # MEASURED (2026-11-22, the test instance, the matrix's five scenarios on every base that offers it):
+    # 25 of 25 bases pass on Vercel and 25 of 25 on OpenRouter, each turn served as qwen4-max itself
+    # (cline's turns report no served model, as for every model there). It is offered exactly where
+    # qwen3.8-max is (every base that offers it, newest first in the Alibaba family) and on fast-agent
+    # too, where qwen3.8-max is off for its own measured answer and qwen4-max passed. No default
+    # changed; runner/reasoning.py offers no reasoning levels for it yet.
     # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
     # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
     # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
@@ -9257,7 +9281,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
                           "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
-                          "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
+                          "qwen3.7-max", "qwen4-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash",
@@ -9287,7 +9311,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
-                       "qwen3.7-max", "qwen3.8-max",
+                       "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
@@ -9303,7 +9327,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
-                            "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                            "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
@@ -9342,7 +9366,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                   "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                   "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                   "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
-                  "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
+                  "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
                   "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash",
                   "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # kimi (Kimi Code CLI): the same relay reach as qwen and cline (OpenAI chat/completions through the
@@ -9367,7 +9391,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                  "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9398,7 +9422,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                     "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                     "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                     "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                     "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                     "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                     "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9418,7 +9442,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9441,7 +9465,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                       "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                       "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                       "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                       "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                       "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9468,7 +9492,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          # within the ten-minute limit, twice (0.34.0-rc.7, 2026-10-15): not offered.
                          "muse-glimmer-30b",
                          "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
-                         "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
+                         "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
                          "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
                          "nemotron-3-super"]},
@@ -9483,7 +9507,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # litellm 1.88.1 takes off that one prefix and nothing else).
     "agentzero": {"default": "gpt-6.1-sol", "models": []},
     "qwen": {"default": "qwen3.7-max",
-             "models": ["qwen3.7-max", "qwen3.8-max",
+             "models": ["qwen3.7-max", "qwen4-max", "qwen3.8-max",
                         "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -9510,7 +9534,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
-                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
@@ -9521,7 +9545,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                      "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                      "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
@@ -9594,7 +9618,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                          "gemini-3-flash-preview",
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
-                         "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
+                         "qwen3.7-max", "qwen4-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
                          "glm-5.3", "glm-5.3-flash",
                          "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
