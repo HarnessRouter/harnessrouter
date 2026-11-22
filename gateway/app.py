@@ -8791,6 +8791,9 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
+    # qwen4-max: 404 model_not_found on qwen, pi and hermes, one real turn each (2026-11-22); OpenRouter and
+    # Vercel served the same three turns as itself
+    "qwen4-max",
     "claude-haiku-5.5",   # not on TokenRouter's /v1/models (2026-10-07): the vendor, OpenRouter and Vercel serve it
     # No Meta id is on TokenRouter's list (2026-09-13).
     "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
@@ -9227,14 +9230,18 @@ _MODEL_CATALOG: dict[str, dict] = {
     # qwen4-max (Alibaba, 2026-11-16; Model Studio's model and pricing pages, updated 2026-11-21, and
     # the aggregators' own /v1/models, read 2026-11-22): the first and so far only model of the Qwen 4
     # family, closed weights, 1M context, 131,072 output tokens (262,144 thinking), text, image and video
-    # in. Model Studio names no preview, snapshot or -latest alias beside it. openrouter, tokenrouter and
-    # llmtr name it `qwen/qwen4-max`, vercel `alibaba/qwen4-max`; each lists tools for it. List price,
-    # no markup (Model Studio, international, one tier up to 1M tokens, per 1M tokens): qwen4-max $1.50
-    # in / $4.50 out, cached $0.075, cache write $1.875 (5 min). Thinking is on by default there (effort
-    # high), and thinking tokens bill as output. NOT YET MEASURED: a candidate placed exactly where
-    # qwen3.8-max is (every base that offers it, newest first in the Alibaba family) and offered on
-    # fast-agent too, where qwen3.8-max is off for its own measured answer, not the family's. No
-    # default changed; runner/reasoning.py names measured ids only. Real turns prune it.
+    # in. Model Studio names no preview, snapshot or -latest alias beside it. openrouter and llmtr name
+    # it `qwen/qwen4-max`, vercel `alibaba/qwen4-max`, and each lists tools for it. TokenRouter answers
+    # 404 model_not_found (one real turn on each of qwen, pi and hermes, 2026-11-22), so it is off
+    # TokenRouter's list (_TOKENROUTER_NO_CHANNEL); OpenRouter and Vercel served the same turns as
+    # itself. llmtr is offered from its published list and was not called (no such connection on the
+    # test instance), as for the gpt-6.2 line. List price, no markup (Model Studio, international, one
+    # tier up to 1M tokens, per 1M tokens): qwen4-max $1.50 in / $4.50 out, cached $0.075, cache write
+    # $1.875 (5 min). Thinking is on by default there (effort high), and thinking tokens bill as output.
+    # NOT YET MEASURED: a candidate placed exactly where qwen3.8-max is (every base that offers it,
+    # newest first in the Alibaba family) and offered on fast-agent too, where qwen3.8-max is off for
+    # its own measured answer, not the family's. No default changed; runner/reasoning.py names measured
+    # ids only. Real turns prune it.
     # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
     # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
     # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and

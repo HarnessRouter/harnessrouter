@@ -29,15 +29,18 @@ DEFAULTS = {
 
 
 def test_every_aggregator_that_carries_the_qwen_line_names_its_own_id():
-    for provider in ("openrouter", "tokenrouter", "llmtr"):
+    for provider in ("openrouter", "llmtr"):
         assert gw._vendor_models(provider)[NEW] == "qwen/qwen4-max", provider
     assert gw._vendor_models("vercel")[NEW] == "alibaba/qwen4-max"
-    assert NEW not in gw._TOKENROUTER_NO_CHANNEL and NEW not in gw._VERCEL_NO_CHANNEL
+    assert NEW not in gw._VERCEL_NO_CHANNEL
     assert NEW not in gw._OPENROUTER_RESLUG   # OpenRouter serves it under the plain name, no dated alias
-    # every vendor table that carries qwen3.8-max carries qwen4-max, and no other one does
+    # TokenRouter answered 404 model_not_found on three bases (2026-11-22): off its list, not out of the catalog
+    assert NEW in gw._TOKENROUTER_NO_CHANNEL and NEW not in gw._vendor_models("tokenrouter")
+    assert PRED in gw._vendor_models("tokenrouter")
+    # every other vendor table that carries qwen3.8-max carries qwen4-max, and no other one does
     for provider, table in gw._VENDOR_MODELS.items():
-        if provider == "harnessrouter":
-            continue   # the hosted list, read at run time
+        if provider in ("harnessrouter", "tokenrouter"):
+            continue   # the hosted list, read at run time; TokenRouter above
         assert (NEW in table) == (PRED in table), provider
     # Model Studio lists no preview, snapshot or -latest alias beside it, so none is offered anywhere
     for table in gw._VENDOR_MODELS.values():
@@ -82,7 +85,6 @@ def test_it_is_a_chat_model_not_a_responses_only_one_and_vision_waits_for_a_meas
 
 def test_the_provider_slug_reaches_the_wire():
     assert gw._map_model({"provider": "openrouter", "backend": "hermes"}, NEW) == "qwen/qwen4-max"
-    assert gw._map_model({"provider": "tokenrouter", "backend": "pi"}, NEW) == "qwen/qwen4-max"
     assert gw._map_model({"provider": "vercel", "backend": "qwen"}, NEW) == "alibaba/qwen4-max"
     assert gw._map_model({"provider": "llmtr", "backend": "opencode"}, NEW) == "qwen/qwen4-max"
 
