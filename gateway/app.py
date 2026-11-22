@@ -8079,6 +8079,39 @@ def _decode_input_file(p: dict) -> tuple[str | None, str | None, str | None, str
     return fname, None, None, None
 
 
+# An input_image reaches the agent the way an input_file does: as a file in its working directory. It used to be
+# kept in the turn's record and nowhere else, so the agent never saw it, the request still answered 200 with
+# ignored_fields [], and the agent said no image was attached. Tasks §2 says an image comes inline or by file_id;
+# a URL is not fetched (the server would be reaching an address the caller picked), and a part that can't be read
+# is refused by name.
+_INPUT_IMAGE_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/gif": "gif",
+                    "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
+
+
+def _decode_input_image(p: dict) -> tuple[str | None, str | None, str | None, str | None]:
+    """→ (filename, base64, media_type, file_id), as _decode_input_file. Inline: a data URL, as a string or
+    as {"url": ...} (the Chat Completions spelling), named from its bytes so the same image under two turns
+    is one file. By file_id: the name comes from the upload's sidecar unless the part names one."""
+    url = p.get("image_url")
+    if isinstance(url, dict):
+        url = url.get("url")
+    if isinstance(url, str) and url:
+        if not url.startswith("data:"):
+            raise uhp_error(400, "invalid_input", "An input_image is sent inline as a data URL (data:image/png;base64,...) "
+                                                  "or by file_id from POST /v1/files; an image URL is not fetched.", "input")
+        head, _, b64 = url.partition(",")
+        media = head[5:].split(";")[0].lower()
+        ext = _INPUT_IMAGE_EXT.get(media)
+        if not ext or ";base64" not in head or not b64:
+            raise uhp_error(400, "invalid_input", "An input_image's data URL is a base64 image "
+                                                  f"({', '.join(sorted(set(_INPUT_IMAGE_EXT.values())))}).", "input")
+        name = p.get("filename") or f"image-{hashlib.sha256(b64.encode()).hexdigest()[:12]}.{ext}"
+        return name, b64, media, None
+    if p.get("file_id"):
+        return p.get("filename"), None, None, p["file_id"]
+    raise uhp_error(400, "invalid_input", "An input_image carries image_url (a data URL) or file_id.", "input")
+
+
 def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
     """→ (prompt_text, file_specs, normalized_input_items). file_specs carry content_b64 or file_id."""
     if isinstance(inp, str):
@@ -8111,7 +8144,10 @@ def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
                     files.append({"filename": fname, "content_b64": b64, "file_id": file_id, "media_type": media})
                 parts.append({"type": "input_file", "filename": fname, "file_id": file_id})
             elif pt == "input_image":
-                parts.append({"type": "input_image", "image_url": p.get("image_url"), "file_id": p.get("file_id")})
+                fname, b64, media, file_id = _decode_input_image(p)
+                files.append({"filename": fname, "content_b64": b64, "file_id": file_id, "media_type": media})
+                # the record keeps the name, as an input_file's does, not the bytes
+                parts.append({"type": "input_image", "filename": fname, "file_id": file_id})
         items_norm.append({"role": role, "content": parts})
     return "\n\n".join(t for t in texts if t).strip(), files, items_norm
 
