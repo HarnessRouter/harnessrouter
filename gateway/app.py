@@ -5229,20 +5229,78 @@ def _with_provider_base(conn: dict | None) -> dict | None:
 
 
 _PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
-                                  r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
+                                  r"insufficient_quota|rate[ _-]?limit|quota|forbidden", re.IGNORECASE)
+# ("too many requests" alone is not on it: Entra's own throttling answers a 502 with "AADSTS90055: Too many
+# requests.", which is the sign-in failing, not the provider turning the key down, and moves on as before.)
+# Of the provider's answers that match above, three are not the key being refused, and saying they were sends people
+# to check a key that works. Out of quota or credit comes first, since OpenAI's insufficient_quota is itself a 429;
+# then a rate limit, which passes if the person waits; then the provider taking the key and refusing this model for
+# it (the same key works on another model).
+_PROVIDER_NO_QUOTA_RE = re.compile(r"insufficient_quota|exceeded your current quota|\bquota\b|out of credits?|"
+                                   r"credit balance is too low|insufficient (?:credits?|balance|funds)", re.I)
+_PROVIDER_RATE_LIMIT_RE = re.compile(r"\b429\b|rate[ _-]?limit|too many requests|throttl", re.I)
+_PROVIDER_MODEL_REFUSED_RE = re.compile(r"model_not_found|model_not_allowed|model_access_denied|"
+                                        r"(?:no|not have|lacks?) access to (?:the )?model|"
+                                        r"not (?:allowed|permitted|authori[sz]ed|entitled) to (?:use|access) (?:this |the )?model|"
+                                        r"model\W{0,3}[\w./:-]{0,80}\W{0,3}(?:is not available|not available to|is not allowed|"
+                                        r"not enabled|access denied|permission denied|does not exist or you do not have access)", re.I)
+# "retry after 20s", "Retry-After: 20", "try again in 1.5s", "please retry in 20 seconds", "try again in 120ms"
+_PROVIDER_RETRY_AFTER_RE = re.compile(r"(?:retry[ _-]?after|(?:try again|retry) in)\W{0,3}(\d+(?:\.\d+)?)\s*"
+                                      r"(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)?\b", re.I)
+# What each one is called in a failed response's error.detail.reason, and whether running the task again can succeed.
+_PROVIDER_FAILURE_REASONS = {"refused": ("provider_key_refused", False), "model": ("provider_model_refused", False),
+                             "quota": ("provider_quota_exhausted", False), "rate_limit": ("provider_rate_limited", True)}
 
 
-def _provider_refused(err: str) -> bool:
-    """Whether a failure on the org's own connection is the provider refusing the key. Judged on
-    the first line only: that is the line the runner chose as the provider's answer, and a
-    diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex
-    compaction failure or a bad request into "your key was refused"."""
+def _provider_failure_kind(err: str) -> str:
+    """What the provider's answer on the org's own connection was: "refused" (it would not take the key),
+    "model" (it took the key and refused this model for it), "quota" (the account behind it has no quota or
+    credit), "rate_limit" (too many requests for now), or "" (not the provider turning the request down).
+    Judged on the first line only: that is the line the runner chose as the provider's answer, and a
+    diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex compaction
+    failure or a bad request into "your key was refused"."""
     first = (err or "").split("\n", 1)[0]
     # A 401 from the runner's own MCP relay (an address under /hr-mcp-) is not the provider refusing the
     # key: OpenHands' follow-ups read "Your vercel key was refused" over the relay's "unknown relay token" (#714).
-    if "/hr-mcp-" in first:
-        return False
-    return bool(_PROVIDER_REFUSAL_RE.search(first))
+    if "/hr-mcp-" in first or not _PROVIDER_REFUSAL_RE.search(first):
+        return ""
+    if _PROVIDER_NO_QUOTA_RE.search(first):
+        return "quota"
+    if _PROVIDER_RATE_LIMIT_RE.search(first):
+        return "rate_limit"
+    if _PROVIDER_MODEL_REFUSED_RE.search(first):
+        return "model"
+    return "refused"
+
+
+def _provider_refused(err: str) -> bool:
+    """Whether the provider turned the org's own connection down (any of _provider_failure_kind's four). The turn
+    stops there rather than move on to another connection, as it always has; only what it says differs by kind."""
+    return bool(_provider_failure_kind(err))
+
+
+def _provider_retry_after(err: str) -> float | None:
+    """The wait, in seconds, the provider's first line asks for, when it names one."""
+    m = _PROVIDER_RETRY_AFTER_RE.search((err or "").split("\n", 1)[0])
+    if not m:
+        return None
+    n, unit = float(m.group(1)), (m.group(2) or "s").lower()
+    return n / 1000 if unit.startswith("ms") or unit.startswith("milli") else n * 60 if unit.startswith("m") else n
+
+
+def _provider_failure_detail(err: str) -> dict:
+    """The error.detail fields that say why the provider turned the turn down and whether a retry can succeed,
+    so a client with automatic retries stops on a refused key or an empty account instead of matching words
+    in the message. Empty when the provider's line is not one of the four. None of the provider's text."""
+    kind = _provider_failure_kind(err)
+    if not kind:
+        return {}
+    reason, retryable = _PROVIDER_FAILURE_REASONS[kind]
+    out: dict = {"reason": reason, "retryable": retryable}
+    wait = _provider_retry_after(err) if kind == "rate_limit" else None
+    if wait is not None:
+        out["retry_after_seconds"] = wait
+    return out
 
 
 # A Responses provider refusing a replayed history: OpenAI's encrypted reasoning items are opened
@@ -5278,7 +5336,20 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     # custom endpoint on some bases) and keeps the vendor in `_vendor`.
     provider = str((conn or {}).get("_vendor") or (conn or {}).get("provider") or "your provider")
     what = "connection" if str((conn or {}).get("auth") or "").strip().lower() == "entra" else "key"
-    return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
+    said = err or "the provider returned an error"
+    kind = _provider_failure_kind(err)
+    if kind == "rate_limit":
+        wait = _provider_retry_after(err)
+        when = (f"It asked to wait {wait:g} s before trying again." if wait is not None and wait < 120
+                else f"It asked to wait {wait / 60:.0f} min before trying again." if wait is not None
+                else "Wait a minute and try again.")
+        return f"{provider} rate-limited this task (too many requests for now; your {what} was not refused). {when} {said}"
+    if kind == "quota":
+        return f"Your {provider} account has no quota or credit left for this {what}; add credit with {provider}, then try again: {said}"
+    if kind == "model":
+        return (f"{provider} refused this model for your {what} (the {what} itself was accepted). Choose another model, "
+                f"or enable this one for your account with {provider}: {said}")
+    return f"Your {provider} {what} was refused: {said}"
 
 
 def _failure_detail(rec: dict) -> dict:
@@ -5293,6 +5364,8 @@ def _failure_detail(rec: dict) -> dict:
     tool = str((rec.get("error_detail") or {}).get("tool") or "")
     if tool:
         detail["tool"] = tool
+    # why the provider turned the org's own connection down, and whether a retry can succeed
+    detail.update(rec.get("provider_failure") or {})
     return detail
 
 
@@ -11594,6 +11667,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             # so the rule is the refusal itself, not which store the key came from. Other failures
             # (a transient error, a timeout) still move on to the next connection.
             rec["error_message"] = _refusal_message(conn, _last_err)
+            rec["provider_failure"] = _provider_failure_detail(_last_err)
             status = "failed"
             rec["status"] = "failed"
             await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "last_connection": name})
