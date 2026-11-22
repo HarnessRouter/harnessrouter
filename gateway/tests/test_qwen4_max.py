@@ -1,8 +1,9 @@
 """qwen4-max (Alibaba, released 2026-11-16; Model Studio's model and pricing pages and the aggregators' own
-/v1/models, read 2026-11-22): every provider we route to that carries the Qwen line names it, and it is a
-candidate placed exactly where qwen3.8-max is, to be measured. Newest first in the Alibaba family; no
-default changed. fast-agent offers it although it does not offer qwen3.8-max: that exclusion is for
-qwen3.8-max's own measured answer there, not for the family."""
+/v1/models, read 2026-11-22). OpenRouter, Vercel and llmtr name it; TokenRouter answered 404 model_not_found and
+does not. It is placed exactly where qwen3.8-max is and measured there: 25 of 25 bases pass all five matrix
+scenarios on Vercel and on OpenRouter. Newest first in the Alibaba family; no default changed. fast-agent offers
+it although it does not offer qwen3.8-max: that exclusion is for qwen3.8-max's own measured answer there, not
+for the family."""
 from __future__ import annotations
 
 import re
@@ -53,7 +54,8 @@ def test_the_facts_read_on_the_day_are_written_beside_the_catalog():
     src = re.sub(r"\s*\n\s*#\s*", " ", APP_PY.read_text())
     assert ("qwen4-max $1.50 in / $4.50 out, cached $0.075, cache write $1.875 (5 min)") in src
     assert "Thinking is on by default there (effort high), and thinking tokens bill as output" in src
-    assert "NOT YET MEASURED: a candidate placed exactly where qwen3.8-max is" in src
+    assert ("MEASURED (2026-11-22, the test instance, the matrix's five scenarios on every base that offers it): "
+            "25 of 25 bases pass on Vercel and 25 of 25 on OpenRouter") in src
 
 
 def test_it_leads_the_alibaba_family_newest_first():

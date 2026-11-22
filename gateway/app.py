@@ -9238,10 +9238,12 @@ _MODEL_CATALOG: dict[str, dict] = {
     # test instance), as for the gpt-6.2 line. List price, no markup (Model Studio, international, one
     # tier up to 1M tokens, per 1M tokens): qwen4-max $1.50 in / $4.50 out, cached $0.075, cache write
     # $1.875 (5 min). Thinking is on by default there (effort high), and thinking tokens bill as output.
-    # NOT YET MEASURED: a candidate placed exactly where qwen3.8-max is (every base that offers it,
-    # newest first in the Alibaba family) and offered on fast-agent too, where qwen3.8-max is off for
-    # its own measured answer, not the family's. No default changed; runner/reasoning.py names measured
-    # ids only. Real turns prune it.
+    # MEASURED (2026-11-22, the test instance, the matrix's five scenarios on every base that offers it):
+    # 25 of 25 bases pass on Vercel and 25 of 25 on OpenRouter, each turn served as qwen4-max itself
+    # (cline's turns report no served model, as for every model there). It is offered exactly where
+    # qwen3.8-max is (every base that offers it, newest first in the Alibaba family) and on fast-agent
+    # too, where qwen3.8-max is off for its own measured answer and qwen4-max passed. No default
+    # changed; runner/reasoning.py offers no reasoning levels for it yet.
     # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
     # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
     # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
