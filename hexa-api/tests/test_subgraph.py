@@ -5,6 +5,7 @@ import json
 import pytest
 
 from app.tasks.service import TaskError, workflow_from_json
+from app.db.models import NodeRun
 from tests.test_task_workflows import authenticated, node, wait_run
 
 
@@ -473,3 +474,48 @@ def test_subgraph_pause_does_not_dispatch_next_child_until_continue(client, app)
     result = wait_run(client, started['id'], {'completed', 'failed'})
     assert result['status'] == 'completed', result
     assert [call.get('subgraph_node_id') for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second']
+
+
+def test_active_subgraph_retry_appends_failed_child_attempt_and_preserves_success(client, app):
+    authenticated(client)
+    calls = []
+    attempts = {'second': 0}
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'items': []}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            if context['subgraph_node_id'] == 'second':
+                attempts['second'] += 1
+                if attempts['second'] == 1:
+                    return {'status': 'failed'}
+            return {'status': 'completed', 'child': context['subgraph_node_id']}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': 'ok'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    task = client.post('/api/hexa/tasks', json={'workflow': workflow()}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'subgraph-active-retry'}).json()
+    failed = wait_run(client, started['id'], {'failed'})
+    group = next(row for row in failed['nodes'] if row['node_id'] == 'group')
+    items = client.get(f"/api/hexa/node-runs/{group['id']}/items").json()['items']
+    failed_child = next(row for row in items if row['status'] == 'failed')
+    from app.db.models import Run
+    with app.state.session_factory() as db:
+        db.get(Run, started['id']).status = 'running'
+        db.commit()
+    retried = client.post(
+        f"/api/hexa/runs/{started['id']}/nodes/group/retry",
+        json={'item_node_run_id': failed_child['id']},
+        headers={'Idempotency-Key': 'subgraph-active-retry-action'},
+    )
+    assert retried.status_code == 200, retried.text
+    completed = wait_run(client, started['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed
+    assert [call.get('subgraph_node_id') for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second', 'second']
+    with app.state.session_factory() as db:
+        rows = db.query(NodeRun).filter_by(run_id=started['id'], node_id='group', execution_kind='subgraph_node').order_by(NodeRun.id).all()
+        assert [row.status for row in rows] == ['succeeded', 'failed', 'succeeded']

@@ -42,6 +42,15 @@ test('subgraph history uses its persisted child manifest and local identity', ()
   assert.equal(hasManifest({ id: 19, node_id: 'group', input: {} }), false);
 });
 
+test('subgraph failed child exposes the same active or terminal retry action', () => {
+  const control = { id: 10, node_id: 'group', iteration: 1, input: { subgraph_node_run_ids: [11] } };
+  const item = { id: 11, run_id: 7, node_id: 'group', iteration: 1, execution_kind: 'subgraph_node', status: 'failed', input: {} };
+  assert.deepEqual(itemRetryAction({ id: 7, status: 'running' }, control, item, false), { kind: 'retry', itemId: 11 });
+  assert.deepEqual(itemRetryAction({ id: 7, status: 'failed' }, control, item, false), {
+    kind: 'resume', body: { kind: 'rerun', target_node: 'group', resume_from_run_id: 7, item_node_run_id: 11 },
+  });
+});
+
 test('nested subgraph history labels inner children separately', () => {
   assert.equal(attemptLabel({ execution_kind: 'subgraph_node', attempt: 1, iteration: 1,
     input: { subgraph_node_id: 'leaf', nested_subgraph_parent: true } }), '第 1 轮 · 嵌套子节点 leaf · 尝试 1');

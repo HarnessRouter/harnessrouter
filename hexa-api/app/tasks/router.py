@@ -9,6 +9,7 @@ from sqlalchemy import String, cast, delete, or_, select
 from app.db.models import AppWorkspace, Artifact, CommandReceipt, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
 from app.tasks.fanout import node_record_usage, retry_fanout, manifest_records
+from app.tasks.subgraph import retry_subgraph
 from app.tasks.service import ACTIVE, TaskError, all_node_runs, append_run_event, command_replay, command_receipt_json, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, receipts_for_nodes, reconcile_receipt, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
@@ -370,12 +371,14 @@ def build_router(app, require_session, user_id):
                     raise TaskError('invalid_transition', '终态运行请创建新的 Run。')
                 definition = json.loads(run.snapshot_json)['workflow']
                 item = next(item for item in definition['nodes'] if item['id'] == node_id)
-                if body.item_node_run_id is not None and (action != 'retry' or not (item.get('foreach') or item.get('dynamic_plan'))):
-                    raise TaskError('invalid_retry_item', '只有集合重试支持指定执行项。', 422)
+                if body.item_node_run_id is not None and (action != 'retry' or not (item.get('foreach') or item.get('dynamic_plan') or item.get('subgraph'))):
+                    raise TaskError('invalid_retry_item', '只有集合或子编排重试支持指定执行项。', 422)
                 if action == 'skip' and item.get('allow_skip') and row.status in ('idle', 'failed', 'canceled'):
                     row.status = 'skipped'
                 elif action == 'retry' and row.status in ('failed', 'canceled'):
-                    if item.get('foreach') or item.get('dynamic_plan'):
+                    if item.get('subgraph'):
+                        retry_subgraph(db, run, item, row, body.item_node_run_id, encoded=encoded, error=TaskError)
+                    elif item.get('foreach') or item.get('dynamic_plan'):
                         retry_fanout(db, run, item, row, body.item_node_run_id, encoded=encoded, error=TaskError)
                     else:
                         if node_record_usage(db, run_id) >= 500:

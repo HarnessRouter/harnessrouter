@@ -48,6 +48,92 @@ def _nested_children(db, control):
     return rows
 
 
+def retry_subgraph(db, run, item, control, selected_id, *, encoded, error):
+    """Append a subgraph control attempt while preserving successful child history."""
+    children = _children(db, control)
+    all_children = list(children)
+    for child in children:
+        state = json.loads(child.input_json)
+        if state.get('nested_subgraph_node_run_ids'):
+            all_children.extend(_nested_children(db, child))
+    selected = next((row for row in all_children if row.id == selected_id), None) if selected_id is not None else None
+    if selected_id is not None and (selected is None or selected.status not in ('failed', 'canceled')):
+        raise error('invalid_retry_item', '只能重试当前子编排清单中失败或取消的项。', 422)
+    retry_source = {
+        row.id for row in all_children
+        if row.status in ('failed', 'canceled') and (selected_id is None or row.id == selected_id or row.error_code == 'subgraph_sibling_failed')
+    }
+    if not retry_source:
+        raise error('invalid_retry_item', '当前子编排没有可重试的失败项。', 422)
+    if _record_count(db, run.id) + len(retry_source) + 1 > 500:
+        raise error('storage_limit_exceeded', '运行超过 500 条尝试限制。', 422)
+    clones = {}
+
+    def clone_nested(prior, parent_id):
+        state = json.loads(prior.input_json)
+        clone = NodeRun(
+            run_id=run.id, node_id=prior.node_id, iteration=prior.iteration,
+            attempt=prior.attempt + 1, execution_kind='subgraph_node', foreach_index=prior.foreach_index,
+            input_json=encoded({**state, 'subgraph_parent_node_run_id': parent_id, 'retry_of': prior.id}),
+            status='idle',
+        )
+        db.add(clone)
+        db.flush()
+        clones[prior.id] = clone
+        return clone
+
+    new_children = []
+    new_retry_ids = []
+    for child in children:
+        child_state = json.loads(child.input_json)
+        nested_ids = child_state.get('nested_subgraph_node_run_ids', [])
+        nested = [db.get(NodeRun, identity) for identity in nested_ids]
+        nested_retry = any(row is not None and row.id in retry_source for row in nested)
+        if child.id not in retry_source and not nested_retry:
+            new_children.append(child)
+            continue
+        if not nested_ids:
+            clone = clone_nested(child, control.id)
+            new_children.append(clone)
+            new_retry_ids.append(clone.id)
+            continue
+        if any(row is None or row.run_id != run.id or row.execution_kind != 'subgraph_node' for row in nested):
+            raise error('invalid_retry_item', '来源子编排清单不可用。', 422)
+        outer = clone_nested(child, control.id)
+        outer_state = json.loads(outer.input_json)
+        nested_manifest, nested_retry_ids = [], []
+        for leaf in nested:
+            if leaf.id not in retry_source:
+                nested_manifest.append(leaf.id)
+                continue
+            clone = clone_nested(leaf, outer.id)
+            nested_manifest.append(clone.id)
+            nested_retry_ids.append(clone.id)
+        outer_state['nested_subgraph_node_run_ids'] = nested_manifest
+        outer_state['nested_retry_subgraph_node_run_ids'] = nested_retry_ids
+        outer.input_json = encoded(outer_state)
+        outer.status = 'running'
+        new_children.append(outer)
+        new_retry_ids.append(outer.id)
+    state = json.loads(control.input_json)
+    state['subgraph_node_run_ids'] = [row.id for row in new_children]
+    state['subgraph_aggregate_node_run_id'] = None
+    state['retry_subgraph_node_run_ids'] = new_retry_ids
+    retry = NodeRun(
+        run_id=run.id, node_id=control.node_id, iteration=control.iteration,
+        attempt=control.attempt + 1, execution_kind='node', status='running',
+        input_json=encoded(state),
+    )
+    db.add(retry)
+    db.flush()
+    return retry
+
+
+def _record_count(db, run_id):
+    from sqlalchemy import func, select
+    return db.scalar(select(func.count()).select_from(NodeRun).where(NodeRun.run_id == run_id)) or 0
+
+
 def _dynamic_values(value, config):
     """Decode exactly once and validate a bounded local DAG."""
     if isinstance(value, str):
@@ -152,7 +238,10 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
             children = created
         if control.status not in ('idle', 'running'):
             continue
-        failed = next((row for row in children if row.status in ('failed', 'canceled')), None)
+        retry_ids = set(state.get('retry_subgraph_node_run_ids', []))
+        retry_pending = any(row.id in retry_ids and row.status in ('idle', 'running') for row in children)
+        failed = next((row for row in children if row.status in ('failed', 'canceled')
+                       and (not retry_pending or row.id in retry_ids)), None)
         if failed:
             for row in children:
                 if row.status == 'idle':
@@ -195,7 +284,11 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
             if child.status not in ('idle', 'running'):
                 continue
             nested_failed = next((row for row in nested_rows if row.status in ('failed', 'canceled')), None)
+            nested_retry_ids = set(child_state.get('nested_retry_subgraph_node_run_ids', []))
+            nested_retry_pending = any(row.id in nested_retry_ids and row.status in ('idle', 'running') for row in nested_rows)
             if nested_failed:
+                if nested_retry_pending:
+                    continue
                 for row in nested_rows:
                     if row.status == 'idle':
                         row.status, row.error_code, row.finished_at = 'canceled', 'subgraph_sibling_failed', now

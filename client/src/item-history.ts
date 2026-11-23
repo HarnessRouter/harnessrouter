@@ -10,10 +10,10 @@ export function manifestLabel(control: Pick<AppNodeRun, 'input'>): string {
 
 export function itemRetryAction(run: AppRun, control: AppNodeRun, item: AppNodeRun, replaying: boolean): { kind: 'retry'; itemId: number } | { kind: 'resume'; body: { kind: 'rerun'; target_node: string; resume_from_run_id: number; item_node_run_id: number } } | null {
   if (replaying || !run || !control || !item) return null;
-  const manifest = control.input?.item_node_run_ids;
+  const manifest = control.input?.item_node_run_ids || control.input?.subgraph_node_run_ids;
   if (!Array.isArray(manifest) || !manifest.includes(item.id)) return null;
   if (item.run_id !== run.id || item.node_id !== control.node_id || item.iteration !== control.iteration) return null;
-  if (!['foreach_item', 'dynamic_item'].includes(item.execution_kind || '') || !['failed', 'canceled'].includes(item.status)) return null;
+  if (!['foreach_item', 'dynamic_item', 'subgraph_node'].includes(item.execution_kind || '') || !['failed', 'canceled'].includes(item.status)) return null;
   if (['pending', 'running', 'waiting_human'].includes(run.status)) return { kind: 'retry', itemId: item.id };
   if (['failed', 'canceled'].includes(run.status)) return {
     kind: 'resume',

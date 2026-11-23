@@ -1070,3 +1070,25 @@ capability_snapshot_plugin_preflight:
     - "native tool approval、Response/SSE continuation 和审批 UI 仍未接线，不能广告 tool_approvals capability。"
   remaining: [real Gateway/BYOK smoke, PostgreSQL fresh/upgrade, Linux/Runner plugin conformance, native tool approval runtime]
   next_action: "继续补 GatewayClient HTTP 单测和真实 Gateway conformance；随后推进跨页项历史与完整动态子图，保持 UHP 审批能力未广告。"
+
+subgraph_item_retry:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 2d5cdb0f
+  branch: codex/agent-orchestration
+  reuse_decision: reuse NodeRun subgraph manifests, existing node retry route and terminal resume; preserve old Run history
+  scope: active static/dynamic subgraph item retry, nested manifest remapping, client retry action
+  acceptance_ids: [AC-32, AC-40]
+  impact: [hexa-api/app/tasks/router.py, hexa-api/app/tasks/subgraph.py, hexa-api/tests/test_subgraph.py, client/src/item-history.ts, client/tests/item-history.test.mjs, docs/changes/CHG-task-centric-workflow/spec.md, docs/changes/CHG-task-centric-workflow/plan.md]
+  verification:
+    red: "目标活动子编排项重试测试先因 NodeRun retry 支持缺失而失败；修复测试夹具导入后目标行为通过。"
+    backend: "python -m pytest -q hexa-api/tests/test_subgraph.py; 24 passed"
+    client: "npm.cmd test --prefix client -- --test-name-pattern=\"subgraph|item history\"; 67 passed"
+    static: "Python compile, YAML safe_load and git diff --check; pending final run"
+  security_review: "retry 只接受当前 Run、当前 control 的 subgraph_node 失败/取消项；记录新 attempt，不覆盖旧输出；完整清单和嵌套父子归属经过服务端校验，500 条记录预算继续生效。"
+  limitations:
+    - "真实 PostgreSQL、多进程执行器、Linux/Runner 和真实 Provider 尚未验证。"
+    - "客户端浏览器视觉与终态子编排重试旅程沿用既有证据，本切片未新增 Playwright 旅程。"
+  remaining: [PostgreSQL fresh/upgrade, real Gateway/BYOK smoke, browser terminal subgraph retry, native tool approval runtime]
+  next_action: "补浏览器活动/终态子编排重试旅程和 PostgreSQL migration smoke，再继续 Gateway native tool approval。"

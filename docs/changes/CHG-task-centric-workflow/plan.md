@@ -238,3 +238,14 @@ native tool approval 仍按既有独立门禁记录。动态子编排不得与�
 哈希、Run 快照和 preflight。验证 Gateway 客户端、能力快照、任务工作流、并发、动态 DAG、子编排、
 RunEvent、CommandReceipt、Lease 和 reconciliation 回归；真实 Gateway/Runner、PostgreSQL、Linux
 及 native tool approval 仍单独验收。
+
+## 2026-11-24 子编排项级重试实施
+
+复用 `NodeRun` 的 `subgraph_node` 清单、父子归属和现有 `retry` 控制入口。活动 Run 按失败/取消子节点
+追加新的 attempt，成功兄弟和旧历史保持不可变；嵌套清单重试时同步重映射 outer/leaf parent，父控制节点
+在 retry manifest 仍有未完成项时不提前失败或生成聚合。客户端复用集合项历史操作卡，仅接受当前清单内的
+`subgraph_node`，终态仍调用既有新 Run 恢复接口。
+
+先写活动子编排失败项重试和客户端动作测试，再实现状态机；验证子编排、动态子编排、终态恢复、并发、
+RunEvent、Lease 和全任务 API 回归。真实 PostgreSQL、Linux/Runner、Provider 和 native tool approval
+仍分别验收。
