@@ -138,6 +138,10 @@ class Run(Base):
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
     target_node: Mapped[str | None] = mapped_column(String(255), nullable=True)
     superseded_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    lease_fence: Mapped[int] = mapped_column(Integer, default=0)
+    lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class RunEvent(Base):
@@ -275,6 +279,14 @@ def create_session_factory(database_url: str):
             run_columns = {column['name'] for column in inspect(connection).get_columns('task_runs')}
             if 'workflow_revision_id' not in run_columns:
                 connection.execute(text('ALTER TABLE task_runs ADD COLUMN workflow_revision_id INTEGER'))
+            if 'lease_owner' not in run_columns:
+                connection.execute(text('ALTER TABLE task_runs ADD COLUMN lease_owner VARCHAR(255)'))
+            if 'lease_fence' not in run_columns:
+                connection.execute(text('ALTER TABLE task_runs ADD COLUMN lease_fence INTEGER NOT NULL DEFAULT 0'))
+            if 'lease_heartbeat_at' not in run_columns:
+                connection.execute(text('ALTER TABLE task_runs ADD COLUMN lease_heartbeat_at DATETIME'))
+            if 'lease_expires_at' not in run_columns:
+                connection.execute(text('ALTER TABLE task_runs ADD COLUMN lease_expires_at DATETIME'))
             if 'current_revision' in columns:
                 connection.execute(text('''
                     UPDATE tasks

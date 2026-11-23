@@ -4,7 +4,8 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
@@ -589,10 +590,50 @@ async def prepare_run(db, task, body, key, gateway, secrets):
 
 
 class TaskExecutor:
-    def __init__(self, session_factory, gateway, secrets=()):
+    LEASE_TTL_SECONDS = 30
+
+    def __init__(self, session_factory, gateway, secrets=(), lease_owner=None):
         self.session_factory, self.gateway, self.secrets = session_factory, gateway, secrets
+        self.lease_owner = lease_owner or f'hexa-api-{uuid.uuid4().hex}'
         self.jobs = {}
         self.locks = {}
+
+    @staticmethod
+    def _utc(value):
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+    def acquire_run_lease(self, db, run_id):
+        now = datetime.now(timezone.utc)
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        if run is None or run.status not in ('pending', 'running') or run.paused:
+            return None
+        if run.lease_owner and run.lease_owner != self.lease_owner and run.lease_expires_at and self._utc(run.lease_expires_at) > now:
+            return None
+        run.lease_owner = self.lease_owner
+        run.lease_fence = (run.lease_fence or 0) + 1
+        run.lease_heartbeat_at = now
+        run.lease_expires_at = now + timedelta(seconds=self.LEASE_TTL_SECONDS)
+        return run.lease_fence
+
+    def renew_run_lease(self, db, run_id, fence):
+        now = datetime.now(timezone.utc)
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        if run is None or run.lease_owner != self.lease_owner or run.lease_fence != fence:
+            return False
+        run.lease_heartbeat_at = now
+        run.lease_expires_at = now + timedelta(seconds=self.LEASE_TTL_SECONDS)
+        return True
+
+    def release_run_lease(self, db, run_id, fence):
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        if run is None or run.lease_owner != self.lease_owner or run.lease_fence != fence:
+            return False
+        run.lease_owner = None
+        run.lease_heartbeat_at = None
+        run.lease_expires_at = None
+        return True
 
     def lock(self, task_id):
         return self.locks.setdefault(task_id, asyncio.Lock())
@@ -630,11 +671,34 @@ class TaskExecutor:
             db.commit()
 
     async def execute(self, run_id):
+        with self.session_factory() as db:
+            lease_fence = self.acquire_run_lease(db, run_id)
+            if lease_fence is None:
+                return
+            db.commit()
+        lease_stop = asyncio.Event()
+        lease_lost = asyncio.Event()
+
+        async def heartbeat():
+            while not lease_stop.is_set():
+                try:
+                    await asyncio.wait_for(lease_stop.wait(), timeout=self.LEASE_TTL_SECONDS / 3)
+                    return
+                except asyncio.TimeoutError:
+                    with self.session_factory() as lease_db:
+                        if not self.renew_run_lease(lease_db, run_id, lease_fence):
+                            lease_lost.set()
+                            lease_db.rollback()
+                            return
+                        lease_db.commit()
+
+        heartbeat_job = asyncio.create_task(heartbeat())
         try:
             while True:
                 with self.session_factory() as db:
                     run = db.get(Run, run_id)
-                    if not run or run.status not in ('pending', 'running') or run.paused:
+                    if not run or run.status not in ('pending', 'running') or run.paused or lease_lost.is_set() or not self.renew_run_lease(db, run_id, lease_fence):
+                        db.rollback()
                         return
                     run.status = 'running'
                     task = db.get(Task, run.task_id)
@@ -788,7 +852,7 @@ class TaskExecutor:
                                                'attempt': row.attempt, 'iteration': row.iteration})
                         calls.append((row.id, item, context, space.gateway_id if space else ''))
                     db.commit()
-                await asyncio.gather(*(self.execute_node(run_id, *call) for call in calls))
+                await asyncio.gather(*(self.execute_node(run_id, *call, lease_fence=lease_fence, lease_lost=lease_lost) for call in calls))
                 with self.session_factory() as db:
                     run = db.get(Run, run_id)
                     if not run or run.status not in ('pending', 'running'):
@@ -863,8 +927,15 @@ class TaskExecutor:
                             row.error_code = 'executor_error'
                     append_run_event(db, run.id, 'run.failed', data={'error_code': 'executor_error'})
                     db.commit()
+        finally:
+            lease_stop.set()
+            heartbeat_job.cancel()
+            await asyncio.gather(heartbeat_job, return_exceptions=True)
+            with self.session_factory() as db:
+                if self.release_run_lease(db, run_id, lease_fence):
+                    db.commit()
 
-    async def execute_node(self, run_id, attempt_id, item, context, workspace_id):
+    async def execute_node(self, run_id, attempt_id, item, context, workspace_id, *, lease_fence=None, lease_lost=None):
         result, error = None, None
         exception_response_id = None
         command_id = f'hexa-task-{run_id}-{attempt_id}'
@@ -875,6 +946,11 @@ class TaskExecutor:
             'context': context,
         }).encode()).hexdigest()
         with self.session_factory() as db:
+            if lease_fence is not None:
+                run = db.get(Run, run_id)
+                if not run or run.lease_owner != self.lease_owner or run.lease_fence != lease_fence or (lease_lost and lease_lost.is_set()):
+                    db.rollback()
+                    return
             receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == attempt_id))
             if receipt is None:
                 receipt = CommandReceipt(node_run_id=attempt_id, command_id=command_id,
@@ -916,6 +992,9 @@ class TaskExecutor:
         with self.session_factory() as db:
             run, row = db.get(Run, run_id), db.get(NodeRun, attempt_id)
             if run is None or row is None or run.status != 'running' or row.status != 'running':
+                return
+            if lease_fence is not None and (lease_lost and lease_lost.is_set() or run.lease_owner != self.lease_owner or run.lease_fence != lease_fence):
+                db.rollback()
                 return
             task = db.get(Task, run.task_id)
             artifacts = []

@@ -111,6 +111,29 @@ command_receipt_slice:
   rollback: "停止带回执的活动 Run 后回退回执写入、读取、模型升级和迁移；RunEvent 与历史 NodeRun 快照保留。"
   remaining: [full orchestration regression, PostgreSQL migration lane, exact reconciliation, runtime lease/heartbeat, native Gateway approval]
   next_action: "跑受影响编排回归并提交回执切片；随后实现 Run lease/heartbeat 与 fencing。"
+run_lease_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: ecc9ad85
+  branch: codex/agent-orchestration
+  references: [spec.md#run-lease-与-heartbeat, plan.md#run-lease-与-heartbeat-实施2026-11-24]
+  reuse_decision: add lease fields to Run and fence the existing TaskExecutor write boundary; keep Gateway lease semantics separate
+  acceptance_ids: [AC-36]
+  behavior:
+    before: "TaskExecutor 只有进程内锁，跨进程执行器没有持久化 owner、heartbeat 或 fence，旧 owner 可能迟到写回。"
+    after: "Run 使用 owner/fence/heartbeat/expiry 租约；未过期租约拒绝第二 owner，过期接管递增 fence，旧 owner 不能续租或写回。"
+  verification:
+    red: "新增 test_run_leases.py 首次三个竞争、过期接管和释放场景均失败；实现并修正 SQLite naive datetime 归一化后目标通过。"
+    unit: "python -X utf8 -m pytest -q hexa-api/tests/test_run_leases.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_execution_progress.py --tb=short; exit 0; 8 passed。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_subgraph.py --tb=short; exit 0; 165 passed in 125.31s。"
+    migration: "PostgreSQL 012_run_leases.sql 已加入 migrate.py；真实 PostgreSQL lane 未配置，需在 HEXA_TEST_POSTGRES_URL 环境补跑。"
+    hygiene: "python -m compileall -q hexa-api/app、YAML 解析和 git diff --check 通过。"
+  security_review: "租约通过 owner/fence 检查保护迟到写回；Heartbeat 失败时旧执行器停止提交；不自动重放 unknown Agent 副作用。"
+  limitations: [real PostgreSQL/Linux/deployment, multiprocess live takeover, exact reconciliation, native tool approval runtime]
+  rollback: "停止活动 Run 后回退租约写入、fence 检查、模型升级和迁移；保留已有 RunEvent/CommandReceipt 历史。"
+  remaining: [PostgreSQL migration lane, multiprocess live takeover, exact reconciliation, native Gateway approval]
+  next_action: "在真实 PostgreSQL/Linux 和多进程目标环境验证租约接管，再处理精确 reconciliation 与 UHP native approval。"
 approval_binding_slice:
   date: "2026-11-24"
   owner: Codex

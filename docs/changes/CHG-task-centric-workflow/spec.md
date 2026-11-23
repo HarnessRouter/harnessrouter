@@ -337,6 +337,16 @@ serial 按已保存计划顺序挑选一个就绪节点；parallel 挑选所有�
 丢失时写 `unknown` 并置 `reconciliation_required=true`。`unknown` 回执不能被重试逻辑自动重新派发；只有用户显式创建新 Run 或
 未来已实现且精确绑定的 reconciliation 流程才能继续。节点调试和 Run 节点摘要可以读取回执摘要，但不得扩大秘密字段。
 
+### Run Lease 与 Heartbeat
+
+活动 Run 由执行器持有短时 `Run Lease`，至少保存 `lease_owner`、单调递增 `lease_fence`、最近 heartbeat 和过期时间。执行器
+开始调度前必须取得租约，运行期间按 TTL 续租，终态或安全退出时释放；同一 Run 的新 owner 只有在租约过期后才能以新 fence 接管。
+数据库不支持安全原子接管时，执行器不得把租约当作已获得。
+
+所有 NodeRun、CommandReceipt、RunEvent 和 Run 状态写入前都必须核对 owner 与 fence。旧 owner 失去 fence 后不得提交迟到的 Agent
+结果、产物、状态或事件；已经向 Gateway 派发但结果未知的节点收敛为 `unknown` 并要求 reconciliation。heartbeat 不是 Agent 副作用
+已完成的证明，也不允许因租约接管自动重放调用。
+
 ### Task 状态
 
 `draft`、`running`、`waiting`、`completed`、`failed`、`archived`。
@@ -634,6 +644,7 @@ Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。�
 - **AC-32 有界静态子编排：** 保存时拒绝空/超限/有环/三层及以上嵌套/动态嵌套/带控制模式/人工节点/未知字段的 `subgraph`；允许最多两层静态子编排。运行时持久化父子清单，按各层子图并发上限派发，内层完成并聚合后才完成外层控制节点，外层聚合后才释放父节点下游；失败取消未开始兄弟并保留叶子、内层聚合和外层控制历史；终态恢复只复制同一 Run 中可验证的嵌套清单，成功叶子复用、指定失败叶子重试，清单 API 验证同 Run、父 NodeRun、iteration 和层级归属，模型输出不能修改拓扑。
 - **AC-34 RunEvent 事实流：** 成功、失败、暂停、继续、取消、恢复和节点重试必须在同一事务追加不可变 `RunEvent`；事件 ID 在 Run 内递增，重启后的活动副作用写入 `node.unknown`/`run.recovered_unknown` 而不自动重放；分页接口先做任务权限检查，跨页无重复、无越权、无副作用，幂等命令重放不追加重复事件。
 - **AC-35 CommandReceipt 回执：** 每个实际 Gateway 调用都生成一条与 NodeRun 一对一的回执，成功进入 `completed`，明确失败进入 `failed`，不确定中断、进程恢复或租约丢失进入 `unknown` 且要求 reconciliation；回执包含稳定 `command_id` 和 `request_hash`，不包含原始工具参数、凭据或授权头，`unknown` 不自动重放，节点详情可分页读取脱敏摘要。
+- **AC-36 Run Lease 与 Heartbeat：** 两个执行器不能同时持有同一未过期 Run；过期接管必须递增 fence，旧 owner 续租和迟到写回失败；执行期间 heartbeat 续期，终态释放租约，进程恢复将已派发但无法确认的节点和回执收敛为 `unknown`，不自动重放。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 

@@ -134,6 +134,13 @@ PostgreSQL 通过 010 迁移；验证领域/API/受控 Gateway、进程恢复、
 `unknown/reconciliation_required`，不得自动重新派发。先写成功、不确定和重启恢复测试，再运行任务编排回归与 PostgreSQL 迁移检查；
 本切片不实现精确 reconciliation、Runtime lease 或 Gateway native tool approval。
 
+### Run Lease 与 Heartbeat 实施（2026-11-24）
+
+给 `Run` 增加 owner、fence、heartbeat 和过期时间；执行器在实际调度前原子取得租约，以固定 TTL 的异步 heartbeat 续期，并在
+Gateway 回调写回前校验 fence。旧 owner 失去租约时只能放弃迟到结果，恢复路径把不确定副作用与回执收敛为 unknown；正常终态释放
+租约。先覆盖竞争、过期接管、旧 owner 续租拒绝和释放，再运行任务/工作流/并发/动态子编排回归。租约不改变 UHP，不提供工具审批，也
+不自动恢复副作用。
+
 不得将前述受限动态项展开等同于已完成动态子图，或将仅通过目标测试的切片标记为完整引擎完成。
 
 ### 循环与集合组合的状态边界
