@@ -77,4 +77,6 @@ Linux、可选远端 control backing、真实 Runner、HTTP/SSE 审批及部署 
 | 本地 HTTP App / GatewayClient / PostgreSQL | 第二个 API lifespan 启动不破坏仍在流式执行的任务，原 owner 完成且只发生一次 HTTP 调用；受控 Gateway 不证明真实 Provider。 |
 | Linux API / Runner / 真实 Provider / 部署 | not_evaluated；当前 Runner 镜像没有 SQLAlchemy，不能直接作为 API 验收环境。需在 hexa-api 交付镜像运行同一测试及部署冒烟；本轮不修改运行中容器或广告 UHP 审批能力。 |
 
+API delivery image follow-up: `docker build -t hexa-orchestration-api-check:reaper hexa-api` completed from the final source; a disposable `python:3.12-slim` API container started and `GET /healthz` returned 200. The image smoke does not prove PostgreSQL wiring, real Gateway/BYOK, multi-replica failover, or Runner execution; those remain not_evaluated.
+
 复用 ORM 与持久化 JSON 引用，无数据库列、Shell、原生模块或系统路径变更。Windows / SQLite 覆盖新 Run 恢复、引用身份和旧历史不变；HTTP 夹具覆盖实际 GatewayClient、失败响应、补跑和重启只读。当前源码真实 PostgreSQL、Linux 与真实 Provider 仍 not_evaluated；本批未新增迁移，也不宣称可发布。最终测试数量及 Chromium 流程证据见 Change `terminal_fanout_resume`；新增项级 UI 入口仍属后续工作。

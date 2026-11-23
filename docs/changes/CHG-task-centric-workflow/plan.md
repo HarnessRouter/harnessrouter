@@ -143,6 +143,8 @@ Gateway 回调写回前校验 fence。旧 owner 失去租约时只能放弃迟�
 
 启动恢复先以有效租约保留、过期恢复及重复恢复测试复现跨进程误伤，再在每个 Run 的行锁内重新检查状态和租约、撤销旧 fence、提交 unknown 事实。进度和结果提交使用相同行锁检查，新增迟到回调验证。独立 PostgreSQL 进程验证有效 owner 不被新进程恢复破坏、过期并发恢复只收敛一次；无新增迁移、UHP 能力或自动副作用恢复。SQLite 继续验证单进程行为，多进程发布证据以 PostgreSQL 为准。
 
+持续运行的 API 由 `TaskExecutor` 启动一个可取消的 lease reaper，按短周期只回收仍有 owner 且已过期的 Run；数据库操作在线程池执行，避免阻塞异步请求。关闭 lifespan 时先取消 reaper，再关闭执行任务。测试覆盖有效 heartbeat、无 owner Run、过期 owner、重复回收和事件幂等。
+
 ### 显式 reconciliation 实施（2026-11-24）
 
 为 unknown 的具体 NodeRun 提供带幂等键的状态确认接口。接口先验证任务权限、NodeRun 归属和 CommandReceipt，再只读查询已有

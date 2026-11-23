@@ -1148,3 +1148,26 @@ lease_recovery_fencing:
     - "SQLite 为开发/测试单进程数据库，不声明其 SELECT FOR UPDATE 提供多进程原子租约。"
   remaining: [Linux API delivery-image validation, real Gateway/BYOK smoke, periodic expired-owner recovery design, native approval interception and durable continuation, deployment and remote CI]
   next_action: "提交本地分支；继续 Linux API 目标镜像与过期 owner 回收设计，并建立首个真实 Runner 审批 checkpoint 适配方案，不能以本切片关闭完整编排目标。"
+
+lease_reaper_delivery:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 1cec939e
+  branch: codex/agent-orchestration
+  reuse_decision: extend TaskExecutor lifespan and existing fenced recovery; no migration or UHP change
+  scope: periodic expired-owner recovery, event-loop isolation, API delivery image smoke
+  acceptance_ids: [AC-34, AC-36]
+  references: [spec.md#run-lease-与-heartbeat, plan.md#run-lease-与-heartbeat-实施2026-11-24, platform-matrix.md#2026-11-23-租约恢复与跨进程-fencing]
+  verification:
+    red: "周期 reaper 目标测试先失败于测试夹具的错误 fence 预期；修正为每个 Run 独立从 fence=1 开始后，再以真实过期/有效 owner 场景通过。"
+    unit_integration: "python -m pytest -q hexa-api/tests/test_run_leases.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_http_integration.py --tb=short; exit 0; 14 passed in 21.12s。覆盖启动恢复、周期过期回收、无 owner 保留、重复事件、迟到写入和 HTTP response ID。"
+    static: "python -m py_compile hexa-api/app/main.py hexa-api/app/tasks/service.py; git diff --check; passed。"
+    image: "docker build -t hexa-orchestration-api-check:reaper hexa-api; exit 0；临时 Linux python:3.12-slim API 容器启动，GET /healthz 返回 200；容器随后停止。"
+  security_review: "reaper 仅传入 expired_only=True，必须同时有 owner 和过期时间；无 owner 的 pending/running Run 不会被周期恢复误杀。回收复用行锁、fence、CommandReceipt/RunEvent 和原 response ID 规则；同步数据库操作在线程池中执行，不阻塞 API 事件循环。无新网络端点、凭据、权限、迁移或 Cloud 入口。"
+  limitations:
+    - "镜像 smoke 未连接 PostgreSQL 或真实 Gateway；Linux API 多副本故障切换、部署编排和真实 Provider 仍未验证。"
+    - "reaper 只回收已过期 owner，不能证明进程级存活检测或外部租约服务；TTL 与重试策略仍使用现有固定值。"
+    - "原生工具审批仍没有副作用前拦截、精确 continuation 或 UHP capability 广告。"
+  remaining: [PostgreSQL-backed Linux API deployment, multiprocess production failover, real Gateway/BYOK smoke, native approval interception and durable continuation, remote CI]
+  next_action: "提交本地分支；继续验证 API 镜像接 PostgreSQL/Gateway 的部署冒烟，并在真实 Runner 入口选择首个可持久化审批 checkpoint。"

@@ -355,6 +355,8 @@ API 启动恢复必须跳过其他执行器仍持有未过期租约的 Run，不
 
 流中已取得的 Gateway response ID 须随 NodeRun 和 CommandReceipt 一起持久化；恢复旧记录时可从 NodeRun 补回回执已有调用身份，使显式 reconciliation 仍查询原 Response。恢复不能生成新 response ID 或发起替代调用。
 
+API 进程持续运行时必须周期检查已过期且仍有 owner 的租约；仅这类租约可被 reaper 收敛为 `unknown`，无 owner 的新建 pending/running Run 不得被周期检查误杀。回收在后台线程执行，不能阻塞事件循环；每轮仍复用 Run 行锁和 fence 规则，正常 heartbeat 或新 owner 已接管的 Run 必须保留。
+
 ### Task 状态
 
 `draft`、`running`、`waiting`、`completed`、`failed`、`archived`。

@@ -86,6 +86,7 @@ def create_app(settings: Settings | None = None, gateway: Any | None = None) -> 
         app.state.session_factory = create_session_factory(resolved.database_url)
         app.state.task_executor = TaskExecutor(app.state.session_factory, app.state.gateway, (resolved.gateway_api_key, resolved.session_secret))
         app.state.task_executor.recover()
+        app.state.task_executor.start_reaper()
         yield
         await app.state.task_executor.close()
         app.state.session_factory.kw['bind'].dispose()

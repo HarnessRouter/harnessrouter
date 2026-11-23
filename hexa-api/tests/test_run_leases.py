@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from app.db.models import Run, Task
 from app.tasks.service import TaskExecutor, encoded
 from app.db.models import CommandReceipt, NodeRun, RunEvent
+import asyncio
 import pytest
 
 
@@ -164,3 +165,32 @@ def test_lease_recheck_refreshes_previously_loaded_run(app, client):
         assert owner.renew_run_lease(stale, run_id, 1) is False
         stale.rollback()
         assert cached.lease_owner == 'new-owner'
+
+
+@pytest.mark.anyio
+async def test_periodic_reaper_reconciles_only_expired_owned_runs(app, client):
+    expired_id = _seed_active_run(app)
+    live_id = _seed_active_run(app)
+    owner = TaskExecutor(app.state.session_factory, app.state.gateway, lease_owner='periodic-owner')
+    with app.state.session_factory() as db:
+        assert owner.acquire_run_lease(db, expired_id) == 1
+        assert owner.acquire_run_lease(db, live_id) == 1
+        db.get(Run, expired_id).lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+    owner.LEASE_REAPER_INTERVAL_SECONDS = 0.01
+    owner.start_reaper()
+    try:
+        for _ in range(100):
+            with app.state.session_factory() as db:
+                expired = db.get(Run, expired_id)
+                live = db.get(Run, live_id)
+                if expired.status == 'failed':
+                    break
+            await asyncio.sleep(0.01)
+        with app.state.session_factory() as db:
+            assert db.get(Run, expired_id).status == 'failed'
+            assert db.get(Run, live_id).status == 'running'
+            assert db.query(RunEvent).filter_by(run_id=expired_id, event_type='run.recovered_unknown').count() == 1
+            assert db.query(RunEvent).filter_by(run_id=live_id).count() == 0
+    finally:
+        await owner.close()

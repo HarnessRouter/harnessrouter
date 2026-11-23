@@ -807,12 +807,14 @@ async def prepare_run(db, task, body, key, gateway, secrets):
 
 class TaskExecutor:
     LEASE_TTL_SECONDS = 30
+    LEASE_REAPER_INTERVAL_SECONDS = 10
 
     def __init__(self, session_factory, gateway, secrets=(), lease_owner=None):
         self.session_factory, self.gateway, self.secrets = session_factory, gateway, secrets
         self.lease_owner = lease_owner or f'hexa-api-{uuid.uuid4().hex}'
         self.jobs = {}
         self.locks = {}
+        self.reaper_job = None
 
     @staticmethod
     def _utc(value):
@@ -859,12 +861,30 @@ class TaskExecutor:
             job = asyncio.create_task(self.execute(run_id))
             self.jobs[run_id] = job
 
+    def start_reaper(self):
+        if self.reaper_job is None or self.reaper_job.done():
+            self.reaper_job = asyncio.create_task(self._reap_expired_leases())
+        return self.reaper_job
+
+    async def _reap_expired_leases(self):
+        while True:
+            try:
+                await asyncio.sleep(self.LEASE_REAPER_INTERVAL_SECONDS)
+                await asyncio.to_thread(self.recover, expired_only=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                continue
+
     async def close(self):
+        if self.reaper_job is not None:
+            self.reaper_job.cancel()
+            await asyncio.gather(self.reaper_job, return_exceptions=True)
         for job in self.jobs.values():
             job.cancel()
         await asyncio.gather(*self.jobs.values(), return_exceptions=True)
 
-    def recover(self):
+    def recover(self, *, expired_only=False):
         with self.session_factory() as db:
             identities = db.scalars(select(Run.id).where(Run.status.in_(('pending', 'running')))).all()
         for identity in identities:
@@ -873,7 +893,9 @@ class TaskExecutor:
                 if not run or run.status not in ('pending', 'running') or run.paused:
                     continue
                 now = datetime.now(timezone.utc)
-                if run.lease_owner and run.lease_expires_at and self._utc(run.lease_expires_at) > now:
+                if expired_only and not (run.lease_owner and run.lease_expires_at and self._utc(run.lease_expires_at) <= now):
+                    continue
+                if not expired_only and run.lease_owner and run.lease_expires_at and self._utc(run.lease_expires_at) > now:
                     continue
                 run.lease_fence = (run.lease_fence or 0) + 1
                 run.lease_owner = None
