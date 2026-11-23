@@ -32,9 +32,12 @@ class TaskInputBody(BaseModel):
 
 
 class RunBody(BaseModel):
+    model_config = {'extra': 'forbid'}
     kind: str = Field(default='normal', pattern='^(normal|rerun)$')
     target_node: str | None = None
     reuse_refs: list[int] = Field(default_factory=list, max_length=50)
+    resume_from_run_id: int | None = Field(default=None, ge=1, strict=True)
+    item_node_run_id: int | None = Field(default=None, ge=1, strict=True)
 
 
 class NodeControlBody(BaseModel):

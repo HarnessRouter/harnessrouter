@@ -84,3 +84,12 @@ Agent 页面中的“模板库”通过 `GET /api/hexa/agent-templates/gateway` 
 `{"item_node_run_id": 123}`（当前清单指定失败项），并携带新的 `Idempotency-Key`。
 成功项不会重复执行；新项追加 attempt，聚合保序引用当前清单。终态 Run 仍需创建新的 Run。
 `attempt` 表示控制/项执行尝试，聚合项数使用 `input.item_count`，循环轮次使用 `iteration`。
+
+
+终态集合项恢复在创建 Run 时发送：
+```json
+{"kind":"rerun","target_node":"worker","resume_from_run_id":71,"item_node_run_id":123}
+```
+省略 `item_node_run_id` 时显式恢复全部失败/取消项。来源必须属于同 Task，且工作流版本、任务输入和所用 Agent 公开配置一致。
+接口创建新的 Run 并保存 `execution_snapshot.resume`，成功项/上游通过本 Run 的 `reused_from` 记录引用来源结果，旧 Run 不变。
+循环内恢复保留 iteration；人工确认须在新 Run 重新提交。独立失败分支不自动重放；新 Run 仍可能因这些分支失败。

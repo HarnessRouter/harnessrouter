@@ -18,10 +18,11 @@ def node_record_usage(db, run_id):
     fanouts = [item['id'] for item in json.loads(run.snapshot_json).get('workflow', {}).get('nodes', [])
                if item.get('foreach') or item.get('dynamic_plan')]
     count = db.scalar(select(func.count()).select_from(NodeRun).where(NodeRun.run_id == run_id))
-    reserved = db.scalar(select(func.count()).select_from(NodeRun).where(
+    controls = db.scalars(select(NodeRun).where(
         NodeRun.run_id == run_id, NodeRun.node_id.in_(fanouts),
-        NodeRun.execution_kind == 'node', NodeRun.status == 'running',
-    )) if fanouts else 0
+        NodeRun.execution_kind == 'node', NodeRun.status.in_(('idle', 'running')),
+    )).all() if fanouts else []
+    reserved = sum(row.status == 'running' or 'item_node_run_ids' in json.loads(row.input_json) for row in controls)
     return count + reserved
 
 
@@ -116,6 +117,13 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
             continue
         children = fanout_items(db, control, prefix)
         now = datetime.now(timezone.utc)
+        if control.status == 'idle' and children:
+            if any(rows[dep].status != 'succeeded' for dep in item.get('deps', [])):
+                continue
+            if item.get('requires_human') and item['id'] not in decisions:
+                continue
+            control.status = 'running'
+            changed = True
         if control.status == 'idle' and not children:
             if any(rows[dep].status != 'succeeded' and not (
                 rows[dep].status == 'skipped' and item.get('allow_missing_inputs')

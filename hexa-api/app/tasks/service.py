@@ -274,8 +274,8 @@ def latest_nodes(db, run_id):
     visible = [row for row in rows if row.execution_kind not in {'foreach_item', 'dynamic_item'}]
     for row in visible:
         prior = latest.get(row.node_id)
-        priority = (row.iteration, json.loads(row.input_json).get('control_node_run_id', row.id), row.id)
-        prior_priority = (prior.iteration, json.loads(prior.input_json).get('control_node_run_id', prior.id), prior.id) if prior else None
+        priority = (row.iteration, json.loads(row.input_json).get('control_node_run_id', row.id), row.execution_kind.endswith('_aggregate'), row.id)
+        prior_priority = (prior.iteration, json.loads(prior.input_json).get('control_node_run_id', prior.id), prior.execution_kind.endswith('_aggregate'), prior.id) if prior else None
         if prior is None or priority >= prior_priority:
             latest[row.node_id] = row
     return latest
@@ -394,6 +394,8 @@ async def prepare_run(db, task, body, key, gateway, secrets):
     active = db.scalar(select(Run).where(Run.task_id == task.id, Run.status.in_(ACTIVE)))
     if active and not ((active.status == 'waiting_human' or active.paused) and active.workflow_revision != task.current_revision):
         raise TaskError('active_run_exists', '任务已有正在运行的 Run。')
+    from app.tasks.resume import validate_resume, seed_resume
+    resume = validate_resume(db, task, revision, definition, body, latest_nodes=latest_nodes, error=TaskError)
     try:
         agents = {row['id']: row for row in await gateway.list_agents(getattr(gateway, 'api_key', None))}
         catalogs = {}
@@ -410,9 +412,19 @@ async def prepare_run(db, task, body, key, gateway, secrets):
                 raise ValueError('model unavailable')
     except Exception as exc:
         raise TaskError('configuration_unavailable', '节点 Agent 或模型不可用，请检查配置。', 422) from exc
+    if resume:
+        previous_agents = json.loads(resume[0].snapshot_json).get('agents', {})
+        used_agents = {item.get('agent_id') for item in definition['nodes'] if not is_explicit_human_node(item)}
+        if any(redact(agents.get(identity), secrets) != previous_agents.get(identity) for identity in used_agents):
+            raise TaskError('resume_configuration_conflict', 'Agent 配置已经改变，请整节点重跑。', 409)
     snapshot = redact({'workflow': definition, 'input': task.input_text, 'agents': agents,
                        'workflow_revision_id': revision.id,
                        'source': {'kind': 'saved_workflow_revision', 'revision': revision.revision}}, secrets)
+    if resume:
+        snapshot['resume'] = {'source_run_id': resume[0].id, 'control_node_run_id': resume[3].id,
+                              'item_node_run_id': body.get('item_node_run_id'),
+                              'item_node_run_ids': [child.id for child in resume[4]],
+                              'execution_config_source_run_id': resume[0].id}
     run = Run(task_id=task.id, workflow_revision=task.current_revision, workflow_revision_id=revision.id, idempotency_key=key, request_hash=fingerprint,
               snapshot_json=encoded(snapshot), kind=body.get('kind', 'normal'), target_node=body.get('target_node'))
     if run.kind == 'rerun' and run.target_node not in {item['id'] for item in definition['nodes']}:
@@ -420,7 +432,7 @@ async def prepare_run(db, task, body, key, gateway, secrets):
     db.add(run)
     db.flush()
     reused = {}
-    if run.kind == 'rerun' and run.target_node:
+    if run.kind == 'rerun' and run.target_node and not resume:
         affected = downstream_nodes(definition, run.target_node)
         adopted = json.loads(task.current_result_json)
         for node_id, attempt_id in adopted.items():
@@ -434,10 +446,13 @@ async def prepare_run(db, task, body, key, gateway, secrets):
         if not row or not source or source.task_id != task.id or row.status != 'succeeded' or row.node_id in stale_nodes(db, task):
             raise TaskError('input_ref_unavailable', '复用结果无效或已过期。', 422)
         reused[row.node_id] = row
-    for item in definition['nodes']:
-        row = reused.get(item['id'])
-        db.add(NodeRun(run_id=run.id, node_id=item['id'], iteration=1, status='succeeded' if row else 'idle',
-                       input_json=encoded({'reused_from': row.id}) if row else '{}', output_json=row.output_json if row else None))
+    if resume:
+        seed_resume(db, run, resume, body, encoded=encoded, downstream_nodes=downstream_nodes, error=TaskError)
+    else:
+        for item in definition['nodes']:
+            row = reused.get(item['id'])
+            db.add(NodeRun(run_id=run.id, node_id=item['id'], iteration=1, status='succeeded' if row else 'idle',
+                           input_json=encoded({'reused_from': row.id}) if row else '{}', output_json=row.output_json if row else None))
     if active:
         active.status = 'completed'
         active.superseded_by = run.id

@@ -209,7 +209,8 @@ async def test_selected_retry_runs_even_when_another_item_remains_failed(app, fa
         assert db.get(NodeRun, children[1]).status == 'failed'
 
 
-def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, app):
+@pytest.mark.parametrize('terminal', [False, True])
+def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, app, terminal):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from app.gateway.client import GatewayClient
@@ -252,21 +253,31 @@ def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, ap
         task = client.post('/api/hexa/tasks', json={'workflow': {'nodes': [node('source'),
             node('worker', deps=['source'], inputRefs=['source'], foreach={
                 'source': 'source', 'path': 'artifacts', 'max_items': 1,
-            }), node('hold', deps=['source'], node_type='human'),
+            }), *([] if terminal else [node('hold', deps=['source'], node_type='human')]),
         ]}}).json()
         run = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'http-start'}).json()
-        waiting = wait_run(client, run['id'], {'waiting_human'})
+        waiting = wait_run(client, run['id'], {'failed' if terminal else 'waiting_human'})
         control = next(row for row in waiting['nodes'] if row['node_id'] == 'worker')
         before = client.get(f"/api/hexa/node-runs/{control['id']}").json()['attempts']
         failed = next(row for row in before if row['execution_kind'] == 'foreach_item')
         assert failed['status'] == 'failed'
-        assert client.post(f"/api/hexa/runs/{run['id']}/nodes/worker/retry", json={
-            'item_node_run_id': failed['id'],
-        }, headers={'Idempotency-Key': 'http-retry'}).status_code == 200
+        if terminal:
+            resumed = client.post(f"/api/hexa/tasks/{task['id']}/runs", json={
+                'kind': 'rerun', 'target_node': 'worker', 'resume_from_run_id': run['id'],
+                'item_node_run_id': failed['id'],
+            }, headers={'Idempotency-Key': 'http-resume'})
+            assert resumed.status_code == 202
+            original_run_id = run['id']
+            run = resumed.json()
+            assert run['id'] != original_run_id
+        else:
+            assert client.post(f"/api/hexa/runs/{run['id']}/nodes/worker/retry", json={
+                'item_node_run_id': failed['id'],
+            }, headers={'Idempotency-Key': 'http-retry'}).status_code == 200
         for _ in range(200):
             result = client.get(f"/api/hexa/runs/{run['id']}").json()
             aggregate = next(row for row in result['nodes'] if row['node_id'] == 'worker')
-            if aggregate['status'] == 'succeeded' and result['status'] == 'waiting_human':
+            if aggregate['status'] == 'succeeded' and result['status'] == ('completed' if terminal else 'waiting_human'):
                 break
             time.sleep(0.01)
         assert aggregate['status'] == 'succeeded'

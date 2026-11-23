@@ -138,6 +138,27 @@ fanout_retry_slice:
   security_review: "选定 ID 必须属于当前 Run/节点/iteration 的失败或取消项；请求体拒绝配置注入；幂等 fingerprint 包含请求体；预算检查早于所有追加；不自动重试不确定副作用；不恢复终态 Run。"
   rollback: 停止活动执行后回退代码；旧版本不能继续带替换清单的 Run，否则可能重新读取旧失败项。历史 NodeRun 与 Run 快照保留，不需要删除或反向迁移。
   remaining: [terminal_run_item_resume, item_history_ui, scoped_nested_execution, dynamic_subgraphs, real_postgresql_migration, live_runtime_verification]
+terminal_fanout_resume:
+  date: "2026-11-23"
+  owner: Codex
+  baseline: 68511260
+  branch: codex/agent-orchestration
+  status: verified_slice
+  references: [spec.md#终态集合恢复, plan.md#终态集合恢复实施]
+  acceptance_ids: [AC-24]
+  reuse_decision: extend prepare_run, current fanout manifest and retry helpers; no database migration or UHP change
+  scope: failed/canceled 来源的新 Run 项级恢复、成功项复用、循环轮次与输入映射、新人工确认和身份/配置校验
+  impact: [hexa-api/app/tasks/resume.py, hexa-api/app/tasks/service.py, hexa-api/app/tasks/fanout.py, hexa-api/app/tasks/router.py, hexa-api/tests/test_fanout_resume.py, hexa-api/tests/test_fanout_retry.py]
+  verification:
+    red: "旧接口 7 项失败：忽略 resume 字段并重新调用 source/成功项，非法来源/输入/版本也创建 Run。循环恢复最初丢失检查节点的上一轮引用，两项失败后修复。"
+    unit: "seed_resume 配额超限单测通过；API 请求字段类型与 extra 配置拒绝测试。"
+    backend: "最终源码：python -m pytest -q hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_http_integration.py hexa-api/tests/test_execution_progress.py; exit 0; 210 passed in 216.16s。"
+    http_e2e: "python -m pytest -q hexa-api/tests/test_fanout_retry.py -k http_retry; exit 0; 2 passed（活动重试与终态新 Run 恢复），真实 GatewayClient + HTTP Gateway 夹具 + SQLite + 应用重启只读。"
+    browser: "最终源码：npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts tasks-lifecycle.spec.ts --project=chromium --grep 'orchestration settings|failed run|parallel collectors'; exit 0; 3 passed in 1.8m。新增恢复入口 UI 未实现，HTTP 端到端证据覆盖新 API。"
+    hygiene: "git diff --check; py_compile resume/service/fanout/router/test_fanout_resume; YAML safe_load; passed。"
+  remaining: [item_history_ui, scoped_nested_execution, dynamic_subgraphs, real_postgresql_migration, live_runtime_verification]
+  security_review: 同 Task、同版本、同输入、同公开 Agent 配置；来源必须终态，指定项必须属于当前清单。历史副作用不自动重放，新批准独立；ORM 参数化，无新增外部目标/命令/权限。
+  rollback: 停止活动恢复 Run 后回退代码，历史记录和快照保留；旧版本不应继续恢复包含本 Run 引用映射的活动 Run。没有数据库迁移。
 parallel_foreach_slice:
   date: "2026-11-23"
   owner: Codex
