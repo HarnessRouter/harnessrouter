@@ -1085,10 +1085,13 @@ subgraph_item_retry:
     red: "目标活动子编排项重试测试先因 NodeRun retry 支持缺失而失败；修复测试夹具导入后目标行为通过。"
     backend: "python -m pytest -q hexa-api/tests/test_subgraph.py; 24 passed"
     client: "npm.cmd test --prefix client -- --test-name-pattern=\"subgraph|item history\"; 67 passed"
-    static: "Python compile, YAML safe_load and git diff --check; pending final run"
+    static: "python -m py_compile hexa-api/app/tasks/router.py hexa-api/app/tasks/subgraph.py; YAML safe_load; git diff --check; passed"
+    postgres: "HEXA_TEST_POSTGRES_URL=postgresql://postgres@127.0.0.1:55438/postgres python -m pytest -q hexa-api/tests/test_postgres_migrations.py; 2 passed; isolated schema created and dropped"
+    orchestration_regression: "python -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py; 247 passed"
+    browser: "cd client; npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium --grep \"nested collection\"; 1 passed"
   security_review: "retry 只接受当前 Run、当前 control 的 subgraph_node 失败/取消项；记录新 attempt，不覆盖旧输出；完整清单和嵌套父子归属经过服务端校验，500 条记录预算继续生效。"
   limitations:
     - "真实 PostgreSQL、多进程执行器、Linux/Runner 和真实 Provider 尚未验证。"
     - "客户端浏览器视觉与终态子编排重试旅程沿用既有证据，本切片未新增 Playwright 旅程。"
   remaining: [PostgreSQL fresh/upgrade, real Gateway/BYOK smoke, browser terminal subgraph retry, native tool approval runtime]
-  next_action: "补浏览器活动/终态子编排重试旅程和 PostgreSQL migration smoke，再继续 Gateway native tool approval。"
+  next_action: "补浏览器活动/终态子编排重试旅程，再继续 Gateway native tool approval。"

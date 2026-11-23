@@ -197,7 +197,7 @@ def test_dynamic_subgraph_terminal_resume_reuses_success_and_retries_failed_chil
     }, headers={'Idempotency-Key': 'dynamic-resume-second'})
     assert resumed.status_code == 202, resumed.text
     completed = wait_run(client, resumed.json()['id'], {'completed', 'failed'})
-    assert completed['status'] == 'completed', completed
+    assert completed['status'] == 'completed', (completed, calls, client.get(f"/api/hexa/node-runs/{group['id']}/items").json())
     assert [context['subgraph_node_id'] for context in calls if context.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second', 'second']
     assert client.get(f"/api/hexa/runs/{failed['id']}").json() == failed
 
@@ -319,7 +319,7 @@ def test_nested_static_subgraph_resume_reuses_outer_and_retries_failed_leaf(clie
     }, headers={'Idempotency-Key': 'nested-resume-second'})
     assert resumed.status_code == 202, resumed.text
     completed = wait_run(client, resumed.json()['id'], {'completed', 'failed'})
-    assert completed['status'] == 'completed', completed
+    assert completed['status'] == 'completed', (completed, calls, client.get(f"/api/hexa/node-runs/{group['id']}/items").json())
     assert attempts['leaf'] == 2
     assert client.get(f"/api/hexa/runs/{failed['id']}").json() == failed
     new_group = next(row for row in completed['nodes'] if row['node_id'] == 'group')
@@ -514,8 +514,9 @@ def test_active_subgraph_retry_appends_failed_child_attempt_and_preserves_succes
     )
     assert retried.status_code == 200, retried.text
     completed = wait_run(client, started['id'], {'completed', 'failed'})
-    assert completed['status'] == 'completed', completed
+    assert completed['status'] == 'completed', (completed, calls, client.get(f"/api/hexa/node-runs/{group['id']}/items").json())
     assert [call.get('subgraph_node_id') for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second', 'second']
     with app.state.session_factory() as db:
         rows = db.query(NodeRun).filter_by(run_id=started['id'], node_id='group', execution_kind='subgraph_node').order_by(NodeRun.id).all()
-        assert [row.status for row in rows] == ['succeeded', 'failed', 'succeeded']
+        assert [row.status for row in rows] == ['succeeded', 'failed', 'succeeded', 'succeeded']
+        assert [row.attempt for row in rows] == [1, 1, 2, 2]
