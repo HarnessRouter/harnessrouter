@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select, update
@@ -29,9 +30,70 @@ def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def workflow_concurrency(value):
+    if 'max_concurrency' not in value:
+        return 50
+    raw = value['max_concurrency']
+    if type(raw) is not int or not 1 <= raw <= 50:
+        raise TaskError('invalid_workflow', '并发上限必须是 1 到 50 之间的整数。', 422)
+    return raw
+
+
+CONDITION_OPS = {'eq', 'neq', 'in', 'exists'}
+CONDITION_PATH = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$')
+
+
+def validate_condition(item, known_ids):
+    condition = item.get('condition')
+    if condition is None:
+        return
+    if not isinstance(condition, dict):
+        raise TaskError('invalid_workflow', '条件必须是固定比较对象。', 422)
+    source = condition.get('source')
+    path = condition.get('path')
+    op = condition.get('op')
+    if not isinstance(source, str) or source not in set(item.get('deps', [])) or source not in known_ids:
+        raise TaskError('invalid_workflow', '条件来源必须是当前节点的依赖。', 422)
+    if not isinstance(path, str) or not CONDITION_PATH.fullmatch(path):
+        raise TaskError('invalid_workflow', '条件路径格式无效。', 422)
+    if op not in CONDITION_OPS:
+        raise TaskError('invalid_workflow', '条件操作不受支持。', 422)
+    if op == 'exists':
+        if 'value' in condition:
+            raise TaskError('invalid_workflow', 'exists 条件不能携带 value。', 422)
+    elif 'value' not in condition:
+        raise TaskError('invalid_workflow', '比较条件必须携带 value。', 422)
+    elif op == 'in' and not isinstance(condition['value'], list):
+        raise TaskError('invalid_workflow', 'in 条件的 value 必须是数组。', 422)
+
+
+def validate_repeat(item):
+    repeat = item.get('repeat')
+    if repeat is None:
+        return
+    if not isinstance(repeat, dict) or type(repeat.get('max_iterations')) is not int or not 1 <= repeat['max_iterations'] <= 10:
+        raise TaskError('invalid_workflow', 'repeat.max_iterations 必须是 1 到 10 之间的整数。', 422)
+    until = repeat.get('until')
+    if not isinstance(until, dict) or until.get('op') not in CONDITION_OPS - {'in', 'neq'}:
+        raise TaskError('invalid_workflow', 'repeat.until 必须是 eq 或 exists 条件。', 422)
+    if not isinstance(until.get('path'), str) or not CONDITION_PATH.fullmatch(until['path']):
+        raise TaskError('invalid_workflow', 'repeat.until.path 格式无效。', 422)
+    if until['op'] == 'exists':
+        if 'value' in until:
+            raise TaskError('invalid_workflow', 'repeat.until.exists 不能携带 value。', 422)
+    elif 'value' not in until:
+        raise TaskError('invalid_workflow', 'repeat.until.eq 必须携带 value。', 422)
+
+
 def workflow_from_json(value):
     if not isinstance(value, dict) or not isinstance(value.get('nodes'), list):
         raise TaskError('invalid_workflow', '工作流格式无效。', 422)
+    workflow_concurrency(value)
+    known_ids = {item.get('id') for item in value['nodes'] if isinstance(item, dict)}
+    for item in value['nodes']:
+        if isinstance(item, dict):
+            validate_condition(item, known_ids)
+            validate_repeat(item)
     try:
         workflow = WorkflowSpec(tuple(NodeSpec(item['id'], tuple(item.get('deps', [])), tuple(item.get('inputRefs', [])), bool(item.get('final_report')), bool(item.get('requires_human'))) for item in value['nodes']))
         validate_workflow(workflow)
@@ -128,6 +190,31 @@ def downstream_nodes(definition, target_node):
                 affected.add(item['id'])
                 changed = True
     return affected
+
+
+_MISSING = object()
+
+
+def condition_matches(condition, output):
+    current = output
+    for part in condition['path'].split('.'):
+        if not isinstance(current, dict) or part not in current:
+            current = _MISSING
+            break
+        current = current[part]
+    if condition['op'] == 'exists':
+        return current is not _MISSING
+    if current is _MISSING:
+        return False
+    if condition['op'] == 'eq':
+        return current == condition['value']
+    if condition['op'] == 'neq':
+        return current != condition['value']
+    return current in condition['value']
+
+
+def repeat_matches(repeat, output):
+    return condition_matches(repeat['until'], output)
 
 
 def run_json(db, run):
@@ -283,12 +370,30 @@ class TaskExecutor:
                     task = db.get(Task, run.task_id)
                     snapshot = json.loads(run.snapshot_json)
                     definition = snapshot['workflow']
+                    max_concurrency = workflow_concurrency(definition)
                     rows = latest_nodes(db, run.id)
                     nodes = {item['id']: item for item in definition['nodes']}
                     decisions = {row.node_id: json.loads(row.input_refs_json) for row in db.scalars(select(RunDecision).where(RunDecision.run_id == run.id)).all()}
                     unfinished = [item for item in nodes.values() if rows[item['id']].status == 'idle']
                     ready = [item for item in unfinished if all(rows[dep].status == 'succeeded' or (rows[dep].status == 'skipped' and item.get('allow_missing_inputs')) for dep in item.get('deps', []))]
+                    for item in ready:
+                        condition = item.get('condition')
+                        if not condition:
+                            continue
+                        source = rows[condition['source']]
+                        output = json.loads(source.output_json) if source.output_json else None
+                        if not condition_matches(condition, output):
+                            row = rows[item['id']]
+                            row.status = 'skipped'
+                            row.error_code = 'condition_not_matched'
+                            row.finished_at = datetime.now(timezone.utc)
+                    if any(item.get('condition') and rows[item['id']].status == 'skipped' for item in ready):
+                        db.commit()
+                        continue
                     executable = [item for item in ready if not is_human_node(item) or item['id'] in decisions]
+                    human_nodes = [item for item in executable if is_human_node(item)]
+                    agent_nodes = [item for item in executable if not is_human_node(item)]
+                    executable = human_nodes + agent_nodes[:max_concurrency]
                     if not executable:
                         if ready:
                             run.status, task.status = 'waiting_human', 'waiting'
@@ -326,6 +431,28 @@ class TaskExecutor:
                         calls.append((row.id, item, context, space.gateway_id if space else ''))
                     db.commit()
                 await asyncio.gather(*(self.execute_node(run_id, *call) for call in calls))
+                with self.session_factory() as db:
+                    run = db.get(Run, run_id)
+                    if not run or run.status not in ('pending', 'running'):
+                        continue
+                    definition = json.loads(run.snapshot_json)['workflow']
+                    rows = latest_nodes(db, run_id)
+                    repeat_rows = []
+                    for item in definition['nodes']:
+                        repeat = item.get('repeat')
+                        row = rows[item['id']]
+                        if repeat and row.status == 'succeeded' and not repeat_matches(repeat, json.loads(row.output_json) if row.output_json else None):
+                            repeat_rows.append((item, row))
+                    for item, row in repeat_rows:
+                        repeat = item['repeat']
+                        if row.attempt >= repeat['max_iterations']:
+                            row.status = 'failed'
+                            row.error_code = 'repeat_limit_exceeded'
+                            row.finished_at = datetime.now(timezone.utc)
+                        else:
+                            db.add(NodeRun(run_id=run_id, node_id=row.node_id, attempt=row.attempt + 1, status='idle'))
+                    if repeat_rows:
+                        db.commit()
         except asyncio.CancelledError:
             raise
         except Exception:

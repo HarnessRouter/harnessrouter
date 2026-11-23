@@ -1,4 +1,39 @@
 id: CHG-task-centric-workflow
+concurrency_slice:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified
+  baseline: 28109d258c97b61ca4b111c78ded6ac5a237973f
+  branch: codex/agent-orchestration
+  reuse_decision: extend TaskExecutor and workflow snapshot; no production edits copied from the original dirty checkout
+  scope: spec.md 静态 DAG 并发上限; plan.md 2026-11-23 切片
+  acceptance_ids: [AC-3, AC-6, AC-7, AC-8, AC-13, AC-15, AC-16, AC-17]
+  impact: [hexa-api/app/tasks/service.py, hexa-api/tests/test_task_workflows.py]
+  verification:
+    red: "python -m pytest -q hexa-api/tests/test_task_concurrency.py; before implementation 3 passed, 21 failed (the 21 failures exposed missing validation/dispatch and an invalid unstarted lifespan fixture; the fixture was corrected before Green)."
+    green: "python -m pytest -q hexa-api/tests/test_task_concurrency.py; 24 passed in 8.56s"
+    regression: "python -m pytest -q hexa-api/tests/test_task_domain.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; 36 passed in 30.54s"
+    hygiene: "git diff --check; passed"
+  remaining: [global rate limiting, Runtime/MCP concurrency limits, workspace isolation, foreach/repeat, UHP approval extension]
+  condition_slice:
+    date: "2026-11-23"
+    status: verified
+    scope: 固定比较对象驱动的静态 DAG 条件分支；未匹配分支持久化为 skipped，显式 allow_missing_inputs 汇合成功
+    verification:
+      unit: "python -m pytest -q hexa-api/tests/test_task_workflows.py; 14 passed"
+      red: "条件领域测试先于实现失败，覆盖未知 source、不支持 op、缺 value、非法 path 和任意表达式"
+      integration: "test_condition_skips_one_branch_and_join_waits_for_selected_branch passed with controlled Gateway"
+      hygiene: "python -m py_compile hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py; git diff --check; passed"
+    remaining: [nested_conditions, loops, foreach, dynamic_plan]
+  repeat_slice:
+    date: "2026-11-23"
+    status: verified
+    scope: 同一静态节点的有界 NodeRun 尝试，最多 10 次，输出满足 until 后释放下游
+    verification:
+      unit: "python -m pytest -q hexa-api/tests/test_task_workflows.py; 23 passed"
+      integration: "bounded repeat success and repeat_limit_exceeded cases passed with controlled Gateway"
+      hygiene: "python -m pytest -q hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; 76 passed in 53.92s; python -m py_compile hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py; git diff --check; passed"
+    remaining: [unbounded loops, foreach, cross-node loops, dynamic_plan]
 status: in_progress
 status_reason: 2026-11-19 已完成工作台 REST/SSE 接入与按需分页闭环；本地 SQLite 和受控 HTTP Gateway 验收通过，PostgreSQL、当前源码真实 BYOK 与部署验收仍未完成，不能标记整个 Change 完成。
 owner: Codex

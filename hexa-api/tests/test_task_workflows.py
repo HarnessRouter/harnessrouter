@@ -1,7 +1,9 @@
 import time
+import json
 
+import pytest
 from app.db.models import NodeRun, Run, WorkflowRevision
-from app.tasks.service import is_human_node
+from app.tasks.service import TaskError, is_human_node, workflow_from_json
 
 
 def test_human_node_predicate_covers_explicit_and_legacy_gate_configs():
@@ -13,6 +15,55 @@ def test_human_node_predicate_covers_explicit_and_legacy_gate_configs():
     assert is_human_node({'node_type': 'agent', 'requires_human': True})
     assert not is_human_node({'node_type': 'agent', 'requires_human': False})
     assert not is_human_node({})
+
+
+@pytest.mark.parametrize('condition', [
+    {'source': 'missing', 'path': 'route', 'op': 'eq', 'value': 'fast'},
+    {'source': 'gate', 'path': 'route', 'op': 'contains', 'value': 'fast'},
+    {'source': 'gate', 'path': 'route', 'op': 'eq'},
+    {'source': 'gate', 'path': '../route', 'op': 'eq', 'value': 'fast'},
+    'gate.route == "fast"',
+])
+def test_workflow_rejects_invalid_declarative_condition(condition):
+    with pytest.raises(TaskError) as failure:
+        workflow_from_json({'nodes': [
+            {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+            {'id': 'fast', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'], 'condition': condition},
+        ]})
+    assert failure.value.code == 'invalid_workflow'
+    assert failure.value.status == 422
+
+
+def test_workflow_accepts_condition_only_when_source_is_a_dependency():
+    workflow_from_json({'nodes': [
+        {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+        {'id': 'fast', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'],
+         'condition': {'source': 'gate', 'path': 'route', 'op': 'eq', 'value': 'fast'}},
+    ]})
+
+
+@pytest.mark.parametrize('repeat', [
+    {'max_iterations': 0, 'until': {'path': 'done', 'op': 'eq', 'value': True}},
+    {'max_iterations': 11, 'until': {'path': 'done', 'op': 'eq', 'value': True}},
+    {'max_iterations': True, 'until': {'path': 'done', 'op': 'eq', 'value': True}},
+    {'max_iterations': 2, 'until': {'path': '../done', 'op': 'eq', 'value': True}},
+    {'max_iterations': 2, 'until': {'path': 'done', 'op': 'contains', 'value': True}},
+    {'max_iterations': 2, 'until': {'path': 'done', 'op': 'eq'}},
+])
+def test_workflow_rejects_invalid_bounded_repeat(repeat):
+    with pytest.raises(TaskError) as failure:
+        workflow_from_json({'nodes': [
+            {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'repeat': repeat},
+        ]})
+    assert failure.value.code == 'invalid_workflow'
+    assert failure.value.status == 422
+
+
+def test_workflow_accepts_bounded_repeat():
+    workflow_from_json({'nodes': [
+        {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1',
+         'repeat': {'max_iterations': 2, 'until': {'path': 'done', 'op': 'eq', 'value': True}}},
+    ]})
 
 
 def authenticated(client):
@@ -75,6 +126,87 @@ def test_complete_five_agents_selection_two_validators_report(client, app):
     replay = client.post(f'/api/hexa/runs/{run_id}/continue', headers={'Idempotency-Key': 'choice'}, json={'node_id': 'summary', 'input_refs': collectors[1:3]})
     assert replay.status_code == 200
     assert len(app.state.gateway.calls) == 9
+
+
+def test_condition_skips_one_branch_and_join_waits_for_selected_branch(client, app):
+    authenticated(client)
+
+    original = app.state.gateway.create_response
+
+    async def routed(text, previous, key, **kwargs):
+        context = json.loads(text)
+        if context['prompt'] == 'execute gate':
+            app.state.gateway.calls.append((text, previous, key, kwargs))
+            return {'status': 'completed', 'text': 'gate', 'route': 'fast'}
+        return await original(text, previous, key, **kwargs)
+
+    app.state.gateway.create_response = routed
+    definition = {
+        'nodes': [
+            node('gate'),
+            node('fast', deps=['gate'], inputRefs=['gate'], condition={'source': 'gate', 'path': 'route', 'op': 'eq', 'value': 'fast'}),
+            node('slow', deps=['gate'], inputRefs=['gate'], condition={'source': 'gate', 'path': 'route', 'op': 'eq', 'value': 'slow'}),
+            node('report', deps=['fast', 'slow'], inputRefs=['fast', 'slow'], allow_missing_inputs=True, final_report=True),
+        ],
+    }
+    task = client.post('/api/hexa/tasks', json={'title': 'Conditional route', 'workflow': definition}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'condition-run'})
+    assert started.status_code == 202
+    completed = wait_run(client, started.json()['id'], {'completed'})
+    rows = {row['node_id']: row for row in completed['nodes']}
+    assert rows['gate']['status'] == 'succeeded'
+    assert rows['fast']['status'] == 'succeeded'
+    assert rows['slow']['status'] == 'skipped'
+    assert rows['slow']['error_code'] == 'condition_not_matched'
+    assert rows['report']['status'] == 'succeeded'
+    assert [ref['node_id'] for ref in rows['report']['input']['refs']] == ['fast']
+    assert [json.loads(call[0])['prompt'] for call in app.state.gateway.calls] == ['execute gate', 'execute fast', 'execute report']
+
+
+def test_bounded_repeat_appends_attempts_until_output_matches(client, app):
+    authenticated(client)
+    calls = 0
+
+    async def repeated(text, previous, key, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {'status': 'completed', 'done': calls >= 2, 'iteration': calls}
+
+    app.state.gateway.create_response = repeated
+    task = client.post('/api/hexa/tasks', json={'title': 'Bounded repeat', 'workflow': {'nodes': [
+        node('worker', repeat={'max_iterations': 3, 'until': {'path': 'done', 'op': 'eq', 'value': True}}, final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'repeat-run'})
+    completed = wait_run(client, started.json()['id'], {'completed'})
+    worker = next(row for row in completed['nodes'] if row['node_id'] == 'worker')
+    assert worker['status'] == 'succeeded'
+    assert worker['attempt'] == 2
+    assert worker['output']['iteration'] == 2
+    assert calls == 2
+    attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
+    assert [row['attempt'] for row in attempts] == [1, 2]
+
+
+def test_bounded_repeat_fails_at_limit_without_dispatching_extra_attempt(client, app):
+    authenticated(client)
+    calls = 0
+
+    async def never_done(text, previous, key, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {'status': 'completed', 'done': False, 'iteration': calls}
+
+    app.state.gateway.create_response = never_done
+    task = client.post('/api/hexa/tasks', json={'title': 'Repeat limit', 'workflow': {'nodes': [
+        node('worker', repeat={'max_iterations': 2, 'until': {'path': 'done', 'op': 'eq', 'value': True}}, final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'repeat-limit'})
+    failed = wait_run(client, started.json()['id'], {'failed'})
+    worker = next(row for row in failed['nodes'] if row['node_id'] == 'worker')
+    assert worker['status'] == 'failed'
+    assert worker['error_code'] == 'repeat_limit_exceeded'
+    assert worker['attempt'] == 2
+    assert calls == 2
 
 
 def test_template_versions_copy_definitions_and_history_is_immutable(client, app):

@@ -115,6 +115,50 @@ Task → WorkflowRevision
 
 ## 状态契约
 
+### 静态 DAG 并发上限
+
+静态 DAG 已支持并行和普通依赖汇合，不新增 ParallelNode。工作流定义可设置顶层 `max_concurrency`，严格接受 1 至 50 的整数（不接受布尔值、字符串、小数和 null）；省略时使用 50，与单工作流最多 50 节点及原有并行能力兼容。非法值在创建任务、保存工作流、保存模板和运行预检时按 `invalid_workflow` 返回 422，不产生新版本或执行请求。
+
+并发上限是工作流执行配置，随 WorkflowRevision 和 Run 的 workflow 快照固定。旧工作流和历史 Run 未携带该字段时按 50 解释，不补写历史定义。不改变 `deps`（调度依赖）和 `inputRefs`（实际消费结果）的关系。
+
+首批实现保留当前批次调度：按已保存节点顺序选择最多 `max_concurrency` 个可执行 Agent 节点，同时调用 Gateway，等待本批全部完成后重新计算依赖。没有选中的节点保持 `idle`，不提前标记 running、占用启动时间或发起 Gateway 请求；已确认的显式人工节点不占 Agent 调用名额。运行取消或暂停后不派发下一批；失败节点的必需下游不执行，不因上限而将人工门控或容量等待误判为 Run 结束。
+
+本上限只约束单 Run 的节点派发，不表示全局限流、Runtime/MCP 工具并发限制或 Workspace 写入隔离。后续分别实施工作区隔离、恢复收据、结构化条件分支、有界 foreach/repeat；当前仍拒绝 DAG 回边，不允许运行中修改 WorkflowRevision。
+
+### 声明式条件分支
+
+节点可以声明固定格式的 `condition`，用于在静态 DAG 中选择分支：
+
+```json
+{
+  "source": "route",
+  "path": "decision.next",
+  "op": "eq",
+  "value": "fast"
+}
+```
+
+`source` 必须是当前节点的 `deps` 之一；`path` 只能由点分隔的对象字段组成；`op` 目前只允许 `eq`、`neq`、`in`、`exists`。`eq` 和 `neq` 对字段值做 JSON 值比较，`in` 要求 `value` 为数组，`exists` 只判断字段是否存在且不接受 `value`。条件值来自 source 节点成功输出的脱敏 JSON；条件不是 Python、JavaScript、模板或任意表达式，服务端不执行用户提供的代码。
+
+条件节点必须先等待全部 `deps` 满足。条件不匹配时，NodeRun 追加为 `skipped`，错误原因固定为 `condition_not_matched`，不调用 Gateway，也不占用并发名额。条件匹配时按普通 Agent 或人工节点规则执行。历史 Run 只使用启动时保存的条件定义和节点输出，不读取当前工作流。
+
+条件分支的汇合节点必须在工作流中显式设置 `allow_missing_inputs: true`，并允许其 `deps` 中出现 `skipped` 节点；运行时上下文只包含成功的 `inputRefs`。没有该声明的汇合节点不会把跳过当作成功依赖，保持等待或进入无法继续的失败状态。条件只负责选择静态节点，不新增动态节点、不修改依赖、不允许回边，也不实现 `foreach`、`repeat` 或运行中改图。
+
+### 有界重复
+
+节点可以声明有界 `repeat`，用于让同一个静态节点根据自身输出追加执行尝试：
+
+```json
+{
+  "max_iterations": 3,
+  "until": { "path": "done", "op": "eq", "value": true }
+}
+```
+
+`max_iterations` 必须是 `1..10` 的整数；`until` 只允许 `eq` 或 `exists`，路径使用与条件分支相同的安全字段路径规则。每次重复仍使用原节点 ID，并追加一个 `NodeRun`，其 `attempt` 递增；旧尝试、输入、输出和错误不可覆盖。`until` 在该次尝试成功后读取脱敏输出判断。匹配后节点保持该次 `succeeded`，下游才可继续；未匹配且尚有配额时追加下一次 `idle` 尝试。
+
+达到 `max_iterations` 仍未匹配时，最新尝试变为 `failed`，错误码为 `repeat_limit_exceeded`，Run 不得继续执行依赖该节点的下游。重复只是在静态节点上的有界尝试，不形成 DAG 回边，不生成新节点，不允许运行中修改上限，也不代表全局重试策略。进程恢复不会自动重放不确定的外部副作用；只有已明确成功且输出可判断的尝试才会进入下一轮。
+
 ### NodeRun 状态
 
 节点状态属于某个 Run，不属于全局 Task：
@@ -248,6 +292,9 @@ Task → WorkflowRevision
 - **AC-12 权限和安全：** 不同用户或工作区不能读取、引用或导出无权访问的任务结果；敏感信息不进入持久化和响应。
 - **AC-13 可靠性：** 版本冲突、活动 Run 冲突和重复请求有明确错误；API 进程恢复后不自动重放不确定的 Agent 副作用。
 - **AC-14 响应式界面：** 桌面和移动视口下任务列表、画布、检查器、运行区、加载、失败和恢复状态可用。
+- **AC-15 静态 DAG 并发上限：** 通过任务 API 保存 `max_concurrency=2` 的五个独立 Agent 和汇总节点，运行期间最多两个 Agent 调用活动且至少两个可同时执行，汇总等待全部必需依赖完成；非法值返回 422；取消阻止后续批次；失败不触发其下游；人工门控仍需合法决定；重开后修改配置不改变历史 Run 快照。省略上限仍支持五节点并行。
+- **AC-16 声明式条件分支：** 条件只允许固定比较对象且来源必须是依赖节点；未匹配分支记录为 `skipped/condition_not_matched` 且不调用 Gateway；匹配分支正常执行；显式 `allow_missing_inputs` 汇合节点等待所有依赖完成并只消费成功输入；任意表达式、未知来源、非法路径和不支持操作返回 422。
+- **AC-17 有界重复：** `repeat.max_iterations` 只接受 1 至 10 的整数，`until` 只接受安全的 `eq`/`exists` 条件；重复追加同一节点的 NodeRun 尝试并递增 `attempt`，终止条件满足后下游执行；达到上限仍未满足时记录 `repeat_limit_exceeded` 并阻断下游；不会生成动态节点或无限派发。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 
