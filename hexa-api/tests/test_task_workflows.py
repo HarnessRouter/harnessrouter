@@ -66,6 +66,32 @@ def test_workflow_accepts_bounded_repeat():
     ]})
 
 
+@pytest.mark.parametrize('foreach', [
+    {'source': 'missing', 'path': 'items', 'max_items': 2},
+    {'source': 'gate', 'path': '../items', 'max_items': 2},
+    {'source': 'gate', 'path': 'items', 'max_items': 0},
+    {'source': 'gate', 'path': 'items', 'max_items': 11},
+    {'source': 'gate', 'path': 'items', 'max_items': True},
+    {'source': 'gate', 'path': 'items'},
+])
+def test_workflow_rejects_invalid_bounded_foreach(foreach):
+    with pytest.raises(TaskError) as failure:
+        workflow_from_json({'nodes': [
+            {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+            {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'], 'foreach': foreach},
+        ]})
+    assert failure.value.code == 'invalid_workflow'
+    assert failure.value.status == 422
+
+
+def test_workflow_accepts_bounded_foreach_only_from_a_dependency():
+    workflow_from_json({'nodes': [
+        {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+        {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'],
+         'foreach': {'source': 'gate', 'path': 'items', 'max_items': 10}},
+    ]})
+
+
 def authenticated(client):
     assert client.post('/api/hexa/auth/login', json={'username': 'admin', 'password': 'correct-password'}).status_code == 200
 
@@ -207,6 +233,60 @@ def test_bounded_repeat_fails_at_limit_without_dispatching_extra_attempt(client,
     assert worker['error_code'] == 'repeat_limit_exceeded'
     assert worker['attempt'] == 2
     assert calls == 2
+
+
+def test_bounded_foreach_runs_each_item_and_aggregates_outputs(client, app):
+    authenticated(client)
+    calls = []
+
+    async def foreach_gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute gate':
+            return {'status': 'completed', 'items': ['alpha', 'beta', 'gamma']}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': context['refs'][0]['output']}
+        return {'status': 'completed', 'item': context['foreach_item'], 'index': context['foreach_index']}
+
+    app.state.gateway.create_response = foreach_gateway
+    task = client.post('/api/hexa/tasks', json={'title': 'Bounded foreach', 'workflow': {'nodes': [
+        node('gate'),
+        node('worker', deps=['gate'], inputRefs=['gate'], foreach={'source': 'gate', 'path': 'items', 'max_items': 3}),
+        node('report', deps=['worker'], inputRefs=['worker'], final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'foreach-run'})
+    completed = wait_run(client, started.json()['id'], {'completed'})
+    worker = next(row for row in completed['nodes'] if row['node_id'] == 'worker')
+    assert worker['status'] == 'succeeded'
+    assert worker['attempt'] == 3
+    assert worker['output']['items'] == [
+        {'status': 'completed', 'item': 'alpha', 'index': 0},
+        {'status': 'completed', 'item': 'beta', 'index': 1},
+        {'status': 'completed', 'item': 'gamma', 'index': 2},
+    ]
+    attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
+    assert [row['attempt'] for row in attempts] == [1, 2, 3]
+    assert [call.get('foreach_item') for call in calls] == [None, 'alpha', 'beta', 'gamma', None]
+
+
+def test_bounded_foreach_rejects_more_items_than_limit_without_worker_call(client, app):
+    authenticated(client)
+    calls = []
+
+    async def too_many(text, previous, key, **kwargs):
+        calls.append(json.loads(text))
+        return {'status': 'completed', 'items': ['a', 'b', 'c']}
+
+    app.state.gateway.create_response = too_many
+    task = client.post('/api/hexa/tasks', json={'title': 'Foreach limit', 'workflow': {'nodes': [
+        node('gate'),
+        node('worker', deps=['gate'], foreach={'source': 'gate', 'path': 'items', 'max_items': 2}, final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'foreach-limit'})
+    failed = wait_run(client, started.json()['id'], {'failed'})
+    worker = next(row for row in failed['nodes'] if row['node_id'] == 'worker')
+    assert worker['error_code'] == 'foreach_limit_exceeded'
+    assert len(calls) == 1
 
 
 def test_template_versions_copy_definitions_and_history_is_immutable(client, app):

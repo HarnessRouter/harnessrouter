@@ -7,7 +7,7 @@ concurrency_slice:
   branch: codex/agent-orchestration
   reuse_decision: extend TaskExecutor and workflow snapshot; no production edits copied from the original dirty checkout
   scope: spec.md 静态 DAG 并发上限; plan.md 2026-11-23 切片
-  acceptance_ids: [AC-3, AC-6, AC-7, AC-8, AC-13, AC-15, AC-16, AC-17]
+  acceptance_ids: [AC-3, AC-6, AC-7, AC-8, AC-13, AC-15, AC-16, AC-17, AC-18]
   impact: [hexa-api/app/tasks/service.py, hexa-api/tests/test_task_workflows.py]
   verification:
     red: "python -m pytest -q hexa-api/tests/test_task_concurrency.py; before implementation 3 passed, 21 failed (the 21 failures exposed missing validation/dispatch and an invalid unstarted lifespan fixture; the fixture was corrected before Green)."
@@ -34,6 +34,15 @@ concurrency_slice:
       integration: "bounded repeat success and repeat_limit_exceeded cases passed with controlled Gateway"
       hygiene: "python -m pytest -q hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; 76 passed in 53.92s; python -m py_compile hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py; git diff --check; passed"
     remaining: [unbounded loops, foreach, cross-node loops, dynamic_plan]
+  foreach_slice:
+    date: "2026-11-23"
+    status: verified
+    scope: 成功依赖输出中的有限 JSON 数组串行展开，最多 10 项，按 foreach_index 聚合
+    verification:
+      unit: "python -m pytest -q hexa-api/tests/test_task_workflows.py -k foreach; 9 passed"
+      integration: "逐项成功、空集合、非法集合和超限集合均通过受控 Gateway 测试"
+      hygiene: "python -m pytest -q hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; 85 passed in 45.32s; python -m py_compile hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py; git diff --check; passed"
+    remaining: [parallel_foreach, nested_foreach, cross_node_loops, dynamic_plan]
 status: in_progress
 status_reason: 2026-11-19 已完成工作台 REST/SSE 接入与按需分页闭环；本地 SQLite 和受控 HTTP Gateway 验收通过，PostgreSQL、当前源码真实 BYOK 与部署验收仍未完成，不能标记整个 Change 完成。
 owner: Codex
