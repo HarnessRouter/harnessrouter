@@ -6,6 +6,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import select, update
 
@@ -34,6 +35,122 @@ class TaskError(ValueError):
 
 def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def _capability_digest(value):
+    return hashlib.sha256(encoded(value).encode('utf-8')).hexdigest()
+
+
+def _safe_mcp_summary(server, source):
+    if not isinstance(server, dict):
+        return None
+    result = {'name': str(server.get('name') or ''), 'source': source,
+              'transport': str(server.get('transport') or server.get('type') or '')}
+    if isinstance(server.get('url'), str) and server['url']:
+        parts = urlsplit(server['url'])
+        result['url'] = urlunsplit((parts.scheme, parts.hostname or '', parts.path, '', ''))
+    for key in ('command', 'cwd'):
+        if isinstance(server.get(key), str) and server[key]:
+            result[key] = server[key]
+    if isinstance(server.get('args'), list):
+        result['args'] = [str(item) for item in server['args'][:32]]
+    return result if result['name'] else None
+
+
+def _safe_skill_summary(skill, source):
+    if not isinstance(skill, dict):
+        return None
+    name = skill.get('name') or skill.get('id')
+    if not isinstance(name, str) or not name:
+        return None
+    return {'name': name, 'source': source,
+            **({'description': skill['description']} if isinstance(skill.get('description'), str) else {})}
+
+
+def capability_snapshot(agent, discovery=None):
+    """Create the immutable, secret-free capability view used by a Run.
+
+    The Gateway remains the authority for plugin package parsing and runtime materialisation.
+    This function records only stable identity and composition facts, never headers, auth, env,
+    package files, or plugin scripts.
+    """
+    agent = agent if isinstance(agent, dict) else {}
+    discovery = discovery if isinstance(discovery, dict) else {}
+    plugins = []
+    components = []
+    for server in agent.get('mcpServers', agent.get('mcp_servers', [])) or []:
+        summary = _safe_mcp_summary(server, 'direct')
+        if summary:
+            components.append({'kind': 'mcp', **summary})
+    for skill in agent.get('skills', []) or []:
+        summary = _safe_skill_summary(skill, 'direct')
+        if summary:
+            components.append({'kind': 'skill', **summary})
+    for plugin in agent.get('plugins', []) or []:
+        if not isinstance(plugin, dict) or not isinstance(plugin.get('name'), str):
+            continue
+        manifest = plugin.get('manifest') if isinstance(plugin.get('manifest'), dict) else {}
+        manifest_identity = {
+            key: manifest[key] for key in ('name', 'version')
+            if isinstance(manifest.get(key), str)
+        }
+        enabled = plugin.get('enabled', True) is not False
+        plugin_components = []
+        for server in plugin.get('mcpServers', []) or []:
+            summary = _safe_mcp_summary(server, 'plugin')
+            if summary:
+                summary['plugin'] = plugin['name']
+                components.append({'kind': 'mcp', **summary})
+                plugin_components.append(summary)
+        for skill in plugin.get('skills', []) or []:
+            summary = _safe_skill_summary(skill, 'plugin')
+            if summary:
+                summary['plugin'] = plugin['name']
+                components.append({'kind': 'skill', **summary})
+                plugin_components.append(summary)
+        skipped = [
+            {'path': str(item.get('path') or ''), 'reason': str(item.get('reason') or '')}
+            for item in (plugin.get('skipped') or [])
+            if isinstance(item, dict)
+        ]
+        plugin_record = {
+            'name': plugin['name'], 'enabled': enabled, 'manifest': manifest_identity,
+            'manifest_digest': _capability_digest(manifest_identity), 'skipped': skipped,
+            'component_digest': _capability_digest(plugin_components),
+        }
+        if isinstance(plugin.get('_package_digest'), str) and plugin['_package_digest']:
+            plugin_record['package_digest'] = plugin['_package_digest']
+        if isinstance(plugin.get('_package_read_error'), str):
+            plugin_record['package_read_error'] = plugin['_package_read_error']
+        # An installed but disabled plugin is retained in the snapshot for audit, while its
+        # derived components are deliberately omitted from the effective composition below.
+        if not enabled:
+            components = [item for item in components if item.get('plugin') != plugin['name']]
+        plugins.append(plugin_record)
+    effective = {
+        'agent_id': str(agent.get('id') or ''), 'base': str(agent.get('base') or ''),
+        'components': sorted(components, key=lambda item: (item.get('kind', ''), item.get('name', ''), item.get('plugin', ''))),
+        'disabled_tools': sorted({str(item) for item in (agent.get('disabledTools', agent.get('disabled_tools', [])) or []) if isinstance(item, str)}),
+        'plugins': plugins,
+        'discovery': {
+            'versions': [str(item) for item in (discovery.get('versions') or []) if isinstance(item, str)],
+            'capabilities': {str(key): bool(value) for key, value in (discovery.get('capabilities') or {}).items()},
+            'plugin_schemas': [str(item) for item in (discovery.get('plugin_schemas') or []) if isinstance(item, str)],
+        },
+    }
+    effective['digest'] = _capability_digest(effective)
+    effective['preflight_errors'] = [
+        {'plugin': item['name'], 'path': skipped['path'], 'reason': skipped['reason']}
+        for item in plugins if item['enabled'] for skipped in item['skipped']
+    ]
+    if any(item['enabled'] and item.get('package_read_error') for item in plugins):
+        effective['preflight_errors'].extend(
+            {'plugin': item['name'], 'path': 'package', 'reason': item['package_read_error']}
+            for item in plugins if item['enabled'] and item.get('package_read_error')
+        )
+    if any(item['enabled'] for item in plugins) and discovery.get('capabilities', {}).get('plugins') is not True:
+        effective['preflight_errors'].append({'plugin': '*', 'path': 'uhp.discovery', 'reason': 'Gateway does not advertise plugins'})
+    return effective
 
 
 def append_run_event(db, run_id, event_type, *, node_run_id=None, data=None):
@@ -552,6 +669,25 @@ async def prepare_run(db, task, body, key, gateway, secrets):
     try:
         agents = {row['id']: row for row in await gateway.list_agents(getattr(gateway, 'api_key', None))}
         catalogs = {}
+        capability_rows = {}
+        discovery = {}
+        if hasattr(gateway, 'get_uhp_discovery'):
+            discovery = await gateway.get_uhp_discovery()
+
+        def workflow_agent_ids(nodes):
+            for node in nodes or []:
+                if not is_explicit_human_node(node) and node.get('agent_id'):
+                    yield node['agent_id']
+                yield from workflow_agent_ids((node.get('subgraph') or {}).get('nodes', []))
+
+        used_agent_ids = set(workflow_agent_ids(definition['nodes']))
+        for agent_id in used_agent_ids:
+            if agent_id not in agents:
+                raise ValueError('agent unavailable')
+            if hasattr(gateway, 'get_agent_capabilities'):
+                capability_rows[agent_id] = await gateway.get_agent_capabilities(agent_id)
+            else:
+                capability_rows[agent_id] = agents[agent_id]
         for item in definition['nodes']:
             if item.get('node_type') in {'human', 'human_gate'}:
                 continue
@@ -585,12 +721,24 @@ async def prepare_run(db, task, body, key, gateway, secrets):
                     raise ValueError('subgraph model unavailable')
     except Exception as exc:
         raise TaskError('configuration_unavailable', '节点 Agent 或模型不可用，请检查配置。', 422) from exc
+    capability_snapshots = {
+        agent_id: capability_snapshot(capability_rows.get(agent_id, agents[agent_id]), discovery)
+        for agent_id in sorted(capability_rows)
+    }
+    preflight_errors = [
+        {'agent_id': agent_id, **error}
+        for agent_id, snapshot_row in capability_snapshots.items()
+        for error in snapshot_row.get('preflight_errors', [])
+    ]
+    if preflight_errors:
+        raise TaskError('configuration_unavailable', 'Agent 插件存在未加载能力，请修复插件后再运行。', 422)
     if resume:
         previous_agents = json.loads(resume[0].snapshot_json).get('agents', {})
         used_agents = {item.get('agent_id') for item in definition['nodes'] if not is_explicit_human_node(item)}
         if any(redact(agents.get(identity), secrets) != previous_agents.get(identity) for identity in used_agents):
             raise TaskError('resume_configuration_conflict', 'Agent 配置已经改变，请整节点重跑。', 409)
     snapshot = redact({'workflow': definition, 'input': task.input_text, 'agents': agents,
+                       'capabilities': capability_snapshots,
                        'workflow_revision_id': revision.id,
                        'source': {'kind': 'saved_workflow_revision', 'revision': revision.revision}}, secrets)
     if resume:

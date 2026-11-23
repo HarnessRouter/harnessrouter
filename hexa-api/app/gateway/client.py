@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import hashlib
 import json
 from urllib.parse import quote
 
@@ -130,6 +131,47 @@ class GatewayClient:
         except ValueError as exc:
             raise GatewayError("Gateway 返回的数据格式无效。") from exc
         return body if isinstance(body, dict) else {}
+
+    async def get_uhp_discovery(self) -> dict[str, Any]:
+        """Read the unauthenticated UHP capability document before using optional fields."""
+        result = await self.json_request('GET', '/v1/uhp')
+        return result if isinstance(result, dict) else {}
+
+    async def get_agent_capabilities(self, agent_id: str) -> dict[str, Any]:
+        """Read the Gateway's direct and plugin-derived Harness composition.
+
+        The returned package is intentionally not expanded here. Gateway remains responsible for
+        parsing and materialising plugin files; Hexa only snapshots the safe composition summary.
+        """
+        result = await self.json_request('GET', f'/v1/harnesses/{quote(agent_id, safe="")}')
+        if not isinstance(result, dict):
+            return {}
+        plugins = result.get('plugins')
+        if isinstance(plugins, list):
+            for plugin in plugins:
+                if not isinstance(plugin, dict) or not plugin.get('name'):
+                    continue
+                try:
+                    files = await self.json_request(
+                        'GET',
+                        f'/v1/harnesses/{quote(agent_id, safe="")}/plugins/{quote(str(plugin["name"]), safe="")}/files',
+                    )
+                except GatewayError:
+                    # The Harness summary remains useful for preflight; the missing package is
+                    # represented by the Gateway's own skipped/plugin_not_found error path.
+                    plugin['_package_read_error'] = 'plugin package could not be read'
+                    continue
+                if isinstance(files, dict) and isinstance(files.get('files'), list):
+                    normalized = []
+                    for item in files['files']:
+                        if not isinstance(item, dict) or not isinstance(item.get('path'), str):
+                            continue
+                        payload = item.get('content_b64') if isinstance(item.get('content_b64'), str) else item.get('content', '')
+                        normalized.append({'path': item['path'], 'content': payload})
+                    plugin['_package_digest'] = hashlib.sha256(
+                        json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+                    ).hexdigest()
+        return result
 
     async def create_agent(self, input: dict[str, Any]) -> dict[str, Any]:
         payload = {'name': input['name'], 'base': input['base'], 'default_model': input['default_model'], 'system_prompt': input.get('system_prompt', ''), 'mcp_servers': [], 'skills': [], 'disabled_tools': []}

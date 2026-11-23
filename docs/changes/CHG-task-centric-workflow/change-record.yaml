@@ -1047,3 +1047,26 @@ item_history_ui:
     - "UHP durable tool approval 仍是独立 proposal，尚未进入 Gateway/Runner 运行时实现。"
   remaining: [390px item-history screenshot/overflow check, PostgreSQL fresh/upgrade, current-source real Gateway/BYOK smoke, nested foreach, dynamic subgraphs, UHP approval runtime]
   next_action: "在具备目标环境时补项级历史专用视觉截图与真实 Gateway/Provider 验证；随后再决定是否进入嵌套 foreach、完整动态子图或 UHP 审批运行时。"
+
+capability_snapshot_plugin_preflight:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: bd080d88
+  branch: codex/agent-orchestration
+  reuse_decision: reuse UHP 2026-10-19 Plugin composition and existing Run.snapshot_json; do not add a new plugin format or copy package files
+  scope: Gateway capability reads, secret-free capability snapshot, enabled-plugin preflight
+  acceptance_ids: [AC-38, AC-39]
+  impact: [hexa-api/app/gateway/client.py, hexa-api/app/tasks/service.py, hexa-api/tests/test_capability_snapshot.py, docs/changes/CHG-task-centric-workflow/spec.md, docs/changes/CHG-task-centric-workflow/plan.md]
+  verification:
+    red: "能力快照测试在实现前因 capability_snapshot 不存在而收集失败；目标行为测试随后通过。"
+    unit: "python -m pytest -q hexa-api/tests/test_capability_snapshot.py; 2 passed"
+    regression: "python -m pytest -q hexa-api/tests/test_capability_snapshot.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py; 88 passed"
+    static: "python -m py_compile hexa-api/app/gateway/client.py hexa-api/app/tasks/service.py; YAML safe_load; git diff --check; passed"
+  security_review: "只保存 direct/plugin 来源、manifest/package/component digest 和 UHP 能力摘要；不保存 headers、auth、env、插件文件、脚本或工具参数。enabled Plugin 的 skipped 组件在首个 NodeRun 前 fail closed；disabled Plugin 不进入有效组合。"
+  limitations:
+    - "真实 Gateway/Runner 插件物化、stdio containment、Linux、PostgreSQL 和部署尚未验证。"
+    - "package digest 由 Gateway 文件读取接口计算，Gateway 若拒绝文件读取则仍依赖其 Harness skipped/plugin_not_found 诊断；完整冲突和 unsupported transport 由 Gateway 配置契约负责。"
+    - "native tool approval、Response/SSE continuation 和审批 UI 仍未接线，不能广告 tool_approvals capability。"
+  remaining: [real Gateway/BYOK smoke, PostgreSQL fresh/upgrade, Linux/Runner plugin conformance, native tool approval runtime]
+  next_action: "继续补 GatewayClient HTTP 单测和真实 Gateway conformance；随后推进跨页项历史与完整动态子图，保持 UHP 审批能力未广告。"

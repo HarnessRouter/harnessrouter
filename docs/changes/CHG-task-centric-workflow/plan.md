@@ -224,3 +224,17 @@ native tool approval 仍按既有独立门禁记录。动态子编排不得与�
 模板响应另提供最新版本摘要，编辑与使用前重新读取该摘要，不遍历历史。历史版本、产物、调试尝试按服务端游标单批追加，按 ID 去重；游标按服务端 offset/limit 推进，不按去重后的数组长度推算。正常阅读、翻页和重放不写业务数据。
 
 验证顺序：分页合并与游标单测 Red、服务端搜索/隔离/跨任务 Run/模板最新版本集成测试 Red、浏览器按需加载与失败重试 Red；再实现 API 与工作台。最终执行相关后端回归、客户端单测、Chromium/Edge 工作台回归、真实 HTTP App API＋SQLite E2E、桌面和移动截图检查、类型检查和构建。执行证据统一记录在 change-record.yaml；不扩展 PostgreSQL、真实模型凭据或生产部署范围。
+
+## 2026-11-24 Agent 能力快照与 Plugin preflight 实施
+
+复用 Gateway 已发布的 UHP `2026-10-19` Plugin 子协议，不新增 Plugin 包格式或新的安装协议。
+先读取 `/v1/uhp`、Harness 详情和已安装 Plugin 文件清单，形成 direct、plugin、builtin、runtime
+来源明确的安全组合摘要；只保存 manifest/package/component digest 和 enabled/skipped 等事实，
+不保存插件文件、认证头、环境变量或凭据。Run 创建前对启用 Plugin 的 skipped、缺包和能力不一致
+执行 fail-closed preflight，disabled Plugin 保留安装审计但不进入有效组件。动态计划、动态 DAG 和
+子编排继承父 Run 快照，不得借模型输出扩展工具或权限。
+
+先以能力快照单测和任务 API 的 skipped Plugin 拒绝测试建立 Red，再实现 GatewayClient 读取、摘要
+哈希、Run 快照和 preflight。验证 Gateway 客户端、能力快照、任务工作流、并发、动态 DAG、子编排、
+RunEvent、CommandReceipt、Lease 和 reconciliation 回归；真实 Gateway/Runner、PostgreSQL、Linux
+及 native tool approval 仍单独验收。

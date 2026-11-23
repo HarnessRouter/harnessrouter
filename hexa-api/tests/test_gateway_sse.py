@@ -79,3 +79,37 @@ async def test_gateway_sse_adapter_collects_utf8_delta_response_id_and_terminal_
         httpx.AsyncClient = original
 
     assert result == {"response_id": "resp-utf8", "text": "你好，世界", "status": "completed"}
+
+
+@pytest.mark.anyio
+async def test_gateway_reads_uhp_harness_and_plugin_package_for_capability_snapshot(monkeypatch):
+    import json
+    original = httpx.AsyncClient
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/v1/uhp':
+            return httpx.Response(200, json={'versions': ['2026-10-19'], 'capabilities': {'plugins': True}})
+        if request.url.path == '/v1/harnesses/agent-1':
+            return httpx.Response(200, json={'id': 'agent-1', 'plugins': [{
+                'name': 'pack', 'enabled': True, 'manifest': {'name': 'pack', 'version': '1.0.0'},
+                'mcpServers': [], 'skills': [], 'skipped': [],
+            }]})
+        if request.url.path == '/v1/harnesses/agent-1/plugins/pack/files':
+            return httpx.Response(200, json={'files': [
+                {'path': 'plugin.json', 'content': json.dumps({'name': 'pack'})},
+            ]})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+
+    class Client(httpx.AsyncClient):
+        def __init__(self, *args, **kwargs):
+            kwargs['transport'] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', Client)
+    gateway = GatewayClient('http://gateway.test', 'test-key')
+    discovery = await gateway.get_uhp_discovery()
+    capabilities = await gateway.get_agent_capabilities('agent-1')
+    assert discovery['capabilities']['plugins'] is True
+    assert capabilities['plugins'][0]['_package_digest']

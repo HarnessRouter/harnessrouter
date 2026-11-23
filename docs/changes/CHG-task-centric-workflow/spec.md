@@ -412,6 +412,20 @@ containment 仍由 Gateway/Runner 负责；Hexa 只负责任务策略、预检�
 
 Skill 只能声明其所需能力，不能授予权限。插件安装或启用也不能绕过任务、工作区、Agent 或 Runtime 的限制。
 
+Hexa 的实现入口是 Gateway 的 `GET /v1/uhp`、`GET /v1/harnesses/{id}` 和已安装插件的
+`GET /v1/harnesses/{id}/plugins/{name}/files`。后一个接口只用于计算不可逆的 package digest；
+Hexa 不保存文件内容，也不把插件文件复制到任务快照。每个 Run 的 `capabilities` 快照至少保存
+Agent 标识、direct/plugin/builtin/runtime 来源、MCP transport 与安全摘要、Skill 标识、插件
+manifest name/version、manifest digest、package digest、enabled/skipped、disabled tools、UHP
+versions/capabilities/plugin_schemas 和组合 digest。认证头、env、auth、headers、脚本和原始参数
+不得进入快照。
+
+Run preflight 必须在创建 `Run` 记录或派发第一个 NodeRun 前完成。启用 Plugin 的 `skipped`、
+缺失 package、冲突、unsupported transport 或缺失 UHP capability 必须返回
+`configuration_unavailable`，并给出可展示的安全诊断；disabled Plugin 的派生能力不得进入
+effective composition。动态计划、动态 DAG 和子编排只能继承父 Run 已冻结的 capability snapshot，
+不能在模型输出中声明新的 Plugin、MCP、Skill 或权限。
+
 ### 有效权限
 
 每次工具执行的有效权限按以下交集计算，并在 Run 快照中保留决策摘要：
@@ -650,6 +664,8 @@ Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。�
 - **AC-35 CommandReceipt 回执：** 每个实际 Gateway 调用都生成一条与 NodeRun 一对一的回执，成功进入 `completed`，明确失败进入 `failed`，不确定中断、进程恢复或租约丢失进入 `unknown` 且要求 reconciliation；回执包含稳定 `command_id` 和 `request_hash`，不包含原始工具参数、凭据或授权头，`unknown` 不自动重放，节点详情可分页读取脱敏摘要。
 - **AC-36 Run Lease 与 Heartbeat：** 两个执行器不能同时持有同一未过期 Run；过期接管必须递增 fence，旧 owner 续租和迟到写回失败；执行期间 heartbeat 续期，终态释放租约，进程恢复将已派发但无法确认的节点和回执收敛为 `unknown`，不自动重放。
 - **AC-37 显式 reconciliation：** 对带已有 `response_id` 的 unknown 回执，读取 Gateway terminal 状态可以一次性收敛 NodeRun、回执和事实事件；running、读取失败和缺少 response ID 保持 unknown；重复幂等请求不重新查询、不调用 `create_response`，不得由 reconciliation 产生新的 Agent 副作用。
+- **AC-38 能力快照：** Run 创建前读取 UHP discovery 和每个实际使用 Harness 的 direct/plugin/builtin/runtime 能力，保留启用状态、来源、插件 manifest/package/component digest、skipped、disabled tools 与组合 digest；快照不得包含 headers、auth、env、凭据、插件文件或工具参数，动态项和子编排只能继承该快照。
+- **AC-39 Plugin preflight：** 启用 Plugin 的 skipped、缺少 package、冲突、unsupported transport 或缺少必要 UHP capability 在首个 NodeRun 前返回 `configuration_unavailable`；disabled Plugin 可被审计但其派生 MCP/Skill/Tool 不进入有效组合；不支持审批的 Gateway 不得被任务层宣称为支持工具审批。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 
