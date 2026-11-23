@@ -22,3 +22,14 @@ Gateway 仅作为 `hexa-api` 的外部执行依赖；Gateway 原有回归测试�
 | 真实 HTTP API / SQLite / 受控 Gateway | 任务生命周期、恢复、Edge 路径通过；真实分页单项通过并验证移动端非空 Artifact 下载 | Change 三条 E2E 记录，明确初始失败与定向修复结果 |
 | 本地静态构建预览 | `/tasks/71`、`/runs/19`、对应 JS 与重复访问均 200 | Change `static_preview`；生产反向代理未验证 |
 | Linux / PostgreSQL / 真实 BYOK / 生产部署 | not_evaluated；继承已有环境限制，未称可发布 | 具备目标环境后补迁移、模型及部署冒烟 |
+
+
+## 2026-11-23 循环与集合组合
+
+| 平台/边界 | 影响、验证入口与结果 |
+| --- | --- |
+| Windows / Python / SQLite | 新增 iteration 默认值、旧库重复升级、保留输出和决定；API 与执行器回归的最终结果见 Change `loop_composed_fanout_slice`。无新增 Shell、原生模块或操作系统路径分支。 |
+| 本地 HTTP Gateway 夹具 | 真实 HTTP adapter + SQLite 验证串联集合两轮、上一轮结果输入、分页与重启只读；不代表真实 Provider 执行。 |
+| Chromium | 编排编辑保存运行重开 1 项、人工确认及并行/暂停/取消 2 项通过；本批没有 UI 源码或样式变更。 |
+| Linux / PostgreSQL | not_evaluated；新增 009 及真实迁移测试已更新，按既有约定保留真库后续验证；SQLite 证据不替代 PostgreSQL。 |
+| 真实 Gateway / BYOK / 生产部署 | not_evaluated；本批未改变 Gateway/UHP 调用契约，不宣称运行时审批已实现或整体可发布。 |

@@ -32,6 +32,8 @@ python -m uvicorn app.main:app --app-dir hexa-api --host 127.0.0.1 --port 4010 -
 5. `migrations/005_task_artifacts.sql`
 6. `migrations/006_conversation_execution.sql`
 7. `migrations/007_node_execution.sql`
+8. `migrations/008_node_orchestration.sql`
+9. `migrations/009_node_iterations.sql`
 
 应用启动不会自动创建 PostgreSQL 表，也不会连接未配置的默认数据库。SQLite 只用于测试工厂；SQLite 开发数据库启动时会补齐 Agent 模板表、任务来源模板字段、任务版本身份字段和任务 Artifact 表，已有任务按已有版本号回填可确定的版本 ID。Agent 模板独立于任务工作流模板，保存名称、说明、运行时、默认模型和系统提示词，不保存 Gateway 凭据。`004_task_template_source.sql` 给现有任务增加可空的来源模板及固定版本字段，旧任务不会推测补写来源。`005_task_artifacts.sql` 只保存 Gateway 文件引用和任务权限元数据，不复制文件内容。
 

@@ -288,9 +288,11 @@ def test_bounded_cross_node_loop_reexecutes_the_static_body_until_check_matches(
     assert calls == ['execute work', 'execute check', 'execute work', 'execute check']
     check = next(row for row in completed['nodes'] if row['node_id'] == 'check')
     assert check['status'] == 'succeeded'
-    assert check['attempt'] == 2
+    assert check['iteration'] == 2
+    assert check['attempt'] == 1
     attempts = client.get(f"/api/hexa/node-runs/{check['id']}").json()['attempts']
-    assert [row['attempt'] for row in attempts] == [1, 2]
+    assert [row['iteration'] for row in attempts] == [1, 2]
+    assert [row['attempt'] for row in attempts] == [1, 1]
 
 
 def test_bounded_cross_node_loop_fails_at_limit_without_an_extra_body_dispatch(client, app):
@@ -315,6 +317,92 @@ def test_bounded_cross_node_loop_fails_at_limit_without_an_extra_body_dispatch(c
     check = next(row for row in failed['nodes'] if row['node_id'] == 'check')
     assert check['error_code'] == 'loop_limit_exceeded'
     assert calls == ['execute work', 'execute check', 'execute work', 'execute check']
+
+
+@pytest.mark.parametrize('kind,mode', [('foreach', 'serial'), ('foreach', 'parallel'), ('dynamic_plan', 'serial'), ('dynamic_plan', 'parallel')])
+def test_bounded_loop_reexpands_foreach_body_each_iteration(client, app, kind, mode):
+    authenticated(client)
+    calls = []
+
+    async def loop_foreach_gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute gate':
+            return {'status': 'completed', 'items': ['a', 'b'] if kind == 'foreach' else [
+                {'id': 'a', 'prompt': 'first'}, {'id': 'b', 'prompt': 'second'},
+            ]}
+        if context['prompt'] == 'execute check':
+            return {'status': 'completed', 'done': sum(item.get('prompt') == 'execute check' for item in calls) >= 2}
+        return {'status': 'completed', 'item': context[f'{kind if kind == "foreach" else "dynamic"}_item']}
+
+    app.state.gateway.create_response = loop_foreach_gateway
+    task = client.post('/api/hexa/tasks', json={'title': 'Loop foreach body', 'workflow': {'nodes': [
+        node('gate'),
+        node('work', deps=['gate'], inputRefs=['gate'], **{kind: {
+            'source': 'gate', 'path': 'items', 'max_items': 2, 'mode': mode,
+        }}),
+        node('check', deps=['work'], inputRefs=['work'], loop={
+            'body': ['work', 'check'], 'max_iterations': 3,
+            'until': {'source': 'check', 'path': 'done', 'op': 'eq', 'value': True},
+        }, final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'loop-foreach-body'})
+    completed = wait_run(client, started.json()['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed['nodes']
+    assert [call['prompt'].splitlines()[0] for call in calls] == [
+        'execute gate', 'execute work', 'execute work', 'execute check',
+        'execute work', 'execute work', 'execute check',
+    ]
+    work = next(row for row in completed['nodes'] if row['node_id'] == 'work')
+    attempts = client.get(f"/api/hexa/node-runs/{work['id']}").json()['attempts']
+    prefix = 'foreach' if kind == 'foreach' else 'dynamic'
+    assert sorted({row['iteration'] for row in attempts if row['execution_kind'] == f'{prefix}_item'}) == [1, 2]
+    assert len([row for row in attempts if row['execution_kind'] == f'{prefix}_aggregate']) == 2
+    previous = calls[4]['loop_previous']
+    assert previous['iteration'] == 1
+    assert [(ref['node_id'], ref['output']) for ref in previous['refs']] == [
+        ('work', next(row['output'] for row in attempts if row['execution_kind'] == f'{prefix}_aggregate' and row['iteration'] == 1)),
+        ('check', {'status': 'completed', 'done': False}),
+    ]
+
+
+@pytest.mark.parametrize('mode', ['serial', 'parallel'])
+def test_chained_foreach_waits_for_upstream_aggregate(client, app, mode):
+    authenticated(client)
+    calls = []
+
+    async def chained_gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'values': ['a', 'b']}
+        return {'status': 'completed', 'value': context['foreach_item']}
+
+    app.state.gateway.create_response = chained_gateway
+    created = client.post('/api/hexa/tasks', json={'title': 'Chained foreach', 'workflow': {'nodes': [
+        node('source'),
+        node('outer', deps=['source'], inputRefs=['source'], foreach={
+            'source': 'source', 'path': 'values', 'max_items': 2, 'mode': mode,
+        }),
+        node('inner', deps=['outer'], inputRefs=['outer'], foreach={
+            'source': 'outer', 'path': 'items', 'max_items': 2, 'mode': mode,
+        }, final_report=True),
+    ]}})
+    assert created.status_code == 201
+    task = created.json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'chained-foreach'})
+    completed = wait_run(client, started.json()['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed['nodes']
+    outer = next(row for row in completed['nodes'] if row['node_id'] == 'outer')
+    inner = next(row for row in completed['nodes'] if row['node_id'] == 'inner')
+    assert outer['output']['items'] == [
+        {'status': 'completed', 'value': 'a'},
+        {'status': 'completed', 'value': 'b'},
+    ]
+    assert [item['value'] for item in inner['output']['items']] == outer['output']['items']
+    inner_calls = [call for call in calls if call['prompt'] == 'execute inner']
+    assert len(inner_calls) == 2
+    assert all(call['refs'][0]['node_run_id'] == outer['id'] for call in inner_calls)
 
 
 def test_parallel_foreach_failure_cancels_unstarted_siblings_and_preserves_completed_items(client, app):

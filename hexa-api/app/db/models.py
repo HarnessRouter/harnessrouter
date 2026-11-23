@@ -147,6 +147,7 @@ class NodeRun(Base):
     run_id: Mapped[int] = mapped_column(ForeignKey('task_runs.id'), index=True)
     node_id: Mapped[str] = mapped_column(String(255), index=True)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
+    iteration: Mapped[int] = mapped_column(Integer, default=1)
     execution_kind: Mapped[str] = mapped_column(String(32), default="node")
     foreach_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="idle")
@@ -184,6 +185,7 @@ class RunDecision(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey('task_runs.id'), index=True)
     node_id: Mapped[str] = mapped_column(String(255))
+    iteration: Mapped[int] = mapped_column(Integer, default=1)
     input_refs_json: Mapped[str] = mapped_column(Text)
 
 
@@ -276,8 +278,13 @@ def create_session_factory(database_url: str):
                 connection.execute(text('ALTER TABLE node_runs ADD COLUMN execution_json TEXT'))
             if 'execution_kind' not in node_columns:
                 connection.execute(text("ALTER TABLE node_runs ADD COLUMN execution_kind VARCHAR(32) NOT NULL DEFAULT 'node'"))
+            if 'iteration' not in node_columns:
+                connection.execute(text("ALTER TABLE node_runs ADD COLUMN iteration INTEGER NOT NULL DEFAULT 1"))
             if 'foreach_index' not in node_columns:
                 connection.execute(text('ALTER TABLE node_runs ADD COLUMN foreach_index INTEGER'))
+            decision_columns = {column['name'] for column in inspect(connection).get_columns('run_decisions')}
+            if 'iteration' not in decision_columns:
+                connection.execute(text('ALTER TABLE run_decisions ADD COLUMN iteration INTEGER NOT NULL DEFAULT 1'))
     else:
         # PostgreSQL schema changes are deployment-owned migrations. The API must
         # fail clearly when 005_task_artifacts.sql has not been applied rather

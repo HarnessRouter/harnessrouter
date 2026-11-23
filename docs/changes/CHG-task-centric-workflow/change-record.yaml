@@ -92,6 +92,29 @@ dynamic_plan_slice:
     e2e: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium; 1 passed in 41.8s after updating the assertion to item-level history"
     hygiene: "python -m py_compile hexa-api/app/tasks/service.py hexa-api/app/tasks/fanout.py; git diff --check; passed"
   remaining: [dynamic_subgraphs, nested_foreach, real_postgresql_migration, tool_approval_runtime]
+loop_composed_fanout_slice:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified_slice
+  baseline: 4e37cc00
+  branch: codex/agent-orchestration
+  reuse_decision: extend persisted fanout state machine and RunDecision; preserve published UHP and original checkout
+  scope: 循环与集合隔离、上一轮结果引用、串联集合聚合提交边界、按轮人工确认和共享 NodeRun 配额
+  acceptance_ids: [AC-17, AC-18, AC-19, AC-20, AC-22]
+  references: [spec.md#有界跨节点循环, plan.md#循环与集合组合的状态边界, platform-matrix.md]
+  impact: [hexa-api/app/db/models.py, hexa-api/app/tasks/fanout.py, hexa-api/app/tasks/router.py, hexa-api/app/tasks/service.py, hexa-api/migrations/009_node_iterations.sql, hexa-api/migrate.py, hexa-api/tests/test_orchestration_safety.py, hexa-api/tests/test_postgres_migrations.py, hexa-api/tests/test_task_workflows.py, hexa-api/tests/test_http_integration.py]
+  verification:
+    red: "串联集合 serial/parallel 先失败 foreach_input_invalid；轮次与尝试分离及上一轮引用 5 项先失败；自动追加配额/跳过依赖 4 项先失败；人工模式及逐轮确认 11 项先失败；并发展开聚合预留先出现 501 条 NodeRun。"
+    earlier_regression: "iteration 隔离初版 87 passed, 2 skipped；补充人工门控后 139 passed, 2 skipped。均为各自切片证据，不替代最终源码验证。"
+    unit: "显式人工节点非法执行模式 8 项、轮次优先级 SQLite 单测均通过；API 与执行器集成单独覆盖组合边界。"
+    final_backend: "python -m pytest -q hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py hexa-api/tests/test_postgres_migrations.py; exit 0; 140 passed, 2 skipped in 100.78s。两个 skip 是未配置 HEXA_TEST_POSTGRES_URL 的真实数据库测试。"
+    integration: "API/SQLite 与受控 Gateway 验证循环 + serial/parallel foreach/dynamic_plan、旧库重复升级、历史分页、当前轮决定和历史审计。"
+    http_e2e: "test_http_chained_fanout_loop_keeps_rounds_and_history_after_restart passed；真实 HTTP Gateway 夹具完成两轮串联展开、持久化重开与分页，无额外执行。"
+    browser: "最终源码：npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts tasks-lifecycle.spec.ts --project=chromium --grep 'orchestration settings|explicit human node|parallel collectors'; exit 0; 3 passed in 1.8m。"
+    hygiene: "git diff --check; python -m py_compile tasks service/fanout/router, db models and migrate.py; YAML safe_load; exit 0。"
+  security_review: "只读取同 Run 已成功结果；新输入沿原有 secrets 脱敏；动态项仍严格继承静态执行配置；没有表达式执行、任意路径访问、外部网络目标或 UHP 权限扩张。"
+  migration: "新增 009，不改写 008；旧 NodeRun 和 RunDecision 的 iteration 默认 1，不修改输出或人工选择。部署先迁移后启动；回滚前停止新任务，保留历史，旧执行器不得恢复依赖逐轮确认的活动 Run。"
+  remaining: [scoped_nested_execution, dynamic_subgraphs, item_level_retry, fanout_retry_isolation, aggregate_attempt_semantics, aggregate_upstream_provenance, iteration_history_ui, real_postgresql_migration, tool_approval_runtime]
 parallel_foreach_slice:
   date: "2026-11-23"
   owner: Codex

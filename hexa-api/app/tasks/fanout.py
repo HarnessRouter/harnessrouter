@@ -8,7 +8,21 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select, func
 
-from app.db.models import NodeRun
+from app.db.models import NodeRun, Run
+
+
+def node_record_usage(db, run_id):
+    """Include the aggregate slot reserved by every running fanout control."""
+    db.flush()
+    run = db.get(Run, run_id)
+    fanouts = [item['id'] for item in json.loads(run.snapshot_json).get('workflow', {}).get('nodes', [])
+               if item.get('foreach') or item.get('dynamic_plan')]
+    count = db.scalar(select(func.count()).select_from(NodeRun).where(NodeRun.run_id == run_id))
+    reserved = db.scalar(select(func.count()).select_from(NodeRun).where(
+        NodeRun.run_id == run_id, NodeRun.node_id.in_(fanouts),
+        NodeRun.execution_kind == 'node', NodeRun.status == 'running',
+    )) if fanouts else 0
+    return count + reserved
 
 
 def dynamic_items_valid(values):
@@ -27,7 +41,7 @@ def dynamic_items_valid(values):
     return True
 
 
-def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condition_matches):
+def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condition_matches, decisions):
     """Return dispatch candidates and whether a durable transition was made."""
     candidates, changed = [], False
     for item in definition['nodes']:
@@ -44,6 +58,7 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
         children = db.scalars(select(NodeRun).where(
             NodeRun.run_id == run.id, NodeRun.node_id == item['id'],
             NodeRun.execution_kind == f'{prefix}_item',
+            NodeRun.iteration == control.iteration,
         ).order_by(NodeRun.foreach_index, NodeRun.id)).all()
         now = datetime.now(timezone.utc)
         if control.status == 'idle' and not children:
@@ -57,6 +72,8 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
                 control.finished_at = now
                 changed = True
                 continue
+            if item.get('requires_human') and item['id'] not in decisions:
+                continue
             values = value_at_path(json.loads(rows[config['source']].output_json or 'null'), config['path'])
             if not isinstance(values, list) or (dynamic and not dynamic_items_valid(values)):
                 control.status, control.error_code = 'failed', invalid
@@ -65,18 +82,20 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
             else:
                 # Reserve space for every item and the final aggregate, atomically
                 # with expansion. No partially persisted plan can be dispatched.
-                count = db.scalar(select(func.count()).select_from(NodeRun).where(NodeRun.run_id == run.id))
+                count = node_record_usage(db, run.id)
                 if count + len(values) + 1 > 500:
                     control.status, control.error_code = 'failed', 'storage_limit_exceeded'
                 else:
                     control.status = 'running'
                     control.started_at = control.started_at or now
+                    previous = json.loads(control.input_json).get('loop_previous')
                     for index, value in enumerate(values):
                         child = NodeRun(
-                            run_id=run.id, node_id=item['id'], attempt=1,
+                            run_id=run.id, node_id=item['id'], attempt=1, iteration=control.iteration,
                             execution_kind=f'{prefix}_item', foreach_index=index,
                             input_json=encoded({'_orchestration_role': f'{prefix}_item',
-                                                f'{prefix}_item': value, 'foreach_index': index}),
+                                                f'{prefix}_item': value, 'foreach_index': index,
+                                                **({'loop_previous': previous} if previous else {})}),
                         )
                         db.add(child)
                         children.append(child)
@@ -107,7 +126,7 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
                 # aggregate records how many collection items were dispatched.
                 # Item attempts remain independent and start at one for every
                 # item, while foreach_index preserves the collection position.
-                run_id=run.id, node_id=item['id'], attempt=len(children),
+                run_id=run.id, node_id=item['id'], attempt=len(children), iteration=control.iteration,
                 execution_kind=f'{prefix}_aggregate', input_json=encoded(aggregate_input),
                 output_json=output if len(output.encode()) <= 1024 * 1024 else None,
                 status='succeeded' if len(output.encode()) <= 1024 * 1024 else 'failed',
@@ -116,7 +135,9 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
             )
             db.add(aggregate)
             control.status, control.finished_at = aggregate.status, now
-            changed = True
+            # Dependencies must observe the persisted aggregate, never the
+            # now-succeeded control record whose output is intentionally empty.
+            return candidates, True
         else:
             idle = [child for child in children if child.status == 'idle']
             candidates.extend((f'{prefix}_item', item, child) for child in (

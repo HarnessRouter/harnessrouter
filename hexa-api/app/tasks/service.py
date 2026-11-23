@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, Task, TaskCommand, WorkflowRevision
 from app.gateway.client import GatewayError
 from app.tasks.domain import NodeSpec, WorkflowSpec, redact, validate_workflow
+from app.tasks.fanout import node_record_usage
 
 
 ACTIVE = ('pending', 'running', 'waiting_human')
@@ -155,6 +156,8 @@ def workflow_from_json(value):
     known_ids = {item.get('id') for item in value['nodes'] if isinstance(item, dict)}
     for item in value['nodes']:
         if isinstance(item, dict):
+            if is_explicit_human_node(item) and any(item.get(mode) is not None for mode in ('repeat', 'foreach', 'loop', 'dynamic_plan')):
+                raise TaskError('invalid_workflow', '人工节点只支持单次执行模式。', 422)
             validate_condition(item, known_ids)
             validate_repeat(item)
             validate_foreach(item, known_ids)
@@ -257,7 +260,7 @@ def task_json(db, task):
 
 def node_json(row):
     return {'id': row.id, 'node_id': row.node_id, 'run_id': row.run_id, 'attempt': row.attempt, 'status': row.status,
-            'execution_kind': row.execution_kind, 'foreach_index': row.foreach_index,
+            'execution_kind': row.execution_kind, 'iteration': row.iteration, 'foreach_index': row.foreach_index,
             'input': json.loads(row.input_json), 'output': json.loads(row.output_json) if row.output_json else None,
             'error_code': row.error_code, 'response_id': row.response_id,
             'progress': redact({'text': row.partial_text or '', 'execution': json.loads(row.execution_json) if row.execution_json else {}}),
@@ -267,12 +270,12 @@ def node_json(row):
 
 def latest_nodes(db, run_id):
     latest = {}
-    rows = db.scalars(select(NodeRun).where(NodeRun.run_id == run_id).order_by(NodeRun.attempt, NodeRun.id)).all()
+    rows = db.scalars(select(NodeRun).where(NodeRun.run_id == run_id).order_by(NodeRun.iteration, NodeRun.attempt, NodeRun.id)).all()
     visible = [row for row in rows if row.execution_kind not in {'foreach_item', 'dynamic_item'}]
     for row in visible:
         prior = latest.get(row.node_id)
-        priority = (1 if row.execution_kind.endswith('_aggregate') else 0, row.attempt, row.id)
-        prior_priority = ((1 if prior and prior.execution_kind.endswith('_aggregate') else 0), prior.attempt, prior.id) if prior else None
+        priority = (row.iteration, 1 if row.execution_kind.endswith('_aggregate') else 0, row.attempt, row.id)
+        prior_priority = (prior.iteration, 1 if prior and prior.execution_kind.endswith('_aggregate') else 0, prior.attempt, prior.id) if prior else None
         if prior is None or priority >= prior_priority:
             latest[row.node_id] = row
     return latest
@@ -332,13 +335,18 @@ def run_json(db, run):
     snapshot = json.loads(run.snapshot_json)
     revision = db.get(WorkflowRevision, run.workflow_revision_id) if run.workflow_revision_id else None
     revision_ref = {'id': revision.id, 'revision': revision.revision} if revision else {'id': run.workflow_revision_id, 'revision': run.workflow_revision}
+    rows = latest_nodes(db, run.id)
+    decisions = db.scalars(select(RunDecision).where(RunDecision.run_id == run.id).order_by(RunDecision.id)).all()
     return {'id': run.id, 'task_id': run.task_id, 'workflow_revision': run.workflow_revision, 'workflow_revision_ref': revision_ref,
             'workflow_revision_number': run.workflow_revision, 'workflow_revision_id': run.workflow_revision_id,
             'status': run.status,
             'paused': run.paused, 'kind': run.kind, 'superseded_by': run.superseded_by,
             'workflow': snapshot.get('workflow', {}), 'execution_snapshot': snapshot,
-            'nodes': [node_json(row) for row in latest_nodes(db, run.id).values()],
-            'decisions': [{'node_id': row.node_id, 'input_refs': json.loads(row.input_refs_json)} for row in db.scalars(select(RunDecision).where(RunDecision.run_id == run.id)).all()]}
+            'nodes': [node_json(row) for row in rows.values()],
+            'decisions': [{'node_id': row.node_id, 'input_refs': json.loads(row.input_refs_json)} for row in decisions
+                          if row.node_id in rows and row.iteration == rows[row.node_id].iteration],
+            'decision_history': [{'node_id': row.node_id, 'iteration': row.iteration,
+                                  'input_refs': json.loads(row.input_refs_json)} for row in decisions]}
 
 
 def save_workflow(db, task, expected_revision, workflow):
@@ -428,7 +436,7 @@ async def prepare_run(db, task, body, key, gateway, secrets):
         reused[row.node_id] = row
     for item in definition['nodes']:
         row = reused.get(item['id'])
-        db.add(NodeRun(run_id=run.id, node_id=item['id'], status='succeeded' if row else 'idle',
+        db.add(NodeRun(run_id=run.id, node_id=item['id'], iteration=1, status='succeeded' if row else 'idle',
                        input_json=encoded({'reused_from': row.id}) if row else '{}', output_json=row.output_json if row else None))
     if active:
         active.status = 'completed'
@@ -484,16 +492,18 @@ class TaskExecutor:
                     max_concurrency = workflow_concurrency(definition)
                     rows = latest_nodes(db, run.id)
                     nodes = {item['id']: item for item in definition['nodes']}
-                    decisions = {row.node_id: json.loads(row.input_refs_json) for row in db.scalars(select(RunDecision).where(RunDecision.run_id == run.id)).all()}
+                    decisions = {row.node_id: json.loads(row.input_refs_json) for row in db.scalars(select(RunDecision).where(RunDecision.run_id == run.id)).all()
+                                 if row.node_id in rows and row.iteration == rows[row.node_id].iteration}
                     from app.tasks.fanout import advance_fanouts
                     fanout_calls, fanout_changed = advance_fanouts(
                         db, run, definition, rows, encoded=encoded,
                         value_at_path=value_at_path, condition_matches=condition_matches,
+                        decisions=decisions,
                     )
                     if fanout_changed:
                         db.commit()
                         continue
-                    unfinished = [item for item in nodes.values() if rows[item['id']].status == 'idle' and not (item.get('foreach') or item.get('dynamic_plan'))]
+                    unfinished = [item for item in nodes.values() if rows[item['id']].status == 'idle']
                     ready = [item for item in unfinished if all(rows[dep].status == 'succeeded' or (rows[dep].status == 'skipped' and item.get('allow_missing_inputs')) for dep in item.get('deps', []))]
                     for item in ready:
                         condition = item.get('condition')
@@ -509,7 +519,7 @@ class TaskExecutor:
                     if any(item.get('condition') and rows[item['id']].status == 'skipped' for item in ready):
                         db.commit()
                         continue
-                    executable = [item for item in ready if not is_human_node(item) or item['id'] in decisions]
+                    executable = [item for item in ready if not (item.get('foreach') or item.get('dynamic_plan')) and (not is_human_node(item) or item['id'] in decisions)]
                     human_nodes = [item for item in executable if is_explicit_human_node(item)]
                     regular_agent_nodes = [item for item in executable if not is_explicit_human_node(item)]
                     work_units = [('node', item, rows[item['id']]) for item in regular_agent_nodes]
@@ -520,7 +530,7 @@ class TaskExecutor:
                             run.status, task.status = 'waiting_human', 'waiting'
                         elif any(row.status == 'failed' for row in rows.values()):
                             run.status, task.status = 'failed', 'failed'
-                        elif not unfinished:
+                        elif all(row.status in ('succeeded', 'skipped') for row in rows.values()):
                             run.status = 'completed'
                             final = next((item for item in nodes.values() if item.get('final_report') and rows[item['id']].status == 'succeeded'), None)
                             if final:
@@ -546,8 +556,18 @@ class TaskExecutor:
                             continue
                         inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if rows[ref].status == 'succeeded']
                         context = redact({'task_input': snapshot['input'], 'prompt': item.get('prompt', ''), 'refs': inputs}, self.secrets)
+                        state = json.loads(row.input_json)
+                        previous = state.get('loop_previous')
+                        if previous:
+                            previous_rows = [db.get(NodeRun, identity) for identity in previous['node_run_ids']]
+                            context['loop_previous'] = {
+                                'iteration': previous['iteration'],
+                                'refs': [{'node_id': prior.node_id, 'node_run_id': prior.id,
+                                          'output': json.loads(prior.output_json)}
+                                         for prior in previous_rows
+                                         if prior and prior.run_id == run.id and prior.status == 'succeeded' and prior.output_json],
+                            }
                         if unit_kind in ('foreach_item', 'dynamic_item'):
-                            state = json.loads(row.input_json)
                             context[unit_kind] = state[unit_kind]
                             context['foreach_index'] = row.foreach_index
                             if unit_kind == 'dynamic_item':
@@ -577,8 +597,12 @@ class TaskExecutor:
                             row.status = 'failed'
                             row.error_code = 'repeat_limit_exceeded'
                             row.finished_at = datetime.now(timezone.utc)
+                        elif node_record_usage(db, run_id) >= 500:
+                            row.status, row.error_code = 'failed', 'storage_limit_exceeded'
+                            row.finished_at = datetime.now(timezone.utc)
                         else:
-                            db.add(NodeRun(run_id=run_id, node_id=row.node_id, attempt=row.attempt + 1, status='idle'))
+                            db.add(NodeRun(run_id=run_id, node_id=row.node_id, attempt=row.attempt + 1, iteration=row.iteration, status='idle'))
+                            db.flush()
                     loop_changed = False
                     for item in definition['nodes']:
                         loop = item.get('loop')
@@ -589,16 +613,27 @@ class TaskExecutor:
                         until_output = json.loads(until_source.output_json) if until_source and until_source.output_json else None
                         if condition_matches(loop['until'], until_output):
                             continue
-                        if row.attempt >= loop['max_iterations']:
+                        if row.iteration >= loop['max_iterations']:
                             row.status = 'failed'
                             row.error_code = 'loop_limit_exceeded'
                             row.finished_at = datetime.now(timezone.utc)
                             loop_changed = True
                             continue
-                        next_attempt = row.attempt + 1
+                        count = node_record_usage(db, run_id)
+                        if count + len(loop['body']) > 500:
+                            row.status, row.error_code = 'failed', 'storage_limit_exceeded'
+                            row.finished_at = datetime.now(timezone.utc)
+                            loop_changed = True
+                            continue
+                        next_iteration = row.iteration + 1
+                        previous = {'iteration': row.iteration,
+                                    'node_run_ids': [rows[identity].id for identity in loop['body']
+                                                     if rows[identity].status == 'succeeded']}
                         for body_node_id in loop['body']:
-                            body_row = rows[body_node_id]
-                            db.add(NodeRun(run_id=run_id, node_id=body_node_id, attempt=next_attempt, status='idle'))
+                            db.add(NodeRun(run_id=run_id, node_id=body_node_id, attempt=1,
+                                           iteration=next_iteration, status='idle',
+                                           input_json=encoded({'loop_previous': previous})))
+                        db.flush()
                         loop_changed = True
                     if repeat_rows or loop_changed:
                         db.commit()

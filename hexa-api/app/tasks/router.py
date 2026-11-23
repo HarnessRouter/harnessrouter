@@ -8,6 +8,7 @@ from sqlalchemy import String, cast, delete, or_, select
 
 from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
+from app.tasks.fanout import node_record_usage
 from app.tasks.service import ACTIVE, TaskError, all_node_runs, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
@@ -261,7 +262,7 @@ def build_router(app, require_session, user_id):
                         refs = body.get('input_refs', [])
                         if not item or not is_human_node(item) or not refs or len(set(refs)) != len(refs) or set(refs) - set(item.get('deps', [])) or any(rows[ref].status != 'succeeded' for ref in refs):
                             raise TaskError('invalid_decision', '人工选择的节点或结果无效。', 422)
-                        db.add(RunDecision(run_id=run_id, node_id=item['id'], input_refs_json=encoded(refs)))
+                        db.add(RunDecision(run_id=run_id, node_id=item['id'], iteration=rows[item['id']].iteration, input_refs_json=encoded(refs)))
                     run.status, task.status = 'running', 'running'
                 elif action == 'pause':
                     run.paused, task.status = True, 'waiting'
@@ -309,9 +310,9 @@ def build_router(app, require_session, user_id):
                 if action == 'skip' and item.get('allow_skip') and row.status in ('idle', 'failed', 'canceled'):
                     row.status = 'skipped'
                 elif action == 'retry' and row.status in ('failed', 'canceled'):
-                    if db.query(NodeRun).filter_by(run_id=run_id).count() >= 500:
+                    if node_record_usage(db, run_id) >= 500:
                         raise TaskError('storage_limit_exceeded', '运行超过 500 次尝试限制。', 422)
-                    db.add(NodeRun(run_id=run_id, node_id=node_id, attempt=row.attempt + 1, status='idle'))
+                    db.add(NodeRun(run_id=run_id, node_id=node_id, attempt=row.attempt + 1, iteration=row.iteration, status='idle'))
                 else:
                     raise TaskError('invalid_transition', '节点操作不被当前状态或配置允许。')
                 run.status = 'running'
@@ -328,7 +329,7 @@ def build_router(app, require_session, user_id):
                 raise TaskError('not_found', '节点记录不存在。', 404)
             run = owned_run(db, row.run_id, user_id(session))
             offset, limit = page(offset, limit, 500)
-            attempts = db.scalars(select(NodeRun).where(NodeRun.run_id == run.id, NodeRun.node_id == row.node_id).order_by(NodeRun.attempt).offset(offset).limit(limit + 1)).all()
+            attempts = db.scalars(select(NodeRun).where(NodeRun.run_id == run.id, NodeRun.node_id == row.node_id).order_by(NodeRun.iteration, NodeRun.attempt, NodeRun.id).offset(offset).limit(limit + 1)).all()
             artifacts = db.scalars(select(Artifact).where(Artifact.node_run_id == row.id, Artifact.user_id == user_id(session)).order_by(Artifact.id.desc()).limit(51)).all()
             result = {**node_json(row), 'environment': json.loads(run.snapshot_json), 'attempts': [node_json(attempt) for attempt in attempts[:limit]],
                       'attempts_pagination': {'offset': offset, 'limit': limit, 'has_more': len(attempts) > limit}, 'artifacts': [artifact_json(item) for item in artifacts[:50]],

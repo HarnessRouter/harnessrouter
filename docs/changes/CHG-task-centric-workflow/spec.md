@@ -173,7 +173,7 @@ Task → WorkflowRevision
 
 `foreach.source` 必须是当前节点的 `deps` 之一，`path` 使用条件分支相同的安全字段路径，`max_items` 必须是 `1..10` 的整数。集合只从 source 节点的成功输出读取；缺少路径或值不是 JSON 数组时，节点失败并使用 `foreach_input_invalid`；数组超过上限时，节点失败并使用 `foreach_limit_exceeded`；空数组产生 `{"items": []}`，不调用 Gateway。
 
-每个集合项调用一次 Agent，复用同一节点 ID，并以独立 `NodeRun.execution_kind=foreach_item` 和 `foreach_index` 标识项；`attempt` 只表示该项自身的执行尝试，不再承担集合索引。串行模式按索引逐项调用；并行模式最多同时派发工作流 `max_concurrency` 个集合项。所有项成功后追加不可变的 `execution_kind=foreach_aggregate` NodeRun，输出聚合为 `{"items": [输出...]}`，下游只看到聚合记录；任何项失败都会停止后续派发并使展开节点失败。正在运行的项取消或进程恢复时逐项记录 `canceled` 或 `interrupted_unknown_outcome`，不能只更新展开节点的汇总状态。
+每个集合项调用一次 Agent，复用同一节点 ID，并以独立 `NodeRun.execution_kind=foreach_item` 和 `foreach_index` 标识项；`attempt` 只表示该项自身的执行尝试，不再承担集合索引。每条 NodeRun 还保存从 1 开始的 `iteration`；循环体重新展开时，新的 item/aggregate 只能属于新的 iteration，不能复用上一轮的控制记录。串行模式按索引逐项调用；并行模式最多同时派发工作流 `max_concurrency` 个集合项。所有项成功后追加不可变的 `execution_kind=foreach_aggregate` NodeRun，输出聚合为 `{"items": [输出...]}`，下游只看到当前 iteration 的聚合记录；任何项失败都会停止后续派发并使展开节点失败。正在运行的项取消或进程恢复时逐项记录 `canceled` 或 `interrupted_unknown_outcome`，不能只更新展开节点的汇总状态。
 
 foreach 是固定数量的节点执行，不创建新的工作流节点、不修改 DAG、不形成回边、不支持嵌套 foreach 或无限展开。集合和 `max_items` 随 Run 快照固定；运行中修改工作流不会影响当前展开。`mode` 只允许 `serial` 或 `parallel`。
 
@@ -189,9 +189,13 @@ foreach 是固定数量的节点执行，不创建新的工作流节点、不修
 }
 ```
 
-循环检查节点的 `loop.body` 必须是已存在的静态节点列表，并包含自身；循环体不能与 `repeat` 或 `foreach` 同时启用。每轮循环只追加这些固定节点的 NodeRun，循环体内部保持原有依赖顺序；终止条件从指定循环体节点的成功输出读取。满足条件后释放下游，未满足且仍有配额时开始下一轮；达到 `max_iterations` 后检查节点以 `loop_limit_exceeded` 失败，不再派发下一轮。
+循环检查节点的 `loop.body` 必须是已存在的静态节点列表，并包含自身；循环体不能与 `repeat` 或 `foreach` 同时启用，但循环体中的其他静态节点可以声明有限 foreach/dynamic_plan。每轮循环只追加这些固定节点的 NodeRun，并为整轮分配递增的 `iteration`；循环体内部保持原有依赖顺序，展开节点在当前轮次完成后才能释放检查节点。终止条件从指定循环体节点的成功输出读取。满足条件后释放下游，未满足且仍有配额时开始下一轮；达到 `max_iterations` 后检查节点以 `loop_limit_exceeded` 失败，不再派发下一轮。
 
-循环不会创建新节点、修改 WorkflowRevision 或允许任意 DAG 回边。循环体、上限和终止条件随 Run 快照固定。取消、恢复和调试按每轮 NodeRun 保留历史；运行中的不确定 Agent 副作用不自动重放。
+循环不会创建新节点、修改 WorkflowRevision 或允许任意 DAG 回边。循环体、上限和终止条件随 Run 快照固定。取消、恢复和调试按每轮 NodeRun 保留历史；运行中的不确定 Agent 副作用不自动重放。嵌套 loop 仍拒绝；组合 `loop + foreach` 只允许 loop 控制节点之外的静态体节点展开，禁止动态项改变循环体或新增边。
+
+`iteration` 表示整轮循环，`attempt` 表示该轮内部的执行尝试；新轮次的 attempt 从 1 开始，repeat 在当前 iteration 内递增 attempt。循环下一轮的输入包含 `loop_previous`，保存上一轮成功体节点的 `node_id`、`node_run_id` 和 `output`；该引用只指向当前 Run 的已完成记录，不能因本轮输出替换。新轮次必须在事务内完整预留，配额计入所有运行中集合尚待写入的聚合记录；超过单 Run 的 500 条记录上限时使用 `storage_limit_exceeded` 失败，不追加半轮。串联集合必须等待上游聚合持久化后读取；缺少集合路径仍失败，不降级为空集合。
+
+显式 human/human_gate 节点只允许单次执行模式，服务端与编辑器一致拒绝其他模式。Agent 的 `requires_human` 可以与有限展开组合，但必须在创建项或派发前等待人工决定。决定绑定该节点的 iteration；循环下一轮重新确认，不继承前一轮批准。旧决定默认属于第一轮，继续保留审计记录；Run 的 `decisions` 返回当前轮有效决定，`decision_history` 返回带 iteration 的历史。
 
 ### 受限动态计划
 
@@ -425,6 +429,7 @@ Agent/模型授权、MCP 配置、权限策略或未预检的工作流修改。�
 - **AC-18 有界 foreach：** `foreach.source` 必须是依赖节点，`max_items` 只接受 1 至 10 的整数；数组逐项产生同一节点的 NodeRun 尝试并按 `foreach_index` 保序聚合，全部完成后下游只收到聚合结果；空数组不调用 Gateway；缺少数组和超限数组分别返回 `foreach_input_invalid`、`foreach_limit_exceeded`；不创建动态节点或无限展开。
 - **AC-19 并行 foreach：** `foreach.mode=parallel` 产生独立的项级 NodeRun，项索引不复用 `attempt`；同一 Run 同时执行的集合项不超过 `max_concurrency`，所有成功项按索引聚合到独立 aggregate NodeRun；单项失败、取消和恢复都保留逐项状态，不能覆盖已完成项输出；非法 mode 返回 422。
 - **AC-20 有界跨节点循环：** 固定 `loop.body` 只能引用当前节点和已声明依赖，且包含检查节点；每轮按静态依赖顺序追加 NodeRun，终止条件满足后释放下游，达到上限记录 `loop_limit_exceeded`；不生成动态节点、不接受无界循环或任意回边。
+- **AC-22 循环组合展开：** 循环体中的有限 foreach/dynamic_plan 按每轮独立 `iteration` 展开并追加 item/aggregate NodeRun；第二轮不能读取或覆盖第一轮聚合，检查节点必须等待当前轮聚合完成；历史 API 能按 iteration 分页返回全部记录。嵌套 loop、动态边和动态修改循环体仍返回 422。
 - **AC-21 受限动态计划：** `dynamic_plan` 只能从依赖节点的数组读取最多 10 个严格 `{id,prompt}` 项；项级 Agent 配置固定继承静态节点，运行时持久化清单并按模式执行，聚合到独立 `dynamic_aggregate`；非法项、重复 ID、超限和额外执行配置在 Gateway 派发前失败；不生成可递归动态子图、不修改 WorkflowRevision。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。

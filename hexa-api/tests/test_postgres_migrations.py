@@ -31,7 +31,7 @@ def test_cli_fresh_repeat_and_read_only_check():
         migrate(url, '--check')
         with connect(url) as db:
             assert db.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema()").fetchone() == (0,)
-        assert 'applied 008_node_orchestration.sql' in migrate(url)
+        assert 'applied 009_node_iterations.sql' in migrate(url)
         with connect(url) as db:
             db.execute("INSERT INTO tasks (user_id, title) VALUES (1, 'preserved')")
         migrate(url)
@@ -39,7 +39,9 @@ def test_cli_fresh_repeat_and_read_only_check():
         with connect(url) as db:
             assert db.execute('SELECT title FROM tasks').fetchall() == [('preserved',)]
             columns = {row[0] for row in db.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'node_runs'")}
-            assert {'partial_text', 'execution_json', 'execution_kind', 'foreach_index'} <= columns
+            assert {'partial_text', 'execution_json', 'execution_kind', 'iteration', 'foreach_index'} <= columns
+            decision_columns = {row[0] for row in db.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'run_decisions'")}
+            assert 'iteration' in decision_columns
 
 
 def test_upgrade_backfills_version_identity_and_retains_history():
