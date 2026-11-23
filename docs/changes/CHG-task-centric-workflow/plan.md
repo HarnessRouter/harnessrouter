@@ -85,6 +85,13 @@ secret；Gateway/Runner 继续负责插件物化、sandbox、MCP 连接和 comma
 
 ## 2026-11-23 完整引擎推进
 
+### 有界静态子编排实施（2026-11-24）
+
+按 AC-32 新增 `subgraph` 静态子 DAG。先以 `test_subgraph.py` 建立保存校验、作用域、串行/并行、父子聚合和失败阻断的 Red，
+再加入服务端预检、`subgraph_node`/`subgraph_aggregate` 清单状态机和分页清单归属校验。子图子节点固定继承已保存 Agent 配置，
+不接受人工节点、集合/循环、递归或模型生成拓扑；所有记录继续属于同一 Run，并计入 500 条 NodeRun 上限。后续应补暂停/取消、
+终态子图恢复、客户端编辑器和真实 PostgreSQL/Provider 验证；本切片不能宣称完整编排引擎完成。
+
 ### 精确调用 gate 实施（2026-11-24）
 
 按 AC-31 新增 `gateway/approval_execution.py`，使用固定版本 rfc8785 库和已有 cryptography，复用 HR_SECRET_KEY 派生算法并以

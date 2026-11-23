@@ -1,4 +1,23 @@
 id: CHG-task-centric-workflow
+subgraph_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: e48105ac
+  branch: codex/agent-orchestration
+  status: verified_slice
+  references: [spec.md#有界静态子编排, plan.md#有界静态子编排实施2026-11-24]
+  reuse_decision: extend the existing NodeRun manifest and executor; keep child records inside the parent Run
+  acceptance_ids: [AC-32]
+  verification:
+    red: "新增子图 suite 首次 10 项失败：配置未校验、子节点未展开、父子引用和失败状态未实现；修复后目标 suite 10 passed。"
+    unit_integration: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py; exit 0; 10 passed in 4.38s。覆盖保存边界、父依赖、子 DAG、子项清单、串行/并行、聚合、失败阻断和清单读取。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_nested_foreach.py --tb=short; exit 0; 113 passed in 147.34s。"
+    hygiene: "未引入迁移、UHP 字段、外部网络或 Cloud 入口；提交前执行 Python AST、YAML 解析和 git diff --check。"
+  security_review: "子图仅来自已保存 WorkflowRevision；未知字段、控制模式、递归、人工节点和有环结构在保存时拒绝。子 NodeRun 必须属于同一 Run/父节点/iteration，模型输出不能修改拓扑；Agent/model 对子节点重复执行配置预检；清单读取复用现有用户和工作区鉴权。"
+  limitations: [pause_cancel_and_terminal_subgraph_resume, client_editor, PostgreSQL/Linux, real Provider and deployment not_evaluated]
+  rollback: "停止带 subgraph 的活动 Run 后回退执行器、校验和文档；历史 NodeRun 保留，旧执行器不得继续新 subgraph Run。"
+  remaining: [pause_cancel_semantics, terminal_subgraph_resume, client_editor, PostgreSQL/Linux, real Provider and deployment validation]
+  next_action: "补子图暂停/取消/恢复和跨重启证据，再接客户端编辑和完整任务回归。"
 approval_binding_slice:
   date: "2026-11-24"
   owner: Codex

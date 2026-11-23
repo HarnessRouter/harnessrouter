@@ -105,6 +105,13 @@ def manifest_records(db, anchor):
     state = json.loads(anchor.input_json)
     if not isinstance(state, dict):
         raise ValueError('invalid anchor input')
+    if 'subgraph_node_run_ids' in state:
+        members(state.get('subgraph_node_run_ids', []), {'subgraph_node'})
+        if state.get('subgraph_aggregate_node_run_id') is not None:
+            members([state['subgraph_aggregate_node_run_id']], {'subgraph_aggregate'})
+        if len(selected) > 500:
+            raise ValueError('manifest exceeds run limit')
+        return sorted(selected.values(), key=lambda row: row.id)
     outers = members(state.get('item_node_run_ids', []), {'foreach_item', 'dynamic_item'})
     for outer in outers:
         outer_state = json.loads(outer.input_json)

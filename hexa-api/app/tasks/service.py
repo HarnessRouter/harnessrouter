@@ -163,6 +163,46 @@ def validate_dynamic_plan(item, known_ids):
         raise TaskError('invalid_workflow', 'dynamic_plan.topology 只支持 list 或 dag。', 422)
 
 
+def validate_subgraph(item, known_ids):
+    """Validate a bounded static child DAG owned by one parent NodeRun."""
+    subgraph = item.get('subgraph')
+    if subgraph is None:
+        return
+    if any(item.get(mode) is not None for mode in ('repeat', 'foreach', 'loop', 'dynamic_plan')):
+        raise TaskError('invalid_workflow', 'subgraph 不能与 repeat、foreach、loop 或 dynamic_plan 同时启用。', 422)
+    if not item.get('deps'):
+        raise TaskError('invalid_workflow', 'subgraph 节点必须依赖父工作流节点。', 422)
+    if not isinstance(subgraph, dict) or set(subgraph) - {'max_concurrency', 'nodes'}:
+        raise TaskError('invalid_workflow', 'subgraph 只支持 max_concurrency 和 nodes。', 422)
+    concurrency = subgraph.get('max_concurrency', 1)
+    children = subgraph.get('nodes')
+    if type(concurrency) is not int or not 1 <= concurrency <= 10:
+        raise TaskError('invalid_workflow', 'subgraph.max_concurrency 必须是 1 到 10 之间的整数。', 422)
+    if not isinstance(children, list) or not 1 <= len(children) <= 10:
+        raise TaskError('invalid_workflow', 'subgraph.nodes 必须包含 1 到 10 个静态节点。', 422)
+    child_ids = set()
+    specs = []
+    allowed_child_fields = {'id', 'name', 'agent_id', 'model', 'prompt', 'deps', 'inputRefs', 'final_report', 'x', 'y'}
+    for child in children:
+        if not isinstance(child, dict):
+            raise TaskError('invalid_workflow', 'subgraph 子节点格式无效。', 422)
+        if set(child) - allowed_child_fields:
+            raise TaskError('invalid_workflow', 'subgraph 子节点包含不受支持的字段。', 422)
+        if child.get('node_type') in {'human', 'human_gate'} or child.get('requires_human'):
+            raise TaskError('invalid_workflow', 'subgraph 暂不支持人工子节点。', 422)
+        if any(child.get(mode) is not None for mode in ('repeat', 'foreach', 'loop', 'dynamic_plan', 'subgraph')):
+            raise TaskError('invalid_workflow', 'subgraph 只支持静态 Agent 子节点，不能递归或展开。', 422)
+        child_id = child.get('id')
+        if not isinstance(child_id, str) or not child_id.strip() or len(child_id) > 255 or child_id in child_ids:
+            raise TaskError('invalid_workflow', 'subgraph 子节点 ID 无效或重复。', 422)
+        child_ids.add(child_id)
+        specs.append(NodeSpec(child_id, tuple(child.get('deps', [])), tuple(child.get('inputRefs', [])), bool(child.get('final_report')), False))
+    try:
+        validate_workflow(WorkflowSpec(tuple(specs)), max_nodes=10, max_edges=20)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TaskError('invalid_workflow', 'subgraph 子节点、依赖或输入映射无效。', 422) from exc
+
+
 def workflow_from_json(value):
     if not isinstance(value, dict) or not isinstance(value.get('nodes'), list):
         raise TaskError('invalid_workflow', '工作流格式无效。', 422)
@@ -177,6 +217,7 @@ def workflow_from_json(value):
             validate_foreach(item, known_ids)
             validate_loop(item, known_ids)
             validate_dynamic_plan(item, known_ids)
+            validate_subgraph(item, known_ids)
     try:
         workflow = WorkflowSpec(tuple(NodeSpec(item['id'], tuple(item.get('deps', [])), tuple(item.get('inputRefs', [])), bool(item.get('final_report')), bool(item.get('requires_human'))) for item in value['nodes']))
         validate_workflow(workflow)
@@ -287,6 +328,7 @@ def latest_nodes(db, run_id):
     rows = db.scalars(select(NodeRun).where(NodeRun.run_id == run_id).order_by(NodeRun.iteration, NodeRun.attempt, NodeRun.id)).all()
     visible = [row for row in rows if row.execution_kind not in {
         'foreach_item', 'dynamic_item', 'foreach_nested_item', 'foreach_nested_aggregate',
+        'subgraph_node', 'subgraph_aggregate',
     }]
     for row in visible:
         prior = latest.get(row.node_id)
@@ -426,6 +468,15 @@ async def prepare_run(db, task, body, key, gateway, secrets):
             available = {row['id'] for row in catalogs[agent_id].get('models', []) if row.get('available', True)}
             if item.get('model') not in available:
                 raise ValueError('model unavailable')
+            for child in item.get('subgraph', {}).get('nodes', []):
+                child_agent_id = child.get('agent_id', '')
+                if child_agent_id not in agents:
+                    raise ValueError('subgraph agent unavailable')
+                if child_agent_id not in catalogs:
+                    catalogs[child_agent_id] = await gateway.list_agent_models(child_agent_id)
+                child_available = {row['id'] for row in catalogs[child_agent_id].get('models', []) if row.get('available', True)}
+                if child.get('model') not in child_available:
+                    raise ValueError('subgraph model unavailable')
     except Exception as exc:
         raise TaskError('configuration_unavailable', '节点 Agent 或模型不可用，请检查配置。', 422) from exc
     if resume:
@@ -531,7 +582,11 @@ class TaskExecutor:
                         value_at_path=value_at_path, condition_matches=condition_matches,
                         decisions=decisions,
                     )
-                    if fanout_changed:
+                    from app.tasks.subgraph import advance_subgraphs
+                    subgraph_calls, subgraph_changed = advance_subgraphs(
+                        db, run, definition, rows, encoded=encoded,
+                    )
+                    if fanout_changed or subgraph_changed:
                         db.commit()
                         continue
                     unfinished = [item for item in nodes.values() if rows[item['id']].status == 'idle']
@@ -550,11 +605,12 @@ class TaskExecutor:
                     if any(item.get('condition') and rows[item['id']].status == 'skipped' for item in ready):
                         db.commit()
                         continue
-                    executable = [item for item in ready if not (item.get('foreach') or item.get('dynamic_plan')) and (not is_human_node(item) or item['id'] in decisions)]
+                    executable = [item for item in ready if not (item.get('foreach') or item.get('dynamic_plan') or item.get('subgraph')) and (not is_human_node(item) or item['id'] in decisions)]
                     human_nodes = [item for item in executable if is_explicit_human_node(item)]
                     regular_agent_nodes = [item for item in executable if not is_explicit_human_node(item)]
                     work_units = [('node', item, rows[item['id']]) for item in regular_agent_nodes]
                     work_units.extend(fanout_calls)
+                    work_units.extend(subgraph_calls)
                     work_units = [('human', item, rows[item['id']]) for item in human_nodes] + work_units[:max_concurrency]
                     if not work_units:
                         if ready:
@@ -576,7 +632,7 @@ class TaskExecutor:
                     calls = []
                     space = db.get(AppWorkspace, task.workspace_id) if task.workspace_id else None
                     for unit_kind, item, row in work_units:
-                        refs = decisions.get(item['id'], item.get('inputRefs', []))
+                        refs = [] if unit_kind == 'subgraph_node' else decisions.get(item['id'], item.get('inputRefs', []))
                         if unit_kind == 'human':
                             inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if rows[ref].status == 'succeeded']
                             row.input_json = encoded({'task_input': snapshot['input'], 'refs': inputs, 'decision': 'human_confirmed'})
@@ -585,9 +641,18 @@ class TaskExecutor:
                             row.started_at = row.started_at or datetime.now(timezone.utc)
                             row.finished_at = datetime.now(timezone.utc)
                             continue
-                        inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if rows[ref].status == 'succeeded']
+                        inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if ref in rows and rows[ref].status == 'succeeded']
                         context = redact({'task_input': snapshot['input'], 'prompt': item.get('prompt', ''), 'refs': inputs}, self.secrets)
                         state = json.loads(row.input_json)
+                        if unit_kind == 'subgraph_node':
+                            state = json.loads(row.input_json)
+                            context['subgraph_node_id'] = state['subgraph_node_id']
+                            context['subgraph_parent_node_run_id'] = state['subgraph_parent_node_run_id']
+                            context['subgraph_index'] = state['subgraph_index']
+                            from app.tasks.subgraph import _children, _refs
+                            parent = db.get(NodeRun, state['subgraph_parent_node_run_id'])
+                            context['refs'] = state.get('parent_refs', []) + _refs(_children(db, parent), state)
+                            context['_orchestration_role'] = 'subgraph_node'
                         if unit_kind in ('foreach_item', 'dynamic_item', 'foreach_nested_item'):
                             context['refs'] = json.loads(rows[item['id']].input_json).get('refs', inputs)
                         previous = state.get('loop_previous')
