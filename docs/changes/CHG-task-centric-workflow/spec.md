@@ -426,6 +426,11 @@ Run preflight 必须在创建 `Run` 记录或派发第一个 NodeRun 前完成�
 effective composition。动态计划、动态 DAG 和子编排只能继承父 Run 已冻结的 capability snapshot，
 不能在模型输出中声明新的 Plugin、MCP、Skill 或权限。
 
+仅返回插件名称的旧 Gateway/非 UHP Harness 列表项属于 `metadata_only`，只用于显示和审计，
+不能被当作可执行插件，也不能触发 `plugins` capability 的严格预检。只有返回 UHP 派生的
+`manifest`、`mcpServers`、`skills` 或 `skipped` 字段时，Hexa 才把它当作已配置插件并要求
+Gateway 广告 Plugin capability、读取 package 并执行完整预检。
+
 ### 有效权限
 
 每次工具执行的有效权限按以下交集计算，并在 Run 快照中保留决策摘要：

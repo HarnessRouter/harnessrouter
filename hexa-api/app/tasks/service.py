@@ -89,6 +89,7 @@ def capability_snapshot(agent, discovery=None):
     for plugin in agent.get('plugins', []) or []:
         if not isinstance(plugin, dict) or not isinstance(plugin.get('name'), str):
             continue
+        metadata_only = plugin.get('_metadata_only') is True
         manifest = plugin.get('manifest') if isinstance(plugin.get('manifest'), dict) else {}
         manifest_identity = {
             key: manifest[key] for key in ('name', 'version')
@@ -118,6 +119,8 @@ def capability_snapshot(agent, discovery=None):
             'manifest_digest': _capability_digest(manifest_identity), 'skipped': skipped,
             'component_digest': _capability_digest(plugin_components),
         }
+        if metadata_only:
+            plugin_record['metadata_only'] = True
         if isinstance(plugin.get('_package_digest'), str) and plugin['_package_digest']:
             plugin_record['package_digest'] = plugin['_package_digest']
         if isinstance(plugin.get('_package_read_error'), str):
@@ -148,7 +151,7 @@ def capability_snapshot(agent, discovery=None):
             {'plugin': item['name'], 'path': 'package', 'reason': item['package_read_error']}
             for item in plugins if item['enabled'] and item.get('package_read_error')
         )
-    if any(item['enabled'] for item in plugins) and discovery.get('capabilities', {}).get('plugins') is not True:
+    if any(item['enabled'] and not item.get('metadata_only') for item in plugins) and discovery.get('capabilities', {}).get('plugins') is not True:
         effective['preflight_errors'].append({'plugin': '*', 'path': 'uhp.discovery', 'reason': 'Gateway does not advertise plugins'})
     return effective
 
@@ -671,8 +674,6 @@ async def prepare_run(db, task, body, key, gateway, secrets):
         catalogs = {}
         capability_rows = {}
         discovery = {}
-        if hasattr(gateway, 'get_uhp_discovery'):
-            discovery = await gateway.get_uhp_discovery()
 
         def workflow_agent_ids(nodes):
             for node in nodes or []:
@@ -685,9 +686,30 @@ async def prepare_run(db, task, body, key, gateway, secrets):
             if agent_id not in agents:
                 raise ValueError('agent unavailable')
             if hasattr(gateway, 'get_agent_capabilities'):
-                capability_rows[agent_id] = await gateway.get_agent_capabilities(agent_id)
+                # Older/no-plugin Gateway adapters may expose only the harness list. Their
+                # absence of an optional detail route is compatible when the list contains no
+                # plugin declaration; an explicitly configured plugin remains fail-closed.
+                listed = agents[agent_id]
+                listed_plugins = listed.get('plugins') if isinstance(listed, dict) else None
+                try:
+                    capability_rows[agent_id] = await gateway.get_agent_capabilities(agent_id)
+                except GatewayError:
+                    if isinstance(listed_plugins, list) and listed_plugins:
+                        for plugin in listed_plugins:
+                            if isinstance(plugin, dict) and not any(key in plugin for key in ('manifest', 'mcpServers', 'skills', 'skipped')):
+                                plugin['_metadata_only'] = True
+                            elif isinstance(plugin, dict):
+                                raise
+                    capability_rows[agent_id] = listed
             else:
                 capability_rows[agent_id] = agents[agent_id]
+        has_plugins = any(
+            isinstance(plugin, dict) and plugin.get('enabled', True) is not False and plugin.get('_metadata_only') is not True
+            for row in capability_rows.values()
+            for plugin in (row.get('plugins') or []) if isinstance(row, dict)
+        )
+        if has_plugins and hasattr(gateway, 'get_uhp_discovery'):
+            discovery = await gateway.get_uhp_discovery()
         for item in definition['nodes']:
             if item.get('node_type') in {'human', 'human_gate'}:
                 continue
