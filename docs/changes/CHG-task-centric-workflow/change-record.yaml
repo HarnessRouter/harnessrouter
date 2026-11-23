@@ -1122,3 +1122,29 @@ subgraph_browser_recovery:
     - "新嵌套子编排恢复旅程和截图使用 Chromium；Edge 验证集合项历史回归，未验证新嵌套恢复完整旅程。"
   remaining: [real Gateway/BYOK smoke, native tool approval interception and exact continuation, multiprocess lease takeover, Linux deployment, Edge nested recovery journey]
   next_action: "提交本地独立分支；随后选择具有真实副作用前 native hook 的 Runner 适配审批，保持 UHP proposal 和 coverage fail closed。"
+
+lease_recovery_fencing:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified_slice
+  baseline: 707f4a54
+  branch: codex/agent-orchestration
+  reuse_decision: extend existing Run lease, startup recovery, CommandReceipt and progress persistence; no new migration or UHP capability
+  scope: startup recovery isolation, PostgreSQL process competition, cached fence refresh and streamed response identity
+  acceptance_ids: [AC-34, AC-35, AC-36, AC-37]
+  references: [spec.md#run-lease-与-heartbeat, plan.md#run-lease-与-heartbeat-实施2026-11-24, platform-matrix.md#2026-11-23-租约恢复与跨进程-fencing]
+  verification:
+    red: "test_run_leases.py 新测试先 3 failed/3 passed：新启动进程误伤有效 owner、过期恢复未撤销 fence、旧 owner 写入流进度。真实 PostgreSQL 缓存回读测试先 1 failed：ORM 已缓存 Run 导致旧 owner 仍能续租；已知 response ID 的恢复测试另先 1 failed，回执丢失原 Response ID。"
+    unit_integration: "python -m pytest -q hexa-api/tests/test_run_leases.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_subgraph.py hexa-api/tests/test_http_integration.py --tb=short; exit 0; 59 passed in 51.97s，Windows/SQLite，真实 HTTP adapter。"
+    postgres: "HEXA_TEST_POSTGRES_URL 指向本机隔离 PostgreSQL；python -m pytest -q hexa-api/tests/test_postgres_leases.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_http_integration.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_events.py hexa-api/tests/test_reconciliation.py hexa-api/tests/test_task_concurrency.py --tb=short; exit 0; 47 passed in 69.45s。每个测试独立 schema 并清理，无 public schema 写入。"
+    process_http_final: "最终增强 HTTP 流中回执 response_id 断言及进程超时清理后：同 PostgreSQL 环境 pytest test_postgres_leases.py test_http_integration.py -k 'independent or second_api_startup'; exit 0; 4 passed in 23.99s。两个独立 Python 进程竞争仅一人获租、并发恢复一次收敛，第二 API lifespan 启动不影响原流式任务完成且只有一次 HTTP 调用。"
+    orchestration_regression: "python -m pytest -q hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py --tb=short; exit 0; 51 passed in 71.03s，取消/恢复/嵌套状态边界。"
+    hygiene: "修改 Python AST parse、YAML safe_load 和 git diff --check 在提交前验证。无客户端改动，复用上轮浏览器/类型/构建证据，不重复无关 UI 门禁。"
+  security_review: "恢复在每个 Run 行锁中重读状态/租约，撤销 fence 后一次提交 unknown；流式回调和终态写回在同一 Run 行锁内校验 owner/fence。租约方法 populate_existing 避免 ORM 缓存绕过 fence；已取得 Response ID 只同步原身份，不派发新调用。子进程固定 Python argv、数据库 URL 经环境传入且不打印；隔离 schema 使用 Identifier；没有新增网络端点、权限或 Cloud 入口。"
+  rollback: "停止相关执行器后回退 service.py 与测试/规范；不删历史 RunEvent 或回执，无数据库迁移。回退版本存在启动误伤有效 owner 的缺陷，不得用于多 API 进程发布。"
+  limitations:
+    - "独立执行器进程在 Windows，PostgreSQL 在 Linux 容器；尚不证明 Linux API 交付镜像、多副本负载、故障后的周期性自动接管或生产部署。"
+    - "HTTP Gateway 是受控夹具，不代表真实 Provider 或原生工具审批。Codex/ACP 权限请求仍自动答复，无持久化精确 native continuation；tool_approvals 继续不广告。"
+    - "SQLite 为开发/测试单进程数据库，不声明其 SELECT FOR UPDATE 提供多进程原子租约。"
+  remaining: [Linux API delivery-image validation, real Gateway/BYOK smoke, periodic expired-owner recovery design, native approval interception and durable continuation, deployment and remote CI]
+  next_action: "提交本地分支；继续 Linux API 目标镜像与过期 owner 回收设计，并建立首个真实 Runner 审批 checkpoint 适配方案，不能以本切片关闭完整编排目标。"

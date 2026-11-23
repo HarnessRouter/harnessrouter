@@ -7,6 +7,72 @@ from tests.test_conversations import login
 from app.gateway.client import GatewayClient
 
 
+def test_second_api_startup_preserves_live_http_task_and_owner_completes(client, app):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.test_task_workflows import authenticated, node, wait_run
+
+    entered, release = threading.Event(), threading.Event()
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.end_headers()
+            self.wfile.write(b'data: {"type":"response.created","response":{"id":"live-lease-response"}}\n\n')
+            self.wfile.flush()
+            entered.set()
+            if not release.wait(15):
+                return
+            event = {'type': 'response.completed', 'response': {
+                'id': 'live-lease-response', 'status': 'completed',
+                'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'owner completed'}]}],
+            }}
+            self.wfile.write(f'data: {json.dumps(event)}\n\n'.encode())
+            self.wfile.flush()
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        app.state.task_executor.gateway = GatewayClient(f'http://127.0.0.1:{server.server_port}', 'local-fixture-key')
+        authenticated(client)
+        task = client.post('/api/hexa/tasks', json={'workflow': {'nodes': [node('work', final_report=True)]}}).json()
+        started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'live-http-lease'}).json()
+        assert entered.wait(10)
+        from app.db.models import CommandReceipt
+        import time
+        deadline = time.monotonic() + 5
+        while True:
+            with app.state.session_factory() as db:
+                receipt = db.query(CommandReceipt).filter_by(node_run_id=started['nodes'][0]['id']).one()
+                if receipt.response_id == 'live-lease-response':
+                    break
+            assert time.monotonic() < deadline, 'streamed response ID was not durably saved in receipt'
+            time.sleep(0.01)
+        with TestClient(create_app(app.state.settings, app.state.gateway)) as second:
+            second.cookies.update(client.cookies)
+            snapshot = second.get(f"/api/hexa/runs/{started['id']}").json()
+            assert snapshot['status'] == 'running'
+            assert snapshot['nodes'][0]['status'] == 'running'
+            release.set()
+            result = wait_run(client, started['id'], {'completed', 'failed'})
+            assert result['status'] == 'completed', result
+            assert result['nodes'][0]['output']['text'] == 'owner completed'
+            assert second.get(f"/api/hexa/runs/{started['id']}").json() == result
+        assert len(requests) == 1
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+
+
 def test_real_http_gateway_continuation_progress_and_app_restart(client, app, caplog):
     requests = []
     class Handler(BaseHTTPRequestHandler):

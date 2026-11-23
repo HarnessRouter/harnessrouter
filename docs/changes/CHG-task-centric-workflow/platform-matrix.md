@@ -68,4 +68,13 @@ Windows/Python 3.13/真实 SQLite 覆盖独立进程重开、多线程决定/开
 Linux、可选远端 control backing、真实 Runner、HTTP/SSE 审批及部署 not_evaluated；无 runtime capability 广告或 UI 修改。
 证据与剩余接线统一见 Change `approval_journal_slice`。
 
+## 2026-11-23 租约恢复与跨进程 fencing
+
+| 平台/边界 | 实现影响、验证入口及结果 |
+| --- | --- |
+| Windows / Python / SQLite | 启动恢复跳过有效 owner、过期撤销 fence、迟到流与结果拒绝、同会话缓存刷新及 response ID 保留；相关结果见 Change `lease_recovery_fencing`。子进程以固定 Python 模块 argv 启动，数据库 URL 只经环境变量传入，不输出凭据。 |
+| Windows 独立 Python 进程 / Linux PostgreSQL 容器 | 真实 PostgreSQL 隔离 schema：两进程竞争只有一个 owner、并发恢复仅一次 unknown、有效 owner 保持；47 项 PostgreSQL 回归及最终目标复验见 Change。数据库运行在 Linux，不代表执行器已在 Linux 验证。 |
+| 本地 HTTP App / GatewayClient / PostgreSQL | 第二个 API lifespan 启动不破坏仍在流式执行的任务，原 owner 完成且只发生一次 HTTP 调用；受控 Gateway 不证明真实 Provider。 |
+| Linux API / Runner / 真实 Provider / 部署 | not_evaluated；当前 Runner 镜像没有 SQLAlchemy，不能直接作为 API 验收环境。需在 hexa-api 交付镜像运行同一测试及部署冒烟；本轮不修改运行中容器或广告 UHP 审批能力。 |
+
 复用 ORM 与持久化 JSON 引用，无数据库列、Shell、原生模块或系统路径变更。Windows / SQLite 覆盖新 Run 恢复、引用身份和旧历史不变；HTTP 夹具覆盖实际 GatewayClient、失败响应、补跑和重启只读。当前源码真实 PostgreSQL、Linux 与真实 Provider 仍 not_evaluated；本批未新增迁移，也不宣称可发布。最终测试数量及 Chromium 流程证据见 Change `terminal_fanout_resume`；新增项级 UI 入口仍属后续工作。

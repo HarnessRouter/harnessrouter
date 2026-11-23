@@ -351,6 +351,10 @@ Hexa 提供显式的 `POST /runs/{run_id}/nodes/{attempt_id}/reconcile`。该接
 结果、产物、状态或事件；已经向 Gateway 派发但结果未知的节点收敛为 `unknown` 并要求 reconciliation。heartbeat 不是 Agent 副作用
 已完成的证明，也不允许因租约接管自动重放调用。
 
+API 启动恢复必须跳过其他执行器仍持有未过期租约的 Run，不改变其节点、回执、事件或任务状态。恢复过期或无租约的运行时，须在数据库行锁内重新检查当前状态及租约，递增 fence 并清除 owner，再将可能已派发的调用记为 unknown；并发恢复只产生一次恢复事件。迟到的流式进度与终态结果都须在同一锁内验证 owner/fence，不能污染新 owner 的记录。PostgreSQL 多进程启动与竞争必须以真实独立进程验证，SQLite 单进程测试不能代替该证据。
+
+流中已取得的 Gateway response ID 须随 NodeRun 和 CommandReceipt 一起持久化；恢复旧记录时可从 NodeRun 补回回执已有调用身份，使显式 reconciliation 仍查询原 Response。恢复不能生成新 response ID 或发起替代调用。
+
 ### Task 状态
 
 `draft`、`running`、`waiting`、`completed`、`failed`、`archived`。

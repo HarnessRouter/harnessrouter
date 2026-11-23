@@ -822,7 +822,7 @@ class TaskExecutor:
 
     def acquire_run_lease(self, db, run_id):
         now = datetime.now(timezone.utc)
-        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update().execution_options(populate_existing=True))
         if run is None or run.status not in ('pending', 'running') or run.paused:
             return None
         if run.lease_owner and run.lease_owner != self.lease_owner and run.lease_expires_at and self._utc(run.lease_expires_at) > now:
@@ -835,7 +835,7 @@ class TaskExecutor:
 
     def renew_run_lease(self, db, run_id, fence):
         now = datetime.now(timezone.utc)
-        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update().execution_options(populate_existing=True))
         if run is None or run.lease_owner != self.lease_owner or run.lease_fence != fence:
             return False
         run.lease_heartbeat_at = now
@@ -843,7 +843,7 @@ class TaskExecutor:
         return True
 
     def release_run_lease(self, db, run_id, fence):
-        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update().execution_options(populate_existing=True))
         if run is None or run.lease_owner != self.lease_owner or run.lease_fence != fence:
             return False
         run.lease_owner = None
@@ -866,9 +866,19 @@ class TaskExecutor:
 
     def recover(self):
         with self.session_factory() as db:
-            for run in db.scalars(select(Run).where(Run.status.in_(('pending', 'running')))).all():
-                if run.paused:
+            identities = db.scalars(select(Run.id).where(Run.status.in_(('pending', 'running')))).all()
+        for identity in identities:
+            with self.session_factory() as db:
+                run = db.scalar(select(Run).where(Run.id == identity).with_for_update())
+                if not run or run.status not in ('pending', 'running') or run.paused:
                     continue
+                now = datetime.now(timezone.utc)
+                if run.lease_owner and run.lease_expires_at and self._utc(run.lease_expires_at) > now:
+                    continue
+                run.lease_fence = (run.lease_fence or 0) + 1
+                run.lease_owner = None
+                run.lease_heartbeat_at = None
+                run.lease_expires_at = None
                 run.status = 'failed'
                 task = db.get(Task, run.task_id)
                 task.status = 'failed'
@@ -881,10 +891,11 @@ class TaskExecutor:
                             receipt.side_effect_state = 'unknown'
                             receipt.reconciliation_required = True
                             receipt.error_code = 'interrupted_unknown_outcome'
+                            receipt.response_id = row.response_id or receipt.response_id
                         append_run_event(db, run.id, 'node.unknown', node_run_id=row.id,
                                          data={'node_id': row.node_id, 'error_code': row.error_code})
                 append_run_event(db, run.id, 'run.failed', data={'error_code': 'interrupted_unknown_outcome'})
-            db.commit()
+                db.commit()
 
     async def execute(self, run_id):
         with self.session_factory() as db:
@@ -1167,7 +1178,7 @@ class TaskExecutor:
         }).encode()).hexdigest()
         with self.session_factory() as db:
             if lease_fence is not None:
-                run = db.get(Run, run_id)
+                run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
                 if not run or run.lease_owner != self.lease_owner or run.lease_fence != lease_fence or (lease_lost and lease_lost.is_set()):
                     db.rollback()
                     return
@@ -1180,11 +1191,18 @@ class TaskExecutor:
             db.commit()
         def save_progress(*, response_id=None, partial=None, details=None):
             with self.session_factory() as db:
-                row, run = db.get(NodeRun, attempt_id), db.get(Run, run_id)
+                run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+                if lease_fence is not None and (not run or run.lease_owner != self.lease_owner
+                        or run.lease_fence != lease_fence or (lease_lost and lease_lost.is_set())):
+                    return
+                row = db.get(NodeRun, attempt_id)
                 if not row or not run or row.status != 'running' or run.status != 'running':
                     return
                 if response_id:
                     row.response_id = response_id
+                    receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
+                    if receipt:
+                        receipt.response_id = response_id
                 if partial is not None:
                     row.partial_text = redact(partial, self.secrets)[:262144]
                 if details is not None:
@@ -1210,7 +1228,8 @@ class TaskExecutor:
             error = 'agent_failed' if isinstance(exc, GatewayError) and not exc.uncertain else 'interrupted_unknown_outcome'
         uncertain = error == 'interrupted_unknown_outcome'
         with self.session_factory() as db:
-            run, row = db.get(Run, run_id), db.get(NodeRun, attempt_id)
+            run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+            row = db.get(NodeRun, attempt_id)
             if run is None or row is None or run.status != 'running' or row.status != 'running':
                 return
             if lease_fence is not None and (lease_lost and lease_lost.is_set() or run.lease_owner != self.lease_owner or run.lease_fence != lease_fence):
