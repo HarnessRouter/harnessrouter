@@ -422,6 +422,26 @@ EffectivePermission
 过期/撤销/绑定变化/原生拒绝零执行许可、终态单向和崩溃 unknown；存储异常必须传播，不能 fail open。该验收仅证明日志边界，
 不代替 A-01 至 A-09 的真实 Gateway/Runner 拦截、HTTP/SSE、Hexa UI 与原生 runtime conformance。
 
+### Gateway 审批读取与决定接口
+
+按草案提供 `GET/POST /v1/responses/{response_id}/tool-approvals/{approval_id}`。只有受信任运行路径登记在 Response 内部
+`_tool_approval_commands` 中的审批 ID/command 映射才能被寻址，客户端或模型输出不能创建映射。当前尚无原生生产登记路径。
+接口核对 Response 的组织、非空 `_member`、Session、当前 Workspace/校准作用域及 Session 未删除状态；不使用旧响应缺少
+owner 的兼容放行规则。映射或日志缺失、主体不符返回统一 404；存储读取失败返回安全 503，不能解释成“未找到”。
+
+决定必须有 HTTP `Idempotency-Key`，仅接受草案 Decision 固定字段；不得夹带参数替换、headers 或凭据。接口只记录决定，
+不启动 Runner、不恢复 Response、不派发工具。读取返回当前审批状态与执行回执；决定重放返回原决定回执。取消/删除一个
+含审批索引的 Response 前，先持久化 void 所有映射记录，失败时拒绝完成操作；已开始的调用记为 unknown。
+
+原生 coverage 未接通时，`POST /v1/responses` 若出现 `tool_approval_policy`（包括显式 null）或 `tool_approval_response`
+输入，必须在 idempotency replay、外部 UHP 转发、创建 Session、模型解析或 Runner 调用前返回 422
+`hexa_approval_unavailable`。引用含待接线审批索引的旧 Response 的普通继续也必须拒绝，不得把待批当普通消息忽略。
+现有不带新字段的任务与 input_required 流程不变；discovery 不广告 tool_approvals。
+
+**AC-30 审批 HTTP 边界：** 真实 FastAPI/SQLite/blob 组合验证读回、决定幂等/冲突、不同主体/组织/Session/工作区隔离、
+缺失 key/非法 payload/过期错误、重开 store、取消/删除 void、读写故障 fail closed 和错误脱敏；策略/审批继续请求均零 Runner
+派发。HTTP 通过仅证明接口与预检边界，仍须另验真实 native interception、完整恢复、SSE、能力协商及 Hexa UI。
+
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是

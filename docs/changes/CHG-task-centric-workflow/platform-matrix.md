@@ -50,6 +50,11 @@ Gateway 仅作为 `hexa-api` 的外部执行依赖；Gateway 原有回归测试�
 
 ## 2026-11-23 终态集合恢复
 
+审批 HTTP 接线后续切片（2026-11-24）：Windows/Python 3.13 的真实本地 blob/SQLite、ASGI 和 Uvicorn TCP 入口验证鉴权读取、
+决定重放、作用域隔离与取消，沿用内部请求头鉴权，无新增进程能力或操作系统分支。测试 TCP listener 限定 127.0.0.1 并动态选端口，
+服务线程在 finally 退出；没有可执行 Shell 字符串或外网请求。真实 native Runner、完整审批 SSE/继续、Hexa UI、Linux 与部署
+not_evaluated；当前 API 测试通过不代表 runtime coverage。结果见 Change `approval_http_slice`。
+
 后续内部审批日志切片（2026-11-24）：复用 Gateway `control.db` 的原子 create/ETag CAS，无迁移、Shell 执行或新依赖。
 Windows/Python 3.13/真实 SQLite 覆盖独立进程重开、多线程决定/开始/撤销竞争、原 store factory、过期/恢复/未知回执；测试子进程
 通过 argv 调用 Python，不构造 Shell 命令。原用户提问测试存在默认 GBK 读 UTF-8 源码问题，回归以 `python -X utf8` 执行。

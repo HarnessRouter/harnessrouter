@@ -85,6 +85,15 @@ secret；Gateway/Runner 继续负责插件物化、sandbox、MCP 连接和 comma
 
 ## 2026-11-23 完整引擎推进
 
+### 审批 HTTP 接线（2026-11-24）
+
+按 AC-30 复用 `_principal`、严格 blob 读取、Session 权限和内部 CAS 日志。先写 API Red：真实本地 backing 中种入受信任
+审批映射与日志，通过 ASGI 接口读取/决定/取消/删除；覆盖陌生主体、工作区限制、存储异常和 malformed body。扩展
+CreateResponseBody 仅用于识别新策略字段并在最早入口拒绝；无 coverage 时不把审批输入带入旧文本规范化或远端转发。
+新增 getter 以 mapping 寻址，不扫描组织所有日志；日志可额外核对 approval ID 与 command 的对应。取消和删除在已有副作用前
+void journal，接口不触发工具。单元验证 guard/参数与 journal，集成验证 HTTP/blob/SQLite，真实 Provider/Runner E2E
+仍未接线并记录限制。回退前确认无带审批的活动调用，保留 control.db 与 Response 历史；不升级已发布 schema 或 capability。
+
 用户将目标扩展为完整编排引擎，继续复用本 Change。按以下依赖顺序推进，实际结果只写入 change-record.yaml：
 
 1. 统一展开状态机，移除串行集合覆盖项输出及业务 `items` 字段控制逻辑；同时修复 SQLite 旧库升级。

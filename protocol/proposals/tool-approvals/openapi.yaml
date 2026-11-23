@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Hexa tool approval proposal fragments (unimplemented)
+  title: Hexa tool approval proposal fragments (partial implementation; runtime unavailable)
   version: draft
 paths:
   /v1/responses/{response_id}/tool-approvals/{approval_id}:
@@ -16,6 +16,7 @@ paths:
             application/json:
               schema: {$ref: 'schema.json#/$defs/Record'}
         '404': {description: Unknown or outside scope}
+        '503': {description: Approval or authorization storage unavailable; retry without executing}
     post:
       security: [{bearerAuth: []}]
       parameters:
@@ -35,6 +36,7 @@ paths:
         '409': {description: Conflict or changed execution descriptor}
         '410': {description: Expired approval}
         '422': {description: Invalid decision}
+        '503': {description: Approval or authorization storage unavailable; no execution}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer}

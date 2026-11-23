@@ -245,7 +245,7 @@ def test_a_held_keys_plug_routes_are_about_its_own_workspace_whatever_header_it_
 
 IDS = {"hid", "harness_id", "sid", "response_id", "container_id", "kid", "env_id", "wid"}
 ASKS = {"_owned_session", "_owned_environment", "_harness_in_reach", "_harness_for_route", "_media_route",
-        "_response_in_reach", "_scope_keeps"}
+        "_response_in_reach", "_scope_keeps", "_addressed_approval"}
 # A route that takes an id and is not held to a workspace, with the reason it is not.
 EXEMPT = {
     "recycle_session_sandbox": "behind the internal key: the platform's own call, no caller to narrow",
@@ -272,3 +272,13 @@ def test_every_route_that_takes_an_id_asks_whether_it_is_in_the_callers_workspac
     assert seen > 60, "the scan found too few routes, which means it stopped working"
     assert not missing, "routes that take an id and never ask about the workspace:\n  " + "\n  ".join(sorted(set(missing)))
     assert set(EXEMPT) <= {n.name for n in tree.body if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))}
+
+
+def test_approval_address_helper_reaches_workspace_authorization():
+    tree = ast.parse(pathlib.Path(gw.__file__).read_text())
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
+    def called(name):
+        return {node.func.id for node in ast.walk(functions[name])
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert '_approval_response_scope' in called('_addressed_approval')
+    assert {'_response_in_reach', '_scope_keeps'} <= called('_approval_response_scope')

@@ -69,6 +69,7 @@ import memory_reme
 import memory_relay      # memory vendors' servers call the model relay with a service credential
 import memory_choice     # which memory engine an agent gets, from what it is for
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
+from tool_approvals import ApprovalError, ApprovalJournal, ApprovalScope
 import setup_compose         # New setup: the rules every built configuration is held to
 import setup_builder         # New setup: the built-in builder, saving into the person's workspace
 
@@ -12502,6 +12503,7 @@ class CreateResponseBody(BaseModel):
     stream: bool = False
     previous_response_id: str | None = None
     branch: object = None
+    tool_approval_policy: object = None  # recognized, refused until native coverage exists
     store: bool = True
     instructions: str | None = None
     max_output_tokens: int | None = None
@@ -12623,16 +12625,50 @@ async def create_response(body: CreateResponseBody, request: Request):
     org, member = principal.get("org", ""), principal.get("member", "")
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
-    # A request that asks for a branch and can't have one is refused, never run some other way
-    # (Sessions §1.1). Ignoring it used to be the rule, and with a session hint the task then ran
-    # as a new turn of the very session the client asked to leave alone, which no later answer
-    # can undo. Checked here, before anything is read or claimed: the body alone decides it.
+    # Validate branch shape before reading or claiming anything (Sessions §1.1).
     if body.branch is not None and body.branch is not False:
         if body.branch is not True:
-            raise uhp_error(400, "invalid_input", "branch is true or false.", "branch")
+            raise uhp_error(400, 'invalid_input', 'branch is true or false.', 'branch')
         if not body.previous_response_id:
-            raise uhp_error(400, "invalid_input", "A branch starts from the response named in "
-                                                  "previous_response_id.", "branch")
+            raise uhp_error(400, 'invalid_input', 'A branch starts from the response named in previous_response_id.', 'branch')
+    # Never ignore an opt-in authorization policy, forward it to a server that
+    # may ignore it, or replay unrelated work under a privileged-looking key.
+    approval_inputs = body.input if isinstance(body.input, list) else [body.input]
+    if ('tool_approval_policy' in body.model_fields_set or any(
+            isinstance(item, dict) and item.get('type') == 'tool_approval_response' for item in approval_inputs)):
+        raise uhp_error(422, 'hexa_approval_unavailable',
+                        'This runtime cannot durably enforce tool approvals yet.', 'tool_approval_policy')
+    approval_previous_id = body.previous_response_id
+    if not approval_previous_id and isinstance(body.metadata, dict) and body.metadata.get('session_id'):
+        approval_sid = body.metadata['session_id']
+        if isinstance(approval_sid, str):
+            # A session-only follow-up must not bypass the pending turn. Use the
+            # durable index, not a process-local trace or a non-strict history.
+            try:
+                session_turns = await BACKING.graph.find_strict('HarnessResponse', {'session_id': approval_sid})
+                if session_turns:
+                    def turn_order(row):
+                        try:
+                            return float(row.get('created_at') or 0), str(row.get('id') or '')
+                        except (ValueError, TypeError):
+                            return 0, str(row.get('id') or '')
+                    latest = max(session_turns, key=turn_order)
+                    approval_previous_id = latest.get('id')
+            except Exception:
+                raise uhp_error(503, 'hexa_approval_unavailable', 'The previous response could not be checked.') from None
+    if approval_previous_id:
+        try:
+            prior_approval = await _resp_get(approval_previous_id, strict=True)
+        except backing.BlobUnavailable:
+            raise uhp_error(503, 'hexa_approval_unavailable', 'The previous response could not be checked.') from None
+        except OSError:
+            raise uhp_error(503, 'server_error', 'The previous response could not be checked.') from None
+        if prior_approval and prior_approval.get('_tool_approval_commands'):
+            if (prior_approval.get('_org') != org or prior_approval.get('_member') != member
+                    or not member or not await _response_in_reach(principal, prior_approval)):
+                raise uhp_error(404, 'response_not_found', 'No response with that id.', 'previous_response_id')
+            raise uhp_error(422, 'hexa_approval_unavailable',
+                            'Exact tool approval continuation is not available yet.', 'previous_response_id')
     meta = body.metadata or {}
     probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
@@ -13414,6 +13450,103 @@ async def harness_events(harness_id: str, request: Request):
 _RESPONSE_UNREADABLE = "This response could not be read just now. Try again in a moment."
 
 
+def _approval_http_error(exc):
+    if isinstance(exc, ApprovalError):
+        messages = {
+            'hexa_approval_not_found': 'No tool approval with that id.',
+            'hexa_approval_invalid': 'The approval decision or idempotency key is invalid.',
+            'hexa_approval_conflict': 'This request conflicts with the recorded approval.',
+            'hexa_approval_not_pending': 'This approval is no longer pending.',
+            'hexa_approval_expired': 'This approval has expired.',
+            'hexa_approval_changed': 'The tool invocation has changed.',
+        }
+        return uhp_error(exc.status_code, exc.code, messages.get(exc.code, 'The approval cannot be used.'))
+    return uhp_error(503, 'hexa_approval_unavailable', 'The approval record could not be accessed. Try again.')
+
+
+async def _approval_response_scope(principal: dict, response_id: str, rec: dict) -> ApprovalScope:
+    org, member = principal.get('org'), principal.get('member')
+    sid = rec.get('_session_id')
+    if (not org or not member or rec.get('_org') != org or rec.get('_member') != member
+            or not isinstance(sid, str) or not sid):
+        raise uhp_error(404, 'hexa_approval_not_found', 'No tool approval with that id.')
+    try:
+        in_reach = await _response_in_reach(principal, rec)
+        session = await _vertex_get(sid)
+    except Exception as exc:
+        raise _approval_http_error(exc) from None
+    if not in_reach:
+        raise uhp_error(404, 'hexa_approval_not_found', 'No tool approval with that id.')
+    if (not session or session.get('tenant') != org or session.get('status') == 'deleted'
+            or not _scope_keeps(principal, session.get('workspace'))):
+        raise uhp_error(404, 'hexa_approval_not_found', 'No tool approval with that id.')
+    return ApprovalScope(org, member, sid, response_id)
+
+
+async def _addressed_approval(response_id: str, approval_id: str, request: Request):
+    principal = await _principal(request)
+    try:
+        rec = await _resp_get(response_id, strict=True)
+    except backing.BlobUnavailable as exc:
+        raise _approval_http_error(exc) from None
+    if not rec:
+        raise uhp_error(404, 'hexa_approval_not_found', 'No tool approval with that id.')
+    scope = await _approval_response_scope(principal, response_id, rec)
+    mapping = rec.get('_tool_approval_commands')
+    command = mapping.get(approval_id) if isinstance(mapping, dict) else None
+    if not isinstance(command, str) or not command:
+        raise uhp_error(404, 'hexa_approval_not_found', 'No tool approval with that id.')
+    try:
+        journal = await ApprovalJournal.configured_control_store()
+        record = await journal.read(scope, command)
+    except Exception as exc:
+        raise _approval_http_error(exc) from None
+    if record['request']['id'] != approval_id:
+        raise uhp_error(404, 'hexa_approval_not_found', 'No tool approval with that id.')
+    return journal, scope, command, record
+
+
+@app.get('/v1/responses/{response_id}/tool-approvals/{approval_id}')
+async def get_tool_approval(response_id: str, approval_id: str, request: Request):
+    _, _, _, record = await _addressed_approval(response_id, approval_id, request)
+    return JSONResponse(record, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/responses/{response_id}/tool-approvals/{approval_id}')
+async def decide_tool_approval(response_id: str, approval_id: str, request: Request):
+    journal, scope, command, _ = await _addressed_approval(response_id, approval_id, request)
+    try:
+        value = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise _approval_http_error(ApprovalError('hexa_approval_invalid', 422)) from None
+    try:
+        receipt = await journal.decide(scope, command, value, request.headers.get('Idempotency-Key'))
+    except Exception as exc:
+        raise _approval_http_error(exc) from None
+    return JSONResponse(receipt, headers={'Cache-Control': 'no-store'})
+
+
+async def _void_response_approvals(principal: dict, response_id: str, rec: dict):
+    mapping = rec.get('_tool_approval_commands')
+    if not mapping:
+        return
+    scope = await _approval_response_scope(principal, response_id, rec)
+    if not isinstance(mapping, dict) or len(mapping) > 500:
+        raise _approval_http_error(RuntimeError())
+    try:
+        journal = await ApprovalJournal.configured_control_store()
+        # Validate every entry before mutating any: a broken mapping must not
+        # silently skip a call that cancellation claims to have invalidated.
+        for approval_id, command in mapping.items():
+            stored = await journal.read(scope, command)
+            if stored['request']['id'] != approval_id:
+                raise RuntimeError('invalid approval mapping')
+        for command in mapping.values():
+            await journal.void(scope, command)
+    except Exception as exc:
+        raise _approval_http_error(exc) from None
+
+
 @app.get("/v1/responses/{response_id}")
 async def get_response(response_id: str, request: Request):
     principal = await _principal(request)
@@ -13680,6 +13813,7 @@ async def delete_response(response_id: str, request: Request):
     # 403) so a cross-org id probe can't confirm existence. Legacy records with no _org stay owned.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", "") or not await _response_in_reach(principal, rec):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
+    await _void_response_approvals(principal, response_id, rec)
     # Kept 30 days, restorable, then removed by the retention sweep (Richard's rule, 2026-10-08).
     # Unreadable from now: `_resp_get` answers None for a record marked deleted.
     now = _now_ms()
@@ -14036,6 +14170,7 @@ async def cancel_response(response_id: str, request: Request):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     if not await _response_in_reach(principal, rec):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # another workspace's, or not its harness's
+    await _void_response_approvals(principal, response_id, rec)
     sid = str(rec.get("_session_id") or "")
     # PRIMARY (safe, cross-replica): a durable per-RESPONSE monotonic terminal latch. The turn's
     # own loop checks resp_is_cancelled(its resp_id) at every stage and self-terminates within

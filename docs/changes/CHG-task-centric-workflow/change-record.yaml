@@ -1,4 +1,26 @@
 id: CHG-task-centric-workflow
+approval_http_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: c90e9874
+  branch: codex/agent-orchestration
+  status: verified_api_slice
+  references: [spec.md#gateway-审批读取与决定接口, plan.md#审批-http-接线2026-11-24]
+  reuse_decision: extend authenticated response routes with journal read/decision and fail-closed admission; preserve unadvertised runtime capability
+  acceptance_ids: [AC-30]
+  verification:
+    red: "新增 HTTP suite 首次 30 failed in 6.37s：路由不存在、取消未 void、新策略被忽略；实现后 30 passed。Session-only guard 补测先 failed；Session 存储故障补测先 failed，随后修复为安全 503。"
+    unit: "复用 journal 的 37 项固定字段/CAS/状态/进程恢复测试；新增 malformed Decision/key、error envelope、安全守卫和 wire-shape API 断言，不 mock 状态机或持久化。"
+    integration: "最终 python -X utf8 -m pytest -q gateway/tests/test_tool_approval_http.py --tb=short; exit 0; 49 passed in 9.07s；真实本地 blob/SQLite，包含并发 HTTP 决定唯一赢家、重开 control store、取消/删除 void、开始后 unknown、Session/主体/工作区隔离、映射/故障/非法输入。"
+    http_e2e: "同 suite 的 test_authenticated_local_http_decision_journey_with_real_server 通过：Uvicorn/127.0.0.1 TCP + 真实 _principal 内部头鉴权，读 pending→approve→幂等重放→陌生用户 404→cancel→voided；没有 Runner 派发。"
+    regression: "python -X utf8 -m pytest -q gateway/tests/test_tool_approval_http.py gateway/tests/test_tool_approval_journal.py gateway/tests/test_input_requests.py gateway/tests/test_input_history.py gateway/tests/test_response_branching.py gateway/tests/test_workspace_scope.py gateway/tests/test_calibration_scope.py gateway/tests/test_response_error_envelope.py gateway/tests/test_ignored_fields.py gateway/tests/test_deleted_session.py gateway/tests/test_plugins.py gateway/tests/test_harness_idempotency.py protocol/proposals/tool-approvals/test_schema.py --tb=short; exit 0; 355 passed, 57 warnings in 58.20s；随后仅增加并发/shape 两项 HTTP 测试，最终 HTTP 49 passed。"
+    failures_resolved: "扩大回归发现 Session guard 使用后定义局部 _num、branch 校验块误定位及读取 OSError 语义问题，均已修复并重跑；workspace AST verifier 增加实际鉴权 helper 并测试调用链，非权限豁免。既有 on_event/websockets 弃用与 input_history coroutine 警告保留。"
+    hygiene: "git diff --check、Python AST、Change/OpenAPI YAML 解析通过；Dockerfile COPY gateway/ 覆盖新增模块，无新增依赖或镜像配置修改。"
+  security_review: "固定 owner/org/Session 与现有 Workspace/校准授权；未知/异作用域统一 404；内部映射和 journal ID 双核对，模型 output 不能登记审批；决定不执行工具；新策略/审批输入在转发或幂等 replay 前拒绝；Session-only follow-up 查 durable index；存储故障安全 503、不回显请求/异常，回执 no-store。无新外网目标、Shell、凭据、Cloud 产品入口。取消是多记录顺序 void，部分存储失败只允许更保守结果并返回失败，不宣称跨记录原子性或已撤回已开始副作用。"
+  limitations: [native dispatch and canonical binding not implemented, no production approval registration, SSE and exact resume not_evaluated, Hexa UI and runtime capability unavailable, Linux and deployment not_evaluated]
+  rollback: 停止未来带审批的活动调用后同步回退 app 路由和文档；保留 Response/control.db 审批历史。当前无生产生成路径，无迁移或部署。
+  remaining: [native interception, canonical execution binding, exact continuation, SSE, live conformance, Hexa preflight and UI]
+  next_action: 实现受信任执行描述符与 native checkpoint/精确工具拦截；当前 Codex app-server 待批依赖活进程且会立即接受，不能当成 durable coverage。
 approval_journal_slice:
   date: "2026-11-24"
   owner: Codex
