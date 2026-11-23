@@ -274,8 +274,8 @@ def latest_nodes(db, run_id):
     visible = [row for row in rows if row.execution_kind not in {'foreach_item', 'dynamic_item'}]
     for row in visible:
         prior = latest.get(row.node_id)
-        priority = (row.iteration, 1 if row.execution_kind.endswith('_aggregate') else 0, row.attempt, row.id)
-        prior_priority = (prior.iteration, 1 if prior and prior.execution_kind.endswith('_aggregate') else 0, prior.attempt, prior.id) if prior else None
+        priority = (row.iteration, json.loads(row.input_json).get('control_node_run_id', row.id), row.id)
+        prior_priority = (prior.iteration, json.loads(prior.input_json).get('control_node_run_id', prior.id), prior.id) if prior else None
         if prior is None or priority >= prior_priority:
             latest[row.node_id] = row
     return latest
@@ -557,6 +557,8 @@ class TaskExecutor:
                         inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if rows[ref].status == 'succeeded']
                         context = redact({'task_input': snapshot['input'], 'prompt': item.get('prompt', ''), 'refs': inputs}, self.secrets)
                         state = json.loads(row.input_json)
+                        if unit_kind in ('foreach_item', 'dynamic_item'):
+                            context['refs'] = json.loads(rows[item['id']].input_json).get('refs', inputs)
                         previous = state.get('loop_previous')
                         if previous:
                             previous_rows = [db.get(NodeRun, identity) for identity in previous['node_run_ids']]

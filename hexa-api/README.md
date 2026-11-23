@@ -77,3 +77,10 @@ Agent 页面中的“模板库”通过 `GET /api/hexa/agent-templates/gateway` 
 ## 范围边界
 
 后端只调用现有 Gateway UHP 接口，不改变 Gateway、CORS、Compose、Dockerfile、Runner 或任何 Hexa Cloud 删除契约。任务、工作流和运行历史由 Hexa App API 管理，client 通过 App API 展示和操作。
+
+
+集合展开记录通过 `input.item_node_run_ids` 固定当前项尝试。活动 Run 的失败集合可向
+`POST /api/hexa/runs/{run_id}/nodes/{node_id}/retry` 发送 `{}`（全部失败/取消项）或
+`{"item_node_run_id": 123}`（当前清单指定失败项），并携带新的 `Idempotency-Key`。
+成功项不会重复执行；新项追加 attempt，聚合保序引用当前清单。终态 Run 仍需创建新的 Run。
+`attempt` 表示控制/项执行尝试，聚合项数使用 `input.item_count`，循环轮次使用 `iteration`。

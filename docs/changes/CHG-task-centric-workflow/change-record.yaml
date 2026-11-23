@@ -115,6 +115,29 @@ loop_composed_fanout_slice:
   security_review: "只读取同 Run 已成功结果；新输入沿原有 secrets 脱敏；动态项仍严格继承静态执行配置；没有表达式执行、任意路径访问、外部网络目标或 UHP 权限扩张。"
   migration: "新增 009，不改写 008；旧 NodeRun 和 RunDecision 的 iteration 默认 1，不修改输出或人工选择。部署先迁移后启动；回滚前停止新任务，保留历史，旧执行器不得恢复依赖逐轮确认的活动 Run。"
   remaining: [scoped_nested_execution, dynamic_subgraphs, item_level_retry, fanout_retry_isolation, aggregate_attempt_semantics, aggregate_upstream_provenance, iteration_history_ui, real_postgresql_migration, tool_approval_runtime]
+fanout_retry_slice:
+  date: "2026-11-23"
+  owner: Codex
+  baseline: e1410950
+  branch: codex/agent-orchestration
+  status: verified_slice
+  acceptance_ids: [AC-23]
+  reuse_decision: extend fanout NodeRun input manifests and existing node retry route; no new database schema or UHP contract
+  scope: 活动 Run 的显式集合项重试、当前清单、成功项复用、不可变旧尝试、聚合 attempt 和实际引用
+  references: [spec.md#集合项重试与执行清单, plan.md#2026-11-23-集合项重试]
+  impact: [hexa-api/app/tasks/fanout.py, hexa-api/app/tasks/service.py, hexa-api/app/tasks/router.py, hexa-api/tests/test_fanout_retry.py, hexa-api/tests/test_task_workflows.py]
+  verification:
+    red: "四种 foreach/dynamic_plan serial/parallel 组合在旧接口重试后保持 idle，4 failed；指定一个失败项时另一个失败会阻止该项派发，目标测试先失败 calls=[]。"
+    unit: "显式 manifest 只选择当前清单的 SQLite 单测；异步执行器测试独立失败项的显式选择。"
+    integration: "API + SQLite + 受控 Gateway 覆盖成功项不重复、旧尝试不改写、非法引用、严格请求字段、终态拒绝及配额零写入。"
+    earlier_regression: "python -m pytest -q hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_http_integration.py; 143 passed in 114.44s before final fixed-ref check."
+    http_e2e: "test_http_retry_uses_fresh_request_and_survives_read_only_restart; 1 passed; real GatewayClient HTTP adapter, fixture HTTP Gateway, SQLite and read-only app restart."
+    final_backend: "python -m pytest -q hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; exit 0; 157 passed in 146.89s。"
+    browser: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts tasks-lifecycle.spec.ts --project=chromium --grep 'orchestration settings|failed run|parallel collectors'; exit 0; 3 passed in 1.8m。新项级按钮尚未实现，此浏览器证据仅覆盖现有整节点流程。"
+    hygiene: "git diff --check; py_compile service/fanout/router/test_fanout_retry; YAML safe_load; exit 0。"
+  security_review: "选定 ID 必须属于当前 Run/节点/iteration 的失败或取消项；请求体拒绝配置注入；幂等 fingerprint 包含请求体；预算检查早于所有追加；不自动重试不确定副作用；不恢复终态 Run。"
+  rollback: 停止活动执行后回退代码；旧版本不能继续带替换清单的 Run，否则可能重新读取旧失败项。历史 NodeRun 与 Run 快照保留，不需要删除或反向迁移。
+  remaining: [terminal_run_item_resume, item_history_ui, scoped_nested_execution, dynamic_subgraphs, real_postgresql_migration, live_runtime_verification]
 parallel_foreach_slice:
   date: "2026-11-23"
   owner: Codex

@@ -41,6 +41,65 @@ def dynamic_items_valid(values):
     return True
 
 
+def fanout_items(db, control, prefix):
+    state = json.loads(control.input_json)
+    if 'item_node_run_ids' in state:
+        children = [db.get(NodeRun, identity) for identity in state['item_node_run_ids']]
+        if any(child is None or child.run_id != control.run_id or child.node_id != control.node_id
+               or child.iteration != control.iteration or child.execution_kind != f'{prefix}_item'
+               for child in children):
+            raise ValueError('invalid persisted fanout manifest')
+        return children
+    # Compatibility with runs expanded before explicit manifests were stored.
+    return db.scalars(select(NodeRun).where(
+        NodeRun.run_id == control.run_id, NodeRun.node_id == control.node_id,
+        NodeRun.execution_kind == f'{prefix}_item', NodeRun.iteration == control.iteration,
+    ).order_by(NodeRun.foreach_index, NodeRun.id)).all()
+
+
+def retry_fanout(db, run, item, control, selected_id, *, encoded, error):
+    prefix = 'dynamic' if item.get('dynamic_plan') else 'foreach'
+    children = fanout_items(db, control, prefix)
+    selected = next((child for child in children if child.id == selected_id), None)
+    if selected_id is not None and (selected is None or selected.status not in ('failed', 'canceled')):
+        raise error('invalid_retry_item', '只能重试当前清单中失败或取消的集合项。', 422)
+    replacing = [child for child in children if child.status in ('failed', 'canceled') and (
+        selected_id is None or child.id == selected_id or child.error_code == f'{prefix}_sibling_failed'
+    )]
+    if node_record_usage(db, run.id) + len(replacing) + 2 > 500:
+        raise error('storage_limit_exceeded', '运行超过 500 次尝试限制。', 422)
+    state = json.loads(control.input_json)
+    manifest = []
+    retried = []
+    for child in children:
+        if child in replacing:
+            child_state = json.loads(child.input_json)
+            replacement = NodeRun(
+                run_id=run.id, node_id=control.node_id, iteration=control.iteration,
+                attempt=child.attempt + 1, execution_kind=f'{prefix}_item',
+                foreach_index=child.foreach_index,
+                input_json=encoded({'_orchestration_role': f'{prefix}_item',
+                                    f'{prefix}_item': child_state[f'{prefix}_item'],
+                                    'foreach_index': child.foreach_index,
+                                    'retry_of': child.id,
+                                    **({'loop_previous': state['loop_previous']} if state.get('loop_previous') else {})}),
+            )
+            db.add(replacement)
+            db.flush()
+            manifest.append(replacement.id)
+            retried.append(replacement.id)
+        else:
+            manifest.append(child.id)
+    retry_state = {**state, 'retry_of': control.id, 'retry_item_node_run_ids': retried}
+    if children or 'item_node_run_ids' in state:
+        retry_state['item_node_run_ids'] = manifest
+    retry = NodeRun(run_id=run.id, node_id=control.node_id, iteration=control.iteration,
+                    attempt=control.attempt + 1, input_json=encoded(retry_state),
+                    status='running' if 'item_node_run_ids' in retry_state else 'idle')
+    db.add(retry)
+    return retry
+
+
 def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condition_matches, decisions):
     """Return dispatch candidates and whether a durable transition was made."""
     candidates, changed = [], False
@@ -55,11 +114,7 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
         control = rows[item['id']]
         if control.status not in ('idle', 'running'):
             continue
-        children = db.scalars(select(NodeRun).where(
-            NodeRun.run_id == run.id, NodeRun.node_id == item['id'],
-            NodeRun.execution_kind == f'{prefix}_item',
-            NodeRun.iteration == control.iteration,
-        ).order_by(NodeRun.foreach_index, NodeRun.id)).all()
+        children = fanout_items(db, control, prefix)
         now = datetime.now(timezone.utc)
         if control.status == 'idle' and not children:
             if any(rows[dep].status != 'succeeded' and not (
@@ -101,13 +156,22 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
                         children.append(child)
                     # Empty collection takes the same explicit aggregation path.
                     db.flush()
+                    refs = [{'node_id': ref, 'node_run_id': rows[ref].id,
+                             'output': json.loads(rows[ref].output_json)}
+                            for ref in decisions.get(item['id'], item.get('inputRefs', [])) if rows[ref].status == 'succeeded']
+                    control.input_json = encoded({**json.loads(control.input_json),
+                                                  'item_node_run_ids': [child.id for child in children],
+                                                  'refs': refs})
             changed = True
             if control.status == 'failed':
                 control.finished_at = now
                 continue
         if control.status != 'running':
             continue
-        failed = next((child for child in children if child.status in ('failed', 'canceled')), None)
+        retry_ids = set(json.loads(control.input_json).get('retry_item_node_run_ids', []))
+        retry_pending = any(child.id in retry_ids and child.status in ('idle', 'running') for child in children)
+        failed = next((child for child in children if child.status in ('failed', 'canceled')
+                       and (not retry_pending or child.id in retry_ids)), None)
         if failed:
             for child in children:
                 if child.status == 'idle':
@@ -118,15 +182,13 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
             changed = True
         elif all(child.status == 'succeeded' for child in children):
             aggregate_input = {'_orchestration_role': f'{prefix}_aggregate',
+                               'control_node_run_id': control.id,
+                               'refs': json.loads(control.input_json).get('refs', []),
                                'item_node_run_ids': [child.id for child in children],
                                'item_count': len(children)}
             output = encoded({'items': [json.loads(child.output_json) for child in children]})
             aggregate = NodeRun(
-                # Keep the historical node-level attempt contract: the visible
-                # aggregate records how many collection items were dispatched.
-                # Item attempts remain independent and start at one for every
-                # item, while foreach_index preserves the collection position.
-                run_id=run.id, node_id=item['id'], attempt=len(children), iteration=control.iteration,
+                run_id=run.id, node_id=item['id'], attempt=control.attempt, iteration=control.iteration,
                 execution_kind=f'{prefix}_aggregate', input_json=encoded(aggregate_input),
                 output_json=output if len(output.encode()) <= 1024 * 1024 else None,
                 status='succeeded' if len(output.encode()) <= 1024 * 1024 else 'failed',

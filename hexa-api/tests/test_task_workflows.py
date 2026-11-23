@@ -533,7 +533,8 @@ def test_bounded_foreach_runs_each_item_and_aggregates_outputs(client, app):
     completed = wait_run(client, started.json()['id'], {'completed'})
     worker = next(row for row in completed['nodes'] if row['node_id'] == 'worker')
     assert worker['status'] == 'succeeded'
-    assert worker['attempt'] == 3
+    assert worker['attempt'] == 1
+    assert worker['input']['item_count'] == 3
     assert worker['output']['items'] == [
         {'status': 'completed', 'item': 'alpha', 'index': 0},
         {'status': 'completed', 'item': 'beta', 'index': 1},

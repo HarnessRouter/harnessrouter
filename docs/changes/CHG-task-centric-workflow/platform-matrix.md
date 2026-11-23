@@ -33,3 +33,8 @@ Gateway 仅作为 `hexa-api` 的外部执行依赖；Gateway 原有回归测试�
 | Chromium | 编排编辑保存运行重开 1 项、人工确认及并行/暂停/取消 2 项通过；本批没有 UI 源码或样式变更。 |
 | Linux / PostgreSQL | not_evaluated；新增 009 及真实迁移测试已更新，按既有约定保留真库后续验证；SQLite 证据不替代 PostgreSQL。 |
 | 真实 Gateway / BYOK / 生产部署 | not_evaluated；本批未改变 Gateway/UHP 调用契约，不宣称运行时审批已实现或整体可发布。 |
+
+
+## 2026-11-23 集合项重试
+
+本批无 UI、路径、进程或原生能力修改，使用 ORM 参数化查询和持久化 JSON 清单。Windows / SQLite / API 相关回归 157 项通过；本地真实 HTTP Gateway 夹具覆盖 fresh idempotency key 和重启只读；Chromium 现有编排、并行控制与终态 rerun 三项通过。Linux / 真实 PostgreSQL / 真实 Provider 继续 not_evaluated，无新增数据库迁移；本机结果不代表目标平台或真实模型成功。完整命令和限制见 Change `fanout_retry_slice`。

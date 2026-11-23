@@ -8,7 +8,7 @@ from sqlalchemy import String, cast, delete, or_, select
 
 from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
-from app.tasks.fanout import node_record_usage
+from app.tasks.fanout import node_record_usage, retry_fanout
 from app.tasks.service import ACTIVE, TaskError, all_node_runs, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
@@ -35,6 +35,11 @@ class RunBody(BaseModel):
     kind: str = Field(default='normal', pattern='^(normal|rerun)$')
     target_node: str | None = None
     reuse_refs: list[int] = Field(default_factory=list, max_length=50)
+
+
+class NodeControlBody(BaseModel):
+    model_config = {'extra': 'forbid'}
+    item_node_run_id: int | None = Field(default=None, ge=1, strict=True)
 
 
 class SaveTemplateBody(BaseModel):
@@ -291,7 +296,7 @@ def build_router(app, require_session, user_id):
             return result
 
     @router.post('/runs/{run_id}/nodes/{node_id}/{action}')
-    async def node_control(run_id: int, node_id: str, action: str, session=Depends(require_session), key: str | None = Header(None, alias='Idempotency-Key')):
+    async def node_control(run_id: int, node_id: str, action: str, body: NodeControlBody = NodeControlBody(), session=Depends(require_session), key: str | None = Header(None, alias='Idempotency-Key')):
         key_value(key)
         with app.state.session_factory() as db:
             run = owned_run(db, run_id, user_id(session))
@@ -299,7 +304,8 @@ def build_router(app, require_session, user_id):
         async with app.state.task_executor.lock(task_id):
             with app.state.session_factory() as db:
                 run = owned_run(db, run_id, user_id(session))
-                fingerprint, replay = command_replay(db, task_id, key, f'{run_id}:{node_id}:{action}', {})
+                payload = body.model_dump(exclude_none=True)
+                fingerprint, replay = command_replay(db, task_id, key, f'{run_id}:{node_id}:{action}', payload)
                 if replay is not None:
                     return replay
                 row = latest_nodes(db, run_id).get(node_id)
@@ -307,12 +313,17 @@ def build_router(app, require_session, user_id):
                     raise TaskError('invalid_transition', '终态运行请创建新的 Run。')
                 definition = json.loads(run.snapshot_json)['workflow']
                 item = next(item for item in definition['nodes'] if item['id'] == node_id)
+                if body.item_node_run_id is not None and (action != 'retry' or not (item.get('foreach') or item.get('dynamic_plan'))):
+                    raise TaskError('invalid_retry_item', '只有集合重试支持指定执行项。', 422)
                 if action == 'skip' and item.get('allow_skip') and row.status in ('idle', 'failed', 'canceled'):
                     row.status = 'skipped'
                 elif action == 'retry' and row.status in ('failed', 'canceled'):
-                    if node_record_usage(db, run_id) >= 500:
-                        raise TaskError('storage_limit_exceeded', '运行超过 500 次尝试限制。', 422)
-                    db.add(NodeRun(run_id=run_id, node_id=node_id, attempt=row.attempt + 1, iteration=row.iteration, status='idle'))
+                    if item.get('foreach') or item.get('dynamic_plan'):
+                        retry_fanout(db, run, item, row, body.item_node_run_id, encoded=encoded, error=TaskError)
+                    else:
+                        if node_record_usage(db, run_id) >= 500:
+                            raise TaskError('storage_limit_exceeded', '运行超过 500 次尝试限制。', 422)
+                        db.add(NodeRun(run_id=run_id, node_id=node_id, attempt=row.attempt + 1, iteration=row.iteration, status='idle'))
                 else:
                     raise TaskError('invalid_transition', '节点操作不被当前状态或配置允许。')
                 run.status = 'running'
