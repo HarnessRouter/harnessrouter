@@ -28,3 +28,7 @@ test('nested history identifies both indexes and remains read-only at the leaf',
   assert.equal(attemptLabel({ ...leaf, execution_kind: 'foreach_nested_aggregate', foreach_index: 0 }), '第 2 轮 · 外层项 1 聚合 · 尝试 3');
   assert.equal(itemRetryAction(run, control, leaf, false), null);
 });
+
+test('dynamic item labels expose stable local node identity', () => {
+  assert.equal(attemptLabel({ ...item, execution_kind: 'dynamic_item', input: { dynamic_item: { id: 'join' } } }), '第 2 轮 · 计划节点 join · 尝试 3');
+});

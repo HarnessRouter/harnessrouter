@@ -150,7 +150,12 @@ async def response(request: Request):
     haystack = marker_text(text)
     if text == '追问' and not body.get('previous_response_id'):
         return Response(status_code=400)
-    if 'E2E_MARKDOWN' in haystack:
+    if context.get('prompt') == 'E2E_DAG_PLAN':
+        output = json.dumps([
+            {'id': 'join', 'prompt': 'combine', 'deps': ['a', 'b'], 'inputRefs': ['a', 'b']},
+            {'id': 'a', 'prompt': 'first'}, {'id': 'b', 'prompt': 'second'},
+        ])
+    elif 'E2E_MARKDOWN' in haystack:
         output = '\n'.join([
             '## 分析结果',
             '',

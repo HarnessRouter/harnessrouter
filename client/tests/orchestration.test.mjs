@@ -30,3 +30,9 @@ test('nested collections validate the relative path, bound and execution mode', 
   }
   assert.deepEqual(withoutDependency({ ...node, inputRefs: ['a'] }, 'a').foreach, undefined);
 });
+
+test('dynamic topology is opt-in and rejects unknown values', () => {
+  const node = { id: 'b', deps: ['a'], dynamic_plan: { source: 'a', path: 'text', max_items: 10, topology: 'dag' } };
+  assert.equal(orchestrationIssue({ nodes: [node] }), undefined);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, dynamic_plan: { ...node.dynamic_plan, topology: 'unknown' } }] }), /拓扑/);
+});

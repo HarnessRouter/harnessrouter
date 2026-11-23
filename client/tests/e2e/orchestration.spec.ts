@@ -106,3 +106,38 @@ test('nested collection executes and resumes through the browser with immutable 
   await expect(page.getByRole('region', { name: '集合项历史' })).toContainText('外层项 1 / 内层项 1');
   await expect(page.getByRole('button', { name: '新建 Run 恢复此项' })).toHaveCount(0);
 });
+
+test('dynamic DAG reads a JSON text plan through HTTP and preserves local result references', async ({ page }) => {
+  await signIn(page);
+  const spaces = await api(page, '/api/hexa/workspaces');
+  const created = await api(page, '/api/hexa/tasks', { method: 'POST', body: {
+    title: `DAG-${Date.now()}`, workspace_id: spaces.body.selected_id, workflow: { max_concurrency: 2, nodes: [
+      { id: 'planner', name: '计划', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'E2E_DAG_PLAN' },
+      { id: 'worker', name: '动态子图', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'E2E_OUT:子节点', deps: ['planner'], inputRefs: ['planner'], dynamic_plan: { source: 'planner', path: 'text', max_items: 3, topology: 'dag', mode: 'parallel' }, final_report: true },
+    ] },
+  } });
+  expect(created.status).toBe(201);
+  const started = await page.evaluate(async taskId => {
+    const response = await fetch(`/api/hexa/tasks/${taskId}/runs`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } });
+    return { status: response.status, body: await response.json() };
+  }, created.body.id);
+  expect(started.status).toBe(202);
+  let result: any;
+  await expect.poll(async () => {
+    result = (await api(page, `/api/hexa/runs/${started.body.id}`)).body;
+    return result.status;
+  }, { timeout: 30000 }).toBe('completed');
+  const worker = result.nodes.find((row: any) => row.node_id === 'worker');
+  expect(worker.output.items.map((row: any) => row.id)).toEqual(['join', 'a', 'b']);
+  const history = (await api(page, `/api/hexa/node-runs/${worker.id}/items`)).body.items;
+  const join = history.find((row: any) => row.input.dynamic_item.id === 'join');
+  expect(join.input.plan_refs.map((ref: any) => ref.id)).toEqual(['a', 'b']);
+  expect(history.every((row: any) => row.run_id === result.id)).toBe(true);
+  await page.goto(`/runs/${result.id}`);
+  await page.getByRole('button', { name: '打开流程图', exact: true }).click();
+  await page.getByRole('button', { name: '动态子图 节点', exact: true }).click();
+  await expect(page.getByRole('region', { name: '编排运行配置' })).toContainText('DAG 子图');
+  await page.getByRole('tab', { name: '调试' }).click();
+  const items = page.getByRole('region', { name: '集合项历史' });
+  await expect(items.getByRole('listitem')).toHaveCount(3);
+});

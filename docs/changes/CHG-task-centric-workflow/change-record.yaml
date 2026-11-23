@@ -1,4 +1,28 @@
 id: CHG-task-centric-workflow
+dynamic_dag_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 85977450
+  branch: codex/agent-orchestration
+  status: verified_slice
+  reuse_decision: extend dynamic item manifests with opt-in local DAG; preserve list mode and immutable WorkflowRevision
+  references: [spec.md#动态计划-dag, plan.md#动态-dag-实施2026-11-24]
+  acceptance_ids: [AC-28]
+  verification:
+    red: "首次 11 failed, 8 passed，暴露 topology 校验缺失、DAG 未展开及恢复无项；JSON 文本 fork/join 先 2 failed, 2 passed；客户端 topology 校验和局部节点标签先失败；浏览器先无计划拓扑控件，HTTP 首次缺文本计划夹具导致 failed。"
+    backend: "python -m pytest -q hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_manifest_pages.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_http_integration.py; exit 0; 273 passed in 320.64s。最终新增边界与 HTTP 测试后 dynamic_dag.py 专项 34 passed in 55.82s，生产后端未再修改。"
+    unit_integration: "graph_valid 单测；API/SQLite 覆盖前向引用、分叉汇合、局部条件跳过、依赖缺失、非法图零展开、固定执行身份、重试/恢复引用、两轮循环、人工门控、配额、暂停/取消/恢复。"
+    http_e2e: "test_http_dag_terminal_recovery_and_restart_keep_successful_local_references 通过，真实 GatewayClient/HTTP fixture/SQLite 验证 JSON text、成功节点不重复、fresh retry key、新 Run plan_refs 映射与只读重启。"
+    client: "最终 npm.cmd test; 61 passed; npm.cmd run typecheck; exit 0; npm.cmd run build; exit 0，已有主包 953.50 kB 警告。"
+    browser: "npx.cmd playwright test -c playwright.app.config.ts tasks.spec.ts --grep 'dynamic DAG topology' --workers=2; 2 passed in 33.4s；Chromium/Edge 1440/390 配置保存重开与页面无溢出。"
+    browser_e2e: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium --grep 'dynamic DAG reads|nested collection'; 2 passed in 1.1m，HTTP 文本计划 fork/join、选择输入与旧二层恢复回归。"
+    hygiene: "git diff --check、YAML safe_load、Python compile；截图 SHA256 记录于 client/.artifacts/orchestration/dynamic-dag-verification.json。"
+  visual: "查看 Chromium 390px DAG 编辑截图，拓扑/路径/调度/说明清晰可读，单列滚动，无页面横向溢出；沿用既有表单标签、fieldset 和错误摘要，不增加全局样式。"
+  security_review: "局部节点字段白名单、静态执行身份、纯 JSON 解码和安全字段比较；拒绝表达式、未知节点/环/输入越界和权限配置注入；plan_refs 仅取当前清单成功项，恢复验证同源 Run/节点/轮次并映射，新 Run 不继承人工决定。无新增网络目标、凭据或 Cloud 产品入口。"
+  rollback: 停止 DAG 活动运行后前后端同步回退，保留历史；旧执行器不得恢复带 topology=dag 的活动 Run，无数据库迁移。
+  limitations: [real PostgreSQL/Linux/Provider/deployment not_evaluated, recursive subgraphs and in-flight topology mutation unsupported, Gateway/Runner durable approval unimplemented]
+  remaining: [recursive scoped execution design, runtime task reliability and approval integration, real PostgreSQL and Provider validation]
+  next_action: 提交独立本地分支，继续按完整目标审计剩余运行时能力；不将单层动态 DAG 视为全部编排引擎完成。
 manifest_pagination_slice:
   date: "2026-11-24"
   owner: Codex

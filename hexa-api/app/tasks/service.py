@@ -159,6 +159,8 @@ def validate_dynamic_plan(item, known_ids):
         raise TaskError('invalid_workflow', 'dynamic_plan.mode 只支持 serial 或 parallel。', 422)
     if 'nested' in plan:
         raise TaskError('invalid_workflow', 'dynamic_plan 不支持嵌套集合展开。', 422)
+    if plan.get('topology', 'list') not in ('list', 'dag'):
+        raise TaskError('invalid_workflow', 'dynamic_plan.topology 只支持 list 或 dag。', 422)
 
 
 def workflow_from_json(value):
@@ -608,6 +610,16 @@ class TaskExecutor:
                             if unit_kind == 'dynamic_item':
                                 context['dynamic_index'] = row.foreach_index
                                 context['prompt'] = item.get('prompt', '') + '\n' + state[unit_kind]['prompt']
+                                if item['dynamic_plan'].get('topology') == 'dag':
+                                    from app.tasks.dynamic_graph import graph_refs
+                                    from app.tasks.fanout import fanout_items
+                                    local = graph_refs(db, rows[item['id']], fanout_items=fanout_items)
+                                    context['plan_refs'] = [
+                                        {'id': identity, 'node_run_id': local[identity].id,
+                                         'output': json.loads(local[identity].output_json)}
+                                        for identity in state['dynamic_item'].get('inputRefs', [])
+                                        if local[identity].status == 'succeeded'
+                                    ]
                             context['_orchestration_role'] = unit_kind
                         row.input_json, row.status = encoded(redact(context, self.secrets)), 'running'
                         row.started_at = datetime.now(timezone.utc)

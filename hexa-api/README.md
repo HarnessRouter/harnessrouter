@@ -56,6 +56,8 @@ python -m uvicorn app.main:app --app-dir hexa-api --host 127.0.0.1 --port 4010 -
 - `GET /api/hexa/node-runs/{attempt_id}`, template version routes, and save-as-template
 - `GET /api/hexa/node-runs/{attempt_id}/items?offset=0&limit=50`: current collection manifest pages anchored to that control/aggregate record, including nested items and aggregates. Returns `anchor_node_run_id`, `items`, and `pagination`; page size is 1–100. Invalid manifests return `409 fanout_manifest_unavailable`; reading never dispatches Agent work.
 
+`dynamic_plan.topology` defaults to `list`. Opt-in `dag` accepts local `{id,prompt,deps?,inputRefs?,condition?,allow_missing_inputs?}` nodes, validates all dependencies before dispatch, and inherits the static worker's Agent/model/tools. The plan path may contain an array or a complete JSON array string (use `path: "text"` for Gateway text output). Local inputs are recorded as `plan_refs`; DAG aggregate items include local ID, status and output. No expressions, execution configuration injection, recursive subgraphs or in-flight topology edits are accepted. See the task specification's “动态计划 DAG” contract for recovery and limits.
+
 消息接口使用 `Idempotency-Key`。Gateway 响应流中断时，后端保留不确定状态并返回 409 给重复提交，客户端应先读取会话状态，不自动重新创建远程任务。
 
 回复消息可包含 `execution`：独立记录 Harness、模型、状态、耗时（毫秒）、Gateway 公开思考摘要和工具名称/状态。流式快照同步当前详情，刷新后按消息恢复；旧消息无记录时省略。只保存工具名称和状态，不包含工具原始参数。SQLite 启动时兼容新增列；PostgreSQL 部署须通过 `python migrate.py` 按顺序应用 `006_conversation_execution.sql` 和 `007_node_execution.sql`。

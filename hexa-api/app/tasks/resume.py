@@ -106,6 +106,16 @@ def seed_resume(db, run, resume, body, *, encoded, downstream_nodes, error):
                 refs.append({**ref, 'run_id': run.id, 'node_run_id': copy_record(upstream).id})
             if 'refs' in state:
                 state['refs'] = refs
+            if 'plan_refs' in state:
+                local_refs = []
+                for ref in state['plan_refs']:
+                    upstream = db.get(NodeRun, ref['node_run_id'])
+                    if (not upstream or upstream.run_id != source.id or upstream.node_id != prior.node_id
+                            or upstream.iteration != prior.iteration or upstream.execution_kind != 'dynamic_item'
+                            or upstream.status != 'succeeded'):
+                        raise error('invalid_resume', '来源子图输入引用不可用。', 422)
+                    local_refs.append({**ref, 'node_run_id': copy_record(upstream).id})
+                state['plan_refs'] = local_refs
             clone.input_json = encoded({**state, 'reused_from': prior.id})
         return clone
 

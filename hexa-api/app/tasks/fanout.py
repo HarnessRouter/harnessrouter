@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, func
 
 from app.db.models import NodeRun, Run
+from app.tasks.dynamic_graph import graph_valid, graph_ready
 
 
 def node_record_usage(db, run_id):
@@ -273,6 +274,7 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
         if not config:
             continue
         dynamic = bool(item.get('dynamic_plan'))
+        dag = dynamic and config.get('topology') == 'dag'
         prefix = 'dynamic' if dynamic else 'foreach'
         invalid = 'dynamic_plan_invalid' if dynamic else 'foreach_input_invalid'
         limit = 'dynamic_plan_limit_exceeded' if dynamic else 'foreach_limit_exceeded'
@@ -302,7 +304,12 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
             if item.get('requires_human') and item['id'] not in decisions:
                 continue
             values = value_at_path(json.loads(rows[config['source']].output_json or 'null'), config['path'])
-            if not isinstance(values, list) or (dynamic and not dynamic_items_valid(values)):
+            if dynamic and isinstance(values, str):
+                try:
+                    values = json.loads(values)
+                except ValueError:
+                    values = None
+            if not isinstance(values, list) or (dynamic and not (graph_valid(values) if dag else dynamic_items_valid(values))):
                 control.status, control.error_code = 'failed', invalid
             elif len(values) > config['max_items']:
                 control.status, control.error_code = 'failed', limit
@@ -399,13 +406,17 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
             control.error_code = failed.error_code or f'{prefix}_item_failed'
             control.finished_at = now
             changed = True
-        elif all(child.status == 'succeeded' for child in children):
+        elif all(child.status in (('succeeded', 'skipped') if dag else ('succeeded',)) for child in children):
             aggregate_input = {'_orchestration_role': f'{prefix}_aggregate',
                                'control_node_run_id': control.id,
                                'refs': json.loads(control.input_json).get('refs', []),
                                'item_node_run_ids': [child.id for child in children],
                                'item_count': len(children)}
-            output = encoded({'items': [json.loads(child.output_json) for child in children]})
+            output = encoded({'items': [
+                {'id': json.loads(child.input_json)['dynamic_item']['id'], 'status': child.status,
+                 'output': json.loads(child.output_json) if child.output_json else None}
+                if dag else json.loads(child.output_json) for child in children
+            ]})
             aggregate = NodeRun(
                 run_id=run.id, node_id=item['id'], attempt=control.attempt, iteration=control.iteration,
                 execution_kind=f'{prefix}_aggregate', input_json=encoded(aggregate_input),
@@ -421,6 +432,13 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
             return candidates, True
         else:
             idle = [child for child in children if child.status == 'idle']
+            if dag:
+                idle, graph_changed = graph_ready(children, condition_matches, now)
+                if graph_changed:
+                    return candidates, True
+                if not idle and not any(child.status == 'running' for child in children):
+                    control.status, control.error_code, control.finished_at = 'failed', 'dynamic_dependency_unavailable', now
+                    return candidates, True
             candidates.extend((f'{prefix}_item', item, child) for child in (
                 idle if config.get('mode', 'serial') == 'parallel' else idle[:1]
             ))

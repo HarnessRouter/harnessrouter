@@ -321,6 +321,32 @@ test('item history ignores a delayed previous anchor even when debug loading fai
   await expect(page.getByRole('button', { name: '重试加载调试' })).toBeVisible();
 });
 
+test('dynamic DAG topology persists in the editor and survives reopening', async ({ page }, info) => {
+  const fixture = await taskFixture(page);
+  fixture.tasks[2].workflow = structuredClone(fixture.tasks[0].workflow);
+  await enter(page);
+  await page.getByRole('row', { name: /待配置的草稿/ }).click();
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await page.getByLabel('执行 Agent 前人工确认输入').uncheck();
+  await page.getByLabel('执行模式').selectOption('dynamic_plan');
+  await page.getByRole('combobox', { name: '计划拓扑', exact: true }).selectOption('dag');
+  await page.getByLabel('计划路径', { exact: true }).fill('text');
+  await page.getByRole('button', { name: '保存任务流程' }).click();
+  await expect.poll(() => fixture.writes.length).toBe(1);
+  expect(fixture.writes[0].body.workflow.nodes.find((n: any) => n.id === 'report').dynamic_plan).toMatchObject({ topology: 'dag', path: 'text' });
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '计划拓扑', exact: true })).toHaveValue('dag');
+  await mkdir('.artifacts/orchestration', { recursive: true });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole('combobox', { name: '计划拓扑', exact: true }).scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `.artifacts/orchestration/dynamic-dag-${info.project.name}-${width}.png` });
+  }
+});
+
 for (const width of [1440, 800, 390]) test(`orchestration inspector remains usable at ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   const fixture = await taskFixture(page);

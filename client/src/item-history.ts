@@ -16,9 +16,11 @@ export function itemRetryAction(run: AppRun, control: AppNodeRun, item: AppNodeR
 
 export function attemptLabel(attempt: AppNodeRun): string {
   const round = typeof attempt.iteration === 'number' ? attempt.iteration : 1;
+  const dynamic = attempt.input?.dynamic_item as { id?: string } | undefined;
   const item = attempt.execution_kind === 'foreach_nested_item'
     ? `外层项 ${Number(attempt.input?.outer_foreach_index ?? 0) + 1} / 内层项 ${Number(attempt.foreach_index ?? 0) + 1}`
     : attempt.execution_kind === 'foreach_nested_aggregate' ? `外层项 ${Number(attempt.foreach_index ?? 0) + 1} 聚合`
+    : attempt.execution_kind === 'dynamic_item' && typeof dynamic?.id === 'string' ? `计划节点 ${dynamic.id}`
     : attempt.execution_kind?.endsWith('_aggregate') ? '聚合' : typeof attempt.foreach_index === 'number' ? `集合项 ${attempt.foreach_index + 1}` : '节点';
   return `第 ${round} 轮 · ${item} · 尝试 ${attempt.attempt || 1}`;
 }

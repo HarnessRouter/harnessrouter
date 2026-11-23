@@ -28,6 +28,7 @@ export function orchestrationIssue(workflow: { max_concurrency?: number; nodes: 
     if (node.dynamic_plan && !node.deps?.includes(node.dynamic_plan.source)) return `${prefix}动态计划来源必须是前置依赖。`;
     if (node.dynamic_plan && (!Number.isInteger(node.dynamic_plan.max_items) || node.dynamic_plan.max_items < 1 || node.dynamic_plan.max_items > 10)) return `${prefix}动态计划上限必须是 1 到 10 的整数。`;
     if (node.dynamic_plan && node.dynamic_plan.mode && !['serial', 'parallel'].includes(node.dynamic_plan.mode)) return `${prefix}动态计划执行模式无效。`;
+    if (node.dynamic_plan?.topology !== undefined && !['list', 'dag'].includes(node.dynamic_plan.topology)) return `${prefix}动态计划拓扑无效。`;
     if (node.loop && (!Number.isInteger(node.loop.max_iterations) || node.loop.max_iterations < 1 || node.loop.max_iterations > 10)) return `${prefix}循环上限必须是 1 到 10 的整数。`;
     if (node.loop && (!node.loop.body.length || !node.loop.body.includes(node.id))) return `${prefix}循环体必须包含当前检查节点。`;
     if (node.loop && !node.loop.body.every(id => node.deps?.includes(id) || id === node.id)) return `${prefix}循环体节点必须是当前节点或依赖节点。`;
