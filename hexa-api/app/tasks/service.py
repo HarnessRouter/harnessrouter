@@ -107,6 +107,16 @@ def validate_foreach(item, known_ids):
         raise TaskError('invalid_workflow', 'foreach.max_items 必须是 1 到 10 之间的整数。', 422)
     if foreach.get('mode', 'serial') not in {'serial', 'parallel'}:
         raise TaskError('invalid_workflow', 'foreach.mode 只支持 serial 或 parallel。', 422)
+    nested = foreach.get('nested')
+    if nested is not None:
+        if not isinstance(nested, dict) or set(nested) - {'path', 'max_items', 'mode'}:
+            raise TaskError('invalid_workflow', 'foreach.nested 只支持 path、max_items 和 mode。', 422)
+        if not isinstance(nested.get('path'), str) or not CONDITION_PATH.fullmatch(nested['path']):
+            raise TaskError('invalid_workflow', 'foreach.nested.path 格式无效。', 422)
+        if type(nested.get('max_items')) is not int or not 1 <= nested['max_items'] <= 10:
+            raise TaskError('invalid_workflow', 'foreach.nested.max_items 必须是 1 到 10 之间的整数。', 422)
+        if nested.get('mode', 'serial') not in {'serial', 'parallel'}:
+            raise TaskError('invalid_workflow', 'foreach.nested.mode 只支持 serial 或 parallel。', 422)
 
 
 def validate_loop(item, known_ids):
@@ -147,6 +157,8 @@ def validate_dynamic_plan(item, known_ids):
         raise TaskError('invalid_workflow', 'dynamic_plan.max_items 必须是 1 到 10 之间的整数。', 422)
     if plan.get('mode', 'serial') not in {'serial', 'parallel'}:
         raise TaskError('invalid_workflow', 'dynamic_plan.mode 只支持 serial 或 parallel。', 422)
+    if 'nested' in plan:
+        raise TaskError('invalid_workflow', 'dynamic_plan 不支持嵌套集合展开。', 422)
 
 
 def workflow_from_json(value):
@@ -271,7 +283,9 @@ def node_json(row):
 def latest_nodes(db, run_id):
     latest = {}
     rows = db.scalars(select(NodeRun).where(NodeRun.run_id == run_id).order_by(NodeRun.iteration, NodeRun.attempt, NodeRun.id)).all()
-    visible = [row for row in rows if row.execution_kind not in {'foreach_item', 'dynamic_item'}]
+    visible = [row for row in rows if row.execution_kind not in {
+        'foreach_item', 'dynamic_item', 'foreach_nested_item', 'foreach_nested_aggregate',
+    }]
     for row in visible:
         prior = latest.get(row.node_id)
         priority = (row.iteration, json.loads(row.input_json).get('control_node_run_id', row.id), row.execution_kind.endswith('_aggregate'), row.id)
@@ -572,7 +586,7 @@ class TaskExecutor:
                         inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if rows[ref].status == 'succeeded']
                         context = redact({'task_input': snapshot['input'], 'prompt': item.get('prompt', ''), 'refs': inputs}, self.secrets)
                         state = json.loads(row.input_json)
-                        if unit_kind in ('foreach_item', 'dynamic_item'):
+                        if unit_kind in ('foreach_item', 'dynamic_item', 'foreach_nested_item'):
                             context['refs'] = json.loads(rows[item['id']].input_json).get('refs', inputs)
                         previous = state.get('loop_previous')
                         if previous:
@@ -584,8 +598,12 @@ class TaskExecutor:
                                          for prior in previous_rows
                                          if prior and prior.run_id == run.id and prior.status == 'succeeded' and prior.output_json],
                             }
-                        if unit_kind in ('foreach_item', 'dynamic_item'):
+                        if unit_kind in ('foreach_item', 'dynamic_item', 'foreach_nested_item'):
                             context[unit_kind] = state[unit_kind]
+                            if unit_kind == 'foreach_nested_item':
+                                context['foreach_item'] = state['foreach_nested_item']
+                                context['outer_item_node_run_id'] = state['outer_item_node_run_id']
+                                context['outer_foreach_index'] = state['outer_foreach_index']
                             context['foreach_index'] = row.foreach_index
                             if unit_kind == 'dynamic_item':
                                 context['dynamic_index'] = row.foreach_index

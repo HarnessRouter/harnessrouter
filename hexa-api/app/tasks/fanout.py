@@ -23,6 +23,13 @@ def node_record_usage(db, run_id):
         NodeRun.execution_kind == 'node', NodeRun.status.in_(('idle', 'running')),
     )).all() if fanouts else []
     reserved = sum(row.status == 'running' or 'item_node_run_ids' in json.loads(row.input_json) for row in controls)
+    outer_controls = db.scalars(select(NodeRun).where(
+        NodeRun.run_id == run_id, NodeRun.execution_kind == 'foreach_item',
+        NodeRun.status.in_(('idle', 'running')),
+    )).all()
+    reserved += sum('nested_item_node_run_ids' in json.loads(row.input_json)
+                    and 'nested_aggregate_node_run_id' not in json.loads(row.input_json)
+                    for row in outer_controls)
     return count + reserved
 
 
@@ -58,18 +65,116 @@ def fanout_items(db, control, prefix):
     ).order_by(NodeRun.foreach_index, NodeRun.id)).all()
 
 
+def nested_fanout_items(db, outer):
+    state = json.loads(outer.input_json)
+    identities = state.get('nested_item_node_run_ids')
+    if identities is None:
+        return []
+    rows = [db.get(NodeRun, identity) for identity in identities]
+    if any(row is None or row.run_id != outer.run_id or row.node_id != outer.node_id
+           or row.iteration != outer.iteration or row.execution_kind != 'foreach_nested_item'
+           for row in rows):
+        raise ValueError('invalid persisted nested fanout manifest')
+    return rows
+
+
+def advance_nested_foreach(db, run, item, control, outer, *, nested, encoded, value_at_path, now):
+    """Advance one outer item in the bounded two-level foreach contract."""
+    if outer.status not in ('idle', 'running'):
+        return [], False
+    state = json.loads(outer.input_json)
+    children = nested_fanout_items(db, outer)
+    changed = False
+    if 'nested_item_node_run_ids' not in state:
+        values = value_at_path(state.get('foreach_item'), nested['path'])
+        if not isinstance(values, list):
+            outer.status, outer.error_code, outer.finished_at = 'failed', 'nested_foreach_input_invalid', now
+            return [], True
+        if len(values) > nested['max_items']:
+            outer.status, outer.error_code, outer.finished_at = 'failed', 'nested_foreach_limit_exceeded', now
+            return [], True
+        if node_record_usage(db, run.id) + len(values) + 1 > 500:
+            outer.status, outer.error_code, outer.finished_at = 'failed', 'storage_limit_exceeded', now
+            return [], True
+        for index, value in enumerate(values):
+            child = NodeRun(
+                run_id=run.id, node_id=item['id'], iteration=outer.iteration,
+                attempt=1, execution_kind='foreach_nested_item', foreach_index=index,
+                input_json=encoded({
+                    '_orchestration_role': 'foreach_nested_item',
+                    'foreach_nested_item': value,
+                    'outer_item_node_run_id': outer.id,
+                    'outer_foreach_index': outer.foreach_index,
+                    'foreach_index': index,
+                    'refs': state.get('refs', []),
+                    **({'loop_previous': state['loop_previous']} if state.get('loop_previous') else {}),
+                }),
+            )
+            db.add(child)
+            children.append(child)
+        db.flush()
+        state['nested_item_node_run_ids'] = [child.id for child in children]
+        outer.input_json = encoded(state)
+        outer.status, outer.started_at = 'running', outer.started_at or now
+        changed = True
+    if outer.status not in ('idle', 'running'):
+        return [], changed
+    failed = next((child for child in children if child.status in ('failed', 'canceled')), None)
+    if failed:
+        for child in children:
+            if child.status == 'idle':
+                child.status, child.error_code, child.finished_at = 'canceled', 'nested_foreach_sibling_failed', now
+        outer.status, outer.error_code, outer.finished_at = 'failed', failed.error_code or 'nested_foreach_item_failed', now
+        return [], True
+    if all(child.status == 'succeeded' for child in children):
+        aggregate_id = state.get('nested_aggregate_node_run_id')
+        aggregate = db.get(NodeRun, aggregate_id) if aggregate_id else None
+        if aggregate is None:
+            nested_output = encoded({'items': [json.loads(child.output_json) for child in children]})
+            if len(nested_output.encode()) > 1024 * 1024:
+                outer.status, outer.error_code, outer.finished_at = 'failed', 'storage_limit_exceeded', now
+                return [], True
+            aggregate = NodeRun(
+                run_id=run.id, node_id=item['id'], iteration=outer.iteration,
+                attempt=outer.attempt, execution_kind='foreach_nested_aggregate',
+                foreach_index=outer.foreach_index,
+                input_json=encoded({
+                    '_orchestration_role': 'foreach_nested_aggregate',
+                    'outer_item_node_run_id': outer.id,
+                    'item_node_run_ids': [child.id for child in children],
+                    'item_count': len(children),
+                }),
+                output_json=nested_output,
+                status='succeeded', started_at=outer.started_at or now, finished_at=now,
+            )
+            db.add(aggregate)
+            db.flush()
+            state['nested_aggregate_node_run_id'] = aggregate.id
+            outer.input_json = encoded(state)
+        outer.output_json = aggregate.output_json
+        outer.status, outer.finished_at = 'succeeded', now
+        return [], True
+    idle = [child for child in children if child.status == 'idle']
+    units = idle if nested.get('mode', 'serial') == 'parallel' else idle[:1]
+    return [('foreach_nested_item', item, child) for child in units], changed
+
+
 def retry_fanout(db, run, item, control, selected_id, *, encoded, error):
     prefix = 'dynamic' if item.get('dynamic_plan') else 'foreach'
     children = fanout_items(db, control, prefix)
+    state = json.loads(control.input_json)
     selected = next((child for child in children if child.id == selected_id), None)
     if selected_id is not None and (selected is None or selected.status not in ('failed', 'canceled')):
         raise error('invalid_retry_item', '只能重试当前清单中失败或取消的集合项。', 422)
     replacing = [child for child in children if child.status in ('failed', 'canceled') and (
         selected_id is None or child.id == selected_id or child.error_code == f'{prefix}_sibling_failed'
     )]
-    if node_record_usage(db, run.id) + len(replacing) + 2 > 500:
+    nested_replacements = {child.id: nested_fanout_items(db, child) for child in replacing
+                           if 'nested_item_node_run_ids' in json.loads(child.input_json)}
+    extra = sum(sum(leaf.status in ('failed', 'canceled') for leaf in leaves) + 1
+                for leaves in nested_replacements.values())
+    if node_record_usage(db, run.id) + len(replacing) + extra + 2 > 500:
         raise error('storage_limit_exceeded', '运行超过 500 次尝试限制。', 422)
-    state = json.loads(control.input_json)
     manifest = []
     retried = []
     for child in children:
@@ -87,6 +192,26 @@ def retry_fanout(db, run, item, control, selected_id, *, encoded, error):
             )
             db.add(replacement)
             db.flush()
+            if child.id in nested_replacements:
+                leaf_ids = []
+                for leaf in nested_replacements[child.id]:
+                    if leaf.status in ('failed', 'canceled'):
+                        leaf_state = json.loads(leaf.input_json)
+                        new_leaf = NodeRun(
+                            run_id=run.id, node_id=control.node_id, iteration=control.iteration,
+                            attempt=leaf.attempt + 1, execution_kind='foreach_nested_item',
+                            foreach_index=leaf.foreach_index,
+                            input_json=encoded({**leaf_state, 'retry_of': leaf.id,
+                                                'outer_item_node_run_id': replacement.id,
+                                                **({'loop_previous': state['loop_previous']} if state.get('loop_previous') else {})}),
+                        )
+                        db.add(new_leaf)
+                        db.flush()
+                        leaf_ids.append(new_leaf.id)
+                    else:
+                        leaf_ids.append(leaf.id)
+                replacement.input_json = encoded({**json.loads(replacement.input_json),
+                                                   'nested_item_node_run_ids': leaf_ids})
             manifest.append(replacement.id)
             retried.append(replacement.id)
         else:
@@ -175,6 +300,53 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
                 control.finished_at = now
                 continue
         if control.status != 'running':
+            continue
+        nested = config.get('nested') if not dynamic else None
+        if nested:
+            nested_calls = []
+            nested_changed = False
+            retry_ids = set(json.loads(control.input_json).get('retry_item_node_run_ids', []))
+            retry_pending = any(outer.id in retry_ids and outer.status in ('idle', 'running') for outer in children)
+            failed_outer = next((outer for outer in children if outer.status in ('failed', 'canceled')
+                                 and (not retry_pending or outer.id in retry_ids)), None)
+            if failed_outer:
+                for outer in children:
+                    if outer.status in ('idle', 'running'):
+                        for leaf in nested_fanout_items(db, outer):
+                            if leaf.status == 'idle':
+                                leaf.status, leaf.error_code, leaf.finished_at = 'canceled', 'nested_foreach_sibling_failed', now
+                        outer.status, outer.error_code, outer.finished_at = 'canceled', 'foreach_sibling_failed', now
+                control.status, control.error_code, control.finished_at = 'failed', failed_outer.error_code or 'nested_foreach_item_failed', now
+                return candidates, True
+            pending = [outer for outer in children if outer.status in ('idle', 'running')]
+            for outer in (pending if config.get('mode', 'serial') == 'parallel' else pending[:1]):
+                calls, item_changed = advance_nested_foreach(
+                    db, run, item, control, outer, nested=nested, encoded=encoded,
+                    value_at_path=value_at_path, now=now,
+                )
+                nested_calls.extend(calls)
+                nested_changed = nested_changed or item_changed
+            if nested_changed:
+                return candidates, True
+            if all(outer.status == 'succeeded' for outer in children):
+                aggregate_input = {'_orchestration_role': 'foreach_aggregate',
+                                   'control_node_run_id': control.id,
+                                   'refs': json.loads(control.input_json).get('refs', []),
+                                   'item_node_run_ids': [outer.id for outer in children],
+                                   'item_count': len(children)}
+                output = encoded({'items': [json.loads(outer.output_json) for outer in children]})
+                aggregate = NodeRun(
+                    run_id=run.id, node_id=item['id'], attempt=control.attempt, iteration=control.iteration,
+                    execution_kind='foreach_aggregate', input_json=encoded(aggregate_input),
+                    output_json=output if len(output.encode()) <= 1024 * 1024 else None,
+                    status='succeeded' if len(output.encode()) <= 1024 * 1024 else 'failed',
+                    error_code=None if len(output.encode()) <= 1024 * 1024 else 'storage_limit_exceeded',
+                    started_at=control.started_at or now, finished_at=now,
+                )
+                db.add(aggregate)
+                control.status, control.finished_at = aggregate.status, now
+                return candidates, True
+            candidates.extend(nested_calls)
             continue
         retry_ids = set(json.loads(control.input_json).get('retry_item_node_run_ids', []))
         retry_pending = any(child.id in retry_ids and child.status in ('idle', 'running') for child in children)

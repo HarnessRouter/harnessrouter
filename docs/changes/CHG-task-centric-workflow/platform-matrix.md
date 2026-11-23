@@ -40,6 +40,10 @@ Gateway 仅作为 `hexa-api` 的外部执行依赖；Gateway 原有回归测试�
 本批无 UI、路径、进程或原生能力修改，使用 ORM 参数化查询和持久化 JSON 清单。Windows / SQLite / API 相关回归 157 项通过；本地真实 HTTP Gateway 夹具覆盖 fresh idempotency key 和重启只读；Chromium 现有编排、并行控制与终态 rerun 三项通过。Linux / 真实 PostgreSQL / 真实 Provider 继续 not_evaluated，无新增数据库迁移；本机结果不代表目标平台或真实模型成功。完整命令和限制见 Change `fanout_retry_slice`。
 
 
+## 2026-11-24 二层 foreach
+
+使用既有 ORM、JSON 清单与 React 表单，无新增操作系统路径、进程或数据库迁移。Windows/Python/SQLite 的最终编排回归和 HTTP 夹具证据见 Change `nested_foreach_slice`；Chromium/Edge 覆盖二层编辑保存重开、叶子历史和 1440/390 布局。浏览器端到端经真实 hexa-api 和受控 HTTP Gateway 验证失败后新 Run 恢复及历史刷新。Linux、真实 PostgreSQL、真实 Gateway/Provider 和生产部署仍为 not_evaluated，需在目标 Runner 上补验，本地切片不代表整体可发布。
+
 ## 2026-11-23 终态集合恢复
 
 复用 ORM 与持久化 JSON 引用，无数据库列、Shell、原生模块或系统路径变更。Windows / SQLite 覆盖新 Run 恢复、引用身份和旧历史不变；HTTP 夹具覆盖实际 GatewayClient、失败响应、补跑和重启只读。当前源码真实 PostgreSQL、Linux 与真实 Provider 仍 not_evaluated；本批未新增迁移，也不宣称可发布。最终测试数量及 Chromium 流程证据见 Change `terminal_fanout_resume`；新增项级 UI 入口仍属后续工作。

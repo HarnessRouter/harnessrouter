@@ -66,6 +66,22 @@ def seed_resume(db, run, resume, body, *, encoded, downstream_nodes, error):
                     if any(row is None or row.run_id != source.id or row.node_id != prior.node_id for row in entries):
                         raise error('invalid_resume', '来源执行清单不可用。', 422)
                     state[key] = [copy_record(row).id for row in entries]
+            if 'nested_item_node_run_ids' in state:
+                entries = [db.get(NodeRun, identity) for identity in state['nested_item_node_run_ids']]
+                if any(row is None or row.run_id != source.id or row.node_id != prior.node_id
+                       or row.execution_kind != 'foreach_nested_item' for row in entries):
+                    raise error('invalid_resume', '来源嵌套执行清单不可用。', 422)
+                state['nested_item_node_run_ids'] = [copy_record(row).id for row in entries]
+            if 'nested_aggregate_node_run_id' in state:
+                nested_aggregate = db.get(NodeRun, state['nested_aggregate_node_run_id'])
+                if not nested_aggregate or nested_aggregate.run_id != source.id or nested_aggregate.node_id != prior.node_id:
+                    raise error('invalid_resume', '来源嵌套聚合记录不可用。', 422)
+                state['nested_aggregate_node_run_id'] = copy_record(nested_aggregate).id
+            if 'outer_item_node_run_id' in state:
+                parent = db.get(NodeRun, state['outer_item_node_run_id'])
+                if not parent or parent.run_id != source.id or parent.node_id != prior.node_id or parent.execution_kind != 'foreach_item':
+                    raise error('invalid_resume', '来源外层执行记录不可用。', 422)
+                state['outer_item_node_run_id'] = copy_record(parent).id
             if 'control_node_run_id' in state:
                 old_control = db.get(NodeRun, state['control_node_run_id'])
                 if not old_control or old_control.run_id != source.id or old_control.node_id != prior.node_id:

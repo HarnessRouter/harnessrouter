@@ -119,6 +119,40 @@ test('invalid orchestration retains the draft and makes no write until corrected
   await expect.poll(() => fixture.writes.length).toBe(1);
 });
 
+test('nested collection fields validate, persist and reopen at desktop and mobile widths', async ({ page }, info) => {
+  const fixture = await taskFixture(page);
+  fixture.tasks[2].workflow = structuredClone(fixture.tasks[0].workflow);
+  await enter(page);
+  await page.getByRole('row', { name: /待配置的草稿/ }).click();
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await page.getByLabel('执行 Agent 前人工确认输入').uncheck();
+  await page.getByLabel('执行模式').selectOption('foreach');
+  await page.getByLabel('启用二层集合展开').check();
+  await page.getByLabel('内层集合路径', { exact: true }).fill('../items');
+  await page.getByRole('button', { name: '保存任务流程' }).click();
+  await expect(page.getByRole('alert')).toContainText('嵌套集合字段路径无效');
+  await expect(page.getByRole('alert')).toBeFocused();
+  expect(fixture.writes).toHaveLength(0);
+  await page.getByLabel('内层集合路径', { exact: true }).fill('children.items');
+  await page.getByLabel('内层集合上限', { exact: true }).fill('3');
+  await page.getByRole('combobox', { name: '内层集合调度', exact: true }).selectOption('serial');
+  await page.getByRole('button', { name: '保存任务流程' }).click();
+  await expect.poll(() => fixture.writes.length).toBe(1);
+  expect(fixture.writes[0].body.workflow.nodes.find((n: any) => n.id === 'report').foreach.nested).toEqual({ path: 'children.items', max_items: 3, mode: 'serial' });
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await expect(page.getByLabel('内层集合路径', { exact: true })).toHaveValue('children.items');
+  await mkdir('.artifacts/orchestration', { recursive: true });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByLabel('内层集合路径', { exact: true }).scrollIntoViewIfNeeded();
+    await expect(page.getByLabel('内层集合路径', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `.artifacts/orchestration/nested-${info.project.name}-${width}.png` });
+  }
+});
+
 test('template revision saves concurrency without changing an existing task', async ({ page }) => {
   const fixture = await taskFixture(page); await enter(page);
   await page.getByRole('navigation', { name: '任务菜单' }).getByRole('button', { name: /模板管理/ }).click();
@@ -191,6 +225,32 @@ test('active fanout history retries the selected failed item with its manifest i
   await expect(properties.getByRole('button', { name: '重试此项' })).toHaveCount(1);
   await properties.getByRole('button', { name: '重试此项' }).click();
   await expect.poll(() => fixture.writes.find(row => row.path === '/api/hexa/runs/18/nodes/worker/retry')?.body).toMatchObject({ item_node_run_id: 312 });
+});
+
+test('nested history shows leaf indexes and keeps recovery on the outer item', async ({ page }, info) => {
+  const fixture = await taskFixture(page);
+  const run = fixture.runs.find(row => row.id === 20)!;
+  run.workflow = { nodes: [{ id: 'worker', name: '二层处理', agent_id: 'agent-1', model: 'model-1', prompt: '', deps: [], foreach: { source: 'source', path: 'groups', max_items: 2, nested: { path: 'items', max_items: 2 } } }] };
+  run.nodes = [{ id: 501, node_id: 'worker', run_id: 20, iteration: 1, execution_kind: 'node', attempt: 1, status: 'failed', input: { item_node_run_ids: [511] }, output: null, debug_attempts: [
+    { id: 511, node_id: 'worker', run_id: 20, iteration: 1, execution_kind: 'foreach_item', foreach_index: 0, attempt: 1, status: 'failed', input: { nested_item_node_run_ids: [521, 522] }, output: null },
+    { id: 521, node_id: 'worker', run_id: 20, iteration: 1, execution_kind: 'foreach_nested_item', foreach_index: 0, attempt: 1, status: 'succeeded', input: { outer_foreach_index: 0 }, output: { text: '保留成功结果' } },
+    { id: 522, node_id: 'worker', run_id: 20, iteration: 1, execution_kind: 'foreach_nested_item', foreach_index: 1, attempt: 1, status: 'failed', input: { outer_foreach_index: 0 }, output: null },
+  ] }];
+  await page.goto('/runs/20');
+  await page.getByRole('button', { name: '打开流程图' }).click();
+  await page.getByRole('button', { name: '二层处理 节点' }).click();
+  await page.getByRole('tab', { name: '调试' }).click();
+  const history = page.getByRole('region', { name: '集合项历史' });
+  await expect(history).toContainText('外层项 1 / 内层项 1');
+  await expect(history).toContainText('外层项 1 / 内层项 2');
+  await expect(history.getByRole('button', { name: '新建 Run 恢复此项' })).toHaveCount(1);
+  await mkdir('.artifacts/orchestration', { recursive: true });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await history.getByRole('button', { name: '新建 Run 恢复此项' }).scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `.artifacts/orchestration/nested-history-${info.project.name}-${width}.png` });
+  }
 });
 
 for (const width of [1440, 800, 390]) test(`orchestration inspector remains usable at ${width}px`, async ({ page }, testInfo) => {

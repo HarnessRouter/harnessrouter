@@ -55,3 +55,54 @@ test('orchestration settings persist through the editor, execution and historica
   await expect(properties).toContainText('串行集合展开');
   await expect(properties).toContainText('已聚合 1 个集合项');
 });
+
+test('nested collection executes and resumes through the browser with immutable old history', async ({ page }) => {
+  await signIn(page);
+  const identity = `nested-${Date.now()}`;
+  const spaces = await api(page, '/api/hexa/workspaces');
+  const created = await api(page, '/api/hexa/tasks', { method: 'POST', body: {
+    title: identity, workspace_id: spaces.body.selected_id, input: 'nested lifecycle', workflow: { max_concurrency: 2, nodes: [
+      { id: 'source', name: '来源', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'E2E_OUT:来源' },
+      { id: 'prep', name: '分组', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'E2E_OUT:分组', deps: ['source'], inputRefs: ['source'], foreach: { source: 'source', path: 'artifacts', max_items: 1 } },
+      { id: 'worker', name: '二层处理', agent_id: 'e2e-agent', model: 'e2e-model', prompt: `E2E_FAIL:${identity}`, deps: ['prep'], inputRefs: ['prep'], foreach: { source: 'prep', path: 'items', max_items: 1, nested: { path: 'artifacts', max_items: 1, mode: 'serial' } }, final_report: true },
+    ] },
+  } });
+  expect(created.status).toBe(201);
+  const started = await page.evaluate(async taskId => {
+    const response = await fetch(`/api/hexa/tasks/${taskId}/runs`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } });
+    return { status: response.status, body: await response.json() };
+  }, created.body.id);
+  expect(started.status).toBe(202);
+  let failed: any;
+  await expect.poll(async () => {
+    failed = (await api(page, `/api/hexa/runs/${started.body.id}`)).body;
+    return failed.status;
+  }, { timeout: 30000 }).toBe('failed');
+  const oldWorker = failed.nodes.find((row: any) => row.node_id === 'worker');
+  const before = await api(page, `/api/hexa/node-runs/${oldWorker.id}`);
+  await page.goto(`/runs/${started.body.id}`);
+  await page.getByRole('button', { name: '打开流程图', exact: true }).click();
+  await page.getByRole('button', { name: '二层处理 节点', exact: true }).click();
+  await expect(page.getByRole('region', { name: '编排运行配置' })).toContainText('二层 artifacts');
+  await page.getByRole('tab', { name: '调试' }).click();
+  await expect(page.getByRole('region', { name: '集合项历史' })).toContainText('外层项 1 / 内层项 1');
+  const resumed = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/tasks/${created.body.id}/runs`));
+  await page.getByRole('button', { name: '新建 Run 恢复此项' }).click();
+  const newRun = await (await resumed).json();
+  expect(newRun.id).not.toBe(started.body.id);
+  let completed: any;
+  await expect.poll(async () => {
+    completed = (await api(page, `/api/hexa/runs/${newRun.id}`)).body;
+    return completed.status;
+  }, { timeout: 30000 }).toBe('completed');
+  const worker = completed.nodes.find((row: any) => row.node_id === 'worker');
+  expect(worker.output.items[0].items).toHaveLength(1);
+  expect((await api(page, `/api/hexa/node-runs/${oldWorker.id}`)).body.attempts).toEqual(before.body.attempts);
+  await page.goto(`/runs/${newRun.id}`);
+  await page.reload();
+  await page.getByRole('button', { name: '打开流程图', exact: true }).click();
+  await page.getByRole('button', { name: '二层处理 节点', exact: true }).click();
+  await page.getByRole('tab', { name: '调试' }).click();
+  await expect(page.getByRole('region', { name: '集合项历史' })).toContainText('外层项 1 / 内层项 1');
+  await expect(page.getByRole('button', { name: '新建 Run 恢复此项' })).toHaveCount(0);
+});

@@ -1,4 +1,37 @@
 id: CHG-task-centric-workflow
+nested_foreach_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 4b925858
+  branch: codex/agent-orchestration
+  status: verified_slice
+  reuse_decision: extend persisted fanout manifests, retry/resume transaction and shared inspector; no schema migration or UHP wire change
+  acceptance_ids: [AC-7, AC-8, AC-14, AC-23, AC-24, AC-25, AC-26]
+  references: [spec.md#二层集合展开, plan.md#二层-foreach-实施, visual-contract.md, platform-matrix.md]
+  scope: 二层相对路径集合、两层调度、叶子成功复用、循环重试、终态引用映射与历史界面
+  impact: [hexa-api/app/tasks/fanout.py, hexa-api/app/tasks/resume.py, hexa-api/app/tasks/service.py, hexa-api/tests/test_nested_foreach.py, hexa-api/tests/test_task_workflows.py, hexa-api/tests/test_fanout_retry.py, client/src/ApiTaskWorkbench.tsx, client/src/OrchestrationFields.tsx, client/src/app-types.ts, client/src/orchestration.ts, client/src/item-history.ts, client/tests]
+  verification:
+    red: "新增专项初次 9 failed, 1 passed；其中 2 项为未启用 lifespan 的测试夹具错误，修正后配额预留和输出限制仍各自失败；其余失败暴露串行、叶子输入、成功复用和空集合缺陷。客户端叶子标签先失败；循环活动重试进一步暴露 loop_previous 引用丢失。"
+    targeted: "python -m pytest -q hexa-api/tests/test_nested_foreach.py; 15 passed；增加两轮组合后 retry_and_resume 4 passed。"
+    earlier_backend: "235 passed in 277.17s；之后修复循环叶子重试引用，最终回归另记。"
+    client: "npm.cmd test; 58 passed; npm.cmd run typecheck; exit 0; npm.cmd run build; exit 0，已有主包 951.94 kB 警告。"
+    browser: "原 tasks.spec.ts 38 项通过；新增用例最初误选活动任务，其次 select 使用了不精确的 label locator，修正后 nested collection/nested history 在 Chromium/Edge 共 4 passed。测试保留非法路径聚焦、零写入、保存重开与无横向溢出断言。"
+    browser_e2e: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium：原编排旅程通过；新增旅程最初缺 workspace_id 导致 404，修正并断言启动响应后单独重跑 nested collection，1 passed in 1.0m。真实 App API/SQLite/HTTP Gateway 夹具验证二层失败、界面新 Run 恢复、旧历史不变、刷新只读。"
+    final_backend: "python -m pytest -q hexa-api/tests/test_task_workflows.py hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; exit 0; 237 passed in 259.26s。包含普通/二层 HTTP 重试与终态恢复 4 项、二层专项 17 项。"
+    history_visual: "npx.cmd playwright test -c playwright.app.config.ts tasks.spec.ts --grep 'nested history' --workers=2; exit 0; 2 passed in 29.5s；追加 1440/390 历史截图和无页面横向溢出断言。"
+    hygiene: "git diff --check、Python py_compile、YAML safe_load 和静态链接检查；证据见 client/.artifacts/orchestration/nested-verification.json。"
+  visual:
+    environment: Windows Chromium and Edge, 1440x900 and 390x900
+    evidence: client/.artifacts/orchestration/nested-*.png
+    inspection: 已查看 Chromium 390px 与 Edge 1440px 编辑截图，以及 Chromium 390px 历史截图；内层字段与层级标签可读、单列可滚动、恢复入口可见，无页面横向溢出。截图 SHA256 记录于 nested-verification.json。
+  security_review: "定义限定两层与安全对象字段路径；不执行表达式或插件脚本。清单检查同 Run/节点/iteration，恢复复制引用到新 Run，当前项选择与预算检查复用事务和鉴权；未知副作用仅显式重试，未新增外部目标、凭据、权限或 Cloud 产品入口。自查不等于独立评审或远端 CI。"
+  rollback: 停止使用二层清单的活动 Run 后回退代码，保留历史数据；旧执行器不得继续带二层 execution_kind 的 Run。无需反向数据库迁移。
+  limitations:
+    - Windows/SQLite 和受控 HTTP Gateway 证明编排契约，真实 PostgreSQL、Linux、Provider 与部署仍未验证。
+    - 项历史只展示已加载调试页中的当前清单；三层及以上、嵌套 loop、完整动态子图继续拒绝。
+    - UHP durable tool approval 仍为独立草案，Gateway/Runner 未实现，不能广告 capability 或视为已完成。
+  remaining: [cross-page item history API, dynamic subgraph design, real PostgreSQL migration, current-source real Gateway/BYOK smoke, Gateway/Runner tool approval runtime]
+  next_action: 本轮本地提交后，继续跨页项历史 API、完整动态子图设计与 Gateway/Runner 审批运行时；具备目标环境后补真实数据库和 Provider 验收。整体目标保持进行中。
 orchestration_ui:
   date: "2026-11-23"
   owner: Codex

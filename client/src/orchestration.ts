@@ -22,6 +22,9 @@ export function orchestrationIssue(workflow: { max_concurrency?: number; nodes: 
     if (node.repeat && !bounded(node.repeat.max_iterations, 10)) return `${prefix}重复上限必须是 1 到 10 的整数。`;
     if (node.foreach && !bounded(node.foreach.max_items, 10)) return `${prefix}集合上限必须是 1 到 10 的整数。`;
     if (node.foreach && node.foreach.mode && !['serial', 'parallel'].includes(node.foreach.mode)) return `${prefix}集合执行模式无效。`;
+    if (node.foreach?.nested && (!node.foreach.nested.path || !pathPattern.test(node.foreach.nested.path))) return `${prefix}嵌套集合字段路径无效。`;
+    if (node.foreach?.nested && !bounded(node.foreach.nested.max_items, 10)) return `${prefix}嵌套集合上限必须是 1 到 10 的整数。`;
+    if (node.foreach?.nested?.mode && !['serial', 'parallel'].includes(node.foreach.nested.mode)) return `${prefix}嵌套集合执行模式无效。`;
     if (node.dynamic_plan && !node.deps?.includes(node.dynamic_plan.source)) return `${prefix}动态计划来源必须是前置依赖。`;
     if (node.dynamic_plan && (!Number.isInteger(node.dynamic_plan.max_items) || node.dynamic_plan.max_items < 1 || node.dynamic_plan.max_items > 10)) return `${prefix}动态计划上限必须是 1 到 10 的整数。`;
     if (node.dynamic_plan && node.dynamic_plan.mode && !['serial', 'parallel'].includes(node.dynamic_plan.mode)) return `${prefix}动态计划执行模式无效。`;

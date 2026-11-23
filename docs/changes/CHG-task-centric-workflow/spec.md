@@ -175,7 +175,17 @@ Task → WorkflowRevision
 
 每个集合项调用一次 Agent，复用同一节点 ID，并以独立 `NodeRun.execution_kind=foreach_item` 和 `foreach_index` 标识项；`attempt` 只表示该项自身的执行尝试，不再承担集合索引。每条 NodeRun 还保存从 1 开始的 `iteration`；循环体重新展开时，新的 item/aggregate 只能属于新的 iteration，不能复用上一轮的控制记录。串行模式按索引逐项调用；并行模式最多同时派发工作流 `max_concurrency` 个集合项。所有项成功后追加不可变的 `execution_kind=foreach_aggregate` NodeRun，输出聚合为 `{"items": [输出...]}`，下游只看到当前 iteration 的聚合记录；任何项失败都会停止后续派发并使展开节点失败。正在运行的项取消或进程恢复时逐项记录 `canceled` 或 `interrupted_unknown_outcome`，不能只更新展开节点的汇总状态。
 
-foreach 是固定数量的节点执行，不创建新的工作流节点、不修改 DAG、不形成回边、不支持嵌套 foreach 或无限展开。集合和 `max_items` 随 Run 快照固定；运行中修改工作流不会影响当前展开。`mode` 只允许 `serial` 或 `parallel`。
+foreach 是固定数量的节点执行，不创建新的工作流节点、不修改 DAG、不形成回边。集合和 `max_items` 随 Run 快照固定；运行中修改工作流不会影响当前展开。`mode` 只允许 `serial` 或 `parallel`。
+
+### 二层集合展开
+
+`foreach.nested` 可声明 `{path, max_items, mode}`，路径相对外层集合项，字段路径和 1..10 上限沿用 foreach 校验。只支持两层，拒绝第三层、内层 source、动态计划嵌套和无限展开。外层 `serial` 表示整个外层项完成后才启动下一外层项；内层模式决定同一外层项的叶子串行或并行，两层都受工作流最大并发数约束。空外层或内层均成功聚合为空数组。
+
+外层项 `foreach_item` 固定 `nested_item_node_run_ids`；叶子为 `foreach_nested_item`，其输入保留外层项 ID、外层索引、内层索引、当前值及上一轮引用。叶子全部成功后追加 `foreach_nested_aggregate`，外层项再成功；全部外层项成功后追加 `foreach_aggregate`，输出保留两层 `items` 结构。清单、叶子和两种聚合均属于同 Run/节点/iteration，聚合预留纳入 500 条 NodeRun 配额，各聚合输出不得超过 1 MiB。
+
+失败停止未开始的兄弟派发，保留已经成功的叶子。按外层项显式重试时，追加新的外层尝试并复用其中成功的叶子，仅失败/取消叶子追加尝试；另一个独立失败外层项不阻止已选择项重试。终态恢复创建新 Run，复制并重映射所有执行清单和运行引用，`reused_from`/`retry_of` 仅作为来源审计；旧 Run 不变。取消、暂停和进程恢复沿用逐项规则，不自动重放不确定副作用。客户端展示内层历史与层级索引，操作入口仍以外层项为恢复边界。
+
+**AC-26 二层集合：** 通过 API 保存并执行二层配置，验证两层 serial/parallel、空集合、非法输入、配额与输出上限、取消/暂停/恢复；活动重试与终态恢复均不重复成功叶子，历史清单完整且新 Run 无旧 Run 的执行引用；界面支持编辑、保存重开、快照属性和内层历史。
 
 ### 集合项重试与执行清单
 

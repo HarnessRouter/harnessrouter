@@ -20,3 +20,13 @@ test('removing a dependency also removes conditions and collection references', 
   assert.equal(next.condition, undefined); assert.equal(next.foreach, undefined);
   assert.deepEqual(node.deps, ['a', 'c']);
 });
+
+test('nested collections validate the relative path, bound and execution mode', () => {
+  const node = { id: 'b', deps: ['a'], foreach: { source: 'a', path: 'groups', max_items: 2,
+    nested: { path: 'items', max_items: 3, mode: 'parallel' } } };
+  assert.equal(orchestrationIssue({ nodes: [node] }), undefined);
+  for (const patch of [{ path: '../items' }, { max_items: 11 }, { mode: 'invalid' }]) {
+    assert.match(orchestrationIssue({ nodes: [{ ...node, foreach: { ...node.foreach, nested: { ...node.foreach.nested, ...patch } } }] }), /嵌套集合/);
+  }
+  assert.deepEqual(withoutDependency({ ...node, inputRefs: ['a'] }, 'a').foreach, undefined);
+});

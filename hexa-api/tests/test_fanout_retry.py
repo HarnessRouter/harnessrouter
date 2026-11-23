@@ -210,7 +210,8 @@ async def test_selected_retry_runs_even_when_another_item_remains_failed(app, fa
 
 
 @pytest.mark.parametrize('terminal', [False, True])
-def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, app, terminal):
+@pytest.mark.parametrize('nested', [False, True])
+def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, app, terminal, nested):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from app.gateway.client import GatewayClient
@@ -233,7 +234,7 @@ def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, ap
                             'container_id': 'fixture', 'filename': 'input.txt'}]
             final = {'id': rid, 'status': 'failed' if failed else 'completed', 'output': [
                 {'type': 'message', 'content': [{'type': 'output_text', 'text': 'finished',
-                  'annotations': annotations if context['prompt'] == 'execute source' else []}]}]}
+                  'annotations': annotations if context['prompt'] in ('execute source', 'execute prep') else []}]}]}
             events = [{'type': 'response.created', 'response': {'id': rid}},
                       {'type': 'response.output_text.delta', 'delta': 'finished'},
                       {'type': 'response.failed' if failed else 'response.completed', 'response': final}]
@@ -251,8 +252,12 @@ def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, ap
         authenticated(client)
         app.state.task_executor.gateway = GatewayClient(f'http://127.0.0.1:{server.server_port}', 'fixture-key')
         task = client.post('/api/hexa/tasks', json={'workflow': {'nodes': [node('source'),
-            node('worker', deps=['source'], inputRefs=['source'], foreach={
+            *([node('prep', deps=['source'], inputRefs=['source'], foreach={
                 'source': 'source', 'path': 'artifacts', 'max_items': 1,
+            })] if nested else []),
+            node('worker', deps=['prep' if nested else 'source'], inputRefs=['prep' if nested else 'source'], foreach={
+                'source': 'prep' if nested else 'source', 'path': 'items' if nested else 'artifacts', 'max_items': 1,
+                **({'nested': {'path': 'artifacts', 'max_items': 1}} if nested else {}),
             }), *([] if terminal else [node('hold', deps=['source'], node_type='human')]),
         ]}}).json()
         run = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'http-start'}).json()
@@ -281,15 +286,15 @@ def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, ap
                 break
             time.sleep(0.01)
         assert aggregate['status'] == 'succeeded'
-        assert len(calls) == 3
-        assert calls[1][0]['foreach_item'] == calls[2][0]['foreach_item']
-        assert calls[1][1] != calls[2][1]
+        assert len(calls) == (4 if nested else 3)
+        assert calls[-2][0]['foreach_item'] == calls[-1][0]['foreach_item']
+        assert calls[-2][1] != calls[-1][1]
         history = client.get(f"/api/hexa/node-runs/{aggregate['id']}").json()['attempts']
         with TestClient(create_app(app.state.settings, app.state.gateway)) as restarted:
             restarted.cookies.update(client.cookies)
             assert restarted.get(f"/api/hexa/node-runs/{aggregate['id']}").json()['attempts'] == history
             assert restarted.get(f"/api/hexa/runs/{run['id']}").json() == result
-        assert len(calls) == 3
+        assert len(calls) == (4 if nested else 3)
     finally:
         server.shutdown()
         server.server_close()

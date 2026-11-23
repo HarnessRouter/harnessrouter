@@ -93,6 +93,34 @@ def test_workflow_accepts_bounded_foreach_only_from_a_dependency():
     ]})
 
 
+@pytest.mark.parametrize('nested', [
+    {'path': '../items', 'max_items': 2},
+    {'path': 'items', 'max_items': 0},
+    {'path': 'items', 'max_items': 11},
+    {'path': 'items', 'max_items': True},
+    {'path': 'items', 'max_items': 2, 'mode': 'unknown'},
+    {'path': 'items', 'max_items': 2, 'nested': {'path': 'again', 'max_items': 1}},
+])
+def test_workflow_rejects_invalid_nested_foreach(nested):
+    with pytest.raises(TaskError) as failure:
+        workflow_from_json({'nodes': [
+            {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+            {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'],
+             'foreach': {'source': 'gate', 'path': 'groups', 'max_items': 2, 'nested': nested}},
+        ]})
+    assert failure.value.code == 'invalid_workflow'
+    assert failure.value.status == 422
+
+
+def test_workflow_accepts_bounded_two_level_foreach():
+    workflow_from_json({'nodes': [
+        {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+        {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'],
+         'foreach': {'source': 'gate', 'path': 'groups', 'max_items': 2,
+                     'mode': 'parallel', 'nested': {'path': 'items', 'max_items': 3, 'mode': 'serial'}}},
+    ]})
+
+
 @pytest.mark.parametrize('plan', [
     {'source': 'missing', 'path': 'items', 'max_items': 2},
     {'source': 'gate', 'path': '../items', 'max_items': 2},
@@ -403,6 +431,43 @@ def test_chained_foreach_waits_for_upstream_aggregate(client, app, mode):
     inner_calls = [call for call in calls if call['prompt'] == 'execute inner']
     assert len(inner_calls) == 2
     assert all(call['refs'][0]['node_run_id'] == outer['id'] for call in inner_calls)
+
+
+def test_two_level_foreach_persists_outer_and_nested_manifests(client, app):
+    authenticated(client)
+    calls = []
+
+    async def nested_gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'groups': [
+                {'name': 'one', 'items': ['a', 'b']},
+                {'name': 'two', 'items': ['c']},
+            ]}
+        return {'status': 'completed', 'value': context['foreach_item']}
+
+    app.state.gateway.create_response = nested_gateway
+    task = client.post('/api/hexa/tasks', json={'title': 'Nested foreach', 'workflow': {'nodes': [
+        node('source'),
+        node('worker', deps=['source'], inputRefs=['source'], foreach={
+            'source': 'source', 'path': 'groups', 'max_items': 2, 'mode': 'parallel',
+            'nested': {'path': 'items', 'max_items': 2, 'mode': 'parallel'},
+        }, final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'nested-foreach'})
+    completed = wait_run(client, started.json()['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed
+    worker = next(row for row in completed['nodes'] if row['node_id'] == 'worker')
+    assert worker['output']['items'] == [
+        {'items': [{'status': 'completed', 'value': 'a'}, {'status': 'completed', 'value': 'b'}]},
+        {'items': [{'status': 'completed', 'value': 'c'}]},
+    ]
+    history = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
+    assert len([row for row in history if row['execution_kind'] == 'foreach_item']) == 2
+    assert len([row for row in history if row['execution_kind'] == 'foreach_nested_item']) == 3
+    assert len([row for row in history if row['execution_kind'] == 'foreach_nested_aggregate']) == 2
+    assert [call['foreach_item'] for call in calls if call['prompt'] == 'execute worker'] == ['a', 'b', 'c']
 
 
 def test_parallel_foreach_failure_cancels_unstarted_siblings_and_preserves_completed_items(client, app):
