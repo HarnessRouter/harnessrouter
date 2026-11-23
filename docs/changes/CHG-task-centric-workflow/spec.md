@@ -173,9 +173,25 @@ Task → WorkflowRevision
 
 `foreach.source` 必须是当前节点的 `deps` 之一，`path` 使用条件分支相同的安全字段路径，`max_items` 必须是 `1..10` 的整数。集合只从 source 节点的成功输出读取；缺少路径或值不是 JSON 数组时，节点失败并使用 `foreach_input_invalid`；数组超过上限时，节点失败并使用 `foreach_limit_exceeded`；空数组产生 `{"items": []}`，不调用 Gateway。
 
-每个集合项按工作流节点顺序串行调用一次 Agent，复用同一节点 ID 并追加一个 `NodeRun`，通过 `attempt` 和输入中的 `foreach_index` 标识项。当前项上下文额外包含 `foreach_item` 和 `foreach_index`；所有项成功后，最新 NodeRun 的输出聚合为 `{"items": [输出...]}`，下游只看到这个聚合结果。单个项失败时停止展开，Run 依现有失败语义终止，不继续发送剩余项。
+每个集合项调用一次 Agent，复用同一节点 ID，并以独立 `NodeRun.execution_kind=foreach_item` 和 `foreach_index` 标识项；`attempt` 只表示该项自身的执行尝试，不再承担集合索引。串行模式按索引逐项调用；并行模式最多同时派发工作流 `max_concurrency` 个集合项。所有项成功后追加不可变的 `execution_kind=foreach_aggregate` NodeRun，输出聚合为 `{"items": [输出...]}`，下游只看到聚合记录；任何项失败都会停止后续派发并使展开节点失败。正在运行的项取消或进程恢复时逐项记录 `canceled` 或 `interrupted_unknown_outcome`，不能只更新展开节点的汇总状态。
 
-foreach 是固定数量的节点尝试，不创建新的工作流节点、不修改 DAG、不形成回边、不支持嵌套 foreach 或无限展开。集合和 `max_items` 随 Run 快照固定；运行中修改工作流不会影响当前展开。
+foreach 是固定数量的节点执行，不创建新的工作流节点、不修改 DAG、不形成回边、不支持嵌套 foreach 或无限展开。集合和 `max_items` 随 Run 快照固定；运行中修改工作流不会影响当前展开。`mode` 只允许 `serial` 或 `parallel`。
+
+### 有界跨节点循环
+
+节点可以声明一个固定节点集合组成的循环体：
+
+```json
+{
+  "body": ["work", "check"],
+  "max_iterations": 3,
+  "until": { "source": "check", "path": "done", "op": "eq", "value": true }
+}
+```
+
+循环检查节点的 `loop.body` 必须是已存在的静态节点列表，并包含自身；循环体不能与 `repeat` 或 `foreach` 同时启用。每轮循环只追加这些固定节点的 NodeRun，循环体内部保持原有依赖顺序；终止条件从指定循环体节点的成功输出读取。满足条件后释放下游，未满足且仍有配额时开始下一轮；达到 `max_iterations` 后检查节点以 `loop_limit_exceeded` 失败，不再派发下一轮。
+
+循环不会创建新节点、修改 WorkflowRevision 或允许任意 DAG 回边。循环体、上限和终止条件随 Run 快照固定。取消、恢复和调试按每轮 NodeRun 保留历史；运行中的不确定 Agent 副作用不自动重放。
 
 ### 编排配置界面
 
@@ -307,8 +323,8 @@ EffectivePermission
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是
-同一静态节点的有界重复，foreach 是有限集合的串行展开；任务和模板编辑器可保存这些配置，Run 使用不可变快照显示实际尝试、
-索引和跳过原因。
+同一静态节点的有界重复，foreach 是有限集合的串行或并行展开；任务和模板编辑器可保存这些配置，Run 使用不可变快照显示实际尝试、
+项索引和跳过原因。
 
 当前仍明确不支持并行 foreach、嵌套 foreach、跨节点循环、DAG 回边、无界循环、动态节点生成、运行中改图和并发项的部分聚合。
 这些能力需要另行定义项级并发、失败重启、顺序/聚合、租约和恢复语义，不能通过把现有 `max_concurrency` 直接套到集合项上来
@@ -379,6 +395,8 @@ EffectivePermission
 - **AC-16 声明式条件分支：** 条件只允许固定比较对象且来源必须是依赖节点；未匹配分支记录为 `skipped/condition_not_matched` 且不调用 Gateway；匹配分支正常执行；显式 `allow_missing_inputs` 汇合节点等待所有依赖完成并只消费成功输入；任意表达式、未知来源、非法路径和不支持操作返回 422。
 - **AC-17 有界重复：** `repeat.max_iterations` 只接受 1 至 10 的整数，`until` 只接受安全的 `eq`/`exists` 条件；重复追加同一节点的 NodeRun 尝试并递增 `attempt`，终止条件满足后下游执行；达到上限仍未满足时记录 `repeat_limit_exceeded` 并阻断下游；不会生成动态节点或无限派发。
 - **AC-18 有界 foreach：** `foreach.source` 必须是依赖节点，`max_items` 只接受 1 至 10 的整数；数组逐项产生同一节点的 NodeRun 尝试并按 `foreach_index` 保序聚合，全部完成后下游只收到聚合结果；空数组不调用 Gateway；缺少数组和超限数组分别返回 `foreach_input_invalid`、`foreach_limit_exceeded`；不创建动态节点或无限展开。
+- **AC-19 并行 foreach：** `foreach.mode=parallel` 产生独立的项级 NodeRun，项索引不复用 `attempt`；同一 Run 同时执行的集合项不超过 `max_concurrency`，所有成功项按索引聚合到独立 aggregate NodeRun；单项失败、取消和恢复都保留逐项状态，不能覆盖已完成项输出；非法 mode 返回 422。
+- **AC-20 有界跨节点循环：** 固定 `loop.body` 只能引用当前节点和已声明依赖，且包含检查节点；每轮按静态依赖顺序追加 NodeRun，终止条件满足后释放下游，达到上限记录 `loop_limit_exceeded`；不生成动态节点、不接受无界循环或任意回边。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 

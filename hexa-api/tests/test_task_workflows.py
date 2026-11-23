@@ -73,6 +73,7 @@ def test_workflow_accepts_bounded_repeat():
     {'source': 'gate', 'path': 'items', 'max_items': 11},
     {'source': 'gate', 'path': 'items', 'max_items': True},
     {'source': 'gate', 'path': 'items'},
+    {'source': 'gate', 'path': 'items', 'max_items': 2, 'mode': 'unknown'},
 ])
 def test_workflow_rejects_invalid_bounded_foreach(foreach):
     with pytest.raises(TaskError) as failure:
@@ -89,6 +90,31 @@ def test_workflow_accepts_bounded_foreach_only_from_a_dependency():
         {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
         {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'],
          'foreach': {'source': 'gate', 'path': 'items', 'max_items': 10}},
+    ]})
+
+
+@pytest.mark.parametrize('loop', [
+    {'body': ['a'], 'max_iterations': 0, 'until': {'source': 'a', 'path': 'done', 'op': 'eq', 'value': True}},
+    {'body': ['missing'], 'max_iterations': 2, 'until': {'source': 'a', 'path': 'done', 'op': 'eq', 'value': True}},
+    {'body': ['a'], 'max_iterations': 2, 'until': {'source': 'missing', 'path': 'done', 'op': 'eq', 'value': True}},
+    {'body': ['a'], 'max_iterations': 2, 'until': {'source': 'a', 'path': '../done', 'op': 'eq', 'value': True}},
+])
+def test_workflow_rejects_invalid_bounded_cross_node_loop(loop):
+    with pytest.raises(TaskError) as failure:
+        workflow_from_json({'nodes': [
+            {'id': 'a', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'loop': loop},
+        ]})
+    assert failure.value.code == 'invalid_workflow'
+    assert failure.value.status == 422
+
+
+def test_workflow_accepts_bounded_cross_node_loop():
+    workflow_from_json({'nodes': [
+        {'id': 'a', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+        {'id': 'check', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['a'], 'loop': {
+            'body': ['a', 'check'], 'max_iterations': 3,
+            'until': {'source': 'check', 'path': 'done', 'op': 'eq', 'value': True},
+        }},
     ]})
 
 
@@ -213,6 +239,92 @@ def test_bounded_repeat_appends_attempts_until_output_matches(client, app):
     assert [row['attempt'] for row in attempts] == [1, 2]
 
 
+def test_bounded_cross_node_loop_reexecutes_the_static_body_until_check_matches(client, app):
+    authenticated(client)
+    calls = []
+
+    async def looping_gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context['prompt'])
+        if context['prompt'] == 'execute check':
+            return {'status': 'completed', 'done': calls.count('execute check') >= 2}
+        return {'status': 'completed', 'value': calls.count('execute work')}
+
+    app.state.gateway.create_response = looping_gateway
+    task = client.post('/api/hexa/tasks', json={'title': 'Cross node loop', 'workflow': {'nodes': [
+        node('work'),
+        node('check', deps=['work'], inputRefs=['work'], loop={
+            'body': ['work', 'check'], 'max_iterations': 3,
+            'until': {'source': 'check', 'path': 'done', 'op': 'eq', 'value': True},
+        }, final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'cross-loop'})
+    completed = wait_run(client, started.json()['id'], {'completed'})
+    assert calls == ['execute work', 'execute check', 'execute work', 'execute check']
+    check = next(row for row in completed['nodes'] if row['node_id'] == 'check')
+    assert check['status'] == 'succeeded'
+    assert check['attempt'] == 2
+    attempts = client.get(f"/api/hexa/node-runs/{check['id']}").json()['attempts']
+    assert [row['attempt'] for row in attempts] == [1, 2]
+
+
+def test_bounded_cross_node_loop_fails_at_limit_without_an_extra_body_dispatch(client, app):
+    authenticated(client)
+    calls = []
+
+    async def never_done(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context['prompt'])
+        return {'status': 'completed', 'done': False}
+
+    app.state.gateway.create_response = never_done
+    task = client.post('/api/hexa/tasks', json={'title': 'Loop limit', 'workflow': {'nodes': [
+        node('work'),
+        node('check', deps=['work'], inputRefs=['work'], loop={
+            'body': ['work', 'check'], 'max_iterations': 2,
+            'until': {'source': 'check', 'path': 'done', 'op': 'eq', 'value': True},
+        }, final_report=True),
+    ]}}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'cross-loop-limit'})
+    failed = wait_run(client, started.json()['id'], {'failed'})
+    check = next(row for row in failed['nodes'] if row['node_id'] == 'check')
+    assert check['error_code'] == 'loop_limit_exceeded'
+    assert calls == ['execute work', 'execute check', 'execute work', 'execute check']
+
+
+def test_parallel_foreach_failure_cancels_unstarted_siblings_and_preserves_completed_items(client, app):
+    authenticated(client)
+    import asyncio
+    calls = []
+
+    async def failing_parallel_gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute gate':
+            return {'status': 'completed', 'items': ['ok', 'bad', 'late']}
+        if context['foreach_item'] == 'bad':
+            raise RuntimeError('unknown side effect')
+        await asyncio.sleep(0.05)
+        return {'status': 'completed', 'item': context['foreach_item']}
+
+    app.state.gateway.create_response = failing_parallel_gateway
+    task = client.post('/api/hexa/tasks', json={'title': 'Parallel failure', 'workflow': {
+        'max_concurrency': 2,
+        'nodes': [node('gate'), node('worker', deps=['gate'], inputRefs=['gate'], foreach={
+            'source': 'gate', 'path': 'items', 'max_items': 3, 'mode': 'parallel',
+        }, final_report=True)],
+    }}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'parallel-failure'})
+    failed = wait_run(client, started.json()['id'], {'failed'})
+    worker = next(row for row in failed['nodes'] if row['node_id'] == 'worker')
+    attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
+    item_attempts = {row['input'].get('foreach_index'): row for row in attempts if row['input'].get('_orchestration_role') == 'foreach_item'}
+    assert item_attempts[0]['status'] == 'succeeded'
+    assert item_attempts[1]['error_code'] == 'interrupted_unknown_outcome'
+    assert item_attempts[2]['status'] == 'canceled'
+    assert worker['error_code'] == 'interrupted_unknown_outcome'
+
+
 def test_bounded_repeat_fails_at_limit_without_dispatching_extra_attempt(client, app):
     authenticated(client)
     calls = 0
@@ -267,6 +379,55 @@ def test_bounded_foreach_runs_each_item_and_aggregates_outputs(client, app):
     attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
     assert [row['attempt'] for row in attempts] == [1, 2, 3]
     assert [call.get('foreach_item') for call in calls] == [None, 'alpha', 'beta', 'gamma', None]
+
+
+def test_parallel_foreach_respects_workflow_limit_and_keeps_item_outputs_immutable(client, app):
+    authenticated(client)
+    import asyncio
+
+    active = 0
+    peak = 0
+    calls = []
+
+    async def parallel_gateway(text, previous, key, **kwargs):
+        nonlocal active, peak
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute gate':
+            return {'status': 'completed', 'items': ['alpha', 'beta', 'gamma']}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': context['refs'][0]['output']}
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.02)
+            return {'status': 'completed', 'item': context['foreach_item'], 'index': context['foreach_index']}
+        finally:
+            active -= 1
+
+    app.state.gateway.create_response = parallel_gateway
+    task = client.post('/api/hexa/tasks', json={'title': 'Parallel foreach', 'workflow': {
+        'max_concurrency': 2,
+        'nodes': [
+            node('gate'),
+            node('worker', deps=['gate'], inputRefs=['gate'], foreach={'source': 'gate', 'path': 'items', 'max_items': 3, 'mode': 'parallel'}),
+            node('report', deps=['worker'], inputRefs=['worker'], final_report=True),
+        ],
+    }}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'parallel-foreach'})
+    completed = wait_run(client, started.json()['id'], {'completed'})
+    worker = next(row for row in completed['nodes'] if row['node_id'] == 'worker')
+    assert peak == 2
+    assert worker['status'] == 'succeeded'
+    assert worker['output']['items'] == [
+        {'status': 'completed', 'item': 'alpha', 'index': 0},
+        {'status': 'completed', 'item': 'beta', 'index': 1},
+        {'status': 'completed', 'item': 'gamma', 'index': 2},
+    ]
+    attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
+    assert [row['input'].get('foreach_index') for row in attempts if row['input'].get('_orchestration_role') == 'foreach_item'] == [0, 1, 2]
+    assert all(row['output'] is not None for row in attempts if row['input'].get('_orchestration_role') == 'foreach_item')
+    assert any(row['input'].get('_orchestration_role') == 'foreach_aggregate' for row in attempts)
 
 
 def test_bounded_foreach_rejects_more_items_than_limit_without_worker_call(client, app):

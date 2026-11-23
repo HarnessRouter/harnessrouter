@@ -8,7 +8,7 @@ from sqlalchemy import String, cast, delete, or_, select
 
 from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
-from app.tasks.service import ACTIVE, TaskError, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
+from app.tasks.service import ACTIVE, TaskError, all_node_runs, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
 class TaskBody(BaseModel):
@@ -267,7 +267,7 @@ def build_router(app, require_session, user_id):
                     run.paused, task.status = True, 'waiting'
                 elif action == 'cancel':
                     run.status, task.status = 'canceled', 'waiting'
-                    for row in rows.values():
+                    for row in all_node_runs(db, run_id):
                         if row.status not in ('succeeded', 'failed', 'skipped', 'canceled'):
                             row.error_code = 'interrupted_unknown_outcome' if row.status == 'running' else None
                             row.status = 'canceled'
@@ -279,7 +279,9 @@ def build_router(app, require_session, user_id):
             if action == 'continue':
                 app.state.task_executor.schedule(run_id)
             if action == 'cancel':
-                for row in rows.values():
+                with app.state.session_factory() as db:
+                    cancel_rows = all_node_runs(db, run_id)
+                for row in cancel_rows:
                     if row.response_id and row.status == 'canceled':
                         try:
                             await app.state.gateway.cancel_response(row.response_id)

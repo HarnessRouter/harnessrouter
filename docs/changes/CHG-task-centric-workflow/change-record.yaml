@@ -17,7 +17,7 @@ orchestration_ui:
     http_e2e: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium; 1 passed"
     visual: "Chromium and Edge screenshots reviewed at 1440px, 800px and 390px; no horizontal overflow or inspector/canvas overlap observed"
     hygiene: "git diff --check; passed"
-  remaining: [backend validation for API clients, parallel foreach design, nested foreach, cross-node loops, UHP approval implementation]
+  remaining: [parallel foreach and loop browser E2E, nested foreach, dynamic plan, UHP approval implementation]
 tool_approval_proposal:
   date: "2026-11-23"
   owner: Codex
@@ -75,7 +75,35 @@ concurrency_slice:
       unit: "python -m pytest -q hexa-api/tests/test_task_workflows.py -k foreach; 9 passed"
       integration: "逐项成功、空集合、非法集合和超限集合均通过受控 Gateway 测试"
       hygiene: "python -m pytest -q hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; 85 passed in 45.32s; python -m py_compile hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py; git diff --check; passed"
-    remaining: [parallel_foreach, nested_foreach, cross_node_loops, dynamic_plan]
+  remaining: [nested_foreach, dynamic_plan]
+parallel_foreach_slice:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified
+  baseline: 2a339dd0
+  scope: 并行 foreach 项级 NodeRun、工作流并发上限、不可变聚合、失败/取消/恢复扫描
+  acceptance_ids: [AC-18, AC-19]
+  impact: [hexa-api/app/tasks/service.py, hexa-api/app/tasks/router.py, hexa-api/app/db/models.py, hexa-api/migrations/008_node_orchestration.sql, client/src/OrchestrationFields.tsx]
+  verification:
+    red: "test_parallel_foreach_respects_workflow_limit_and_keeps_item_outputs_immutable initially observed peak=1 before implementation"
+    green: "python -m pytest -q hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py; 57 passed"
+    syntax: "python -m py_compile hexa-api/app/tasks/service.py hexa-api/app/tasks/router.py hexa-api/app/db/models.py; passed"
+    hygiene: "git diff --check; passed"
+  remaining: [parallel foreach and loop client E2E, real PostgreSQL migration execution, dynamic plan]
+cross_node_loop_slice:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified
+  baseline: 2a339dd0
+  scope: 固定节点集合的有界跨节点循环、终止条件、上限失败、独立 NodeRun 尝试和客户端配置
+  acceptance_ids: [AC-17, AC-20]
+  impact: [hexa-api/app/tasks/service.py, hexa-api/tests/test_task_workflows.py, client/src/app-types.ts, client/src/orchestration.ts, client/src/OrchestrationFields.tsx, client/src/ApiTaskWorkbench.tsx]
+  verification:
+    red: "cross-node loop execution test initially completed after one pass instead of re-executing the static body"
+    green: "python -m pytest -q hexa-api/tests/test_task_workflows.py; 42 passed"
+    client: "npm.cmd test; 54 passed; npm.cmd run typecheck; passed; npm.cmd run build; passed with existing large bundle warning"
+    hygiene: "git diff --check; passed"
+  remaining: [browser and HTTP E2E, real PostgreSQL migration execution, dynamic plan]
 status: in_progress
 status_reason: 2026-11-19 已完成工作台 REST/SSE 接入与按需分页闭环；本地 SQLite 和受控 HTTP Gateway 验收通过，PostgreSQL、当前源码真实 BYOK 与部署验收仍未完成，不能标记整个 Change 完成。
 owner: Codex

@@ -20,6 +20,10 @@ def is_human_node(item):
     return item.get('node_type') in {'human', 'human_gate'} or bool(item.get('requires_human'))
 
 
+def is_explicit_human_node(item):
+    return item.get('node_type') in {'human', 'human_gate'}
+
+
 class TaskError(ValueError):
     def __init__(self, code, message, status=409):
         super().__init__(message)
@@ -71,6 +75,8 @@ def validate_repeat(item):
     repeat = item.get('repeat')
     if repeat is None:
         return
+    if item.get('foreach') is not None:
+        raise TaskError('invalid_workflow', 'repeat 与 foreach 不能同时启用。', 422)
     if not isinstance(repeat, dict) or type(repeat.get('max_iterations')) is not int or not 1 <= repeat['max_iterations'] <= 10:
         raise TaskError('invalid_workflow', 'repeat.max_iterations 必须是 1 到 10 之间的整数。', 422)
     until = repeat.get('until')
@@ -98,6 +104,32 @@ def validate_foreach(item, known_ids):
         raise TaskError('invalid_workflow', 'foreach.path 格式无效。', 422)
     if type(foreach.get('max_items')) is not int or not 1 <= foreach['max_items'] <= 10:
         raise TaskError('invalid_workflow', 'foreach.max_items 必须是 1 到 10 之间的整数。', 422)
+    if foreach.get('mode', 'serial') not in {'serial', 'parallel'}:
+        raise TaskError('invalid_workflow', 'foreach.mode 只支持 serial 或 parallel。', 422)
+
+
+def validate_loop(item, known_ids):
+    loop = item.get('loop')
+    if loop is None:
+        return
+    if item.get('repeat') is not None or item.get('foreach') is not None:
+        raise TaskError('invalid_workflow', 'loop 不能与 repeat 或 foreach 同时启用。', 422)
+    if not isinstance(loop, dict) or type(loop.get('max_iterations')) is not int or not 1 <= loop['max_iterations'] <= 10:
+        raise TaskError('invalid_workflow', 'loop.max_iterations 必须是 1 到 10 之间的整数。', 422)
+    body = loop.get('body')
+    if not isinstance(body, list) or not body or len(set(body)) != len(body) or any(node_id not in known_ids for node_id in body):
+        raise TaskError('invalid_workflow', 'loop.body 必须是已存在的静态节点列表。', 422)
+    if item['id'] not in body:
+        raise TaskError('invalid_workflow', 'loop.body 必须包含循环检查节点。', 422)
+    until = loop.get('until')
+    if not isinstance(until, dict) or until.get('source') not in body or until.get('op') not in {'eq', 'exists'}:
+        raise TaskError('invalid_workflow', 'loop.until 必须引用循环体内的 eq 或 exists 条件。', 422)
+    if not isinstance(until.get('path'), str) or not CONDITION_PATH.fullmatch(until['path']):
+        raise TaskError('invalid_workflow', 'loop.until.path 格式无效。', 422)
+    if until['op'] == 'exists' and 'value' in until:
+        raise TaskError('invalid_workflow', 'loop.until.exists 不能携带 value。', 422)
+    if until['op'] == 'eq' and 'value' not in until:
+        raise TaskError('invalid_workflow', 'loop.until.eq 必须携带 value。', 422)
 
 
 def workflow_from_json(value):
@@ -110,6 +142,7 @@ def workflow_from_json(value):
             validate_condition(item, known_ids)
             validate_repeat(item)
             validate_foreach(item, known_ids)
+            validate_loop(item, known_ids)
     try:
         workflow = WorkflowSpec(tuple(NodeSpec(item['id'], tuple(item.get('deps', [])), tuple(item.get('inputRefs', [])), bool(item.get('final_report')), bool(item.get('requires_human'))) for item in value['nodes']))
         validate_workflow(workflow)
@@ -185,6 +218,7 @@ def task_json(db, task):
 
 def node_json(row):
     return {'id': row.id, 'node_id': row.node_id, 'run_id': row.run_id, 'attempt': row.attempt, 'status': row.status,
+            'execution_kind': row.execution_kind, 'foreach_index': row.foreach_index,
             'input': json.loads(row.input_json), 'output': json.loads(row.output_json) if row.output_json else None,
             'error_code': row.error_code, 'response_id': row.response_id,
             'progress': redact({'text': row.partial_text or '', 'execution': json.loads(row.execution_json) if row.execution_json else {}}),
@@ -193,7 +227,20 @@ def node_json(row):
 
 
 def latest_nodes(db, run_id):
-    return {row.node_id: row for row in db.scalars(select(NodeRun).where(NodeRun.run_id == run_id).order_by(NodeRun.attempt, NodeRun.id)).all()}
+    latest = {}
+    rows = db.scalars(select(NodeRun).where(NodeRun.run_id == run_id).order_by(NodeRun.attempt, NodeRun.id)).all()
+    visible = [row for row in rows if row.execution_kind != 'foreach_item']
+    for row in visible:
+        prior = latest.get(row.node_id)
+        priority = (1 if row.execution_kind == 'foreach_aggregate' else 0, row.attempt, row.id)
+        prior_priority = ((1 if prior and prior.execution_kind == 'foreach_aggregate' else 0), prior.attempt, prior.id) if prior else None
+        if prior is None or priority >= prior_priority:
+            latest[row.node_id] = row
+    return latest
+
+
+def all_node_runs(db, run_id):
+    return db.scalars(select(NodeRun).where(NodeRun.run_id == run_id).order_by(NodeRun.id)).all()
 
 
 def downstream_nodes(definition, target_node):
@@ -379,7 +426,7 @@ class TaskExecutor:
                 run.status = 'failed'
                 task = db.get(Task, run.task_id)
                 task.status = 'failed'
-                for row in latest_nodes(db, run.id).values():
+                for row in all_node_runs(db, run.id):
                     if row.status in ('queued', 'running'):
                         row.status, row.error_code = 'failed', 'interrupted_unknown_outcome'
             db.commit()
@@ -399,6 +446,81 @@ class TaskExecutor:
                     rows = latest_nodes(db, run.id)
                     nodes = {item['id']: item for item in definition['nodes']}
                     decisions = {row.node_id: json.loads(row.input_refs_json) for row in db.scalars(select(RunDecision).where(RunDecision.run_id == run.id)).all()}
+                    parallel_children = []
+                    parallel_changed = False
+                    for item in definition['nodes']:
+                        foreach = item.get('foreach')
+                        if not foreach or foreach.get('mode', 'serial') != 'parallel':
+                            continue
+                        row = rows[item['id']]
+                        children = db.scalars(select(NodeRun).where(
+                            NodeRun.run_id == run.id,
+                            NodeRun.node_id == item['id'],
+                            NodeRun.execution_kind == 'foreach_item',
+                        ).order_by(NodeRun.foreach_index, NodeRun.id)).all()
+                        if row.status == 'idle' and not children:
+                            if any(rows[dep].status != 'succeeded' for dep in item.get('deps', [])):
+                                continue
+                            source = rows[foreach['source']]
+                            values = value_at_path(json.loads(source.output_json) if source.output_json else None, foreach['path'])
+                            if values is _MISSING or not isinstance(values, list):
+                                row.status, row.error_code = 'failed', 'foreach_input_invalid'
+                                row.finished_at = datetime.now(timezone.utc)
+                                parallel_changed = True
+                            elif len(values) > foreach['max_items']:
+                                row.status, row.error_code = 'failed', 'foreach_limit_exceeded'
+                                row.finished_at = datetime.now(timezone.utc)
+                                parallel_changed = True
+                            elif not values:
+                                row.status = 'succeeded'
+                                row.output_json = encoded({'items': []})
+                                row.finished_at = datetime.now(timezone.utc)
+                                parallel_changed = True
+                            else:
+                                row.status = 'running'
+                                for index, value in enumerate(values):
+                                    db.add(NodeRun(
+                                        run_id=run.id,
+                                        node_id=item['id'],
+                                        attempt=index + 1,
+                                        execution_kind='foreach_item',
+                                        foreach_index=index,
+                                        input_json=encoded({'_orchestration_role': 'foreach_item', 'foreach_item': value, 'foreach_index': index}),
+                                    ))
+                                parallel_changed = True
+                        elif row.status == 'running' and children:
+                            failed = next((child for child in children if child.status == 'failed'), None)
+                            if failed:
+                                for sibling in children:
+                                    if sibling.id != failed.id and sibling.status in ('idle', 'running'):
+                                        sibling.status = 'canceled'
+                                        sibling.error_code = 'foreach_sibling_failed'
+                                        sibling.finished_at = datetime.now(timezone.utc)
+                                row.status, row.error_code = 'failed', failed.error_code or 'foreach_item_failed'
+                                row.finished_at = datetime.now(timezone.utc)
+                                parallel_changed = True
+                            elif all(child.status == 'succeeded' for child in children):
+                                outputs = [json.loads(child.output_json) for child in children]
+                                aggregate = NodeRun(
+                                    run_id=run.id,
+                                    node_id=item['id'],
+                                    attempt=max(child.attempt for child in children) + 1,
+                                    execution_kind='foreach_aggregate',
+                                    input_json=encoded({'_orchestration_role': 'foreach_aggregate', 'foreach_count': len(children)}),
+                                    output_json=encoded({'items': outputs}),
+                                    status='succeeded',
+                                    started_at=datetime.now(timezone.utc),
+                                    finished_at=datetime.now(timezone.utc),
+                                )
+                                db.add(aggregate)
+                                row.status = 'succeeded'
+                                parallel_changed = True
+                            else:
+                                parallel_children.extend((item, child) for child in children if child.status == 'idle')
+                    if parallel_changed:
+                        db.commit()
+                        if not parallel_children:
+                            continue
                     unfinished = [item for item in nodes.values() if rows[item['id']].status == 'idle']
                     ready = [item for item in unfinished if all(rows[dep].status == 'succeeded' or (rows[dep].status == 'skipped' and item.get('allow_missing_inputs')) for dep in item.get('deps', []))]
                     for item in ready:
@@ -414,7 +536,7 @@ class TaskExecutor:
                             row.finished_at = datetime.now(timezone.utc)
                     for item in ready:
                         foreach = item.get('foreach')
-                        if not foreach:
+                        if not foreach or foreach.get('mode', 'serial') == 'parallel':
                             continue
                         source = rows[foreach['source']]
                         values = value_at_path(json.loads(source.output_json) if source.output_json else None, foreach['path'])
@@ -445,10 +567,12 @@ class TaskExecutor:
                         db.commit()
                         continue
                     executable = [item for item in ready if not is_human_node(item) or item['id'] in decisions]
-                    human_nodes = [item for item in executable if is_human_node(item)]
-                    agent_nodes = [item for item in executable if not is_human_node(item)]
-                    executable = human_nodes + agent_nodes[:max_concurrency]
-                    if not executable:
+                    human_nodes = [item for item in executable if is_explicit_human_node(item)]
+                    regular_agent_nodes = [item for item in executable if not is_explicit_human_node(item)]
+                    work_units = [('node', item, rows[item['id']]) for item in regular_agent_nodes]
+                    work_units.extend(('foreach_item', item, child) for item, child in parallel_children)
+                    work_units = [('human', item, rows[item['id']]) for item in human_nodes] + work_units[:max_concurrency]
+                    if not work_units:
                         if ready:
                             run.status, task.status = 'waiting_human', 'waiting'
                         elif any(row.status == 'failed' for row in rows.values()):
@@ -467,10 +591,9 @@ class TaskExecutor:
                         return
                     calls = []
                     space = db.get(AppWorkspace, task.workspace_id) if task.workspace_id else None
-                    for item in executable:
-                        row = rows[item['id']]
+                    for unit_kind, item, row in work_units:
                         refs = decisions.get(item['id'], item.get('inputRefs', []))
-                        if item.get('node_type') in {'human', 'human_gate'}:
+                        if unit_kind == 'human':
                             inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if rows[ref].status == 'succeeded']
                             row.input_json = encoded({'task_input': snapshot['input'], 'refs': inputs, 'decision': 'human_confirmed'})
                             row.output_json = encoded({'selected_input_refs': refs, 'selected_results': inputs, 'status': 'confirmed'})
@@ -481,7 +604,11 @@ class TaskExecutor:
                         inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if rows[ref].status == 'succeeded']
                         context = redact({'task_input': snapshot['input'], 'prompt': item.get('prompt', ''), 'refs': inputs}, self.secrets)
                         foreach = item.get('foreach')
-                        if foreach:
+                        if unit_kind == 'foreach_item':
+                            state = json.loads(row.input_json)
+                            context['foreach_item'] = state['foreach_item']
+                            context['foreach_index'] = row.foreach_index
+                        elif foreach:
                             prior = json.loads(row.input_json)
                             values = prior.get('foreach_values', [])
                             index = row.attempt - 1
@@ -489,7 +616,7 @@ class TaskExecutor:
                                 raise TaskError('invalid_workflow', 'foreach 状态无效。', 422)
                             context['foreach_item'] = values[index]
                             context['foreach_index'] = index
-                        row.input_json, row.status = encoded(context), 'running'
+                        row.input_json, row.status = encoded({**context, '_orchestration_role': 'foreach_item'} if unit_kind == 'foreach_item' else context), 'running'
                         row.started_at = datetime.now(timezone.utc)
                         calls.append((row.id, item, context, space.gateway_id if space else ''))
                     db.commit()
@@ -514,6 +641,27 @@ class TaskExecutor:
                             row.finished_at = datetime.now(timezone.utc)
                         else:
                             db.add(NodeRun(run_id=run_id, node_id=row.node_id, attempt=row.attempt + 1, status='idle'))
+                    loop_changed = False
+                    for item in definition['nodes']:
+                        loop = item.get('loop')
+                        row = rows[item['id']]
+                        if not loop or row.status != 'succeeded':
+                            continue
+                        until_source = rows.get(loop['until']['source'])
+                        until_output = json.loads(until_source.output_json) if until_source and until_source.output_json else None
+                        if condition_matches(loop['until'], until_output):
+                            continue
+                        if row.attempt >= loop['max_iterations']:
+                            row.status = 'failed'
+                            row.error_code = 'loop_limit_exceeded'
+                            row.finished_at = datetime.now(timezone.utc)
+                            loop_changed = True
+                            continue
+                        next_attempt = row.attempt + 1
+                        for body_node_id in loop['body']:
+                            body_row = rows[body_node_id]
+                            db.add(NodeRun(run_id=run_id, node_id=body_node_id, attempt=next_attempt, status='idle'))
+                        loop_changed = True
                     foreach_rows = []
                     foreach_changed = False
                     for item in definition['nodes']:
@@ -547,7 +695,7 @@ class TaskExecutor:
                                 foreach_changed = True
                     for item, row, outputs, values in foreach_rows:
                         db.add(NodeRun(run_id=run_id, node_id=row.node_id, attempt=row.attempt + 1, status='idle', input_json=encoded({'foreach_values': values, 'foreach_index': len(outputs)})))
-                    if repeat_rows or foreach_rows or foreach_changed:
+                    if repeat_rows or foreach_rows or foreach_changed or loop_changed:
                         db.commit()
         except asyncio.CancelledError:
             raise
@@ -559,7 +707,7 @@ class TaskExecutor:
                     task = db.get(Task, run.task_id)
                     if task:
                         task.status = 'failed'
-                    for row in latest_nodes(db, run_id).values():
+                    for row in all_node_runs(db, run_id):
                         if row.status in ('queued', 'running'):
                             row.status = 'failed'
                             row.error_code = 'executor_error'

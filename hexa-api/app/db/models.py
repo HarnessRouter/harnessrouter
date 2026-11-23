@@ -147,6 +147,8 @@ class NodeRun(Base):
     run_id: Mapped[int] = mapped_column(ForeignKey('task_runs.id'), index=True)
     node_id: Mapped[str] = mapped_column(String(255), index=True)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
+    execution_kind: Mapped[str] = mapped_column(String(32), default="node")
+    foreach_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="idle")
     input_json: Mapped[str] = mapped_column(Text, default="{}")
     output_json: Mapped[str | None] = mapped_column(Text, nullable=True)
