@@ -1,5 +1,13 @@
 import type { AppNodeRun, AppRun } from './app-api';
 
+export function hasManifest(control: Pick<AppNodeRun, 'input'>): boolean {
+  return Array.isArray(control.input?.item_node_run_ids) || Array.isArray(control.input?.subgraph_node_run_ids);
+}
+
+export function manifestLabel(control: Pick<AppNodeRun, 'input'>): string {
+  return Array.isArray(control.input?.subgraph_node_run_ids) ? '子编排节点历史' : '集合项历史';
+}
+
 export function itemRetryAction(run: AppRun, control: AppNodeRun, item: AppNodeRun, replaying: boolean): { kind: 'retry'; itemId: number } | { kind: 'resume'; body: { kind: 'rerun'; target_node: string; resume_from_run_id: number; item_node_run_id: number } } | null {
   if (replaying || !run || !control || !item) return null;
   const manifest = control.input?.item_node_run_ids;
@@ -21,6 +29,8 @@ export function attemptLabel(attempt: AppNodeRun): string {
     ? `外层项 ${Number(attempt.input?.outer_foreach_index ?? 0) + 1} / 内层项 ${Number(attempt.foreach_index ?? 0) + 1}`
     : attempt.execution_kind === 'foreach_nested_aggregate' ? `外层项 ${Number(attempt.foreach_index ?? 0) + 1} 聚合`
     : attempt.execution_kind === 'dynamic_item' && typeof dynamic?.id === 'string' ? `计划节点 ${dynamic.id}`
+    : attempt.execution_kind === 'subgraph_node' && typeof attempt.input?.subgraph_node_id === 'string' ? `子节点 ${attempt.input.subgraph_node_id}`
+    : attempt.execution_kind === 'subgraph_aggregate' ? '子编排聚合'
     : attempt.execution_kind?.endsWith('_aggregate') ? '聚合' : typeof attempt.foreach_index === 'number' ? `集合项 ${attempt.foreach_index + 1}` : '节点';
   return `第 ${round} 轮 · ${item} · 尝试 ${attempt.attempt || 1}`;
 }

@@ -16,7 +16,32 @@ export function orchestrationIssue(workflow: { max_concurrency?: number; nodes: 
     if (node.subgraph && !node.deps?.length) return `${prefix}子编排节点必须依赖父工作流节点。`;
     if (node.subgraph && (!Number.isInteger(node.subgraph.max_concurrency ?? 1) || (node.subgraph.max_concurrency ?? 1) < 1 || (node.subgraph.max_concurrency ?? 1) > 10)) return `${prefix}子编排并发数必须是 1 到 10 的整数。`;
     if (node.subgraph && (!Array.isArray(node.subgraph.nodes) || !node.subgraph.nodes.length || node.subgraph.nodes.length > 10)) return `${prefix}子编排必须包含 1 到 10 个静态子节点。`;
-    if (node.subgraph && node.subgraph.nodes.some(child => !child.id || child.subgraph || child.repeat || child.foreach || child.loop || child.dynamic_plan)) return `${prefix}子编排只支持不可递归的静态 Agent 子节点。`;
+    if (node.subgraph) {
+      const children = node.subgraph.nodes;
+      if (children.some(child => typeof child.id !== 'string' || !child.id.trim() || child.subgraph || child.repeat || child.foreach || child.loop || child.dynamic_plan)) return `${prefix}子编排只支持不可递归的静态 Agent 子节点。`;
+      const ids = children.map(child => child.id);
+      if (new Set(ids).size !== ids.length) return `${prefix}子编排子节点 ID 不能重复。`;
+      const known = new Set(ids);
+      for (const child of children) {
+        const deps = child.deps || [], inputRefs = child.inputRefs || [];
+        if (!Array.isArray(deps) || !Array.isArray(inputRefs)) return `${prefix}子编排子节点 deps 和 inputRefs 必须是数组。`;
+        if (new Set(deps).size !== deps.length || new Set(inputRefs).size !== inputRefs.length) return `${prefix}子编排子节点依赖或 inputRefs 不能重复。`;
+        if (deps.some(dep => !known.has(dep))) return `${prefix}子编排子节点包含未知依赖。`;
+        if (inputRefs.some(ref => !deps.includes(ref))) return `${prefix}子编排子节点 inputRefs 必须属于 deps。`;
+      }
+      const visiting = new Set<string>(), visited = new Set<string>();
+      const visit = (id: string): boolean => {
+        if (visiting.has(id)) return false;
+        if (visited.has(id)) return true;
+        visiting.add(id);
+        const child = children.find(item => item.id === id)!;
+        if ((child.deps || []).every(dep => visit(dep))) {
+          visiting.delete(id); visited.add(id); return true;
+        }
+        return false;
+      };
+      if (ids.some(id => !visit(id))) return `${prefix}子编排子节点依赖不能形成环。`;
+    }
     if ((node.repeat || node.foreach) && (node.requires_human || ['human', 'human_gate'].includes(node.node_type || ''))) return `${prefix}人工确认节点仅支持单次执行。`;
     for (const config of [node.condition, node.foreach]) {
       if (config && !node.deps?.includes(config.source)) return `${prefix}条件或集合来源必须是前置依赖。`;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from 'antd';
 import { AppApiError, appListNodeItems, appRetryNode, appStartTaskRun, type AppNodeRun, type AppRun } from './app-api';
-import { attemptLabel, itemRetryAction } from './item-history';
+import { attemptLabel, itemRetryAction, manifestLabel } from './item-history';
 import { mergePage } from './pagination';
 import { nodeLabels } from './task-workbench';
 
@@ -36,11 +36,12 @@ export function RunItemHistory({ run, control, replaying, busy, action }: {
     if (!page) { setRetry(value => value + 1); return; }
     void read(page.pagination.offset + page.pagination.limit, generation.current);
   };
-  return <section className="run-item-history" aria-label="集合项历史" aria-busy={loading}>
-    <h4>集合项历史</h4>
-    {loading && !page && <p role="status">正在加载集合项…</p>}
+  const label = manifestLabel(control);
+  return <section className="run-item-history" aria-label={label} aria-busy={loading}>
+    <h4>{label}</h4>
+    {loading && !page && <p role="status">正在加载执行清单…</p>}
     {error && <p role="alert">{error}</p>}
-    {page && !page.items.length && <p>当前节点没有集合项历史。</p>}
+    {page && !page.items.length && <p>当前节点没有执行清单历史。</p>}
     {!!page?.items.length && <ol>{page.items.map(item => {
       const operation = itemRetryAction(run, control, item, replaying);
       return <li key={item.id}>
@@ -52,6 +53,6 @@ export function RunItemHistory({ run, control, replaying, busy, action }: {
         {operation?.kind === 'resume' && <Button disabled={busy} onClick={() => void action(() => appStartTaskRun(run.task_id, crypto.randomUUID(), operation.body))}>新建 Run 恢复此项</Button>}
       </li>;
     })}</ol>}
-    {(error || page?.pagination.has_more) && <Button loading={loading} onClick={more}>{error ? '重试加载集合项' : '加载更多集合项'}</Button>}
+    {(error || page?.pagination.has_more) && <Button loading={loading} onClick={more}>{error ? '重试加载执行清单' : '加载更多执行清单'}</Button>}
   </section>;
 }

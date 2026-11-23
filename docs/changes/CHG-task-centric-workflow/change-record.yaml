@@ -4,7 +4,7 @@ subgraph_slice:
   owner: Codex
   baseline: e48105ac
   branch: codex/agent-orchestration
-  status: verified_with_resume_and_client_slice
+  status: verified_with_resume_and_client_history_slice
   references: [spec.md#有界静态子编排, plan.md#有界静态子编排实施2026-11-24]
   reuse_decision: extend the existing NodeRun manifest and executor; keep child records inside the parent Run
   acceptance_ids: [AC-32]
@@ -12,7 +12,7 @@ subgraph_slice:
     red: "新增子图 suite 首次 10 项失败：配置未校验、子节点未展开、父子引用和失败状态未实现；修复后目标 suite 10 passed。"
     unit_integration: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py; exit 0; 10 passed in 4.38s。覆盖保存边界、父依赖、子 DAG、子项清单、串行/并行、聚合、失败阻断和清单读取。"
     regression: "初始静态子图与现有动态/嵌套集合回归 113 passed in 147.34s；恢复接线后 python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_fanout_resume.py --tb=short; exit 0; 63 passed in 76.18s；取消 fencing、执行进度和暂停后继续专项另 4 项通过。"
-    client: "client 中定向 npm.cmd test -- --test-name-pattern=\"static subgraphs|configuration validation|dynamic topology\"; exit 0; 62 passed；npm.cmd run typecheck; exit 0；npm.cmd run build; exit 0，保留既有大 chunk advisory。"
+    client: "client 中定向 npm.cmd test -- --test-name-pattern=\"static subgraphs|subgraph history|configuration validation|dynamic topology\"; exit 0; 64 passed；完整 npm.cmd test; exit 0; 64 passed；npm.cmd run typecheck; exit 0；npm.cmd run build; exit 0，保留既有约 958 KB 主 chunk advisory。子图保存、重新打开和 Chromium 窄屏无溢出：npx.cmd playwright test -c playwright.app.config.ts tests/app-ui/tasks.spec.ts -g \"static subgraph|subgraph|窄屏\" --project=chromium --workers=1; exit 0; 1 passed。"
     hygiene: "未引入迁移、UHP 字段、外部网络或 Cloud 入口；提交前执行 Python AST、YAML 解析和 git diff --check。"
   security_review: "子图仅来自已保存 WorkflowRevision；未知字段、控制模式、递归、人工节点和有环结构在保存时拒绝。子 NodeRun 必须属于同一 Run/父节点/iteration，模型输出不能修改拓扑；Agent/model 对子节点重复执行配置预检；清单读取复用现有用户和工作区鉴权。"
   limitations: [PostgreSQL/Linux, real Provider and deployment not_evaluated]

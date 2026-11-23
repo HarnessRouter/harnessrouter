@@ -347,6 +347,29 @@ test('dynamic DAG topology persists in the editor and survives reopening', async
   }
 });
 
+test('static subgraph children can be edited and persist across reopening', async ({ page }) => {
+  const fixture = await taskFixture(page);
+  fixture.tasks[2].workflow = structuredClone(fixture.tasks[0].workflow);
+  await enter(page);
+  await page.getByRole('row', { name: /待配置的草稿/ }).click();
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await page.getByLabel('执行 Agent 前人工确认输入').uncheck();
+  await page.getByLabel('执行模式').selectOption('subgraph');
+  await page.getByLabel('子节点提示词').fill('分析子任务');
+  await page.getByRole('button', { name: '添加子节点' }).click();
+  await expect(page.getByRole('group', { name: '静态子编排节点' })).toContainText('子节点 2');
+  await page.getByRole('button', { name: '保存任务流程' }).click();
+  await expect.poll(() => fixture.writes.length).toBe(1);
+  const group = fixture.writes[0].body.workflow.nodes.find((node: any) => node.id === 'report');
+  expect(group.subgraph.nodes).toHaveLength(2);
+  expect(group.subgraph.nodes[0].prompt).toBe('分析子任务');
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await expect(page.getByLabel('子节点提示词').first()).toHaveValue('分析子任务');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 for (const width of [1440, 800, 390]) test(`orchestration inspector remains usable at ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   const fixture = await taskFixture(page);

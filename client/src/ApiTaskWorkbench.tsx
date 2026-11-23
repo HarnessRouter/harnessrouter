@@ -16,6 +16,7 @@ import { layoutRunNodes, replayStates } from './run-history';
 import { mergePage, nextOffset } from './pagination';
 import type { ClientTemplate } from './app-types';
 import { loadWorkbenchLists } from './workbench-loading';
+import { hasManifest } from './item-history';
 
 export type TaskSection = 'mine' | 'templates' | 'runs';
 type Counts = { tasks: number; runs: number; templates: number };
@@ -553,7 +554,7 @@ function RunSnapshot({ run, onAction }: { run: AppRun; onAction: (action: () => 
   };
   useEffect(() => { if (!playing) return; if (currentStep >= events.length) { setPlaying(false); return; } const timer = setTimeout(() => setStep(currentStep + 1), 700); return () => clearTimeout(timer); }, [playing, currentStep, events.length]);
   const action = async (operation: () => Promise<unknown>) => { setBusy(true); setError(''); try { await onAction(operation); } catch (cause) { setError(errorText(cause)); } finally { setBusy(false); } };
-  const currentControl = run.nodes.find(node => node.node_id === selected && Array.isArray(node.input?.item_node_run_ids));
+  const currentControl = run.nodes.find(node => node.node_id === selected && hasManifest(node));
   const itemHistoryPanel = currentControl ? <RunItemHistory key={`${run.id}-${currentControl.id}`} run={run} control={currentControl} replaying={step !== null} busy={busy} action={action} /> : null;
   const propertyContent = <><header className="run-properties-header"><h3>{selectedNode?.name || selected}</h3></header><div className="run-properties-tabs" role="tablist" aria-label="运行属性标签">{(['node', 'run', 'events', 'debug'] as const).map((value, index) => <button role="tab" key={value} aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{['节点', '运行', '事件', '调试'][index]}</button>)}</div><div className="run-properties-body">
      <p>Run #{run.id} · Workflow v{run.workflow_revision}</p>

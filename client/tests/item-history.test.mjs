@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { itemRetryAction, attemptLabel } from '../src/item-history.ts';
+import { itemRetryAction, attemptLabel, hasManifest, manifestLabel } from '../src/item-history.ts';
 
 const run = { id: 71, task_id: 9, status: 'failed', paused: false };
 const control = { id: 8, iteration: 2, node_id: 'work', status: 'failed', input: { item_node_run_ids: [11, 12] } };
@@ -31,4 +31,13 @@ test('nested history identifies both indexes and remains read-only at the leaf',
 
 test('dynamic item labels expose stable local node identity', () => {
   assert.equal(attemptLabel({ ...item, execution_kind: 'dynamic_item', input: { dynamic_item: { id: 'join' } } }), '第 2 轮 · 计划节点 join · 尝试 3');
+});
+
+test('subgraph history uses its persisted child manifest and local identity', () => {
+  const control = { id: 18, node_id: 'group', input: { subgraph_node_run_ids: [21, 22] } };
+  assert.equal(hasManifest(control), true);
+  assert.equal(manifestLabel(control), '子编排节点历史');
+  assert.equal(attemptLabel({ ...item, execution_kind: 'subgraph_node', input: { subgraph_node_id: 'review' } }), '第 2 轮 · 子节点 review · 尝试 3');
+  assert.equal(attemptLabel({ ...item, execution_kind: 'subgraph_aggregate' }), '第 2 轮 · 子编排聚合 · 尝试 3');
+  assert.equal(hasManifest({ id: 19, node_id: 'group', input: {} }), false);
 });

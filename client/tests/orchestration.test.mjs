@@ -44,3 +44,13 @@ test('static subgraphs validate bounded non-recursive child definitions', () => 
   assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { max_concurrency: 11, nodes: [{ id: 'child' }] } }] }), /并发数/);
   assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { max_concurrency: 1, nodes: [{ id: 'child', subgraph: {} }] } }] }), /不可递归/);
 });
+
+test('static subgraphs reject duplicate, unknown, cyclic and invalid child references', () => {
+  const base = { id: 'group', deps: ['source'], subgraph: { nodes: [{ id: 'a' }, { id: 'b', deps: ['a'], inputRefs: ['a'] }] } };
+  assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a' }, { id: 'a' }] } }] }), /重复/);
+  assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a', deps: ['missing'] }] } }] }), /未知/);
+  assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a', deps: ['b'] }, { id: 'b', deps: ['a'] }] } }] }), /环/);
+  assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a', inputRefs: ['b'] }, { id: 'b' }] } }] }), /inputRefs/);
+  assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a', deps: ['a'] }] } }] }), /环/);
+  assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a', deps: 'source' }] } }] }), /必须是数组/);
+});
