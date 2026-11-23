@@ -6,10 +6,10 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import String, cast, delete, or_, select
 
-from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
+from app.db.models import AppWorkspace, Artifact, CommandReceipt, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
 from app.tasks.fanout import node_record_usage, retry_fanout, manifest_records
-from app.tasks.service import ACTIVE, TaskError, all_node_runs, append_run_event, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
+from app.tasks.service import ACTIVE, TaskError, all_node_runs, append_run_event, command_replay, command_receipt_json, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, receipts_for_nodes, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
 class TaskBody(BaseModel):
@@ -359,10 +359,12 @@ def build_router(app, require_session, user_id):
             if not row:
                 raise TaskError('not_found', '节点记录不存在。', 404)
             run = owned_run(db, row.run_id, user_id(session))
+            receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
             offset, limit = page(offset, limit, 500)
             attempts = db.scalars(select(NodeRun).where(NodeRun.run_id == run.id, NodeRun.node_id == row.node_id).order_by(NodeRun.iteration, NodeRun.attempt, NodeRun.id).offset(offset).limit(limit + 1)).all()
             artifacts = db.scalars(select(Artifact).where(Artifact.node_run_id == row.id, Artifact.user_id == user_id(session)).order_by(Artifact.id.desc()).limit(51)).all()
-            result = {**node_json(row), 'environment': json.loads(run.snapshot_json), 'attempts': [node_json(attempt) for attempt in attempts[:limit]],
+            receipts = receipts_for_nodes(db, attempts)
+            result = {**node_json(row, receipt), 'environment': json.loads(run.snapshot_json), 'attempts': [node_json(attempt, receipts.get(attempt.id)) for attempt in attempts[:limit]],
                       'attempts_pagination': {'offset': offset, 'limit': limit, 'has_more': len(attempts) > limit}, 'artifacts': [artifact_json(item) for item in artifacts[:50]],
                       'artifacts_pagination': {'offset': 0, 'limit': 50, 'has_more': len(artifacts) > 50}}
             return result

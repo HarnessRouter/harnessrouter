@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 
-from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, WorkflowRevision
+from app.db.models import AppWorkspace, Artifact, CommandReceipt, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, WorkflowRevision
 from app.gateway.client import GatewayError
 from app.tasks.domain import NodeSpec, WorkflowSpec, redact, validate_workflow
 from app.tasks.fanout import node_record_usage
@@ -341,11 +341,23 @@ def task_json(db, task):
             'latest_run_id': latest.id if latest else None}
 
 
-def node_json(row):
+def command_receipt_json(receipt):
+    if receipt is None:
+        return None
+    return {'id': receipt.id, 'node_run_id': receipt.node_run_id, 'command_id': receipt.command_id,
+            'request_hash': receipt.request_hash, 'side_effect_state': receipt.side_effect_state,
+            'reconciliation_required': receipt.reconciliation_required, 'response_id': receipt.response_id,
+            'error_code': receipt.error_code,
+            'created_at': receipt.created_at.isoformat() if receipt.created_at else None,
+            'updated_at': receipt.updated_at.isoformat() if receipt.updated_at else None}
+
+
+def node_json(row, receipt=None):
     return {'id': row.id, 'node_id': row.node_id, 'run_id': row.run_id, 'attempt': row.attempt, 'status': row.status,
             'execution_kind': row.execution_kind, 'iteration': row.iteration, 'foreach_index': row.foreach_index,
             'input': json.loads(row.input_json), 'output': json.loads(row.output_json) if row.output_json else None,
             'error_code': row.error_code, 'response_id': row.response_id,
+            'command_receipt': command_receipt_json(receipt),
             'progress': redact({'text': row.partial_text or '', 'execution': json.loads(row.execution_json) if row.execution_json else {}}),
             'started_at': row.started_at.isoformat() if row.started_at else None,
             'finished_at': row.finished_at.isoformat() if row.finished_at else None}
@@ -365,6 +377,13 @@ def latest_nodes(db, run_id):
         if prior is None or priority >= prior_priority:
             latest[row.node_id] = row
     return latest
+
+
+def receipts_for_nodes(db, rows):
+    ids = [row.id for row in rows if row is not None]
+    if not ids:
+        return {}
+    return {receipt.node_run_id: receipt for receipt in db.scalars(select(CommandReceipt).where(CommandReceipt.node_run_id.in_(ids))).all()}
 
 
 def all_node_runs(db, run_id):
@@ -423,12 +442,13 @@ def run_json(db, run):
     revision_ref = {'id': revision.id, 'revision': revision.revision} if revision else {'id': run.workflow_revision_id, 'revision': run.workflow_revision}
     rows = latest_nodes(db, run.id)
     decisions = db.scalars(select(RunDecision).where(RunDecision.run_id == run.id).order_by(RunDecision.id)).all()
+    receipts = receipts_for_nodes(db, rows.values())
     return {'id': run.id, 'task_id': run.task_id, 'workflow_revision': run.workflow_revision, 'workflow_revision_ref': revision_ref,
             'workflow_revision_number': run.workflow_revision, 'workflow_revision_id': run.workflow_revision_id,
             'status': run.status,
             'paused': run.paused, 'kind': run.kind, 'superseded_by': run.superseded_by,
             'workflow': snapshot.get('workflow', {}), 'execution_snapshot': snapshot,
-            'nodes': [node_json(row) for row in rows.values()],
+            'nodes': [node_json(row, receipts.get(row.id)) for row in rows.values()],
             'decisions': [{'node_id': row.node_id, 'input_refs': json.loads(row.input_refs_json)} for row in decisions
                           if row.node_id in rows and row.iteration == rows[row.node_id].iteration],
             'decision_history': [{'node_id': row.node_id, 'iteration': row.iteration,
@@ -599,6 +619,11 @@ class TaskExecutor:
                 for row in all_node_runs(db, run.id):
                     if row.status in ('queued', 'running'):
                         row.status, row.error_code = 'failed', 'interrupted_unknown_outcome'
+                        receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
+                        if receipt and receipt.side_effect_state in ('not_started', 'started'):
+                            receipt.side_effect_state = 'unknown'
+                            receipt.reconciliation_required = True
+                            receipt.error_code = 'interrupted_unknown_outcome'
                         append_run_event(db, run.id, 'node.unknown', node_run_id=row.id,
                                          data={'node_id': row.node_id, 'error_code': row.error_code})
                 append_run_event(db, run.id, 'run.failed', data={'error_code': 'interrupted_unknown_outcome'})
@@ -749,6 +774,15 @@ class TaskExecutor:
                             context['_orchestration_role'] = unit_kind
                         row.input_json, row.status = encoded(redact(context, self.secrets)), 'running'
                         row.started_at = datetime.now(timezone.utc)
+                        command_id = f'hexa-task-{run.id}-{row.id}'
+                        request_hash = hashlib.sha256(encoded({
+                            'command_id': command_id,
+                            'agent_id': item.get('agent_id', ''),
+                            'model': item.get('model', ''),
+                            'context': context,
+                        }).encode()).hexdigest()
+                        db.add(CommandReceipt(node_run_id=row.id, command_id=command_id,
+                                              request_hash=request_hash, side_effect_state='not_started'))
                         append_run_event(db, run.id, 'node.dispatched', node_run_id=row.id,
                                          data={'node_id': row.node_id, 'execution_kind': row.execution_kind,
                                                'attempt': row.attempt, 'iteration': row.iteration})
@@ -832,6 +866,22 @@ class TaskExecutor:
 
     async def execute_node(self, run_id, attempt_id, item, context, workspace_id):
         result, error = None, None
+        exception_response_id = None
+        command_id = f'hexa-task-{run_id}-{attempt_id}'
+        request_hash = hashlib.sha256(encoded({
+            'command_id': command_id,
+            'agent_id': item.get('agent_id', ''),
+            'model': item.get('model', ''),
+            'context': context,
+        }).encode()).hexdigest()
+        with self.session_factory() as db:
+            receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == attempt_id))
+            if receipt is None:
+                receipt = CommandReceipt(node_run_id=attempt_id, command_id=command_id,
+                                         request_hash=request_hash, side_effect_state='not_started')
+                db.add(receipt)
+            receipt.side_effect_state = 'started'
+            db.commit()
         def save_progress(*, response_id=None, partial=None, details=None):
             with self.session_factory() as db:
                 row, run = db.get(NodeRun, attempt_id), db.get(Run, run_id)
@@ -860,7 +910,9 @@ class TaskExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            exception_response_id = getattr(exc, 'response_id', None)
             error = 'agent_failed' if isinstance(exc, GatewayError) and not exc.uncertain else 'interrupted_unknown_outcome'
+        uncertain = error == 'interrupted_unknown_outcome'
         with self.session_factory() as db:
             run, row = db.get(Run, run_id), db.get(NodeRun, attempt_id)
             if run is None or row is None or run.status != 'running' or row.status != 'running':
@@ -887,6 +939,10 @@ class TaskExecutor:
                 artifacts.append({'id': artifact.id, 'filename': artifact.filename, 'media_type': artifact.media_type, 'bytes': artifact.bytes})
             row.status = 'failed' if error else 'succeeded'
             row.error_code = error
+            if isinstance(result, dict) and result.get('response_id'):
+                row.response_id = str(result['response_id'])
+            elif exception_response_id:
+                row.response_id = str(exception_response_id)
             if error:
                 row.output_json = None
             else:
@@ -896,6 +952,12 @@ class TaskExecutor:
                     safe_result['artifacts'] = artifacts
                 row.output_json = encoded(safe_result)
             row.finished_at = datetime.now(timezone.utc)
-            append_run_event(db, run.id, 'node.failed' if error else 'node.succeeded', node_run_id=row.id,
+            receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
+            if receipt:
+                receipt.side_effect_state = 'unknown' if uncertain else ('failed' if error else 'completed')
+                receipt.reconciliation_required = uncertain
+                receipt.response_id = row.response_id
+                receipt.error_code = error
+            append_run_event(db, run.id, 'node.unknown' if uncertain else ('node.failed' if error else 'node.succeeded'), node_run_id=row.id,
                              data={'node_id': row.node_id, **({'error_code': error} if error else {})})
             db.commit()

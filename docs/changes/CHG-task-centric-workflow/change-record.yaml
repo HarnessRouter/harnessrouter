@@ -88,6 +88,29 @@ run_event_slice:
   rollback: "停止活动 Run 后回退事件写入、API、模型升级和迁移；历史 Run/NodeRun 快照保留，已写 RunEvent 仅允许通过数据库回滚部署版本恢复。"
   remaining: [PostgreSQL migration lane, CommandReceipt, runtime lease/heartbeat, native Gateway approval]
   next_action: "进入 CommandReceipt 与 Runtime Lease/Heartbeat 切片；真实 PostgreSQL、Linux、Provider 和部署验证仍需目标环境。"
+command_receipt_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: implementing
+  baseline: 14688656
+  branch: codex/agent-orchestration
+  references: [spec.md#commandreceipt-回执, plan.md#commandreceipt-回执实施2026-11-24]
+  reuse_decision: keep user-command TaskCommand separate; add one receipt per Gateway-backed NodeRun attempt and reuse RunEvent facts
+  acceptance_ids: [AC-35]
+  behavior:
+    before: "NodeRun 只有 response_id 和状态，无法稳定区分一次 Gateway 副作用的命令身份、请求摘要和 unknown 回执。"
+    after: "每个 Gateway 调用创建 CommandReceipt；成功、明确失败、不确定中断和进程恢复分别记录 completed、failed、unknown 与 reconciliation_required。"
+  verification:
+    red: "新增 test_command_receipts.py 首次读取 command_receipt 字段失败 2 项；实现成功回执和不确定回执后目标通过，再补进程恢复路径。"
+    backend: "python -X utf8 -m pytest -q hexa-api/tests/test_command_receipts.py --tb=short; exit 0; 3 passed；与 RunEvent、执行进度和编排相关回归合计 263 passed。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_events.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_subgraph.py --tb=short; exit 0; 263 passed in 269.39s。"
+    migration: "PostgreSQL 011_command_receipts.sql 已加入 migrate.py；真实 PostgreSQL lane 未配置，需在 HEXA_TEST_POSTGRES_URL 环境补跑。"
+    hygiene: "python -m compileall -q hexa-api/app、YAML 解析和 git diff --check 通过。"
+  security_review: "回执只返回命令 ID、request_hash、状态、错误码和脱敏 response_id；不保存原始上下文、工具参数、凭据或授权头。"
+  limitations: [full orchestration regression pending, real PostgreSQL/Linux/deployment, exact reconciliation, runtime lease/heartbeat, native tool approval runtime]
+  rollback: "停止带回执的活动 Run 后回退回执写入、读取、模型升级和迁移；RunEvent 与历史 NodeRun 快照保留。"
+  remaining: [full orchestration regression, PostgreSQL migration lane, exact reconciliation, runtime lease/heartbeat, native Gateway approval]
+  next_action: "跑受影响编排回归并提交回执切片；随后实现 Run lease/heartbeat 与 fencing。"
 approval_binding_slice:
   date: "2026-11-24"
   owner: Codex

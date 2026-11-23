@@ -326,6 +326,17 @@ serial 按已保存计划顺序挑选一个就绪节点；parallel 挑选所有�
 `run_id`、事件 ID 分页；断线客户端可以用最后一个事件 ID 继续读取。事件流是运行事实来源，当前 Run/NodeRun 状态是最新快照，
 两者不一致时以追加事件和明确的 `unknown/reconciling` 处理为准，不能自动重放不确定副作用。
 
+### CommandReceipt 回执
+
+每次实际向 Gateway 派发的 Agent 调用必须绑定一个不可变 `CommandReceipt`，与一次 NodeRun 尝试一对一关联。回执至少保存
+`command_id`、`request_hash`、`side_effect_state`、`reconciliation_required`、脱敏 `response_id`、错误码和创建/更新时间；
+`side_effect_state` 只能是 `not_started`、`started`、`completed`、`failed` 或 `unknown`。`command_id` 由 Hexa 服务端生成，
+不能由工作流或模型输出覆盖；`request_hash` 覆盖 Agent、模型、执行上下文和命令身份，不能用来还原原始输入。
+
+回执不保存原始工具参数、凭据、授权头或 secret。Gateway 明确失败写 `failed`；Gateway 返回不确定中断、进程停止或运行租约
+丢失时写 `unknown` 并置 `reconciliation_required=true`。`unknown` 回执不能被重试逻辑自动重新派发；只有用户显式创建新 Run 或
+未来已实现且精确绑定的 reconciliation 流程才能继续。节点调试和 Run 节点摘要可以读取回执摘要，但不得扩大秘密字段。
+
 ### Task 状态
 
 `draft`、`running`、`waiting`、`completed`、`failed`、`archived`。
@@ -622,6 +633,7 @@ Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。�
 - **AC-21 受限动态计划：** `dynamic_plan` 只能从依赖节点的数组读取最多 10 个严格 `{id,prompt}` 项；项级 Agent 配置固定继承静态节点，运行时持久化清单并按模式执行，聚合到独立 `dynamic_aggregate`；非法项、重复 ID、超限和额外执行配置在 Gateway 派发前失败；不生成可递归动态子图、不修改 WorkflowRevision。
 - **AC-32 有界静态子编排：** 保存时拒绝空/超限/有环/三层及以上嵌套/动态嵌套/带控制模式/人工节点/未知字段的 `subgraph`；允许最多两层静态子编排。运行时持久化父子清单，按各层子图并发上限派发，内层完成并聚合后才完成外层控制节点，外层聚合后才释放父节点下游；失败取消未开始兄弟并保留叶子、内层聚合和外层控制历史；终态恢复只复制同一 Run 中可验证的嵌套清单，成功叶子复用、指定失败叶子重试，清单 API 验证同 Run、父 NodeRun、iteration 和层级归属，模型输出不能修改拓扑。
 - **AC-34 RunEvent 事实流：** 成功、失败、暂停、继续、取消、恢复和节点重试必须在同一事务追加不可变 `RunEvent`；事件 ID 在 Run 内递增，重启后的活动副作用写入 `node.unknown`/`run.recovered_unknown` 而不自动重放；分页接口先做任务权限检查，跨页无重复、无越权、无副作用，幂等命令重放不追加重复事件。
+- **AC-35 CommandReceipt 回执：** 每个实际 Gateway 调用都生成一条与 NodeRun 一对一的回执，成功进入 `completed`，明确失败进入 `failed`，不确定中断、进程恢复或租约丢失进入 `unknown` 且要求 reconciliation；回执包含稳定 `command_id` 和 `request_hash`，不包含原始工具参数、凭据或授权头，`unknown` 不自动重放，节点详情可分页读取脱敏摘要。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 

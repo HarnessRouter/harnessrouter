@@ -18,6 +18,7 @@ MIGRATIONS = (
     "008_node_orchestration.sql",
     "009_node_iterations.sql",
     "010_run_events.sql",
+    "011_command_receipts.sql",
 )
 
 

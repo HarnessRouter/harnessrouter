@@ -151,6 +151,22 @@ class RunEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class CommandReceipt(Base):
+    __tablename__ = "command_receipts"
+    __table_args__ = (UniqueConstraint("node_run_id", name="uq_command_receipt_node_run"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_run_id: Mapped[int] = mapped_column(ForeignKey('node_runs.id'), index=True)
+    command_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    request_hash: Mapped[str] = mapped_column(String(64), index=True)
+    side_effect_state: Mapped[str] = mapped_column(String(32), default='not_started')
+    reconciliation_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    response_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class NodeRun(Base):
     __tablename__ = "node_runs"
 
@@ -297,6 +313,7 @@ def create_session_factory(database_url: str):
             if 'iteration' not in decision_columns:
                 connection.execute(text('ALTER TABLE run_decisions ADD COLUMN iteration INTEGER NOT NULL DEFAULT 1'))
             Base.metadata.create_all(engine, tables=[RunEvent.__table__])
+            Base.metadata.create_all(engine, tables=[CommandReceipt.__table__])
     else:
         # PostgreSQL schema changes are deployment-owned migrations. The API must
         # fail clearly when 005_task_artifacts.sql has not been applied rather

@@ -126,6 +126,14 @@ void journal，接口不触发工具。单元验证 guard/参数与 journal，�
 PostgreSQL 通过 010 迁移；验证领域/API/受控 Gateway、进程恢复、权限和幂等回归。后续 CommandReceipt、租约和 Gateway native approval 复用
 该事件事实流，但不在本切片假设审批已经生产接入。
 
+### CommandReceipt 回执实施（2026-11-24）
+
+在每次 Gateway 派发前创建与 NodeRun 一对一的 `CommandReceipt`，使用服务端生成的 `command_id` 和覆盖 Agent/模型/执行上下文的
+`request_hash` 固定调用身份；调用开始、完成、明确失败和不确定中断分别推进副作用状态。回执摘要接入 Run/NodeRun 读取和调试
+详情，原始输入、工具参数、凭据和授权头继续留在脱敏边界之外。进程恢复会把活动节点的 `started` 回执收敛到
+`unknown/reconciliation_required`，不得自动重新派发。先写成功、不确定和重启恢复测试，再运行任务编排回归与 PostgreSQL 迁移检查；
+本切片不实现精确 reconciliation、Runtime lease 或 Gateway native tool approval。
+
 不得将前述受限动态项展开等同于已完成动态子图，或将仅通过目标测试的切片标记为完整引擎完成。
 
 ### 循环与集合组合的状态边界
