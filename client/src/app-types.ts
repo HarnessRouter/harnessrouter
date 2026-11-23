@@ -6,11 +6,13 @@ export type NodeCondition = OutputPredicate & { source: string };
 export interface NodeRepeat { max_iterations: number; until: { path: string; op: 'eq'; value: JsonValue } | { path: string; op: 'exists'; value?: never } }
 export interface NodeForeach { source: string; path: string; max_items: number; mode?: 'serial' | 'parallel' }
 export interface NodeLoop { body: string[]; max_iterations: number; until: NodeCondition }
+export interface NodeDynamicPlan { source: string; path: string; max_items: number; mode?: 'serial' | 'parallel' }
 export interface OrchestrationNode {
   condition?: NodeCondition;
   repeat?: NodeRepeat;
   foreach?: NodeForeach;
   loop?: NodeLoop;
+  dynamic_plan?: NodeDynamicPlan;
   allow_missing_inputs?: boolean;
 }
 export interface TemplateNode extends OrchestrationNode {

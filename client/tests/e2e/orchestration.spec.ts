@@ -44,12 +44,14 @@ test('orchestration settings persist through the editor, execution and historica
   }, { timeout: 30000 }).toBe('completed');
   const worker = run.nodes.find((node: any) => node.node_id === repeatTask.workflow.nodes[1].id);
   expect(worker.output.items).toHaveLength(1);
-  expect(worker.input.foreach_index).toBe(0);
+  const workerHistory = await api(page, `/api/hexa/node-runs/${worker.id}`);
+  const itemAttempt = workerHistory.body.attempts.find((attempt: any) => attempt.execution_kind === 'foreach_item');
+  expect(itemAttempt.foreach_index).toBe(0);
   await page.goto(`/runs/${run.id}`);
   await page.getByRole('button', { name: '打开流程图', exact: true }).click();
   await page.getByRole('button', { name: '逐项处理 节点', exact: true }).click();
   const properties = page.getByRole('region', { name: '编排运行配置' });
   await expect(properties).toContainText('最大并发数：2');
   await expect(properties).toContainText('串行集合展开');
-  await expect(properties).toContainText('集合项 1');
+  await expect(properties).toContainText('已聚合 1 个集合项');
 });

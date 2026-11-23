@@ -274,6 +274,10 @@ def create_session_factory(database_url: str):
                 connection.execute(text("ALTER TABLE node_runs ADD COLUMN partial_text TEXT NOT NULL DEFAULT ''"))
             if 'execution_json' not in node_columns:
                 connection.execute(text('ALTER TABLE node_runs ADD COLUMN execution_json TEXT'))
+            if 'execution_kind' not in node_columns:
+                connection.execute(text("ALTER TABLE node_runs ADD COLUMN execution_kind VARCHAR(32) NOT NULL DEFAULT 'node'"))
+            if 'foreach_index' not in node_columns:
+                connection.execute(text('ALTER TABLE node_runs ADD COLUMN foreach_index INTEGER'))
     else:
         # PostgreSQL schema changes are deployment-owned migrations. The API must
         # fail clearly when 005_task_artifacts.sql has not been applied rather

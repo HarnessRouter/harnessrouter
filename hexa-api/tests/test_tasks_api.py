@@ -239,6 +239,28 @@ def test_template_task_pins_source_and_saved_template_version(client):
     assert denied.status_code == 404
 
 
+def test_template_versions_preserve_orchestration_configuration(client):
+    login(client)
+    definition = {'nodes': [
+        {'id': 'source', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+        {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['source'], 'inputRefs': ['source'],
+         'condition': {'source': 'source', 'path': 'ready', 'op': 'exists'},
+         'foreach': {'source': 'source', 'path': 'items', 'max_items': 2, 'mode': 'parallel'}},
+        {'id': 'planner', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['worker'], 'inputRefs': ['worker'],
+         'dynamic_plan': {'source': 'worker', 'path': 'plan', 'max_items': 2, 'mode': 'serial'}},
+    ], 'max_concurrency': 3}
+    template = client.post('/api/hexa/templates', json={'title': '编排模板', 'workflow': definition})
+    assert template.status_code == 201
+    stored = template.json()['versions'][0]['workflow']
+    assert stored['max_concurrency'] == 3
+    assert stored['nodes'][1]['condition'] == definition['nodes'][1]['condition']
+    assert stored['nodes'][1]['foreach'] == definition['nodes'][1]['foreach']
+    assert stored['nodes'][2]['dynamic_plan'] == definition['nodes'][2]['dynamic_plan']
+
+    task = client.post('/api/hexa/tasks', json={'title': '模板任务', 'template_version_id': template.json()['versions'][0]['id']}).json()
+    assert task['workflow'] == stored
+
+
 def test_task_domain_payload_exposes_saved_revision_source_and_run_snapshot(client):
     login(client)
     definition = {'nodes': [{'id': 'source', 'agent_id': 'agent-1', 'model': 'gpt-6.1'}]}

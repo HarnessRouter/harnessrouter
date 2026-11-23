@@ -93,6 +93,31 @@ def test_workflow_accepts_bounded_foreach_only_from_a_dependency():
     ]})
 
 
+@pytest.mark.parametrize('plan', [
+    {'source': 'missing', 'path': 'items', 'max_items': 2},
+    {'source': 'gate', 'path': '../items', 'max_items': 2},
+    {'source': 'gate', 'path': 'items', 'max_items': 0},
+    {'source': 'gate', 'path': 'items', 'max_items': 11},
+    {'source': 'gate', 'path': 'items', 'max_items': 2, 'mode': 'unknown'},
+])
+def test_workflow_rejects_invalid_dynamic_plan(plan):
+    with pytest.raises(TaskError) as failure:
+        workflow_from_json({'nodes': [
+            {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+            {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'], 'dynamic_plan': plan},
+        ]})
+    assert failure.value.code == 'invalid_workflow'
+    assert failure.value.status == 422
+
+
+def test_workflow_accepts_restricted_dynamic_plan():
+    workflow_from_json({'nodes': [
+        {'id': 'gate', 'agent_id': 'agent-1', 'model': 'gpt-6.1'},
+        {'id': 'worker', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'deps': ['gate'],
+         'dynamic_plan': {'source': 'gate', 'path': 'items', 'max_items': 10, 'mode': 'parallel'}},
+    ]})
+
+
 @pytest.mark.parametrize('loop', [
     {'body': ['a'], 'max_iterations': 0, 'until': {'source': 'a', 'path': 'done', 'op': 'eq', 'value': True}},
     {'body': ['missing'], 'max_iterations': 2, 'until': {'source': 'a', 'path': 'done', 'op': 'eq', 'value': True}},
@@ -325,6 +350,56 @@ def test_parallel_foreach_failure_cancels_unstarted_siblings_and_preserves_compl
     assert worker['error_code'] == 'interrupted_unknown_outcome'
 
 
+def test_restricted_dynamic_plan_expands_safe_items_with_fixed_agent_and_aggregates(client, app):
+    authenticated(client)
+    import asyncio
+    active = 0
+    peak = 0
+    calls = []
+
+    async def dynamic_gateway(text, previous, key, **kwargs):
+        nonlocal active, peak
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute planner':
+            return {'status': 'completed', 'items': [
+                {'prompt': 'first item', 'id': 'a'},
+                {'prompt': 'second item', 'id': 'b'},
+                {'prompt': 'third item', 'id': 'c'},
+            ]}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'items_seen': context['refs'][0]['output']['items']}
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.02)
+            return {'status': 'completed', 'handled': context['dynamic_item']['id']}
+        finally:
+            active -= 1
+
+    app.state.gateway.create_response = dynamic_gateway
+    task = client.post('/api/hexa/tasks', json={'title': 'Dynamic plan', 'workflow': {
+        'max_concurrency': 2,
+        'nodes': [
+            node('planner'),
+            node('worker', deps=['planner'], inputRefs=['planner'], dynamic_plan={'source': 'planner', 'path': 'items', 'max_items': 3, 'mode': 'parallel'}),
+            node('report', deps=['worker'], inputRefs=['worker'], final_report=True),
+        ],
+    }}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'dynamic-plan'})
+    completed = wait_run(client, started.json()['id'], {'completed'})
+    worker = next(row for row in completed['nodes'] if row['node_id'] == 'worker')
+    assert peak == 2
+    assert worker['output']['items'] == [
+        {'handled': 'a', 'status': 'completed'},
+        {'handled': 'b', 'status': 'completed'},
+        {'handled': 'c', 'status': 'completed'},
+    ]
+    attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
+    assert [row['execution_kind'] for row in attempts] == ['node', 'dynamic_item', 'dynamic_item', 'dynamic_item', 'dynamic_aggregate']
+    assert [call['dynamic_item']['id'] for call in calls if 'dynamic_item' in call] == ['a', 'b', 'c']
+
+
 def test_bounded_repeat_fails_at_limit_without_dispatching_extra_attempt(client, app):
     authenticated(client)
     calls = 0
@@ -377,7 +452,10 @@ def test_bounded_foreach_runs_each_item_and_aggregates_outputs(client, app):
         {'status': 'completed', 'item': 'gamma', 'index': 2},
     ]
     attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
-    assert [row['attempt'] for row in attempts] == [1, 2, 3]
+    item_attempts = [row for row in attempts if row['execution_kind'] == 'foreach_item']
+    assert [row['attempt'] for row in item_attempts] == [1, 1, 1]
+    assert [row['foreach_index'] for row in item_attempts] == [0, 1, 2]
+    assert [row['execution_kind'] for row in attempts if row['execution_kind'].endswith('_aggregate')] == ['foreach_aggregate']
     assert [call.get('foreach_item') for call in calls] == [None, 'alpha', 'beta', 'gamma', None]
 
 

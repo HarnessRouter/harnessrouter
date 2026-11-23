@@ -76,6 +76,22 @@ concurrency_slice:
       integration: "逐项成功、空集合、非法集合和超限集合均通过受控 Gateway 测试"
       hygiene: "python -m pytest -q hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_task_domain.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_execution_progress.py hexa-api/tests/test_http_integration.py; 85 passed in 45.32s; python -m py_compile hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py; git diff --check; passed"
   remaining: [nested_foreach, dynamic_plan]
+dynamic_plan_slice:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified
+  baseline: 45b9b3c2
+  scope: 受限动态计划数组校验、持久化 dynamic_item/aggregate NodeRun、串行/并行展开、静态 Agent 配置继承和模板序列化
+  acceptance_ids: [AC-21]
+  impact: [hexa-api/app/tasks/fanout.py, hexa-api/app/tasks/service.py, hexa-api/app/tasks/router.py, hexa-api/tests/test_orchestration_safety.py, hexa-api/tests/test_task_workflows.py, hexa-api/tests/test_tasks_api.py, client/src/app-types.ts, client/src/orchestration.ts, client/src/OrchestrationFields.tsx, client/tests/e2e/orchestration.spec.ts]
+  verification:
+    red: "动态项非法配置原先会直接完成；模板保存原先丢失编排字段；修复前浏览器用例读取旧的 aggregate foreach_index 语义。"
+    backend: "python -m pytest -q hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_task_workflows.py; 62 passed; python -m pytest -q hexa-api/tests/test_tasks_api.py::test_template_versions_preserve_orchestration_configuration hexa-api/tests/test_task_workflows.py hexa-api/tests/test_orchestration_safety.py; 63 passed"
+    concurrency: "python -m pytest -q hexa-api/tests/test_task_concurrency.py; 24 passed"
+    client: "npm.cmd test; 54 passed; npm.cmd run typecheck; passed; npm.cmd run build; passed with existing 947 kB bundle warning"
+    e2e: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium; 1 passed in 41.8s after updating the assertion to item-level history"
+    hygiene: "python -m py_compile hexa-api/app/tasks/service.py hexa-api/app/tasks/fanout.py; git diff --check; passed"
+  remaining: [dynamic_subgraphs, nested_foreach, real_postgresql_migration, tool_approval_runtime]
 parallel_foreach_slice:
   date: "2026-11-23"
   owner: Codex
@@ -89,7 +105,7 @@ parallel_foreach_slice:
     green: "python -m pytest -q hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py; 57 passed"
     syntax: "python -m py_compile hexa-api/app/tasks/service.py hexa-api/app/tasks/router.py hexa-api/app/db/models.py; passed"
     hygiene: "git diff --check; passed"
-  remaining: [parallel foreach and loop client E2E, real PostgreSQL migration execution, dynamic plan]
+  remaining: [parallel foreach and loop client E2E, real PostgreSQL migration execution]
 cross_node_loop_slice:
   date: "2026-11-23"
   owner: Codex
@@ -103,7 +119,7 @@ cross_node_loop_slice:
     green: "python -m pytest -q hexa-api/tests/test_task_workflows.py; 42 passed"
     client: "npm.cmd test; 54 passed; npm.cmd run typecheck; passed; npm.cmd run build; passed with existing large bundle warning"
     hygiene: "git diff --check; passed"
-  remaining: [browser and HTTP E2E, real PostgreSQL migration execution, dynamic plan]
+  remaining: [browser and HTTP E2E, real PostgreSQL migration execution]
 status: in_progress
 status_reason: 2026-11-19 已完成工作台 REST/SSE 接入与按需分页闭环；本地 SQLite 和受控 HTTP Gateway 验收通过，PostgreSQL、当前源码真实 BYOK 与部署验收仍未完成，不能标记整个 Change 完成。
 owner: Codex
