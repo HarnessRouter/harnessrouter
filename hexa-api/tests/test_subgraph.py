@@ -156,3 +156,41 @@ def test_terminal_subgraph_resume_reuses_success_and_retries_failed_child(client
     resumed_items = client.get(f"/api/hexa/node-runs/{resumed_child['id']}/items").json()['items']
     assert all(ref['run_id'] == completed['id'] for item in resumed_items for ref in item['input'].get('parent_refs', []))
     assert client.get(f"/api/hexa/runs/{failed['id']}").json() == failed
+
+
+def test_subgraph_pause_does_not_dispatch_next_child_until_continue(client, app):
+    authenticated(client)
+    calls = []
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'items': []}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            await asyncio.sleep(0.08)
+            return {'status': 'completed', 'child': context['subgraph_node_id']}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': 'ok'}
+        pytest.fail('unexpected subgraph call')
+
+    app.state.gateway.create_response = gateway
+    definition = workflow()
+    definition['nodes'][1]['subgraph']['max_concurrency'] = 1
+    task = client.post('/api/hexa/tasks', json={'workflow': definition}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'subgraph-pause'}).json()
+    for _ in range(50):
+        if any(call.get('_orchestration_role') == 'subgraph_node' for call in calls):
+            break
+        import time
+        time.sleep(0.01)
+    paused = client.post(f"/api/hexa/runs/{started['id']}/pause", headers={'Idempotency-Key': 'subgraph-pause-action'})
+    assert paused.status_code == 200
+    import time
+    time.sleep(0.12)
+    assert [call.get('subgraph_node_id') for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['first']
+    continued = client.post(f"/api/hexa/runs/{started['id']}/continue", headers={'Idempotency-Key': 'subgraph-continue'})
+    assert continued.status_code == 200
+    result = wait_run(client, started['id'], {'completed', 'failed'})
+    assert result['status'] == 'completed', result
+    assert [call.get('subgraph_node_id') for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second']

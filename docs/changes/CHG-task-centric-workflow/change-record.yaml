@@ -11,14 +11,14 @@ subgraph_slice:
   verification:
     red: "新增子图 suite 首次 10 项失败：配置未校验、子节点未展开、父子引用和失败状态未实现；修复后目标 suite 10 passed。"
     unit_integration: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py; exit 0; 10 passed in 4.38s。覆盖保存边界、父依赖、子 DAG、子项清单、串行/并行、聚合、失败阻断和清单读取。"
-    regression: "初始静态子图与现有动态/嵌套集合回归 113 passed in 147.34s；恢复接线后 python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_fanout_resume.py --tb=short; exit 0; 63 passed in 76.18s；取消 fencing 与执行进度回归另 3 项通过。"
+    regression: "初始静态子图与现有动态/嵌套集合回归 113 passed in 147.34s；恢复接线后 python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_fanout_resume.py --tb=short; exit 0; 63 passed in 76.18s；取消 fencing、执行进度和暂停后继续专项另 4 项通过。"
     client: "client 中定向 npm.cmd test -- --test-name-pattern=\"static subgraphs|configuration validation|dynamic topology\"; exit 0; 62 passed；npm.cmd run typecheck; exit 0；npm.cmd run build; exit 0，保留既有大 chunk advisory。"
     hygiene: "未引入迁移、UHP 字段、外部网络或 Cloud 入口；提交前执行 Python AST、YAML 解析和 git diff --check。"
   security_review: "子图仅来自已保存 WorkflowRevision；未知字段、控制模式、递归、人工节点和有环结构在保存时拒绝。子 NodeRun 必须属于同一 Run/父节点/iteration，模型输出不能修改拓扑；Agent/model 对子节点重复执行配置预检；清单读取复用现有用户和工作区鉴权。"
-  limitations: [pause_cancel_semantics, PostgreSQL/Linux, real Provider and deployment not_evaluated]
+  limitations: [PostgreSQL/Linux, real Provider and deployment not_evaluated]
   rollback: "停止带 subgraph 的活动 Run 后回退执行器、校验和文档；历史 NodeRun 保留，旧执行器不得继续新 subgraph Run。"
-  remaining: [pause_cancel_semantics, PostgreSQL/Linux, real Provider and deployment validation]
-  next_action: "补子图暂停语义与真实目标环境验证；继续保持递归动态子图和运行中改图拒绝。"
+  remaining: [PostgreSQL/Linux, real Provider and deployment validation]
+  next_action: "在真实目标环境补 PostgreSQL、Provider 和部署验证；继续保持递归动态子图和运行中改图拒绝。"
 approval_binding_slice:
   date: "2026-11-24"
   owner: Codex
