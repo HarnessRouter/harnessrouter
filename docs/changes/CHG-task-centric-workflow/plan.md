@@ -85,6 +85,15 @@ secret；Gateway/Runner 继续负责插件物化、sandbox、MCP 连接和 comma
 
 ## 2026-11-23 完整引擎推进
 
+### 精确调用 gate 实施（2026-11-24）
+
+按 AC-31 新增 `gateway/approval_execution.py`，使用固定版本 rfc8785 库和已有 cryptography，复用 HR_SECRET_KEY 派生算法并以
+HKDF 分离加密/承诺子密钥。Invocation 保存原 JSON 参数 bytes 与 opaque native checkpoint bytes，纯数据定义，不调用 Shell。
+先写单元/SQLite Red，再给 journal create 增加内部密封字段以及受信任读取入口；无密封的旧记录保持可读可决定，但不得通过
+bound gate 执行。密封内容与 Request 同 create，运行前校验当前 Invocation 与保存 Invocation 的 binding，并复用 CAS permit。
+使用可观察 adapter 边界验证真实 SQLite 重开、并发/损坏/异常和取消，补 API 脱敏读回集成；完整 Runtime E2E 尚无 native adapter，
+不把 controlled callback 当生产 coverage。回退保留加密历史和密钥；若后续已经派发，必须先停止 owner 并记录 unknown 再回退。
+
 ### 审批 HTTP 接线（2026-11-24）
 
 按 AC-30 复用 `_principal`、严格 blob 读取、Session 权限和内部 CAS 日志。先写 API Red：真实本地 backing 中种入受信任

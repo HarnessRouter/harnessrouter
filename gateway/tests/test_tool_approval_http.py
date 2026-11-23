@@ -401,3 +401,27 @@ def test_http_record_and_receipt_conform_to_proposal_shapes(pending):
     validate(api.get(path(scope, value)).json(), 'Record')
     validate(post(api, scope, value).json(), 'Receipt')
     validate(api.get(path(scope, value)).json(), 'Record')
+
+
+def test_bound_capture_secret_fields_never_appear_on_http_read_or_decision(pending):
+    from approval_execution import BoundApprovalGate, Invocation
+    api, scope, _, record, _ = pending
+    async def capture():
+        journal = await ApprovalJournal.configured_control_store()
+        gate = BoundApprovalGate.from_environment(journal)
+        invocation = Invocation(command_id='bound-http-command', tool={'name': 'write', 'origin': 'runtime'},
+                                arguments=b'{"secret":"bound-private-marker"}', checkpoint=b'private-checkpoint-marker',
+                                workspace='approval-workspace', runtime={'name': 'native', 'version': '1'},
+                                policy_digest='a' * 64, capability_digest='b' * 64,
+                                credential_versions={}, environment_versions={})
+        return await gate.capture(scope, invocation, expires_at=int(time.time()) + 300, preview='write')
+    captured = asyncio.run(capture())
+    value = captured['request']
+    record['_tool_approval_commands'] = {value['id']: value['command_id']}
+    record['output'] = [value]
+    persist(scope, record)
+    for result in (api.get(path(scope, value)), post(api, scope, value), api.get(f'/v1/responses/{scope.response}')):
+        assert result.status_code == 200, result.text
+        assert 'bound-private-marker' not in result.text
+        assert 'private-checkpoint-marker' not in result.text
+        assert '_sealed_invocation' not in result.text

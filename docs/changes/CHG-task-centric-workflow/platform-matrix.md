@@ -55,6 +55,13 @@ Gateway 仅作为 `hexa-api` 的外部执行依赖；Gateway 原有回归测试�
 服务线程在 finally 退出；没有可执行 Shell 字符串或外网请求。真实 native Runner、完整审批 SSE/继续、Hexa UI、Linux 与部署
 not_evaluated；当前 API 测试通过不代表 runtime coverage。结果见 Change `approval_http_slice`。
 
+精确调用绑定切片（2026-11-24）：Windows/Python 3.13 的真实 SQLite/control store 验证 RFC 8785 canonicalization、
+AES-GCM 密封 descriptor/原始参数/checkpoint、HR_SECRET_KEY 派生 key、进程重开、并发唯一派发、配置变更、错误 key、
+密文篡改和异常/取消后的 unknown；HTTP 读回未泄漏密封字段。`rfc8785==0.1.4` 固定依赖，已有 cryptography 复用，
+无新增 Shell、网络目标或平台分支。该切片是受信任 adapter 的内部 gate，不代表真实 Runtime 的副作用前拦截、native checkpoint、
+Response 恢复、SSE 或 capability coverage。Linux、真实 Runner/Provider、部署和生产密钥轮换仍为 not_evaluated；结果见 Change
+`approval_binding_slice`。
+
 后续内部审批日志切片（2026-11-24）：复用 Gateway `control.db` 的原子 create/ETag CAS，无迁移、Shell 执行或新依赖。
 Windows/Python 3.13/真实 SQLite 覆盖独立进程重开、多线程决定/开始/撤销竞争、原 store factory、过期/恢复/未知回执；测试子进程
 通过 argv 调用 Python，不构造 Shell 命令。原用户提问测试存在默认 GBK 读 UTF-8 源码问题，回归以 `python -X utf8` 执行。

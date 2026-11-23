@@ -122,11 +122,15 @@ class ApprovalJournal:
             return result
         raise ApprovalError('hexa_approval_conflict')
 
-    async def create(self, scope, request):
+    async def create(self, scope, request, *, _sealed_invocation=None):
         self._validate_request(request)
+        if _sealed_invocation is not None and (not isinstance(_sealed_invocation, str) or not _sealed_invocation):
+            self._invalid()
         identity, partition = self._identity(scope, request['command_id'])
         doc = {'id': identity, 'pk': partition, 'kind': 'tool_approval', 'scope': dict(scope.__dict__),
                'request': copy.deepcopy(request), 'state': 'pending'}
+        if _sealed_invocation is not None:
+            doc['_sealed_invocation'] = _sealed_invocation
         try:
             await self.container.create_item(doc)
             return self._view(doc)
@@ -141,6 +145,11 @@ class ApprovalJournal:
 
     async def read(self, scope, command):
         return await self._change(scope, command, lambda doc: (self._view(doc), None))
+
+    async def trusted_invocation(self, scope, command):
+        """Private native-adapter boundary. Never return this through HTTP/UI."""
+        return await self._change(scope, command, lambda doc: (
+            (copy.deepcopy(doc['request']), doc.get('_sealed_invocation')), None))
 
     async def decide(self, scope, command, decision, key):
         fields = {'type', 'approval_id', 'command_id', 'request_hash', 'decision'}

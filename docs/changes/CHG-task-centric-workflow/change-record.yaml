@@ -1,4 +1,23 @@
 id: CHG-task-centric-workflow
+approval_binding_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 0f7647a0
+  branch: codex/agent-orchestration
+  status: verified_internal_slice
+  references: [spec.md#精确调用绑定与密封-continuation, plan.md#精确调用-gate-实施2026-11-24, ../../../protocol/proposals/tool-approvals/README.md]
+  reuse_decision: extend the existing approval journal with an internal trusted-adapter boundary; do not advertise runtime coverage
+  acceptance_ids: [AC-31]
+  verification:
+    red: "新增 gate 测试首次 collection 因模块不存在失败；建立空接口后 32 项失败；实现后目标 suite 32 项通过。"
+    unit: "python -X utf8 -m pytest -q gateway/tests/test_approval_execution.py; exit 0; 49 passed. 覆盖 RFC 8785 样本、原始参数字节、checkpoint、配置/工具来源变更、边界长度、错误 key、密文篡改、并发 capture/resume、unknown 和 legacy record fail closed。"
+    integration: "python -X utf8 -m pytest -q gateway/tests/test_approval_execution.py gateway/tests/test_tool_approval_journal.py gateway/tests/test_tool_approval_http.py --tb=short; exit 0; 130 passed in 21.05s。真实 SQLite/control store、进程重开、HTTP 公开读回脱敏、并发决定/执行和作用域隔离通过。"
+    hygiene: "Python AST、YAML 解析和 git diff --check 在提交前执行；固定 rfc8785==0.1.4，复用已有 cryptography，无 Shell 或外网调用。"
+  security_review: "密钥由 HR_SECRET_KEY 通过 HKDF 分离派生；AES-GCM AAD 绑定作用域/command/request_hash；低熵秘密只进入 keyed commitment 和密文，不进入公开 Request、HTTP 响应或错误。参数重复键、非有限数、surrogate、超限和无效 UTF-8 fail closed。adapter 只能派发密封保存的 Invocation，start CAS 失败不会派发；异常/取消转 unknown，不重放。"
+  limitations: [native production checkpoint and interception adapter, Response registration and SSE, exact HTTP continuation, capability inspection, Hexa UI, live runtime conformance, Linux and deployment not_evaluated]
+  rollback: "停止未来接入中的绑定调用后回退 gate/依赖和文档；保留既有 control.db 审批历史，不删除密封记录。当前无生产生成路径、迁移或 capability 广告。"
+  remaining: [native interception, exact continuation, SSE, live runtime conformance, Hexa preflight and UI]
+  next_action: "选择具备副作用前 native checkpoint 的真实 Runtime，实现受信任 adapter，再接 UHP capability/Response resume；在此之前保持 tool_approvals 不广告。"
 approval_http_slice:
   date: "2026-11-24"
   owner: Codex

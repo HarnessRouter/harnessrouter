@@ -408,7 +408,7 @@ EffectivePermission
 ### Gateway 内部审批日志
 
 复用 Gateway control store 的原子 create 与 ETag CAS，审批按组织、主体、Session、Response 隔离；同一作用域的 command 只能
-生成一个审批 ID。记录只接受安全 Request 字段，执行描述符及凭据不进入日志；preview 必须由受信任适配器事先脱敏。
+生成一个审批 ID。公开记录只接受安全 Request 字段，执行描述符及凭据不进入公开日志；preview 必须由受信任适配器事先脱敏。
 内部日志要求期限在未来且不超过 24 小时，不通过自动 TTL 删除已到期命令。`request_hash` 由后续受信任的原生拦截器按
 提案生成；日志不通过客户端参数构造执行命令，也不自行宣称已实现 RFC 8785 绑定。
 
@@ -441,6 +441,28 @@ owner 的兼容放行规则。映射或日志缺失、主体不符返回统一 4
 **AC-30 审批 HTTP 边界：** 真实 FastAPI/SQLite/blob 组合验证读回、决定幂等/冲突、不同主体/组织/Session/工作区隔离、
 缺失 key/非法 payload/过期错误、重开 store、取消/删除 void、读写故障 fail closed 和错误脱敏；策略/审批继续请求均零 Runner
 派发。HTTP 通过仅证明接口与预检边界，仍须另验真实 native interception、完整恢复、SSE、能力协商及 Hexa UI。
+
+### 精确调用绑定与密封 continuation
+
+受信任 adapter 在工具副作用前调用内部 bound gate，把精确 UTF-8 JSON 对象参数字节、非空 native checkpoint、Runtime 身份/版本、
+Workspace、工具来源、policy/capability digest、credential/environment 的不可变版本 digest 固定为一次 Invocation。参数拒绝重复
+对象键、NaN/Infinity 和无效 UTF-8；原字节必须保留，不能用重新序列化后的参数替代原调用。参数与 checkpoint 各不超过 1 MiB。
+
+RFC 8785 描述符包含作用域、command、执行配置及参数/checkpoint 的有域 HMAC-SHA256 承诺，最终 request_hash 为该描述符
+canonical JSON 的 SHA256。对秘密相关参数不保存公开裸 SHA，防止短口令字典反推；credential/environment 只接受版本 digest。
+描述符、原参数和 checkpoint 以 AES-256-GCM 密封，AAD 绑定作用域、command 和 request_hash；密封字段与公开 Request 在同一
+control store create 中写入，任何失败不能暴露半条待批记录。密钥来自已有 HR_SECRET_KEY 的独立派生子密钥；缺 key、错误 key、
+密文篡改或内部 request/descriptor 不一致均拒绝执行，错误不得包含原参数。不同 key 的记录不自动迁移或重新批准。
+
+恢复必须读取密封保存的 Invocation，再由 adapter 提供当前执行配置重新生成 binding，校验原生许可。只有完全相同的配置和
+checkpoint 可取得日志的单次 start 许可，派发使用保存的原参数/checkpoint，不接受客户端替换参数。拒绝、到期、撤销、配置
+变化、checkpoint 丢失、存储失败或 unknown 结果均不得调用 adapter。adapter 抛出异常或任务取消后副作用不确定，记录 unknown；
+不能把网络超时等同于确定未执行。成功仅表示 adapter 已返回原生结果，结果仍由 Runtime 自己保存；本 gate 不提供通用原生
+检查点，也不赋予任何现有 Runtime coverage，不增加 HTTP 恢复、SSE、模型生成路径或能力广告。
+
+**AC-31 绑定调用：** 单元测试验证 RFC8785 标准样本、字节差异、配置每一字段改变摘要、低熵秘密不出现于公开哈希/日志；真实
+SQLite 验证 Request 与密文原子创建、重开后恢复精确字节、并发只有一条 adapter 调用、所有 deny/expiry/revoke/change/failure
+零执行、损坏/错误 key 拒绝、执行异常和取消为 unknown。HTTP 读回不得泄漏密封字段；真实 native Runner 的端到端覆盖另验。
 
 ## 当前编排边界
 
