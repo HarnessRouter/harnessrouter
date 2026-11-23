@@ -9,7 +9,7 @@ from sqlalchemy import String, cast, delete, or_, select
 from app.db.models import AppWorkspace, Artifact, CommandReceipt, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
 from app.tasks.fanout import node_record_usage, retry_fanout, manifest_records
-from app.tasks.service import ACTIVE, TaskError, all_node_runs, append_run_event, command_replay, command_receipt_json, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, receipts_for_nodes, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
+from app.tasks.service import ACTIVE, TaskError, all_node_runs, append_run_event, command_replay, command_receipt_json, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, receipts_for_nodes, reconcile_receipt, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
 class TaskBody(BaseModel):
@@ -311,6 +311,45 @@ def build_router(app, require_session, user_id):
                             await app.state.gateway.cancel_response(row.response_id)
                         except Exception:
                             pass
+            return result
+
+    @router.post('/runs/{run_id}/nodes/{attempt_id}/reconcile')
+    async def reconcile(run_id: int, attempt_id: int, session=Depends(require_session), key: str | None = Header(None, alias='Idempotency-Key')):
+        key_value(key)
+        with app.state.session_factory() as db:
+            run = owned_run(db, run_id, user_id(session))
+            row = db.get(NodeRun, attempt_id)
+            if row is None or row.run_id != run.id:
+                raise TaskError('not_found', '节点记录不存在。', 404)
+            fingerprint, replay = command_replay(db, run.task_id, key, f'reconcile:{run.id}:{row.id}', {})
+            if replay is not None:
+                return JSONResponse(replay, status_code=200 if replay.get('side_effect_state') != 'unknown' else 202)
+            receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
+            if receipt is None or receipt.side_effect_state != 'unknown' or not receipt.reconciliation_required or not receipt.response_id:
+                raise TaskError('reconciliation_unavailable', '当前节点没有可确认的未知 Gateway 回执。', 409)
+            response_id = receipt.response_id
+        try:
+            response = await app.state.gateway.get_response(response_id)
+        except Exception:
+            response = None
+        with app.state.session_factory() as db:
+            run = owned_run(db, run_id, user_id(session))
+            row = db.get(NodeRun, attempt_id)
+            receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id)) if row else None
+            if row is None or receipt is None:
+                raise TaskError('not_found', '节点记录不存在。', 404)
+            changed = reconcile_receipt(db, run, row, receipt, response or {}, encoded=encoded,
+                                        redact_values=(app.state.settings.gateway_api_key, app.state.settings.session_secret))
+            if not changed:
+                result = command_receipt_json(receipt)
+                save_command(db, run.task_id, key, fingerprint, result)
+                db.commit()
+                return JSONResponse(result, status_code=202)
+            result = command_receipt_json(receipt)
+            save_command(db, run.task_id, key, fingerprint, result)
+            db.commit()
+            if receipt.side_effect_state == 'completed':
+                app.state.task_executor.schedule(run.id)
             return result
 
     @router.post('/runs/{run_id}/nodes/{node_id}/{action}')

@@ -141,6 +141,12 @@ Gateway 回调写回前校验 fence。旧 owner 失去租约时只能放弃迟�
 租约。先覆盖竞争、过期接管、旧 owner 续租拒绝和释放，再运行任务/工作流/并发/动态子编排回归。租约不改变 UHP，不提供工具审批，也
 不自动恢复副作用。
 
+### 显式 reconciliation 实施（2026-11-24）
+
+为 unknown 的具体 NodeRun 提供带幂等键的状态确认接口。接口先验证任务权限、NodeRun 归属和 CommandReceipt，再只读查询已有
+Gateway response；running、读取失败和无 response ID 保持 unknown，terminal response 才更新回执、节点快照和 RunEvent。不得调用
+`create_response`，不得自动重试或绕过租约；结果通过同一 `TaskCommand` 幂等记录返回。
+
 不得将前述受限动态项展开等同于已完成动态子图，或将仅通过目标测试的切片标记为完整引擎完成。
 
 ### 循环与集合组合的状态边界

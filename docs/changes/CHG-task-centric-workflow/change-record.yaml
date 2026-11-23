@@ -134,6 +134,29 @@ run_lease_slice:
   rollback: "停止活动 Run 后回退租约写入、fence 检查、模型升级和迁移；保留已有 RunEvent/CommandReceipt 历史。"
   remaining: [PostgreSQL migration lane, multiprocess live takeover, exact reconciliation, native Gateway approval]
   next_action: "在真实 PostgreSQL/Linux 和多进程目标环境验证租约接管，再处理精确 reconciliation 与 UHP native approval。"
+reconciliation_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 5fd9b57b
+  branch: codex/agent-orchestration
+  references: [spec.md#commandreceipt-回执, plan.md#显式-reconciliation-实施2026-11-24]
+  reuse_decision: reuse CommandReceipt, RunEvent and TaskCommand; add a read-only Gateway status projection for one NodeRun attempt
+  acceptance_ids: [AC-37]
+  behavior:
+    before: "unknown 回执只能停留在待处理状态，用户没有不重放 Agent 调用的显式状态确认入口。"
+    after: "带 response_id 的 unknown 回执可以通过幂等 reconcile 接口只读查询 Gateway；terminal 状态才一次性收敛，running/读取失败保持 unknown。"
+  verification:
+    red: "新增 test_reconciliation.py 首次路由被通用节点控制返回 409；专用路由提前注册后完成三条目标场景。"
+    backend: "python -X utf8 -m pytest -q hexa-api/tests/test_reconciliation.py --tb=short; exit 0; 3 passed。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_reconciliation.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_events.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_execution_progress.py --tb=short; exit 0; 15 passed；任务 API、工作流、并发、动态 DAG、fanout、嵌套 foreach 和子编排回归 254 passed in 281.39s。"
+    migration: "无新迁移；复用已有 CommandReceipt、RunEvent 和 TaskCommand 表。"
+    hygiene: "python -m compileall -q hexa-api/app 和 git diff --check 通过。"
+  security_review: "接口先做 Run/NodeRun/Receipt 归属检查，只读取已有 response_id；不接受替换参数，不调用 create_response，不自动重试 unknown。"
+  limitations: [real PostgreSQL/Linux/deployment, Gateway terminal response fidelity, native tool approval runtime]
+  rollback: "停止 reconciliation 请求后回退路由、状态投影和文档；历史 CommandReceipt/RunEvent 保留。"
+  remaining: [PostgreSQL migration lane, multiprocess takeover, native Gateway approval]
+  next_action: "继续真实多进程租约验证和 UHP/Gateway 原生审批；当前 reconciliation 不承担工具审批职责。"
 approval_binding_slice:
   date: "2026-11-24"
   owner: Codex

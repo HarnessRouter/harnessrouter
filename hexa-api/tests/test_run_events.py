@@ -97,7 +97,7 @@ def test_existing_sqlite_database_gains_run_event_table_and_can_append(tmp_path)
     try:
         assert 'run_events' in inspect(factory.kw['bind']).get_table_names()
         with factory() as db:
-            db.execute(text("INSERT INTO task_runs (id, task_id, workflow_revision, status, kind, snapshot_json, request_hash, paused) VALUES (91, 71, 1, 'running', 'normal', '{}', '', 0)"))
+            db.execute(text("INSERT INTO task_runs (id, task_id, workflow_revision, status, kind, snapshot_json, request_hash, paused, lease_fence) VALUES (91, 71, 1, 'running', 'normal', '{}', '', 0, 0)"))
             db.add(RunEvent(run_id=91, event_type='run.recovered_unknown', event_json='{"reason":"test"}'))
             db.commit()
             event = db.scalar(select(RunEvent).where(RunEvent.run_id == 91))

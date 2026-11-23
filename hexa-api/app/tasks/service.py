@@ -353,6 +353,52 @@ def command_receipt_json(receipt):
             'updated_at': receipt.updated_at.isoformat() if receipt.updated_at else None}
 
 
+def reconcile_receipt(db, run, row, receipt, response, *, encoded, redact_values=()):
+    """Project an already stored Gateway response onto an unknown attempt.
+
+    This function never dispatches work. The caller must have performed the
+    Gateway read and must hold the task executor lock before entering it.
+    """
+    status = response.get('status') if isinstance(response, dict) else None
+    if status not in {'completed', 'failed', 'incomplete', 'cancelled'}:
+        return False
+    if receipt.side_effect_state != 'unknown' or not receipt.reconciliation_required:
+        return False
+    if receipt.response_id and response.get('id') and str(response['id']) != receipt.response_id:
+        return False
+    safe = {'response_id': receipt.response_id, 'status': status}
+    if status == 'completed':
+        from app.gateway.client import response_text
+        safe['text'] = redact(response_text(response), redact_values)
+        row.status, row.error_code = 'succeeded', None
+        row.output_json = encoded(safe)
+        row.finished_at = datetime.now(timezone.utc)
+        receipt.side_effect_state = 'completed'
+        receipt.reconciliation_required = False
+        receipt.error_code = None
+        run.status = 'running'
+        task = db.get(Task, run.task_id)
+        if task:
+            task.status = 'running'
+        append_run_event(db, run.id, 'node.reconciled', node_run_id=row.id,
+                         data={'node_id': row.node_id, 'status': status})
+    else:
+        row.status, row.error_code = 'failed', 'agent_incomplete' if status == 'incomplete' else 'agent_failed'
+        row.output_json = None
+        row.finished_at = datetime.now(timezone.utc)
+        receipt.side_effect_state = 'failed'
+        receipt.reconciliation_required = False
+        receipt.error_code = row.error_code
+        append_run_event(db, run.id, 'node.reconciled', node_run_id=row.id,
+                         data={'node_id': row.node_id, 'status': status, 'error_code': row.error_code})
+    if row.status == 'failed':
+        run.status = 'failed'
+        task = db.get(Task, run.task_id)
+        if task:
+            task.status = 'failed'
+    return True
+
+
 def node_json(row, receipt=None):
     return {'id': row.id, 'node_id': row.node_id, 'run_id': row.run_id, 'attempt': row.attempt, 'status': row.status,
             'execution_kind': row.execution_kind, 'iteration': row.iteration, 'foreach_index': row.foreach_index,

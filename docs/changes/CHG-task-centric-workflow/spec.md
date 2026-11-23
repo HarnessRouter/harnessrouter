@@ -337,6 +337,10 @@ serial 按已保存计划顺序挑选一个就绪节点；parallel 挑选所有�
 丢失时写 `unknown` 并置 `reconciliation_required=true`。`unknown` 回执不能被重试逻辑自动重新派发；只有用户显式创建新 Run 或
 未来已实现且精确绑定的 reconciliation 流程才能继续。节点调试和 Run 节点摘要可以读取回执摘要，但不得扩大秘密字段。
 
+Hexa 提供显式的 `POST /runs/{run_id}/nodes/{attempt_id}/reconcile`。该接口只读取回执已有的 `response_id`，不调用新的 Agent
+请求；Gateway 返回仍在执行或读取失败时保持 `unknown`，返回已确认的 terminal response 后才一次性投影 NodeRun、CommandReceipt
+和 RunEvent。请求必须带幂等键，重复请求只返回已保存回执，不重复查询或执行；没有 response ID、回执已收敛或作用域不符时拒绝。
+
 ### Run Lease 与 Heartbeat
 
 活动 Run 由执行器持有短时 `Run Lease`，至少保存 `lease_owner`、单调递增 `lease_fence`、最近 heartbeat 和过期时间。执行器
@@ -645,6 +649,7 @@ Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。�
 - **AC-34 RunEvent 事实流：** 成功、失败、暂停、继续、取消、恢复和节点重试必须在同一事务追加不可变 `RunEvent`；事件 ID 在 Run 内递增，重启后的活动副作用写入 `node.unknown`/`run.recovered_unknown` 而不自动重放；分页接口先做任务权限检查，跨页无重复、无越权、无副作用，幂等命令重放不追加重复事件。
 - **AC-35 CommandReceipt 回执：** 每个实际 Gateway 调用都生成一条与 NodeRun 一对一的回执，成功进入 `completed`，明确失败进入 `failed`，不确定中断、进程恢复或租约丢失进入 `unknown` 且要求 reconciliation；回执包含稳定 `command_id` 和 `request_hash`，不包含原始工具参数、凭据或授权头，`unknown` 不自动重放，节点详情可分页读取脱敏摘要。
 - **AC-36 Run Lease 与 Heartbeat：** 两个执行器不能同时持有同一未过期 Run；过期接管必须递增 fence，旧 owner 续租和迟到写回失败；执行期间 heartbeat 续期，终态释放租约，进程恢复将已派发但无法确认的节点和回执收敛为 `unknown`，不自动重放。
+- **AC-37 显式 reconciliation：** 对带已有 `response_id` 的 unknown 回执，读取 Gateway terminal 状态可以一次性收敛 NodeRun、回执和事实事件；running、读取失败和缺少 response ID 保持 unknown；重复幂等请求不重新查询、不调用 `create_response`，不得由 reconciliation 产生新的 Agent 副作用。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 
