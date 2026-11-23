@@ -51,6 +51,12 @@ export async function taskFixture(page: Page, options: { failSave?: boolean; fai
       const task = tasks.find(t => t.id === Number(taskMatch[1])), tail = taskMatch[2];
       if (!task) return route.fulfill({ status: 404, json: { detail: '任务不存在。' } });
       if (!tail) return route.fulfill({ json: task });
+      if (tail === 'runs' && req.method() === 'POST') {
+        const source = body.resume_from_run_id ? runs.find(r => r.id === body.resume_from_run_id) : undefined;
+        const next = { id: 22, task_id: task.id, workflow_revision: source?.workflow_revision || task.current_revision, status: 'waiting_human', kind: 'rerun', paused: false, workflow: structuredClone(source?.workflow || task.workflow), decisions: [], nodes: source?.nodes || [] };
+        runs.unshift(next);
+        return route.fulfill({ json: next });
+      }
       if (tail === 'runs') return route.fulfill({ json: { runs: runs.filter(r => r.task_id === task.id) } });
       if (tail === 'artifacts') return route.fulfill({ json: { artifacts: [], pagination: { limit: 50, offset: 0, total: 0, has_more: false } } });
       if (tail === 'workflow') {
@@ -75,6 +81,7 @@ export async function taskFixture(page: Page, options: { failSave?: boolean; fai
     const runMatch = path.match(/\/runs\/(\d+)(?:\/(.*))?$/);
     if (runMatch) {
       const run = runs.find(r => r.id === Number(runMatch[1]));
+      if (runMatch[2]?.match(/^nodes\/[^/]+\/retry$/)) return route.fulfill({ json: { id: run.id, status: run.status } });
       if (runMatch[2] === 'continue') { run.status = 'running'; run.decisions.push({ node_id: body.node_id, input_refs: body.input_refs }); return route.fulfill({ json: { id: run.id, status: 'running' } }); }
       if (runMatch[2] === 'events') return route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify(run)}\n\n` });
       if (runMatch[2] === 'artifacts') return route.fulfill({ json: { artifacts: [], pagination: { limit: 50, offset: 0, total: 0, has_more: false } } });
@@ -82,7 +89,7 @@ export async function taskFixture(page: Page, options: { failSave?: boolean; fai
     }
     if (/\/node-runs\/\d+\/artifacts$/.test(path)) return route.fulfill({ json: { artifacts: [], pagination: { limit: 50, offset: 0, has_more: false } } });
     const debugMatch = path.match(/\/node-runs\/(\d+)$/);
-    if (debugMatch) { const node = runs.flatMap(r => r.nodes).find(n => n.id === Number(debugMatch[1])); return route.fulfill({ json: { ...node, environment: { workflow: runs.find(r => r.nodes.some(n => n.id === node.id))?.workflow }, attempts: [node] } }); }
+    if (debugMatch) { const node = runs.flatMap(r => r.nodes).find(n => n.id === Number(debugMatch[1])); return route.fulfill({ json: { ...node, environment: { workflow: runs.find(r => r.nodes.some(n => n.id === node.id))?.workflow }, attempts: node?.debug_attempts || [node] } }); }
     return route.fulfill({ json: {} });
   });
   return { tasks, runs, templates, writes, allowSave: () => { failSave = false; }, allowList: () => { failList = false; } };

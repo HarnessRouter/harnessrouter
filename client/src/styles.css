@@ -1790,6 +1790,13 @@ body.is-resizing-detail { cursor: col-resize; user-select: none; }
 .task-api-form textarea { min-height: 80px; resize: vertical; }
 .task-input-copy { white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-properties pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-item-history { margin-top: 16px; }
+.run-item-history > ol { display: grid; gap: 10px; margin: 0; padding-left: 20px; }
+.run-item-history > ol > li { min-width: 0; padding: 10px; border: 1px solid var(--hx-line); border-radius: 8px; background: var(--hx-surface); }
+.run-item-history li strong { overflow-wrap: anywhere; }
+.run-item-history li p { margin: 6px 0 0; overflow-wrap: anywhere; color: var(--hx-ink-muted); }
+.run-item-history li details { margin-top: 8px; }
+.run-item-history li button { min-height: 44px; margin-top: 8px; }
 .run-graph-toolbar { flex-wrap: wrap; }
 .run-detail-columns time { overflow-wrap: anywhere; }
 .task-detail-split .workbench-toolbar { min-height: 96px; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; padding: 12px 16px; }

@@ -148,6 +148,51 @@ test('run properties show bound orchestration and recorded skip reason', async (
   await expect(config).toContainText('条件未匹配');
 });
 
+test('terminal fanout history exposes only the current failed item and resumes it in a new Run', async ({ page }) => {
+  const fixture = await taskFixture(page);
+  const run = fixture.runs.find(row => row.id === 20)!;
+  const worker = { id: 'worker', name: '集合处理', agent_id: 'agent-1', model: 'model-1', prompt: '处理集合', deps: [], foreach: { source: 'input', path: 'items', max_items: 3 } };
+  const control = { id: 201, node_id: 'worker', run_id: 20, iteration: 2, execution_kind: 'foreach_aggregate', attempt: 3, status: 'failed', input: { item_node_run_ids: [211, 212] }, output: null, error_code: 'foreach_item_failed', debug_attempts: [
+    { id: 211, node_id: 'worker', run_id: 20, iteration: 2, execution_kind: 'foreach_item', foreach_index: 0, attempt: 2, status: 'succeeded', input: { item: 'a' }, output: { text: '成功项' }, error_code: null },
+    { id: 212, node_id: 'worker', run_id: 20, iteration: 2, execution_kind: 'foreach_item', foreach_index: 1, attempt: 3, status: 'failed', input: { item: 'b' }, output: null, error_code: 'agent_failed' },
+    { id: 213, node_id: 'worker', run_id: 20, iteration: 1, execution_kind: 'foreach_item', foreach_index: 0, attempt: 1, status: 'failed', input: { item: 'old' }, output: null, error_code: 'agent_failed' },
+  ] };
+  run.workflow = { nodes: [worker] };
+  run.nodes = [control];
+  await page.goto('/runs/20');
+  await page.getByRole('button', { name: '打开流程图' }).click();
+  const flow = page.getByRole('region', { name: '运行记录工作台' });
+  await flow.getByRole('button', { name: '集合处理 节点' }).click();
+  const properties = page.getByRole('complementary', { name: '运行属性' });
+  await properties.getByRole('tab', { name: '调试' }).click();
+  await expect(properties.getByRole('region', { name: '集合项历史' })).toContainText('第 2 轮 · 集合项 1 · 尝试 2');
+  await expect(properties.getByRole('region', { name: '集合项历史' })).toContainText('第 2 轮 · 集合项 2 · 尝试 3');
+  await expect(properties.getByRole('region', { name: '集合项历史' })).not.toContainText('第 1 轮');
+  await expect(properties.getByRole('button', { name: '重试此项' })).toHaveCount(0);
+  await properties.getByRole('button', { name: '新建 Run 恢复此项' }).click();
+  await expect.poll(() => fixture.writes.find(row => row.path === '/api/hexa/tasks/74/runs')?.body).toMatchObject({ kind: 'rerun', target_node: 'worker', resume_from_run_id: 20, item_node_run_id: 212 });
+});
+
+test('active fanout history retries the selected failed item with its manifest identity', async ({ page }) => {
+  const fixture = await taskFixture(page);
+  const run = fixture.runs.find(row => row.id === 18)!;
+  const worker = { id: 'worker', name: '集合处理', agent_id: 'agent-1', model: 'model-1', prompt: '处理集合', deps: [], foreach: { source: 'input', path: 'items', max_items: 3 } };
+  run.workflow = { nodes: [worker] };
+  run.nodes = [{ id: 301, node_id: 'worker', run_id: 18, iteration: 1, execution_kind: 'foreach_aggregate', attempt: 2, status: 'failed', input: { item_node_run_ids: [311, 312] }, output: null, error_code: 'foreach_item_failed', debug_attempts: [
+    { id: 311, node_id: 'worker', run_id: 18, iteration: 1, execution_kind: 'foreach_item', foreach_index: 0, attempt: 1, status: 'succeeded', input: { item: 'a' }, output: { text: '成功项' }, error_code: null },
+    { id: 312, node_id: 'worker', run_id: 18, iteration: 1, execution_kind: 'foreach_item', foreach_index: 1, attempt: 1, status: 'failed', input: { item: 'b' }, output: null, error_code: 'agent_failed' },
+  ] }];
+  await page.goto('/runs/18');
+  await page.getByRole('button', { name: '打开流程图' }).click();
+  const flow = page.getByRole('region', { name: '运行记录工作台' });
+  await flow.getByRole('button', { name: '集合处理 节点' }).click();
+  const properties = page.getByRole('complementary', { name: '运行属性' });
+  await properties.getByRole('tab', { name: '调试' }).click();
+  await expect(properties.getByRole('button', { name: '重试此项' })).toHaveCount(1);
+  await properties.getByRole('button', { name: '重试此项' }).click();
+  await expect.poll(() => fixture.writes.find(row => row.path === '/api/hexa/runs/18/nodes/worker/retry')?.body).toMatchObject({ item_node_run_id: 312 });
+});
+
 for (const width of [1440, 800, 390]) test(`orchestration inspector remains usable at ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   const fixture = await taskFixture(page);

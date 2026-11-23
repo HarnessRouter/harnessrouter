@@ -722,3 +722,26 @@ workbench_pagination_closure:
   remaining: [PostgreSQL fresh/upgrade on target runner, current-source real Gateway/BYOK smoke, production route fallback and deployment acceptance]
   next_action: 完成本地改造切片；有对应环境后补外部验收，再决定整个 Change 是否可关闭，不再将按需分页列为剩余开发。
   document_exit: 行为正文继续以 spec.md 为准；Change 保留结果摘要，原始报告、日志与截图留在已忽略目录，E2E 方案补齐记录保留事后整理说明。
+item_history_ui:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified_slice
+  baseline: 9436fa42
+  branch: codex/agent-orchestration
+  reuse_decision: extend existing RunSnapshot debug pagination and terminal item resume API; preserve immutable Run history
+  scope: client item history, precise fanout retry/resume actions, task fixture and shared visual contract
+  acceptance_ids: [AC-7, AC-8, AC-10, AC-14, AC-19, AC-22]
+  impact: [client/src/item-history.ts, client/src/ApiTaskWorkbench.tsx, client/src/app-api.ts, client/src/styles.css, client/tests/item-history.test.mjs, client/tests/app-ui/tasks.spec.ts, client/tests/task-fixture.ts, docs/changes/CHG-task-centric-workflow/spec.md, docs/changes/CHG-task-centric-workflow/plan.md, docs/changes/CHG-task-centric-workflow/visual-contract.md]
+  verification:
+    unit: "npm.cmd test --prefix client; exit 0; 56 passed"
+    typecheck: "npm.cmd run typecheck --prefix client; exit 0"
+    browser: "cd client; npx.cmd playwright test -c playwright.app.config.ts tests/app-ui/tasks.spec.ts -g \"fanout history\" --project=chromium --workers=1; exit 0; 2 passed"
+    backend_reuse: "终态恢复与活动项重试后端证据沿用 terminal_fanout_resume 和 fanout_retry_slice：210 项后端回归及 2 项 HTTP 夹具通过；本切片未修改后端。"
+    hygiene: "git diff --check; passed"
+  visual: "项级列表使用 ol/li/details/native button，错误与加载状态保留既有面板语义；本切片未重新生成截图，390px 自动化窄屏证据仍待补。"
+  limitations:
+    - "本切片验证了受控 Gateway fixture、Chromium 和客户端领域/类型检查，未验证真实 Gateway、Provider、PostgreSQL 或部署环境。"
+    - "项历史当前读取已加载的 NodeRun 调试页；完整跨页项历史 API 和嵌套 foreach UI 仍未完成。"
+    - "UHP durable tool approval 仍是独立 proposal，尚未进入 Gateway/Runner 运行时实现。"
+  remaining: [390px item-history screenshot/overflow check, PostgreSQL fresh/upgrade, current-source real Gateway/BYOK smoke, nested foreach, dynamic subgraphs, UHP approval runtime]
+  next_action: "在具备目标环境时补项级历史专用视觉截图与真实 Gateway/Provider 验证；随后再决定是否进入嵌套 foreach、完整动态子图或 UHP 审批运行时。"
