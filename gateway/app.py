@@ -15720,7 +15720,15 @@ def _db_parse(engine: str, conn: str) -> tuple[str, str]:
         raise uhp_error(400, "invalid_connection_string",
                         "That connection string names no database — add /yourdatabase to the end.",
                         "connection_string")
-    host = u.hostname + (f":{u.port}" if u.port else "")
+    try:
+        port = u.port
+        if port == 0:
+            raise ValueError
+    except ValueError as e:
+        raise uhp_error(400, "invalid_connection_string",
+                        "The port must be a number from 1 to 65535.",
+                        "connection_string") from e
+    host = u.hostname + (f":{port}" if port else "")
     return host, db
 
 
