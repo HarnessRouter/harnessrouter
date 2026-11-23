@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tool approval proposal fragments \u2014 not a published UHP schema",
+  "$defs": {
+    "ToolIdentity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "enum": [
+            "direct",
+            "plugin",
+            "builtin",
+            "runtime"
+          ]
+        },
+        "plugin_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "mcp_server": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name",
+        "origin"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "const": "plugin"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "plugin_name",
+              "plugin_version",
+              "plugin_digest"
+            ]
+          }
+        }
+      ]
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^approval_[A-Za-z0-9_-]+$"
+        },
+        "type": {
+          "const": "tool_approval_request"
+        },
+        "status": {
+          "const": "completed"
+        },
+        "command_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "canonicalization": {
+          "const": "RFC8785-v1"
+        },
+        "policy_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "capability_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolIdentity"
+        },
+        "preview": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "status",
+        "command_id",
+        "request_hash",
+        "canonicalization",
+        "policy_digest",
+        "capability_digest",
+        "tool",
+        "preview",
+        "expires_at"
+      ],
+      "additionalProperties": true
+    },
+    "Decision": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool_approval_response"
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "decision": {
+          "enum": [
+            "approve",
+            "deny"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "approval_id",
+        "command_id",
+        "request_hash",
+        "decision"
+      ],
+      "additionalProperties": true
+    },
+    "Receipt": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "decision": {
+          "enum": [
+            "approve",
+            "deny"
+          ]
+        },
+        "side_effect_state": {
+          "enum": [
+            "not_started",
+            "started",
+            "completed",
+            "failed",
+            "unknown"
+          ]
+        },
+        "reconciliation_required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approval_id",
+        "command_id",
+        "request_hash",
+        "decision",
+        "side_effect_state",
+        "reconciliation_required"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "side_effect_state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reconciliation_required": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "deny"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "side_effect_state": {
+                "const": "not_started"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Record": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/Request"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired",
+            "voided"
+          ]
+        },
+        "receipt": {
+          "$ref": "#/$defs/Receipt"
+        }
+      },
+      "required": [
+        "request",
+        "state"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Request"
+    },
+    {
+      "$ref": "#/$defs/Decision"
+    },
+    {
+      "$ref": "#/$defs/Receipt"
+    }
+  ]
+}

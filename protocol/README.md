@@ -141,6 +141,9 @@ and how it connects one or more harnesses.
 
 ## Contributing
 
+Local, unimplemented design proposal: [durable tool approvals](proposals/tool-approvals/README.md).
+It is separate from the published UHP version and current conformance claims.
+
 Changes to this specification follow [`GOVERNANCE.md`](GOVERNANCE.md). The short version: propose in
 prose first, and no change lands unless the specification, the reference implementation and the
 conformance suite move together.

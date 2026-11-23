@@ -9,11 +9,14 @@ test('progress uses the bound run attempts, never a percentage inferred from tas
 });
 
 test('drafts preserve execution config and zero coordinates and do not mutate snapshots', () => {
-  const workflow = { nodes: [{ id: 'a', name: '分析', x: 0, y: 0, agent_id: 'agent', model: 'm', prompt: '任务', inputRefs: [], deps: [], allow_missing_inputs: true }] };
+  const workflow = { max_concurrency: 2, nodes: [{ id: 'a', name: '分析', x: 0, y: 0, agent_id: 'agent', model: 'm', prompt: '任务', inputRefs: [], deps: [], allow_missing_inputs: true, repeat: { max_iterations: 3, until: { path: 'done', op: 'eq', value: true } } }] };
   const draft = workflowDraft(workflow);
+  assert.equal(draft.max_concurrency, 2);
   assert.deepEqual(draft.nodes[0], workflow.nodes[0]);
   draft.nodes[0].deps.push('other');
   assert.deepEqual(workflow.nodes[0].deps, []);
+  draft.nodes[0].repeat.until.value = false;
+  assert.equal(workflow.nodes[0].repeat.until.value, true);
 });
 
 test('replay contains only recorded attempt transitions with actual node ids and timestamps', () => {

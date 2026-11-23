@@ -120,11 +120,11 @@ export function SuperAgentCoordinator({ workspaceId, agents, onOpenTasks, visibl
   const savePlan = async (draft: ClientTemplate) => {
     if (!editor) return;
     if (editor.kind === 'task') {
-      const task = await appCreateTask({ title: draft.title, description: draft.description, input: editor.input, workspace_id: workspaceId, workflow: { nodes: draft.nodes } });
+      const task = await appCreateTask({ title: draft.title, description: draft.description, input: editor.input, workspace_id: workspaceId, workflow: { nodes: draft.nodes, ...(draft.max_concurrency !== undefined ? { max_concurrency: draft.max_concurrency } : {}) } });
       if (!mounted.current) return;
       setTasks(current => mergePage(current, [task])); setNotice('任务方案已保存，可以选择并分发。');
     } else {
-      await appSaveTemplate({ title: draft.title, workspace_id: workspaceId, workflow: { nodes: draft.nodes } });
+      await appSaveTemplate({ title: draft.title, workspace_id: workspaceId, workflow: { nodes: draft.nodes, ...(draft.max_concurrency !== undefined ? { max_concurrency: draft.max_concurrency } : {}) } });
       if (!mounted.current) return;
       setNotice('模板已保存，可在模板管理中使用该版本创建任务。');
     }

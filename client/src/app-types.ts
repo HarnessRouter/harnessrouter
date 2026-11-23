@@ -1,4 +1,17 @@
-export interface TemplateNode {
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type OutputPredicate = { path: string } & (
+  { op: 'eq' | 'neq'; value: JsonValue } | { op: 'in'; value: JsonValue[] } | { op: 'exists'; value?: never }
+);
+export type NodeCondition = OutputPredicate & { source: string };
+export interface NodeRepeat { max_iterations: number; until: { path: string; op: 'eq'; value: JsonValue } | { path: string; op: 'exists'; value?: never } }
+export interface NodeForeach { source: string; path: string; max_items: number }
+export interface OrchestrationNode {
+  condition?: NodeCondition;
+  repeat?: NodeRepeat;
+  foreach?: NodeForeach;
+  allow_missing_inputs?: boolean;
+}
+export interface TemplateNode extends OrchestrationNode {
   id: string;
   name: string;
   x: number;
@@ -23,4 +36,5 @@ export interface ClientTemplate {
   description: string;
   nodes: TemplateNode[];
   version: number;
+  max_concurrency?: number;
 }

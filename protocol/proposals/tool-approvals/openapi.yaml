@@ -1,0 +1,40 @@
+openapi: 3.1.0
+info:
+  title: Hexa tool approval proposal fragments (unimplemented)
+  version: draft
+paths:
+  /v1/responses/{response_id}/tool-approvals/{approval_id}:
+    parameters:
+      - {name: response_id, in: path, required: true, schema: {type: string}}
+      - {name: approval_id, in: path, required: true, schema: {type: string}}
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Durable approval record scoped to the authenticated principal
+          content:
+            application/json:
+              schema: {$ref: 'schema.json#/$defs/Record'}
+        '404': {description: Unknown or outside scope}
+    post:
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 255}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: 'schema.json#/$defs/Decision'}
+      responses:
+        '200':
+          description: Decision recorded; this endpoint never executes the tool
+          content:
+            application/json:
+              schema: {$ref: 'schema.json#/$defs/Receipt'}
+        '404': {description: Unknown or outside scope}
+        '409': {description: Conflict or changed execution descriptor}
+        '410': {description: Expired approval}
+        '422': {description: Invalid decision}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}

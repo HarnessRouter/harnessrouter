@@ -5,6 +5,8 @@ import type { ClientTemplate, TemplateNode } from './app-types';
 import { NODE_HEIGHT, NODE_WIDTH, clamp, connectionIssue, edgePath, graphBounds, nodeRole } from './template-graph';
 import { WorkflowCanvas } from './workflow-canvas';
 import { appListAgentModels, appModelSelection, type AppAgent } from './app-api';
+import { OrchestrationFields } from './OrchestrationFields';
+import { orchestrationIssue, withoutDependency } from './orchestration';
 
 const defaultTemplate: ClientTemplate = {
   id: 'product-evaluation',
@@ -39,6 +41,7 @@ function normalizeTemplate(value: unknown): ClientTemplate {
     const node = raw && typeof raw === 'object' ? raw as Partial<TemplateNode> : {};
     const fallback = fallbackNode('', index, rawNodes.length);
     return {
+      ...node,
       id: typeof node.id === 'string' && node.id ? node.id : fallback.id,
       name: typeof node.name === 'string' ? node.name : `节点 ${index + 1}`,
       x: Number.isFinite(node.x) ? Number(node.x) : fallback.x,
@@ -48,6 +51,7 @@ function normalizeTemplate(value: unknown): ClientTemplate {
   });
   return {
     id: typeof input.id === 'string' && input.id ? input.id : defaultTemplate.id,
+    max_concurrency: input.max_concurrency,
     title: typeof input.title === 'string' && input.title ? input.title : defaultTemplate.title,
     description: typeof input.description === 'string' ? input.description : defaultTemplate.description,
     version: Number.isFinite(input.version) ? Number(input.version) : 1,
@@ -59,6 +63,8 @@ export function Templates({ template, onSave, onUse, onBack, persist = true, mod
   const [draft, setDraft] = useState(template);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   const [modelOptions, setModelOptions] = useState<Array<{ id: string; label: string }>>([]);
   const [modelError, setModelError] = useState('');
   const [modelLoading, setModelLoading] = useState(false);
@@ -128,7 +134,7 @@ export function Templates({ template, onSave, onUse, onBack, persist = true, mod
   };
   const removeDependency = (targetId: string, sourceId: string) => {
     setError('');
-    setDraft({ ...draftRef.current, nodes: draftRef.current.nodes.map(node => node.id === targetId ? { ...node, deps: node.deps.filter(dep => dep !== sourceId), inputRefs: node.inputRefs?.filter(ref => ref !== sourceId) } : node) });
+    setDraft({ ...draftRef.current, nodes: draftRef.current.nodes.map(node => node.id === targetId ? withoutDependency(node, sourceId) : node) });
   };
   const updateNode = (id: string, value: string) => setDraft({ ...draft, nodes: draft.nodes.map(node => node.id === id ? { ...node, name: value } : node) });
   const addNode = () => {
@@ -148,7 +154,7 @@ export function Templates({ template, onSave, onUse, onBack, persist = true, mod
   };
   const removeNode = (id: string) => {
     setError('');
-    setDraft({ ...draft, nodes: draft.nodes.filter(node => node.id !== id).map(node => ({ ...node, deps: node.deps.filter(dep => dep !== id), inputRefs: node.inputRefs?.filter(ref => ref !== id) })) });
+    setDraft({ ...draft, nodes: draft.nodes.filter(node => node.id !== id).map(node => withoutDependency(node, id)) });
     setSelectedId(null);
   };
   const beginDrag = (event: React.PointerEvent<HTMLDivElement>, node: TemplateNode) => {
@@ -256,6 +262,8 @@ export function Templates({ template, onSave, onUse, onBack, persist = true, mod
   const save = async () => {
     if (saving) return;
     if (!draft.title.trim() || !draft.nodes.length || draft.nodes.some(node => !node.name.trim())) { setError('名称和节点不能为空。'); return; }
+    const issue = orchestrationIssue(draft);
+    if (issue) { setError(issue); errorRef.current?.focus(); return; }
     setError('');
     setSaving(true);
     const next = { ...draft, version: draft.version + 1, nodes: draft.nodes.map(node => ({ ...node, name: node.name.trim() })) };
@@ -301,7 +309,7 @@ export function Templates({ template, onSave, onUse, onBack, persist = true, mod
         <Button type="primary" loading={saving} onClick={() => void save()}>{mode === 'task' ? taskSaveLabel : '保存模板新版本'}</Button>
       </div>
     </header>
-    {error && <p className="error-banner" role="alert">{error}</p>}
+    {error && <p ref={errorRef} tabIndex={-1} className="error-banner" role="alert">{error}</p>}
     <div className="editor-body" inert={saving}>
       <aside className="org-panel" aria-label="对话编排">
         <div className="org-head"><strong>对话编排</strong><p>选择节点编辑属性，或描述目标让系统先生成流程草稿。</p></div>
@@ -378,16 +386,18 @@ export function Templates({ template, onSave, onUse, onBack, persist = true, mod
       <aside className="template-inspector" aria-label={mode === 'task' ? '任务节点检查器' : '模板检查器'}>
         <div className="inspector-head"><b>节点属性</b><span>{selected ? `${nodeRole(nodes, selected)}节点` : '未选择节点'}</span></div>
         <div className="inspector-body">
+          <fieldset className="workflow-settings"><legend>工作流设置</legend><div className="field"><label>最大并发数<input name="max_concurrency" type="number" min={1} max={50} step={1} value={Number.isFinite(draft.max_concurrency ?? 50) ? draft.max_concurrency ?? 50 : ''} onChange={event => setDraft(current => ({ ...current, max_concurrency: event.target.valueAsNumber }))} /></label><small>1–50 个 Agent 节点；人工节点不占名额。</small></div></fieldset>
           {selected ? <>
             {mode === 'template' && <><div className="field"><label htmlFor="template-title">模板名称</label><input id="template-title" aria-label="模板标题" value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></div>
             <div className="field"><label htmlFor="template-description">模板说明</label><textarea id="template-description" aria-label="模板说明" value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></div></>}
             <div className="field"><label htmlFor="node-name">节点名称</label><input id="node-name" aria-label="节点名称" value={selected.name} onChange={event => updateNode(selected.id, event.target.value)} /></div>
-            <label className="dep"><input type="checkbox" checked={selected.node_type === 'human' || selected.node_type === 'human_gate'} onChange={event => updateConfig({ node_type: event.target.checked ? 'human' : 'agent', human_action: event.target.checked ? 'select_outputs' : undefined, requires_human: false })} />人工处理节点（不调用 Agent）</label>
+            <label className="dep"><input type="checkbox" checked={selected.node_type === 'human' || selected.node_type === 'human_gate'} onChange={event => updateConfig({ node_type: event.target.checked ? 'human' : 'agent', human_action: event.target.checked ? 'select_outputs' : undefined, requires_human: false, ...(event.target.checked ? { repeat: undefined, foreach: undefined } : {}) })} />人工处理节点（不调用 Agent）</label>
             {(selected.node_type !== 'human' && selected.node_type !== 'human_gate') && <><div className="field"><label htmlFor="node-agent">Agent</label><select id="node-agent" aria-label="节点 Agent" value={selected.agent_id || ''} onChange={event => updateConfig({ agent_id: event.target.value, model: '' })}><option value="">请选择 Agent</option>{selected.agent_id && !agents.some(a => a.id === selected.agent_id) && <option value={selected.agent_id}>{selected.agent_id}（不可用）</option>}{agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
             <div className="field"><label htmlFor="node-model">模型</label><select id="node-model" aria-label="节点模型" disabled={modelLoading || !!modelError} value={selected.model || ''} onChange={event => updateConfig({ model: event.target.value })}><option value="">请选择模型</option>{selected.model && !modelOptions.some(m => m.id === selected.model) && <option value={selected.model}>{selected.model}（不可用）</option>}{modelOptions.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</select>{modelLoading && <small role="status">正在加载模型…</small>}{modelError && <p role="alert">{modelError}<button onClick={() => setModelRetry(v => v + 1)}>重试模型</button></p>}</div>
             <div className="field"><label htmlFor="node-prompt">提示词</label><textarea id="node-prompt" aria-label="节点提示词" value={selected.prompt || ''} onChange={event => updateConfig({ prompt: event.target.value })} /></div></>}
             <div className="field"><label>输入结果</label>{nodes.filter(node => selected.deps.includes(node.id)).map(node => <label className="dep" key={node.id}><input type="checkbox" checked={selected.inputRefs?.includes(node.id) || false} onChange={event => updateConfig({ inputRefs: event.target.checked ? [...(selected.inputRefs || []), node.id] : selected.inputRefs?.filter(id => id !== node.id) })} />{node.name}</label>)}</div>
-            {(selected.node_type !== 'human' && selected.node_type !== 'human_gate') && <label className="dep"><input type="checkbox" checked={!!selected.requires_human} onChange={event => updateConfig({ requires_human: event.target.checked })} />执行 Agent 前人工确认输入</label>}
+            {(selected.node_type !== 'human' && selected.node_type !== 'human_gate') && <label className="dep"><input type="checkbox" checked={!!selected.requires_human} onChange={event => updateConfig({ requires_human: event.target.checked, ...(event.target.checked ? { repeat: undefined, foreach: undefined } : {}) })} />执行 Agent 前人工确认输入</label>}
+            <OrchestrationFields key={selected.id} node={selected} nodes={nodes} update={updateConfig} />
             <label className="dep"><input type="checkbox" checked={!!selected.final_report} onChange={event => updateConfig({ final_report: event.target.checked })} />最终报告</label>
             <label className="dep"><input type="checkbox" checked={!!selected.allow_skip} onChange={event => updateConfig({ allow_skip: event.target.checked })} />允许跳过</label>
             <div className="field"><label>前置依赖</label><div className="dep-list">{nodes.filter(node => node.id !== selected.id).map(node => <label key={node.id} className="dep"><input type="checkbox" checked={selected.deps.includes(node.id)} onChange={event => { if (event.target.checked) connectNodes(node.id, selected.id); else removeDependency(selected.id, node.id); }} /><span>{node.name}</span></label>)}</div><small className="field-warning">拖动节点右侧端点到另一个节点，或勾选上游节点。</small></div>

@@ -57,6 +57,24 @@
 
 本切片不实现并行 foreach、嵌套 foreach、动态节点、无限展开、跨节点循环、运行中修改集合或 UHP 新字段。并行化需要单独定义项级并发、失败重启和部分聚合语义。
 
+## 2026-11-23 编排配置界面切片
+
+扩展共享工作流类型、workflowDraft 和保存载荷，确保任务、模板、协调器不丢失 max_concurrency。复用节点检查器并采用独立 fieldset，条件值使用本地文本草稿在保存时解析，repeat/foreach 以互斥模式编辑；校验失败聚焦错误并保留输入。运行属性展示快照配置和尝试信息。用 Node 单测验证配置复制与校验，用双浏览器受控 API 测试验证编辑、保存失败、重开、模板和运行快照，用真实 HTTP API/Gateway 夹具 E2E 验证保存再读取。保存桌面和移动截图并实际检查。协议审批仍是后续独立切片。
+
+## 2026-11-23 Agent 能力与工具审批规范切片
+
+先复用 UHP `2026-10-19` 已发布的 Plugin 子协议，读取 Harness 直接配置、启用插件派生能力、`skipped`、disabled tools
+和 discovery capability，形成任务启动时的能力来源与 digest 快照。Hexa 只保存引用、版本、来源和安全摘要，不复制插件包或
+secret；Gateway/Runner 继续负责插件物化、sandbox、MCP 连接和 command containment。
+
+工具审批单独作为本地提案维护于 `protocol/proposals/tool-approvals/`。提案要求 Gateway 在副作用前持久化拦截精确调用、支持
+幂等决定、精确恢复和执行回执，并要求 Runtime 原生拒绝优先于人工批准。它不把 `input_required` 或 function-call SSE 当作
+授权机制，也不修改当前已发布协议、discovery、Gateway 或 Runner。实现顺序是 Gateway durable store 和 interception、Runner
+原生约束、真实运行时 conformance，最后接入 Hexa Run 预检、审批卡和审计；在此之前工具审批能力必须保持未广告、未实现。
+
+验证：草案 JSON Schema 的元校验和 6 个 shape tests；真实 A-01 至 A-09、跨重启恢复、原生沙箱和生产 Gateway 均为后续验证，不能
+用 fake Gateway 或 schema tests 代替。
+
 ## 2026-11-18 工作台 API 接入批次
 
 复用现有任务、模板、运行 REST/SSE 和工作台全高分栏样式，替换 `AppTasks` 中演示数据。列表按当前工作区分页读取；详情、模板编辑与运行快照分别加载。复用画布编辑器，增加任务/模板保存文案、异步保存和节点执行配置；任务草稿保存成功后才退出，失败保留草稿。运行只使用已保存版本，活动运行锁定语义编辑。SSE 生命周期交给 effect 管理，断线以只读轮询恢复。模板操作独立调用模板接口，不写本地演示模板。

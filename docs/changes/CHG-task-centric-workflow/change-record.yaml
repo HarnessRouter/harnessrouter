@@ -1,4 +1,37 @@
 id: CHG-task-centric-workflow
+orchestration_ui:
+  date: "2026-11-23"
+  owner: Codex
+  baseline: ded96826
+  branch: codex/agent-orchestration
+  status: verified
+  reuse_decision: extend shared Templates inspector and task workflow snapshots
+  references: [spec.md#编排配置界面, plan.md#2026-11-23-编排配置界面切片, visual-contract.md]
+  impact: [client/src/AppModules.tsx, client/src/ApiTaskWorkbench.tsx, client/src/SuperAgentCoordinator.tsx, client/src/app-types.ts, client/src/app-api.ts, client/src/task-workbench.ts, client/tests]
+  verification:
+    dependencies: "npm.cmd ci --ignore-scripts; lockfile unchanged"
+    unit: "npm.cmd test; 54 passed"
+    typecheck: "npm.cmd run typecheck; passed"
+    build: "npm.cmd run build; passed with the existing large bundle warning"
+    browser: "npx.cmd playwright test -c playwright.app.config.ts tasks.spec.ts --workers=2; 34 passed across Chromium and Edge"
+    http_e2e: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium; 1 passed"
+    visual: "Chromium and Edge screenshots reviewed at 1440px, 800px and 390px; no horizontal overflow or inspector/canvas overlap observed"
+    hygiene: "git diff --check; passed"
+  remaining: [backend validation for API clients, parallel foreach design, nested foreach, cross-node loops, UHP approval implementation]
+tool_approval_proposal:
+  date: "2026-11-23"
+  owner: Codex
+  status: draft_unimplemented
+  baseline: ded96826
+  reuse_decision: extend published UHP 2026-10-19 additively; do not advertise a new version until Gateway, Runner and conformance ship together
+  scope: protocol/proposals/tool-approvals/
+  references: [protocol/proposals/tool-approvals/README.md, protocol/proposals/tool-approvals/schema.json, protocol/proposals/tool-approvals/openapi.yaml]
+  impact: [Gateway durable interception, Runner native enforcement, Hexa capability snapshot, approval UI and audit]
+  verification:
+    schema: "python -m pytest -q protocol/proposals/tool-approvals/test_schema.py; 6 passed"
+    schema_meta: "Draft202012Validator.check_schema; passed"
+    status_boundary: "Published UHP schemas, discovery, Gateway and Runner are unchanged; live A-01..A-09 conformance is not evaluated"
+  remaining: [Gateway pre-side-effect interception, durable approval store, runtime continuation, native enforcement, live conformance, Hexa UI integration]
 concurrency_slice:
   date: "2026-11-23"
   owner: Codex

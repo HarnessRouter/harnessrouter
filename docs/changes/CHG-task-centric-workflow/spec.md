@@ -177,6 +177,12 @@ Task → WorkflowRevision
 
 foreach 是固定数量的节点尝试，不创建新的工作流节点、不修改 DAG、不形成回边、不支持嵌套 foreach 或无限展开。集合和 `max_items` 随 Run 快照固定；运行中修改工作流不会影响当前展开。
 
+### 编排配置界面
+
+任务与模板编辑器共用结构化配置：工作流级最大并发数；节点级条件来源（仅前置依赖）、字段路径、固定比较操作和值；允许缺失输入；以及单次、repeat、foreach 三选一执行模式。repeat 与 foreach 互斥，显式人工节点仅使用单次模式。比较值支持 JSON 值，普通文本按字符串保存；`in` 必须输入 JSON 数组；`exists` 不保存 value。非法路径、来源或上限在保存时定位错误，保留草稿且不发送请求。
+
+编辑已保存工作流、保存模板、协调器创建任务及重新打开编辑器时必须保留顶层并发配置和节点配置。删除依赖或节点时同步移除以其为来源的 condition/foreach，避免保存悬空引用。运行详情从 Run 固定快照显示配置、当前尝试、集合项编号和跳过/上限错误原因，不以 Task 当前配置替代历史。桌面与 390px 窄屏均能滚动访问配置和保存入口。
+
 ### NodeRun 状态
 
 节点状态属于某个 Run，不属于全局 Task：
@@ -248,6 +254,65 @@ foreach 是固定数量的节点尝试，不创建新的工作流节点、不修
 - 新输出默认是候选结果。用户点击“采用为当前结果”后，Task 的当前结果指针才更新，并记录审计事件。
 - 当前结果指针变化后，实际依赖旧结果的下游结果显示为 `stale`，需要重新执行才能恢复有效。
 - “忽略”只在节点配置允许跳过时可用；依赖被忽略输出的节点必须有明确的缺失输入策略，否则保持等待或失败并展示原因。
+
+## Agent 能力、插件与权限审批
+
+### 能力来源和快照
+
+任务节点可以引用 Agent 的工具、Skill、MCP Server 和 UHP Plugin。能力来源必须保留为
+`direct`、`plugin`、`builtin` 或 `runtime`，不能在保存任务时把不同来源压平为一个无来源的工具列表。
+
+Gateway 已发布的 UHP `2026-10-19` Plugin 子协议是插件包和运行时组合的唯一来源。插件包继续使用
+`plugin.json`、`mcp.json` 和 `skills/<name>/SKILL.md`；Hexa 不重新定义插件包格式，也不复制插件文件、认证头、凭据或
+插件内部脚本。Harness 直接配置与启用插件派生的 MCP/Skill 分开保存；`enabled=false` 的插件仍可被列出但不进入有效运行
+配置，`skipped` 组件必须进入启动诊断，名称冲突和不支持的 transport 必须在配置或预检阶段显式失败。
+
+Run 启动预检必须从 Gateway 读取并固化能力组合摘要：插件名称、版本、manifest/package/content digest、来源、启用状态、
+`skipped`、直接和插件派生的 MCP/Skill/Tool、disabled tools、UHP discovery 能力及有效组合 digest。快照可以保存引用、版本、
+摘要和哈希，不能保存密钥或可还原的 secret。运行中的 Gateway 解析、sandbox、`PLUGIN_ROOT`、`PLUGIN_DATA` 和 stdio
+containment 仍由 Gateway/Runner 负责；Hexa 只负责任务策略、预检、快照、审计和用户可见结果。
+
+Skill 只能声明其所需能力，不能授予权限。插件安装或启用也不能绕过任务、工作区、Agent 或 Runtime 的限制。
+
+### 有效权限
+
+每次工具执行的有效权限按以下交集计算，并在 Run 快照中保留决策摘要：
+
+```text
+EffectivePermission
+  = WorkflowPolicy
+    ∩ WorkspacePolicy
+    ∩ AgentPolicy
+    ∩ RuntimeNativePolicy
+    ∩ CurrentApproval
+```
+
+工具风险至少区分 `read_only`、`workspace_read`、`workspace_write`、`local_process`、`network_read`、`external_write`、
+`credential_access`、`destructive` 和 `permission_change`。任何一项原生拒绝都不能被人工批准抬高。工具审批是一次精确调用的
+授权，不是给 Agent、Plugin、Skill 或 MCP Server 永久授予权限。
+
+### 运行时审批和 UHP 扩展边界
+
+现有 `input_required/input_response` 只表示 Agent 向用户请求输入，现有 `function_call` 事件只表示执行进度；二者都不能
+作为副作用发生前的精确工具授权边界。需要审批的调用必须在 Gateway 派发工具前创建持久化的
+`tool_approval_request`，绑定 `command_id`、精确参数或服务端参数引用、工具来源、能力/策略 digest、`request_hash` 和
+过期时间。审批记录、决定、执行回执和 `side_effect_state` 必须可在断线或重启后读取；`unknown` 结果必须要求 reconciliation，
+不得盲目重放。
+
+本 Change 只提交 `protocol/proposals/tool-approvals/` 的本地规范草案，不修改已发布的 UHP schema、Gateway discovery 或
+现有运行代码。草案以 UHP `2026-10-19` 为基线，采用新增能力和新增 item/error 的兼容扩展；只有 Gateway 的前置拦截、持久化
+恢复、Runner 原生执行约束和 conformance suite 一起实现后，才能发布新的日期版本并宣称支持。Gateway 不具备指定策略的审批
+覆盖时，Hexa 必须在 Run 启动前返回配置不可用，不能提交任务后再根据流事件推断“已经审批”。
+
+## 当前编排边界
+
+本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是
+同一静态节点的有界重复，foreach 是有限集合的串行展开；任务和模板编辑器可保存这些配置，Run 使用不可变快照显示实际尝试、
+索引和跳过原因。
+
+当前仍明确不支持并行 foreach、嵌套 foreach、跨节点循环、DAG 回边、无界循环、动态节点生成、运行中改图和并发项的部分聚合。
+这些能力需要另行定义项级并发、失败重启、顺序/聚合、租约和恢复语义，不能通过把现有 `max_concurrency` 直接套到集合项上来
+推断。工具审批也不因本轮编排 UI 完成而自动可用。
 
 ## 数据和安全规则
 

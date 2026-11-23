@@ -712,6 +712,21 @@ body.inspector-resizing, body.inspector-resizing * { cursor: col-resize !importa
 .template-inspector .inspector-head b { font-size: 13px; font-weight: 600; }
 .template-inspector .inspector-head span { color: var(--hx-ink-muted); font-size: 10.5px; }
 .template-inspector .inspector-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 15px 24px; }
+.orchestration-fields fieldset, .workflow-settings { min-inline-size: 0; margin: 12px 0; padding: 12px 0; border: 0; border-top: 1px solid var(--hx-line); }
+.orchestration-fields legend, .workflow-settings legend { font-weight: 600; padding-inline-end: 8px; }
+.orchestration-fields label:not(.dep), .workflow-settings label { display: grid; gap: 6px; }
+.orchestration-fields small, .workflow-settings small { display: block; color: var(--hx-ink-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.orchestration-fields input:not([type=checkbox]), .orchestration-fields select, .workflow-settings input { inline-size: 100%; min-inline-size: 0; box-sizing: border-box; }
+.orchestration-fields input:focus-visible, .orchestration-fields select:focus-visible, .workflow-settings input:focus-visible { outline: 2px solid var(--hx-status-blue); outline-offset: 2px; }
+@media (max-width: 640px) {
+  .orchestration-fields input:not([type=checkbox]), .orchestration-fields select, .workflow-settings input { min-height: 48px; font-size: 16px; }
+  .orchestration-fields .dep { min-height: 48px; }
+}
+@media (max-width: 1000px) and (min-width: 641px) {
+  .editor-body { grid-template-columns: minmax(0, 1fr) 288px; }
+  .editor-body .org-panel { display: none; }
+  .editor-body .template-inspector { display: flex; }
+}
 .field { margin-bottom: 13px; }
 .field > label { display: block; margin-bottom: 5px; color: var(--hx-ink-muted); font-size: 11px; font-weight: 500; }
 .field input, .field textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--hx-line); border-radius: 8px; background: var(--hx-surface); color: var(--hx-ink); }
@@ -782,10 +797,11 @@ body.inspector-resizing, body.inspector-resizing * { cursor: col-resize !importa
   .canvas-toolbar .toolbar-meta { margin-left: 0; }
   .zoom-controls { margin-left: auto; }
   .canvas-tip { display: none; }
-  .editor-body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; overflow: auto; }
+  .editor-body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 360px auto; overflow: auto; align-content: start; }
   .org-panel, .canvas-area, .template-inspector { border: 0; }
-  .canvas-area { min-height: 520px; }
+  .canvas-area { min-height: 0; height: 360px; overflow: hidden; }
   .template-inspector { display: flex; border-top: 1px solid var(--hx-line); }
+  .template-inspector .inspector-body { flex: none; overflow: visible; }
   .editor-header .head-title small { display: none; }
   .editor-header .head-title h1 { min-width: 0; flex: 1; }
   .editor-header .muted-count { display: none; }

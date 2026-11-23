@@ -1,4 +1,4 @@
-import type { AppRun, AppTaskNode } from './app-api';
+import type { AppRun, AppWorkflow } from './app-api';
 import type { HistoryEvent } from './run-history';
 
 export const taskLabels: Record<string, string> = { draft: '草稿', running: '运行中', waiting: '等待处理', completed: '已完成', failed: '失败', archived: '已归档' };
@@ -32,8 +32,8 @@ export function taskProgress(run?: AppRun): { done: number; total: number; perce
   return { done, total: nodes.length, percent: nodes.length ? Math.round(done / nodes.length * 100) : 0 };
 }
 
-export function workflowDraft(workflow?: { nodes: AppTaskNode[] } | null) {
-  return { nodes: (workflow?.nodes || []).map((node, index) => ({
+export function workflowDraft(workflow?: AppWorkflow | null) {
+  return { ...(workflow?.max_concurrency !== undefined ? { max_concurrency: workflow.max_concurrency } : {}), nodes: (workflow?.nodes || []).map((node, index) => ({
     ...structuredClone(node), name: node.name || node.id, deps: [...(node.deps || [])],
     x: Number.isFinite(node.x) ? Number(node.x) : 20 + index * 220,
     y: Number.isFinite(node.y) ? Number(node.y) : 80,

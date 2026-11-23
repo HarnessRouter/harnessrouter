@@ -1,3 +1,4 @@
+import type { OrchestrationNode } from './app-types';
 export interface AppAgent {
   id: string;
   name: string;
@@ -220,14 +221,15 @@ export function appSelectWorkspace(workspaceId: number) {
   return appRequest('/api/hexa/workspaces/select', { method: 'POST', body: JSON.stringify({ workspace_id: workspaceId }) });
 }
 
-export interface AppTaskNode { id: string; name?: string; agent_id?: string; model?: string; prompt?: string; deps?: string[]; inputRefs?: string[]; final_report?: boolean; requires_human?: boolean; node_type?: 'agent' | 'human' | 'human_gate'; human_action?: 'select_outputs' | 'approve' | 'edit'; allow_skip?: boolean; x?: number; y?: number; [key: string]: unknown }
+export interface AppTaskNode extends OrchestrationNode { id: string; name?: string; agent_id?: string; model?: string; prompt?: string; deps?: string[]; inputRefs?: string[]; final_report?: boolean; requires_human?: boolean; node_type?: 'agent' | 'human' | 'human_gate'; human_action?: 'select_outputs' | 'approve' | 'edit'; allow_skip?: boolean; x?: number; y?: number; [key: string]: unknown }
+export interface AppWorkflow { nodes: AppTaskNode[]; max_concurrency?: number }
 export interface AppPagination { offset: number; limit: number; has_more: boolean }
-export interface AppTask { id: number; title: string; description: string; input?: string; workspace_id?: number | null; status: string; current_revision: number; current_revision_id?: number | null; workflow_state?: 'draft' | 'saved'; workflow_revision?: { id: number; revision: number; kind: 'saved' } | null; source_template?: { id: number; version_id: number; version: number } | null; workflow: { nodes: AppTaskNode[] } | null; current_result: Record<string, number>; stale_nodes?: string[]; latest_run_id?: number | null; source_template_id?: number | null; source_template_version_id?: number | null; source_template_version?: number | null }
+export interface AppTask { id: number; title: string; description: string; input?: string; workspace_id?: number | null; status: string; current_revision: number; current_revision_id?: number | null; workflow_state?: 'draft' | 'saved'; workflow_revision?: { id: number; revision: number; kind: 'saved' } | null; source_template?: { id: number; version_id: number; version: number } | null; workflow: AppWorkflow | null; current_result: Record<string, number>; stale_nodes?: string[]; latest_run_id?: number | null; source_template_id?: number | null; source_template_version_id?: number | null; source_template_version?: number | null }
 export interface AppArtifact { id: number; task_id: number; run_id: number; node_run_id: number; filename: string; media_type: string; bytes: number; cleanup_status?: string; created_at?: string | null }
 export interface AppNodeRun { id: number; node_id: string; run_id: number; attempt: number; status: string; input: Record<string, unknown>; output: Record<string, unknown> | null; error_code: string | null; response_id?: string | null; started_at?: string | null; finished_at?: string | null; progress?: { text: string; execution?: AppMessageExecution } }
-export interface AppRun { id: number; task_id: number; workflow_revision: number; workflow_revision_id?: number | null; workflow_revision_ref?: { id: number | null; revision: number } | null; status: string; paused?: boolean; kind: string; superseded_by?: number | null; execution_snapshot?: { workflow: { nodes: AppTaskNode[] }; workflow_revision_id?: number | null; source?: { kind: string; revision: number }; [key: string]: unknown }; workflow?: { nodes: AppTaskNode[] }; nodes: AppNodeRun[]; decisions?: Array<{ node_id: string; input_refs: string[] }> }
+export interface AppRun { id: number; task_id: number; workflow_revision: number; workflow_revision_id?: number | null; workflow_revision_ref?: { id: number | null; revision: number } | null; status: string; paused?: boolean; kind: string; superseded_by?: number | null; execution_snapshot?: { workflow: AppWorkflow; workflow_revision_id?: number | null; source?: { kind: string; revision: number }; [key: string]: unknown }; workflow?: AppWorkflow; nodes: AppNodeRun[]; decisions?: Array<{ node_id: string; input_refs: string[] }> }
 
-export interface AppTemplateVersion { id: number; version: number; workflow: { nodes: AppTaskNode[] } }
+export interface AppTemplateVersion { id: number; version: number; workflow: AppWorkflow }
 export interface AppTemplate { id: number; title: string; workspace_id?: number | null; versions: AppTemplateVersion[]; latest_version?: AppTemplateVersion | null; versions_pagination?: AppPagination }
 export type AppPage = { offset?: number; limit?: number; q?: string; status?: string };
 function pageQuery(options?: AppPage & { workspaceId?: number | null }) {
@@ -246,13 +248,13 @@ export async function appListTasksPage(options?: AppPage & { workspaceId?: numbe
   const data = await appRequest<{ tasks?: AppTask[]; pagination?: AppPagination }>(`/api/hexa/tasks${pageQuery(options)}`);
   return { tasks: Array.isArray(data.tasks) ? data.tasks : [], pagination: data.pagination || { offset: options?.offset ?? 0, limit: options?.limit ?? 100, has_more: false } };
 }
-export function appCreateTask(input: { title: string; description?: string; input?: string; workspace_id?: number | null; workflow: { nodes: AppTaskNode[] }; template_version_id?: number }): Promise<AppTask> {
+export function appCreateTask(input: { title: string; description?: string; input?: string; workspace_id?: number | null; workflow: AppWorkflow; template_version_id?: number }): Promise<AppTask> {
   return appRequest('/api/hexa/tasks', { method: 'POST', body: JSON.stringify(input) });
 }
 export function appSaveTaskInput(id: number, input: string, expectedInput: string): Promise<AppTask> {
   return appRequest(`/api/hexa/tasks/${id}/input`, { method: 'PUT', body: JSON.stringify({ input, expected_input: expectedInput }) });
 }
-export function appSaveTaskWorkflow(id: number, expectedRevision: number, workflow: { nodes: AppTaskNode[] }): Promise<AppTask> {
+export function appSaveTaskWorkflow(id: number, expectedRevision: number, workflow: AppWorkflow): Promise<AppTask> {
   return appRequest(`/api/hexa/tasks/${id}/workflow`, { method: 'PUT', body: JSON.stringify({ expected_revision: expectedRevision, workflow }) });
 }
 export function appGetTask(id: number): Promise<AppTask> { return appRequest(`/api/hexa/tasks/${id}`); }
@@ -288,7 +290,7 @@ export function appGetTemplate(id: number, options?: { versionsOffset?: number; 
   const query = new URLSearchParams({ versions_offset: String(options?.versionsOffset ?? 0), versions_limit: String(options?.versionsLimit ?? 100) });
   return appRequest(`/api/hexa/templates/${id}?${query}`);
 }
-export function appSaveTemplate(input: { title: string; workspace_id?: number | null; workflow: { nodes: AppTaskNode[] }; expected_revision?: number }, id?: number): Promise<AppTemplate> {
+export function appSaveTemplate(input: { title: string; workspace_id?: number | null; workflow: AppWorkflow; expected_revision?: number }, id?: number): Promise<AppTemplate> {
   return appRequest(id === undefined ? '/api/hexa/templates' : `/api/hexa/templates/${id}/versions`, { method: 'POST', body: JSON.stringify(input) });
 }
 export function appTaskState(id: number, action: 'reopen' | 'finish' | 'archive' | 'unarchive'): Promise<AppTask> { return appRequest(`/api/hexa/tasks/${id}/state`, { method: 'POST', body: JSON.stringify({ action }) }); }
