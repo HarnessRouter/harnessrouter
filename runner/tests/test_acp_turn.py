@@ -22,6 +22,46 @@ def _blocks(evs, kind):
     return [c for e in evs for c in (e.get("message") or {}).get("content") or [] if c.get("type") == kind]
 
 
+def _permission_answer(handler, params):
+    acp = A.Acp.__new__(A.Acp)
+    acp.permission_handler = handler
+    replies = []
+    acp._reply = lambda msg, result=None, error="": replies.append((msg, result, error))
+    acp._answer({"id": 17, "method": "session/request_permission", "params": params})
+    assert len(replies) == 1
+    return replies[0]
+
+
+def test_permission_handler_receives_the_exact_acp_request_and_can_select_an_option():
+    request = {"sessionId": "s1", "toolCall": {"toolCallId": "c1", "title": "bash",
+                                                  "rawInput": {"command": "rm -i x"}},
+               "options": [{"optionId": "deny", "kind": "reject_once"},
+                           {"optionId": "allow", "kind": "allow_once"}]}
+    seen = []
+    msg, result, error = _permission_answer(lambda params: seen.append(params) or
+                                             {"outcome": {"outcome": "selected", "optionId": "deny"}},
+                                            request)
+    assert seen == [request]
+    assert result == {"outcome": {"outcome": "selected", "optionId": "deny"}}
+    assert error == ""
+    assert msg["id"] == 17
+
+
+def test_permission_handler_returning_no_decision_is_cancelled_fail_closed():
+    _, result, error = _permission_answer(lambda params: None, {"options": [{"optionId": "allow"}]})
+    assert result == {"outcome": {"outcome": "cancelled"}}
+    assert error == ""
+
+
+def test_permission_handler_failure_is_cancelled_and_never_falls_back_to_allow():
+    def broken(_params):
+        raise RuntimeError("approval service unavailable")
+
+    _, result, error = _permission_answer(broken, {"options": [{"optionId": "allow-always"}]})
+    assert result == {"outcome": {"outcome": "cancelled"}}
+    assert error == ""
+
+
 # ── the translator ─────────────────────────────────────────────────────────────────────────────
 def test_a_call_is_shown_once_its_input_is_known_and_closed_by_its_result():
     """fast-agent's shape: the call first with no arguments, the command on its first progress update."""

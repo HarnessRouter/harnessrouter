@@ -31,6 +31,8 @@ import sys
 import threading
 from typing import Callable
 
+PermissionDecisionHandler = Callable[[dict], dict | None]
+
 _RPC_TIMEOUT = float(os.environ.get("HR_ACP_RPC_TIMEOUT", os.environ.get("HR_DCODE_RPC_TIMEOUT", "120")))
 # How long the agent has to exit once its input ends, before it is killed (see Acp.close).
 _END_GRACE = float(os.environ.get("HR_ACP_END_GRACE", os.environ.get("HR_DCODE_END_GRACE", "10")))
@@ -97,10 +99,15 @@ class Acp:
     agent makes but the permission one is refused by name."""
 
     def __init__(self, argv: list[str], cwd: str, env: dict,
-                 on_update: Callable[[dict], None] | None = None, terminal: bool = False) -> None:
+                 on_update: Callable[[dict], None] | None = None, terminal: bool = False,
+                 permission_handler: PermissionDecisionHandler | None = None) -> None:
         self.cwd = cwd
         self.env = env
         self.terminal = terminal
+        # The default preserves the historical autonomous runner behaviour.  A caller that owns
+        # the task's permission policy can inject a handler; it receives the exact ACP params and
+        # must return the ACP response body.  Returning None is fail-closed and becomes cancelled.
+        self.permission_handler = permission_handler or _default_permission_handler
         self.proc = subprocess.Popen(argv, cwd=cwd, env=env, text=True, bufsize=1,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE, start_new_session=True)
@@ -209,15 +216,13 @@ class Acp:
         method = str(msg.get("method") or "")
         params = msg.get("params") or {}
         if method == "session/request_permission":
-            # The sandbox is the trust boundary and nobody is attached to answer, so this allows:
-            # the grant claude gets with --dangerously-skip-permissions.
-            opts = params.get("options") or []
-            pick = next((o for o in opts
-                         if "allow" in str(o.get("kind", "")).lower()
-                         or "allow" in str(o.get("optionId", "")).lower()), None)
-            pick = pick or (opts[0] if opts else None)
-            self._reply(msg, {"outcome": {"outcome": "selected", "optionId": pick["optionId"]}}
-                        if pick else {"outcome": {"outcome": "cancelled"}})
+            try:
+                decision = self.permission_handler(params)
+            except Exception:
+                # A policy adapter failure must not turn into an implicit grant.
+                decision = None
+            self._reply(msg, decision if isinstance(decision, dict)
+                        else {"outcome": {"outcome": "cancelled"}})
             return
         if self.terminal and method.startswith("terminal/"):
             self._terminal(msg, method, params)
@@ -265,6 +270,22 @@ class Acp:
         else:
             self._send({"jsonrpc": "2.0", "id": msg["id"],
                         "error": {"code": -32601, "message": f"this client does not implement {method}"}})
+
+
+def _default_permission_handler(params: dict) -> dict:
+    """Return the legacy autonomous ACP permission decision.
+
+    This compatibility path is intentionally local to the ACP adapter.  It is not a Hexa
+    approval decision and must not be advertised as one by UHP until a durable continuation path
+    exists around the agent's permission request.
+    """
+    opts = params.get("options") or []
+    pick = next((o for o in opts
+                 if "allow" in str(o.get("kind", "")).lower()
+                 or "allow" in str(o.get("optionId", "")).lower()), None)
+    pick = pick or (opts[0] if opts else None)
+    return ({"outcome": {"outcome": "selected", "optionId": pick["optionId"]}}
+            if pick else {"outcome": {"outcome": "cancelled"}})
 
 
 def _text_of(u: dict) -> str:

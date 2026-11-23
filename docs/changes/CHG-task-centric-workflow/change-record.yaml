@@ -1171,3 +1171,24 @@ lease_reaper_delivery:
     - "原生工具审批仍没有副作用前拦截、精确 continuation 或 UHP capability 广告。"
   remaining: [PostgreSQL-backed Linux API deployment, multiprocess production failover, real Gateway/BYOK smoke, native approval interception and durable continuation, remote CI]
   next_action: "提交本地分支；继续验证 API 镜像接 PostgreSQL/Gateway 的部署冒烟，并在真实 Runner 入口选择首个可持久化审批 checkpoint。"
+
+acp_permission_hook_slice:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified_slice
+  baseline: cb286e1c
+  branch: codex/agent-orchestration
+  reuse_decision: extend the shared ACP client with an injectable permission boundary; preserve legacy autonomous behavior without advertising approval coverage
+  scope: ACP session/request_permission capture, exact params handoff, fail-closed cancellation for missing or failing handlers
+  acceptance_ids: [AC-41]
+  references: [spec.md#acp-原生权限-hook-的前置边界, plan.md#acp-permission-hook-前置切片-2026-11-23, platform-matrix.md#2026-11-23-acp-permission-hook]
+  verification:
+    red: "先增加三项 handler 单测；生产实现前测试无法通过，随后实现 Acp.permission_handler 注入和安全默认分支。"
+    unit: "python -m pytest -q runner/tests/test_acp_turn.py -k permission --tb=short; exit 0；3 passed。"
+    static: "python -m py_compile runner/acp_turn.py runner/tests/test_acp_turn.py; git diff --check; passed。"
+    regression: "完整 python -m pytest -q runner/tests/test_acp_turn.py 未通过：3 项既有 /bin/sh 终端测试在 Windows 无法启动；python -m pytest -q runner/tests/test_dcode_acp.py 未完成收集，Windows 缺少 pwd 模块。两项限制已记录，不能宣称 Runner 全套通过。"
+  security_review: "handler 接收原始 params 但不持久化请求；返回空值、非对象或异常统一 cancelled，不回退 allow。默认 autonomous allow 仅保持旧调用兼容，不生成 Hexa approval receipt、不改变 UHP discovery、不授予工具权限。"
+  limitations: [Linux ACP terminal and real Agent not_evaluated, native pre-side-effect checkpoint, durable continuation, Gateway registration, SSE, UHP capability and Hexa UI not implemented]
+  rollback: "停止未来注入 handler 的调用后回退 acp_turn.py 和单测；保留既有 ACP autonomous 行为，当前无协议字段、迁移或外部数据。"
+  remaining: [native interception, exact ACP continuation, durable Gateway binding, UHP capability negotiation, Linux Runner conformance, real Provider validation]
+  next_action: "选择具备副作用前 native checkpoint 的真实 Runner，验证 deny 不执行工具并能在同一 ACP session 精确恢复；完成前保持 tool_approvals 不广告。"

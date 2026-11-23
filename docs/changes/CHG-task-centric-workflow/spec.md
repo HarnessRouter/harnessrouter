@@ -500,6 +500,25 @@ owner 的兼容放行规则。映射或日志缺失、主体不符返回统一 4
 `hexa_approval_unavailable`。引用含待接线审批索引的旧 Response 的普通继续也必须拒绝，不得把待批当普通消息忽略。
 现有不带新字段的任务与 input_required 流程不变；discovery 不广告 tool_approvals。
 
+### ACP 原生权限 hook 的前置边界
+
+ACP Runner 的 `session/request_permission` 是原生权限请求入口，不能被当作普通 `tool_call` 事件处理。Runner
+客户端 `Acp` 必须支持注入 `permission_handler(params)`：handler 接收 ACP 原始 `params`，返回 ACP 要求的 response body；
+它不能修改工具参数、替换工具身份或通过日志中的模型输出构造授权。handler 返回空值、非对象或抛出异常时，客户端必须回复
+`outcome=cancelled`，不得回退到 allow。handler 的异常、请求参数和可能包含秘密的工具输入不得写入普通运行记录。
+
+当前默认兼容路径仍可使用既有 autonomous allow，以保持没有任务审批绑定的旧 Runner 行为；该路径不属于 Hexa 工具审批，
+不能产生 approval receipt，也不能使 UHP discovery 广告 `tool_approvals`。只有任务策略、Gateway durable approval、当前
+Runtime capability 和同一 ACP session 的精确 continuation 全部绑定后，驱动才可以注入任务级 handler。
+
+本 hook 只证明 Runner 能在 ACP 请求边界捕获并返回决定，不证明副作用已经在 native checkpoint 前暂停，也不证明进程重启后
+可恢复同一调用。尚未具备精确 continuation 时，任务层对需要审批的 Run 仍必须在 preflight 返回
+`configuration_unavailable` 或沿用 Gateway 的 `hexa_approval_unavailable`，不能把取消回复伪装成 durable deny。
+
+**AC-41 ACP permission hook：** 单元测试验证原始请求完整透传、明确决定按 ACP 形状返回、handler 无决定或异常时安全取消，
+且不调用旧 allow fallback。该验收不替代真实 ACP Agent 的副作用前拦截、精确 continuation、Gateway 注册、SSE、UHP capability
+协商或跨平台 Runner conformance；Linux ACP 终端执行必须另在 Linux 目标环境验证。
+
 **AC-30 审批 HTTP 边界：** 真实 FastAPI/SQLite/blob 组合验证读回、决定幂等/冲突、不同主体/组织/Session/工作区隔离、
 缺失 key/非法 payload/过期错误、重开 store、取消/删除 void、读写故障 fail closed 和错误脱敏；策略/审批继续请求均零 Runner
 派发。HTTP 通过仅证明接口与预检边界，仍须另验真实 native interception、完整恢复、SSE、能力协商及 Hexa UI。

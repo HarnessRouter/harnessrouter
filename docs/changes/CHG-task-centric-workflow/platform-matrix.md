@@ -79,4 +79,12 @@ Linux、可选远端 control backing、真实 Runner、HTTP/SSE 审批及部署 
 
 API delivery image follow-up: `docker build -t hexa-orchestration-api-check:reaper hexa-api` completed from the final source; a disposable `python:3.12-slim` API container started and `GET /healthz` returned 200. The image smoke does not prove PostgreSQL wiring, real Gateway/BYOK, multi-replica failover, or Runner execution; those remain not_evaluated.
 
+## 2026-11-23 ACP permission hook
+
+Windows/Python 3.13 的 `runner/tests/test_acp_turn.py -k permission` 通过，覆盖原始 ACP 请求透传、显式返回和 handler
+异常/空决定的 cancelled fail-closed。完整 `test_acp_turn.py` 未通过的三项是既有 `/bin/sh` 终端 fixture 在 Windows 上无法启动；
+这三项属于 Linux Runner/终端路径，不能被 Windows 结果替代。`test_dcode_acp.py` 在 Windows 收集阶段还受 `pwd` 模块缺失影响，
+未作为通过证据。Linux ACP 终端、真实 Agent、native checkpoint、Gateway durable approval 和 UHP capability 仍为
+`not_evaluated`，本切片不宣称工具审批已完成。
+
 复用 ORM 与持久化 JSON 引用，无数据库列、Shell、原生模块或系统路径变更。Windows / SQLite 覆盖新 Run 恢复、引用身份和旧历史不变；HTTP 夹具覆盖实际 GatewayClient、失败响应、补跑和重启只读。当前源码真实 PostgreSQL、Linux 与真实 Provider 仍 not_evaluated；本批未新增迁移，也不宣称可发布。最终测试数量及 Chromium 流程证据见 Change `terminal_fanout_resume`；新增项级 UI 入口仍属后续工作。

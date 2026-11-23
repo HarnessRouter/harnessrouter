@@ -75,6 +75,14 @@ secret；Gateway/Runner 继续负责插件物化、sandbox、MCP 连接和 comma
 验证：草案 JSON Schema 的元校验和 6 个 shape tests；真实 A-01 至 A-09、跨重启恢复、原生沙箱和生产 Gateway 均为后续验证，不能
 用 fake Gateway 或 schema tests 代替。
 
+### ACP permission hook 前置切片（2026-11-23）
+
+先在共享 `runner/acp_turn.py` 增加可注入 `permission_handler`，保持旧 autonomous allow 作为未绑定任务的兼容默认值。
+handler 原样接收 `session/request_permission` 的 params；空决定、非对象或异常统一转换为 ACP cancelled，禁止隐式 allow。
+用无 Provider 的单元测试验证捕获、决定形状和 fail-closed。该切片不接 Gateway approval journal、不接 UHP discovery、不接
+Response/SSE continuation，也不把受控 fake 的回复当作副作用未发生的证据；下一步必须选择能提供 native checkpoint 的真实
+Runner，再把 handler 与 durable approval、CommandReceipt 和同一 ACP session 的精确恢复绑定。
+
 ### 内部审批日志实施（2026-11-24）
 
 按 AC-29 新增独立 `gateway/tool_approvals.py`，复用 control_store 的容器、异常和 ETag CAS，不新增数据库、HTTP 路由或依赖。
