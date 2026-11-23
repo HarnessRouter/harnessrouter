@@ -6,10 +6,10 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import String, cast, delete, or_, select
 
-from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
+from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
 from app.tasks.fanout import node_record_usage, retry_fanout, manifest_records
-from app.tasks.service import ACTIVE, TaskError, all_node_runs, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
+from app.tasks.service import ACTIVE, TaskError, all_node_runs, append_run_event, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
 class TaskBody(BaseModel):
@@ -221,6 +221,18 @@ def build_router(app, require_session, user_id):
         with app.state.session_factory() as db:
             return run_json(db, owned_run(db, run_id, user_id(session)))
 
+    @router.get('/runs/{run_id}/event-log')
+    async def event_log(run_id: int, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), session=Depends(require_session)):
+        with app.state.session_factory() as db:
+            run = owned_run(db, run_id, user_id(session))
+            rows = db.scalars(select(RunEvent).where(RunEvent.run_id == run.id).order_by(RunEvent.id).offset(offset).limit(limit + 1)).all()
+            return page_result('events', [
+                {'id': row.id, 'run_id': row.run_id, 'node_run_id': row.node_run_id,
+                 'event_type': row.event_type, 'data': json.loads(row.event_json),
+                 'created_at': row.created_at.isoformat() if row.created_at else None}
+                for row in rows
+            ], offset, limit)
+
     @router.get('/runs/{run_id}/events')
     async def events(run_id: int, request: Request, session=Depends(require_session)):
         uid = user_id(session)
@@ -272,10 +284,13 @@ def build_router(app, require_session, user_id):
                             raise TaskError('invalid_decision', '人工选择的节点或结果无效。', 422)
                         db.add(RunDecision(run_id=run_id, node_id=item['id'], iteration=rows[item['id']].iteration, input_refs_json=encoded(refs)))
                     run.status, task.status = 'running', 'running'
+                    append_run_event(db, run.id, 'run.continued')
                 elif action == 'pause':
                     run.paused, task.status = True, 'waiting'
+                    append_run_event(db, run.id, 'run.paused')
                 elif action == 'cancel':
                     run.status, task.status = 'canceled', 'waiting'
+                    append_run_event(db, run.id, 'run.canceled')
                     for row in all_node_runs(db, run_id):
                         if row.status not in ('succeeded', 'failed', 'skipped', 'canceled'):
                             row.error_code = 'interrupted_unknown_outcome' if row.status == 'running' else None
@@ -327,6 +342,8 @@ def build_router(app, require_session, user_id):
                         if node_record_usage(db, run_id) >= 500:
                             raise TaskError('storage_limit_exceeded', '运行超过 500 次尝试限制。', 422)
                         db.add(NodeRun(run_id=run_id, node_id=node_id, attempt=row.attempt + 1, iteration=row.iteration, status='idle'))
+                    append_run_event(db, run.id, 'node.retry_requested', node_run_id=row.id,
+                                     data={'node_id': node_id, 'item_node_run_id': body.item_node_run_id})
                 else:
                     raise TaskError('invalid_transition', '节点操作不被当前状态或配置允许。')
                 run.status = 'running'

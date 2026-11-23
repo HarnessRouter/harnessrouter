@@ -314,6 +314,18 @@ serial 按已保存计划顺序挑选一个就绪节点；parallel 挑选所有�
 
 终态 Run 不重新打开。终态重跑创建新的 Run，并保留旧 Run。
 
+### RunEvent 事实流
+
+每个 Run 维护追加式 `RunEvent` 事实流。事件与对应的 Run/NodeRun 状态写入同一事务，不能更新或删除既有事件；事件数据只保存
+脱敏的身份、状态、错误码、尝试、轮次和控制原因，不保存凭据、授权头、原始工具参数或 Gateway secret。最小事件类型包括：
+`run.created`、`node.dispatched`、`node.succeeded`、`node.failed`、`node.unknown`、`run.paused`、`run.continued`、
+`run.canceled`、`run.recovered_unknown`、`run.completed` 和 `run.failed`。重复的 HTTP 命令只能追加一次事实，幂等重放只读回原命令
+结果。
+
+事件 ID 在同一 Run 内严格递增，历史 Run 和 NodeRun 不因恢复、重试或当前结果采用而覆盖。事件查询必须先做任务权限检查，再按
+`run_id`、事件 ID 分页；断线客户端可以用最后一个事件 ID 继续读取。事件流是运行事实来源，当前 Run/NodeRun 状态是最新快照，
+两者不一致时以追加事件和明确的 `unknown/reconciling` 处理为准，不能自动重放不确定副作用。
+
 ### Task 状态
 
 `draft`、`running`、`waiting`、`completed`、`failed`、`archived`。
@@ -609,6 +621,7 @@ Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。�
 - **AC-22 循环组合展开：** 循环体中的有限 foreach/dynamic_plan 按每轮独立 `iteration` 展开并追加 item/aggregate NodeRun；第二轮不能读取或覆盖第一轮聚合，检查节点必须等待当前轮聚合完成；历史 API 能按 iteration 分页返回全部记录。嵌套 loop、动态边和动态修改循环体仍返回 422。
 - **AC-21 受限动态计划：** `dynamic_plan` 只能从依赖节点的数组读取最多 10 个严格 `{id,prompt}` 项；项级 Agent 配置固定继承静态节点，运行时持久化清单并按模式执行，聚合到独立 `dynamic_aggregate`；非法项、重复 ID、超限和额外执行配置在 Gateway 派发前失败；不生成可递归动态子图、不修改 WorkflowRevision。
 - **AC-32 有界静态子编排：** 保存时拒绝空/超限/有环/三层及以上嵌套/动态嵌套/带控制模式/人工节点/未知字段的 `subgraph`；允许最多两层静态子编排。运行时持久化父子清单，按各层子图并发上限派发，内层完成并聚合后才完成外层控制节点，外层聚合后才释放父节点下游；失败取消未开始兄弟并保留叶子、内层聚合和外层控制历史；终态恢复只复制同一 Run 中可验证的嵌套清单，成功叶子复用、指定失败叶子重试，清单 API 验证同 Run、父 NodeRun、iteration 和层级归属，模型输出不能修改拓扑。
+- **AC-34 RunEvent 事实流：** 成功、失败、暂停、继续、取消、恢复和节点重试必须在同一事务追加不可变 `RunEvent`；事件 ID 在 Run 内递增，重启后的活动副作用写入 `node.unknown`/`run.recovered_unknown` 而不自动重放；分页接口先做任务权限检查，跨页无重复、无越权、无副作用，幂等命令重放不追加重复事件。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 

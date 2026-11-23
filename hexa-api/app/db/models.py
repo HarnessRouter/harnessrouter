@@ -140,6 +140,17 @@ class Run(Base):
     superseded_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class RunEvent(Base):
+    __tablename__ = "run_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey('task_runs.id'), index=True)
+    node_run_id: Mapped[int | None] = mapped_column(ForeignKey('node_runs.id'), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    event_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+
+
 class NodeRun(Base):
     __tablename__ = "node_runs"
 
@@ -285,6 +296,7 @@ def create_session_factory(database_url: str):
             decision_columns = {column['name'] for column in inspect(connection).get_columns('run_decisions')}
             if 'iteration' not in decision_columns:
                 connection.execute(text('ALTER TABLE run_decisions ADD COLUMN iteration INTEGER NOT NULL DEFAULT 1'))
+            Base.metadata.create_all(engine, tables=[RunEvent.__table__])
     else:
         # PostgreSQL schema changes are deployment-owned migrations. The API must
         # fail clearly when 005_task_artifacts.sql has not been applied rather

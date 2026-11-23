@@ -65,6 +65,29 @@ nested_subgraph_slice:
   rollback: "停止带 nested static subgraph 的活动 Run 后回退执行器、校验、客户端和文档；历史 NodeRun 保留，旧执行器不得继续新二层 Run。"
   remaining: [PostgreSQL/Linux, real Provider and deployment validation]
   next_action: "完成最终验证后提交本地分支；保持动态子编排不可嵌套，并继续独立推进真实运行时门禁。"
+run_event_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 804a09af
+  branch: codex/agent-orchestration
+  references: [spec.md#runevent-事实流, plan.md#runevent-事实流实施2026-11-24]
+  reuse_decision: extend existing Run/NodeRun transaction and event SSE boundaries; add one append-only SQL table and read-only API
+  acceptance_ids: [AC-34]
+  behavior:
+    before: "Run/NodeRun 只有当前快照；进程恢复会标记未知但没有可分页的追加事实流。"
+    after: "Run 创建、节点派发/终态、Run 完成/失败、暂停/继续/取消和恢复 unknown 写入同一事务的 RunEvent；事件按 Run ID 分页并经过任务权限检查。"
+  verification:
+    red: "新增 test_run_events.py 首次请求 event-log 返回 405；实现后生命周期、分页、暂停幂等重放和旧 SQLite 升级目标 4 passed。"
+    backend: "python -X utf8 -m pytest -q hexa-api/tests/test_run_events.py --tb=short; exit 0; 4 passed。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_tasks_api.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_subgraph.py --tb=short; exit 0; 254 passed in 261.53s。"
+    migration: "PostgreSQL 010_run_events.sql 已加入 migrate.py；本地 SQLite 旧库启动升级、建表和追加事件通过；真实 PostgreSQL lane 未配置，需在 HEXA_TEST_POSTGRES_URL 环境补跑。"
+    hygiene: "python -m compileall -q hexa-api/app、YAML 解析和 git diff --check 通过。"
+  security_review: "事件 data 只使用固定状态字段和脱敏节点身份；读取复用 owned_run，事件接口不执行 Gateway、不返回原始工具参数或密钥。"
+  limitations: [real PostgreSQL/Linux/deployment, CommandReceipt and runtime lease not yet implemented, native tool approval runtime not implemented]
+  rollback: "停止活动 Run 后回退事件写入、API、模型升级和迁移；历史 Run/NodeRun 快照保留，已写 RunEvent 仅允许通过数据库回滚部署版本恢复。"
+  remaining: [PostgreSQL migration lane, CommandReceipt, runtime lease/heartbeat, native Gateway approval]
+  next_action: "进入 CommandReceipt 与 Runtime Lease/Heartbeat 切片；真实 PostgreSQL、Linux、Provider 和部署验证仍需目标环境。"
 approval_binding_slice:
   date: "2026-11-24"
   owner: Codex

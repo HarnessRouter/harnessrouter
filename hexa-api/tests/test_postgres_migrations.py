@@ -31,7 +31,7 @@ def test_cli_fresh_repeat_and_read_only_check():
         migrate(url, '--check')
         with connect(url) as db:
             assert db.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema()").fetchone() == (0,)
-        assert 'applied 009_node_iterations.sql' in migrate(url)
+        assert 'applied 010_run_events.sql' in migrate(url)
         with connect(url) as db:
             db.execute("INSERT INTO tasks (user_id, title) VALUES (1, 'preserved')")
         migrate(url)

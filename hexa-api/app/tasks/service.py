@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 
-from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, Task, TaskCommand, WorkflowRevision
+from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, RunEvent, Task, TaskCommand, WorkflowRevision
 from app.gateway.client import GatewayError
 from app.tasks.domain import NodeSpec, WorkflowSpec, redact, validate_workflow
 from app.tasks.fanout import node_record_usage
@@ -33,6 +33,12 @@ class TaskError(ValueError):
 
 def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def append_run_event(db, run_id, event_type, *, node_run_id=None, data=None):
+    """Append one redacted execution fact in the same transaction as its state."""
+    db.add(RunEvent(run_id=run_id, node_run_id=node_run_id, event_type=event_type,
+                    event_json=encoded(data or {})))
 
 
 def workflow_concurrency(value):
@@ -531,6 +537,7 @@ async def prepare_run(db, task, body, key, gateway, secrets):
         raise TaskError('invalid_workflow', '重跑节点不存在。', 422)
     db.add(run)
     db.flush()
+    append_run_event(db, run.id, 'run.created', data={'kind': run.kind, 'workflow_revision_id': revision.id})
     reused = {}
     if run.kind == 'rerun' and run.target_node and not resume:
         affected = downstream_nodes(definition, run.target_node)
@@ -588,9 +595,13 @@ class TaskExecutor:
                 run.status = 'failed'
                 task = db.get(Task, run.task_id)
                 task.status = 'failed'
+                append_run_event(db, run.id, 'run.recovered_unknown', data={'reason': 'executor_restart'})
                 for row in all_node_runs(db, run.id):
                     if row.status in ('queued', 'running'):
                         row.status, row.error_code = 'failed', 'interrupted_unknown_outcome'
+                        append_run_event(db, run.id, 'node.unknown', node_run_id=row.id,
+                                         data={'node_id': row.node_id, 'error_code': row.error_code})
+                append_run_event(db, run.id, 'run.failed', data={'error_code': 'interrupted_unknown_outcome'})
             db.commit()
 
     async def execute(self, run_id):
@@ -651,8 +662,10 @@ class TaskExecutor:
                             run.status, task.status = 'waiting_human', 'waiting'
                         elif any(row.status == 'failed' for row in rows.values()):
                             run.status, task.status = 'failed', 'failed'
+                            append_run_event(db, run.id, 'run.failed', data={'error_code': next((row.error_code for row in rows.values() if row.status == 'failed' and row.error_code), 'node_failed')})
                         elif all(row.status in ('succeeded', 'skipped') for row in rows.values()):
                             run.status = 'completed'
+                            append_run_event(db, run.id, 'run.completed')
                             final = next((item for item in nodes.values() if item.get('final_report') and rows[item['id']].status == 'succeeded'), None)
                             if final:
                                 task.current_result_json = encoded({final['id']: rows[final['id']].id})
@@ -736,6 +749,9 @@ class TaskExecutor:
                             context['_orchestration_role'] = unit_kind
                         row.input_json, row.status = encoded(redact(context, self.secrets)), 'running'
                         row.started_at = datetime.now(timezone.utc)
+                        append_run_event(db, run.id, 'node.dispatched', node_run_id=row.id,
+                                         data={'node_id': row.node_id, 'execution_kind': row.execution_kind,
+                                               'attempt': row.attempt, 'iteration': row.iteration})
                         calls.append((row.id, item, context, space.gateway_id if space else ''))
                     db.commit()
                 await asyncio.gather(*(self.execute_node(run_id, *call) for call in calls))
@@ -811,6 +827,7 @@ class TaskExecutor:
                         if row.status in ('queued', 'running'):
                             row.status = 'failed'
                             row.error_code = 'executor_error'
+                    append_run_event(db, run.id, 'run.failed', data={'error_code': 'executor_error'})
                     db.commit()
 
     async def execute_node(self, run_id, attempt_id, item, context, workspace_id):
@@ -879,4 +896,6 @@ class TaskExecutor:
                     safe_result['artifacts'] = artifacts
                 row.output_json = encoded(safe_result)
             row.finished_at = datetime.now(timezone.utc)
+            append_run_event(db, run.id, 'node.failed' if error else 'node.succeeded', node_run_id=row.id,
+                             data={'node_id': row.node_id, **({'error_code': error} if error else {})})
             db.commit()
