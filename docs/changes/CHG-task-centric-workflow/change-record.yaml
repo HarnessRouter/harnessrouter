@@ -91,7 +91,7 @@ run_event_slice:
 command_receipt_slice:
   date: "2026-11-24"
   owner: Codex
-  status: implementing
+  status: verified_slice
   baseline: 14688656
   branch: codex/agent-orchestration
   references: [spec.md#commandreceipt-回执, plan.md#commandreceipt-回执实施2026-11-24]
@@ -107,10 +107,10 @@ command_receipt_slice:
     migration: "PostgreSQL 011_command_receipts.sql 已加入 migrate.py；真实 PostgreSQL lane 未配置，需在 HEXA_TEST_POSTGRES_URL 环境补跑。"
     hygiene: "python -m compileall -q hexa-api/app、YAML 解析和 git diff --check 通过。"
   security_review: "回执只返回命令 ID、request_hash、状态、错误码和脱敏 response_id；不保存原始上下文、工具参数、凭据或授权头。"
-  limitations: [full orchestration regression pending, real PostgreSQL/Linux/deployment, exact reconciliation, runtime lease/heartbeat, native tool approval runtime]
+  limitations: [real PostgreSQL/Linux/deployment, exact reconciliation, runtime lease/heartbeat, native tool approval runtime]
   rollback: "停止带回执的活动 Run 后回退回执写入、读取、模型升级和迁移；RunEvent 与历史 NodeRun 快照保留。"
-  remaining: [full orchestration regression, PostgreSQL migration lane, exact reconciliation, runtime lease/heartbeat, native Gateway approval]
-  next_action: "跑受影响编排回归并提交回执切片；随后实现 Run lease/heartbeat 与 fencing。"
+  remaining: [PostgreSQL migration lane, exact reconciliation, runtime lease/heartbeat, native Gateway approval]
+  next_action: "租约切片已提交；在目标环境验证租约接管后，再处理精确 reconciliation 与 UHP native approval。"
 run_lease_slice:
   date: "2026-11-24"
   owner: Codex
