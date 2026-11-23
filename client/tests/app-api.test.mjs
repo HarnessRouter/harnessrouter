@@ -239,3 +239,20 @@ test('workbench search and every detail page retain server cursors and cookie au
     assert.equal(init.headers.has('authorization'), false);
   }
 });
+
+test('item history requests a fixed anchor and retains server pagination', async () => {
+  const api = await import('../src/app-api.ts');
+  const seen = [];
+  const restore = withFetch(async (input, init) => {
+    seen.push({ input, init });
+    return Response.json({ anchor_node_run_id: 19, items: [], pagination: { offset: 50, limit: 50, has_more: false } });
+  });
+  try {
+    const result = await api.appListNodeItems(19, { offset: 50, limit: 50 });
+    assert.equal(result.anchor_node_run_id, 19);
+    assert.equal(result.pagination.offset, 50);
+  } finally { restore(); }
+  assert.equal(seen[0].input, '/api/hexa/node-runs/19/items?offset=50&limit=50');
+  assert.equal(seen[0].init.credentials, 'include');
+  assert.equal(seen[0].init.method || 'GET', 'GET');
+});

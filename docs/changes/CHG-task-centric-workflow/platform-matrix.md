@@ -42,6 +42,8 @@ Gateway 仅作为 `hexa-api` 的外部执行依赖；Gateway 原有回归测试�
 
 ## 2026-11-24 二层 foreach
 
+清单独立分页后续切片：无新增平台分支、进程或系统路径；Windows/SQLite 的 API/清单校验与 HTTP 重启读取、Chromium/Edge 分页错误/迟到响应、1440/390 历史截图和浏览器恢复证据见 Change `manifest_pagination_slice`。Linux、真实 PostgreSQL、真实 Provider 与部署限制保持未验证。
+
 使用既有 ORM、JSON 清单与 React 表单，无新增操作系统路径、进程或数据库迁移。Windows/Python/SQLite 的最终编排回归和 HTTP 夹具证据见 Change `nested_foreach_slice`；Chromium/Edge 覆盖二层编辑保存重开、叶子历史和 1440/390 布局。浏览器端到端经真实 hexa-api 和受控 HTTP Gateway 验证失败后新 Run 恢复及历史刷新。Linux、真实 PostgreSQL、真实 Gateway/Provider 和生产部署仍为 not_evaluated，需在目标 Runner 上补验，本地切片不代表整体可发布。
 
 ## 2026-11-23 终态集合恢复

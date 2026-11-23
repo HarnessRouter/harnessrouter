@@ -1,4 +1,28 @@
 id: CHG-task-centric-workflow
+manifest_pagination_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 5ad32abe
+  branch: codex/agent-orchestration
+  status: verified_slice
+  reuse_decision: extend immutable fanout manifests and task ownership; keep generic debug pagination compatible
+  references: [spec.md#独立集合清单分页, plan.md#清单分页实施2026-11-24, visual-contract.md]
+  acceptance_ids: [AC-25, AC-27]
+  scope: independent server-filtered item pages and client loading/retry/request isolation
+  verification:
+    red: "新 API 和 helper 未实现时 12 failed；客户端传输单测先失败 appListNodeItems missing，浏览器先失败无清单错误/重试入口。追加 non_object 测试先暴露 AttributeError，随后显式检查对象类型修复。"
+    backend: "python -m pytest -q hexa-api/tests/test_manifest_pages.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_http_integration.py; exit 0; 124 passed in 209.11s。之后仅修改清单对象校验，最终 test_manifest_pages.py 单独重跑 15 passed in 18.56s。"
+    http_e2e: "上述回归含 4 种普通/二层活动重试和终态恢复 HTTP 旅程，新增清单读取与应用重启后完全相同断言；真实 GatewayClient + HTTP Gateway 夹具 + SQLite，非真实 Provider。"
+    client: "npm.cmd test; 59 passed; npm.cmd run typecheck; exit 0; npm.cmd run build; exit 0，已有主包 952.64 kB 警告。"
+    browser: "npx.cmd playwright test -c playwright.app.config.ts tasks.spec.ts pagination.spec.ts --grep 'item pages load|nested history|fanout history|node debug' --workers=2; exit 0; 12 passed in 1.2m；迟到锚点与独立调试失败另跑双浏览器 2 passed in 28.7s。"
+    browser_e2e: "npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium --grep 'nested collection'; exit 0; 1 passed in 50.8s，验证界面失败恢复、旧历史不变及刷新。"
+    hygiene: "git diff --check、YAML safe_load、Python 编译与文档引用检查；截图 SHA256 见 client/.artifacts/orchestration/manifest-verification.json。"
+  visual: "复用白底单列列表和原生详情，独立 aria-busy/status/alert；Chromium/Edge 1440/390 历史截图由 nested history 用例生成，查看 Edge 390 截图确认层级、恢复按钮可读，无页面横向溢出。"
+  security_review: "读取先鉴权，再校验全部清单的 Run/节点/iteration/执行类型、重复与整数 ID；所有查询沿 ORM 参数化，无新外部目标或副作用。未知副作用仍必须显式重试。自查不代替独立评审或远端 CI。"
+  limitations: [Windows/SQLite and fixture HTTP only, real PostgreSQL/Linux/Provider/deployment not_evaluated, no UHP approval runtime implementation]
+  rollback: 前后端同步回退本提交，无数据库迁移或数据回滚；历史保持不变。
+  remaining: [dynamic subgraph design and implementation, real PostgreSQL migration, current-source real Gateway/BYOK smoke, Gateway/Runner approval runtime]
+  next_action: 提交本地独立分支；下一轮推进完整编排剩余设计和实现，不将本切片视为整体目标完成。
 nested_foreach_slice:
   date: "2026-11-24"
   owner: Codex

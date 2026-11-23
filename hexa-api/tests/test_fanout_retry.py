@@ -290,10 +290,15 @@ def test_http_retry_uses_fresh_request_and_survives_read_only_restart(client, ap
         assert calls[-2][0]['foreach_item'] == calls[-1][0]['foreach_item']
         assert calls[-2][1] != calls[-1][1]
         history = client.get(f"/api/hexa/node-runs/{aggregate['id']}").json()['attempts']
+        manifest_page = client.get(f"/api/hexa/node-runs/{aggregate['id']}/items").json()
+        assert manifest_page['anchor_node_run_id'] == aggregate['id']
+        assert any(row['execution_kind'] == ('foreach_nested_item' if nested else 'foreach_item')
+                   and row['status'] == 'succeeded' for row in manifest_page['items'])
         with TestClient(create_app(app.state.settings, app.state.gateway)) as restarted:
             restarted.cookies.update(client.cookies)
             assert restarted.get(f"/api/hexa/node-runs/{aggregate['id']}").json()['attempts'] == history
             assert restarted.get(f"/api/hexa/runs/{run['id']}").json() == result
+            assert restarted.get(f"/api/hexa/node-runs/{aggregate['id']}/items").json() == manifest_page
         assert len(calls) == (4 if nested else 3)
     finally:
         server.shutdown()

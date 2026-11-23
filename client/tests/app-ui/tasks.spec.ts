@@ -253,6 +253,74 @@ test('nested history shows leaf indexes and keeps recovery on the outer item', a
   }
 });
 
+test('item pages load independently of debug pages, retain errors and retry the same offset', async ({ page }) => {
+  const fixture = await taskFixture(page);
+  const run = fixture.runs.find(row => row.id === 20)!;
+  const anchor = { id: 601, node_id: 'worker', run_id: 20, iteration: 2, execution_kind: 'node', attempt: 2, status: 'failed', input: { item_node_run_ids: [611, 612] }, output: null };
+  run.workflow = { nodes: [{ id: 'worker', name: '分页处理', deps: [] }] };
+  run.nodes = [anchor];
+  const offsets: number[] = [];
+  let initialFailure = true, appendFailure = true;
+  await page.route('**/api/hexa/node-runs/601/items?*', route => {
+    const offset = Number(new URL(route.request().url()).searchParams.get('offset'));
+    offsets.push(offset);
+    if (offset === 0 && initialFailure) { initialFailure = false; return route.fulfill({ status: 503, json: { detail: '清单首次读取失败' } }); }
+    if (offset === 50 && appendFailure) { appendFailure = false; return route.fulfill({ status: 503, json: { detail: '清单追加失败' } }); }
+    return route.fulfill({ json: { anchor_node_run_id: 601, items: [{ ...anchor, id: offset === 0 ? 611 : 612, execution_kind: 'foreach_item', foreach_index: offset === 0 ? 0 : 1, status: offset === 0 ? 'succeeded' : 'failed', input: {} }], pagination: { offset, limit: 50, has_more: offset === 0 } } });
+  });
+  await page.goto('/runs/20');
+  await page.getByRole('button', { name: '打开流程图' }).click();
+  await page.getByRole('button', { name: '分页处理 节点' }).click();
+  await page.getByRole('tab', { name: '调试' }).click();
+  const history = page.getByRole('region', { name: '集合项历史' });
+  await expect(history.getByRole('alert')).toContainText('清单首次读取失败');
+  await history.getByRole('button', { name: '重试加载集合项' }).click();
+  await expect(history).toContainText('集合项 1');
+  expect(offsets).toEqual([0, 0]);
+  await history.getByRole('button', { name: '加载更多集合项' }).click();
+  await expect(history.getByRole('alert')).toContainText('清单追加失败');
+  await expect(history).toContainText('集合项 1');
+  await history.getByRole('button', { name: '重试加载集合项' }).click();
+  await expect(history).toContainText('集合项 2');
+  await expect(history.getByRole('button', { name: '新建 Run 恢复此项' })).toHaveCount(1);
+  await expect(history.getByRole('button', { name: '加载更多集合项' })).toHaveCount(0);
+  expect(offsets).toEqual([0, 0, 50, 50]);
+});
+
+test('item history ignores a delayed previous anchor even when debug loading fails', async ({ page }) => {
+  const fixture = await taskFixture(page);
+  const run = fixture.runs.find(row => row.id === 20)!;
+  run.workflow = { nodes: [{ id: 'old', name: '旧清单', deps: [] }, { id: 'new', name: '新清单', deps: [] }] };
+  run.nodes = [
+    { id: 701, node_id: 'old', run_id: 20, iteration: 1, status: 'failed', attempt: 1, input: { item_node_run_ids: [711] }, output: null },
+    { id: 702, node_id: 'new', run_id: 20, iteration: 1, status: 'failed', attempt: 1, input: { item_node_run_ids: [712] }, output: null },
+  ];
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const requested = new Promise<void>(resolve => { entered = resolve; });
+  await page.route('**/api/hexa/node-runs/701/items?*', async route => {
+    entered(); await held;
+    await route.fulfill({ json: { anchor_node_run_id: 701, items: [{ ...run.nodes[0], id: 711, execution_kind: 'foreach_item', foreach_index: 0, error_code: '旧清单迟到' }], pagination: { offset: 0, limit: 50, has_more: false } } });
+  });
+  await page.route('**/api/hexa/node-runs/702?*', route => route.fulfill({ status: 503, json: { detail: '调试不可用' } }));
+  await page.route('**/api/hexa/node-runs/702/items?*', route => route.fulfill({ json: {
+    anchor_node_run_id: 702, items: [{ ...run.nodes[1], id: 712, execution_kind: 'foreach_item', foreach_index: 0, error_code: '新清单错误' }], pagination: { offset: 0, limit: 50, has_more: false },
+  } }));
+  await page.goto('/runs/20');
+  await page.getByRole('button', { name: '打开流程图' }).click();
+  await page.getByRole('button', { name: '旧清单 节点' }).click();
+  await page.getByRole('tab', { name: '调试' }).click();
+  await requested;
+  await page.getByRole('button', { name: '新清单 节点' }).click();
+  const history = page.getByRole('region', { name: '集合项历史' });
+  await expect(history).toContainText('新清单错误');
+  const oldResponse = page.waitForResponse(response => response.url().includes('/701/items?'));
+  release(); await oldResponse;
+  await expect(history).not.toContainText('旧清单迟到');
+  await expect(history).toContainText('新清单错误');
+  await expect(page.getByRole('button', { name: '重试加载调试' })).toBeVisible();
+});
+
 for (const width of [1440, 800, 390]) test(`orchestration inspector remains usable at ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   const fixture = await taskFixture(page);

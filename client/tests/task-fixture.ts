@@ -88,6 +88,19 @@ export async function taskFixture(page: Page, options: { failSave?: boolean; fai
       return route.fulfill({ json: run });
     }
     if (/\/node-runs\/\d+\/artifacts$/.test(path)) return route.fulfill({ json: { artifacts: [], pagination: { limit: 50, offset: 0, has_more: false } } });
+    const itemsMatch = path.match(/\/node-runs\/(\d+)\/items$/);
+    if (itemsMatch) {
+      const anchor = runs.flatMap(r => r.nodes).find(n => n.id === Number(itemsMatch[1]));
+      const history = anchor?.debug_attempts || [];
+      const ids = new Set<number>(anchor?.input?.item_node_run_ids || []);
+      for (const outer of history.filter((row: any) => ids.has(row.id))) {
+        for (const id of outer.input?.nested_item_node_run_ids || []) ids.add(id);
+        if (outer.input?.nested_aggregate_node_run_id) ids.add(outer.input.nested_aggregate_node_run_id);
+      }
+      const all = history.filter((row: any) => ids.has(row.id)).sort((a: any, b: any) => a.id - b.id);
+      const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || 50);
+      return route.fulfill({ json: { anchor_node_run_id: Number(itemsMatch[1]), items: all.slice(offset, offset + limit), pagination: { offset, limit, has_more: offset + limit < all.length } } });
+    }
     const debugMatch = path.match(/\/node-runs\/(\d+)$/);
     if (debugMatch) { const node = runs.flatMap(r => r.nodes).find(n => n.id === Number(debugMatch[1])); return route.fulfill({ json: { ...node, environment: { workflow: runs.find(r => r.nodes.some(n => n.id === node.id))?.workflow }, attempts: node?.debug_attempts || [node] } }); }
     return route.fulfill({ json: {} });

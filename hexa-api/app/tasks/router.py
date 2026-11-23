@@ -1,14 +1,14 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Query
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import String, cast, delete, or_, select
 
 from app.db.models import AppWorkspace, Artifact, NodeRun, Run, RunDecision, Task, TaskCommand, TaskTemplate, TemplateVersion, WorkflowRevision
 from app.tasks.domain import redact
-from app.tasks.fanout import node_record_usage, retry_fanout
+from app.tasks.fanout import node_record_usage, retry_fanout, manifest_records
 from app.tasks.service import ACTIVE, TaskError, all_node_runs, command_replay, current_revision, encoded, is_human_node, latest_nodes, node_json, owned_run, owned_task, prepare_run, run_json, save_command, save_workflow, stale_nodes, task_json, workflow_from_json
 
 
@@ -353,6 +353,21 @@ def build_router(app, require_session, user_id):
     @router.get('/node-runs/{attempt_id}')
     async def debug(attempt_id: int, offset: int = 0, limit: int = 100, session=Depends(require_session)):
         return await debug_paged(attempt_id, offset, limit, session)
+
+    @router.get('/node-runs/{attempt_id}/items')
+    async def manifest_page(attempt_id: int, offset: int = Query(0, ge=0),
+                            limit: int = Query(50, ge=1, le=100), session=Depends(require_session)):
+        with app.state.session_factory() as db:
+            anchor = db.get(NodeRun, attempt_id)
+            if anchor is None:
+                raise TaskError('not_found', '节点记录不存在。', 404)
+            owned_run(db, anchor.run_id, user_id(session))
+            try:
+                rows = manifest_records(db, anchor)
+            except (ValueError, TypeError, KeyError):
+                raise TaskError('fanout_manifest_unavailable', '集合执行清单不可用，请刷新后重试。', 409) from None
+            return {'anchor_node_run_id': anchor.id,
+                    **page_result('items', [node_json(row) for row in rows[offset:offset + limit + 1]], offset, limit)}
 
     @router.get('/tasks/{task_id}/artifacts')
     async def task_artifacts(task_id: int, offset: int = 0, limit: int = 50, session=Depends(require_session)):

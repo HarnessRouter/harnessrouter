@@ -54,6 +54,7 @@ python -m uvicorn app.main:app --app-dir hexa-api --host 127.0.0.1 --port 4010 -
 - `GET /api/hexa/artifacts/{id}`、`GET /api/hexa/artifacts/{id}/content`
 - `POST /api/hexa/runs/{id}/continue|pause|cancel` and node retry/skip controls
 - `GET /api/hexa/node-runs/{attempt_id}`, template version routes, and save-as-template
+- `GET /api/hexa/node-runs/{attempt_id}/items?offset=0&limit=50`: current collection manifest pages anchored to that control/aggregate record, including nested items and aggregates. Returns `anchor_node_run_id`, `items`, and `pagination`; page size is 1–100. Invalid manifests return `409 fanout_manifest_unavailable`; reading never dispatches Agent work.
 
 消息接口使用 `Idempotency-Key`。Gateway 响应流中断时，后端保留不确定状态并返回 409 给重复提交，客户端应先读取会话状态，不自动重新创建远程任务。
 

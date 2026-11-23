@@ -78,6 +78,45 @@ def nested_fanout_items(db, outer):
     return rows
 
 
+def manifest_records(db, anchor):
+    """Select a fixed two-level manifest before applying presentation paging.
+
+    Validate the complete manifest first: a broken later page must not allow
+    disclosure of a partial or foreign execution on an earlier page.
+    """
+    selected = {}
+
+    def members(identities, kinds):
+        if not isinstance(identities, list) or len(identities) > 500:
+            raise ValueError('invalid manifest')
+        result = []
+        for identity in identities:
+            if type(identity) is not int or identity in selected:
+                raise ValueError('invalid manifest identity')
+            row = db.get(NodeRun, identity)
+            if (row is None or row.run_id != anchor.run_id or row.node_id != anchor.node_id
+                    or row.iteration != anchor.iteration or row.execution_kind not in kinds):
+                raise ValueError('manifest ownership mismatch')
+            selected[identity] = row
+            result.append(row)
+        return result
+
+    state = json.loads(anchor.input_json)
+    if not isinstance(state, dict):
+        raise ValueError('invalid anchor input')
+    outers = members(state.get('item_node_run_ids', []), {'foreach_item', 'dynamic_item'})
+    for outer in outers:
+        outer_state = json.loads(outer.input_json)
+        if not isinstance(outer_state, dict):
+            raise ValueError('invalid outer input')
+        members(outer_state.get('nested_item_node_run_ids', []), {'foreach_nested_item'})
+        if 'nested_aggregate_node_run_id' in outer_state:
+            members([outer_state['nested_aggregate_node_run_id']], {'foreach_nested_aggregate'})
+    if len(selected) > 500:
+        raise ValueError('manifest exceeds run limit')
+    return sorted(selected.values(), key=lambda row: row.id)
+
+
 def advance_nested_foreach(db, run, item, control, outer, *, nested, encoded, value_at_path, now):
     """Advance one outer item in the bounded two-level foreach contract."""
     if outer.status not in ('idle', 'running'):
