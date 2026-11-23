@@ -249,3 +249,5 @@ RunEvent、CommandReceipt、Lease 和 reconciliation 回归；真实 Gateway/Run
 先写活动子编排失败项重试和客户端动作测试，再实现状态机；验证子编排、动态子编排、终态恢复、并发、
 RunEvent、Lease 和全任务 API 回归。真实 PostgreSQL、Linux/Runner、Provider 和 native tool approval
 仍分别验收。
+
+嵌套历史的恢复入口使用已加载清单验证两层归属，不把二层叶子直接当作父控制的一层成员。单测先覆盖正常活动/终态操作及伪造父记录、跨 Run/iteration、缺少父分页、成功项和重放拒绝；再接入历史组件。派发嵌套叶子时保留既有嵌套标记、父局部 ID 和提示词前缀，使历史标签及恢复后的提示词与初次执行一致。HTTP 浏览器旅程分别覆盖普通和嵌套子编排失败后的指定项恢复、成功兄弟复用、旧 Run 不变与刷新后的清单；不修改服务端权限或运行记录格式。

@@ -673,6 +673,8 @@ Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。�
 - **AC-39 Plugin preflight：** 启用 Plugin 的 skipped、缺少 package、冲突、unsupported transport 或缺少必要 UHP capability 在首个 NodeRun 前返回 `configuration_unavailable`；disabled Plugin 可被审计但其派生 MCP/Skill/Tool 不进入有效组合；不支持审批的 Gateway 不得被任务层宣称为支持工具审批。
 - **AC-40 子编排项级重试：** 活动 Run 中子编排清单里的失败/取消 `subgraph_node` 可以按项重试；服务端追加新的 attempt，成功兄弟和旧失败记录保持不变，父聚合在当前清单全部完成后才成功。嵌套子编排必须同时重映射父子清单；终态恢复继续创建新 Run，不能修改旧 Run。清单外、其他 Run、其他 iteration、成功项和聚合项必须拒绝。
 
+  子编排历史界面同时支持第一层失败项和第二层失败叶子的上述操作。第二层操作仅在已加载分页中存在当前父控制清单包含的外层记录、其内层清单包含目标叶子、父子归属及 Run/节点/iteration 一致时显示；父记录尚未加载时不推断可恢复。点击提交叶子 ID，由服务端重新校验完整清单；成功兄弟只复用结果，终态旧 Run 及其尝试保持不变。
+
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 
 工作台搜索名称或 ID、按状态筛选时，服务端先执行权限和筛选再分页。`GET /runs` 提供当前工作区跨任务运行记录，按 Run ID 倒序且仅返回有权访问的任务运行；任务详情和运行深链独立读取，不依赖列表中已经加载该对象。模板响应提供独立的 `latest_version`，不以历史版本首批末项推断最新版本。用户点击下一页或加载更多才读取追加页；失败保留已加载数据，查询或工作区变化后不接受旧响应。本批验收沿用 AC-7、AC-10、AC-11、AC-12、AC-14，覆盖跨页搜索、运行隔离、旧版本保留、追加页重试和移动端可操作性。

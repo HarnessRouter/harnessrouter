@@ -1003,6 +1003,10 @@ class TaskExecutor:
                             context['subgraph_index'] = state['subgraph_index']
                             context['deps'] = state.get('deps', [])
                             context['inputRefs'] = state.get('inputRefs', [])
+                            if state.get('nested_subgraph_parent'):
+                                context['nested_subgraph_parent'] = True
+                                context['nested_parent_node_id'] = state.get('nested_parent_node_id')
+                                context['nested_prompt_prefix'] = state.get('nested_prompt_prefix', '')
                             from app.tasks.subgraph import _children, _refs
                             parent = db.get(NodeRun, state['subgraph_parent_node_run_id'])
                             context['refs'] = state.get('parent_refs', []) + _refs(_children(db, parent), state)

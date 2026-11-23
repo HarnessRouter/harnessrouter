@@ -274,16 +274,16 @@ test('item pages load independently of debug pages, retain errors and retry the 
   await page.getByRole('tab', { name: '调试' }).click();
   const history = page.getByRole('region', { name: '集合项历史' });
   await expect(history.getByRole('alert')).toContainText('清单首次读取失败');
-  await history.getByRole('button', { name: '重试加载集合项' }).click();
+  await history.getByRole('button', { name: '重试加载执行清单' }).click();
   await expect(history).toContainText('集合项 1');
   expect(offsets).toEqual([0, 0]);
-  await history.getByRole('button', { name: '加载更多集合项' }).click();
+  await history.getByRole('button', { name: '加载更多执行清单' }).click();
   await expect(history.getByRole('alert')).toContainText('清单追加失败');
   await expect(history).toContainText('集合项 1');
-  await history.getByRole('button', { name: '重试加载集合项' }).click();
+  await history.getByRole('button', { name: '重试加载执行清单' }).click();
   await expect(history).toContainText('集合项 2');
   await expect(history.getByRole('button', { name: '新建 Run 恢复此项' })).toHaveCount(1);
-  await expect(history.getByRole('button', { name: '加载更多集合项' })).toHaveCount(0);
+  await expect(history.getByRole('button', { name: '加载更多执行清单' })).toHaveCount(0);
   expect(offsets).toEqual([0, 0, 50, 50]);
 });
 

@@ -271,7 +271,11 @@ def test_nested_static_subgraph_runs_in_one_parent_run_and_releases_downstream(c
     group = next(row for row in result['nodes'] if row['node_id'] == 'group')
     items = client.get(f"/api/hexa/node-runs/{group['id']}/items").json()['items']
     assert {item['input'].get('subgraph_node_id') for item in items if item['execution_kind'] == 'subgraph_node'} == {'outer', 'leaf'}
-    assert next(item for item in items if item['input'].get('subgraph_node_id') == 'leaf')['input']['subgraph_parent_node_run_id'] == next(item for item in items if item['input'].get('subgraph_node_id') == 'outer')['id']
+    leaf = next(item for item in items if item['input'].get('subgraph_node_id') == 'leaf')
+    assert leaf['input']['subgraph_parent_node_run_id'] == next(item for item in items if item['input'].get('subgraph_node_id') == 'outer')['id']
+    assert leaf['input']['nested_subgraph_parent'] is True
+    assert leaf['input']['nested_parent_node_id'] == 'outer'
+    assert leaf['input']['nested_prompt_prefix'] == 'outer control'
 
 
 def test_nested_static_subgraph_resume_reuses_outer_and_retries_failed_leaf(client, app):
@@ -286,6 +290,7 @@ def test_nested_static_subgraph_resume_reuses_outer_and_retries_failed_leaf(clie
             return {'status': 'completed', 'value': 'source'}
         if context.get('_orchestration_role') == 'subgraph_node':
             attempts['leaf'] += 1
+            assert context['prompt'] == 'outer control\nleaf work'
             if attempts['leaf'] == 1:
                 return {'status': 'failed'}
             return {'status': 'completed', 'child': 'leaf'}
@@ -520,3 +525,52 @@ def test_active_subgraph_retry_appends_failed_child_attempt_and_preserves_succes
         rows = db.query(NodeRun).filter_by(run_id=started['id'], node_id='group', execution_kind='subgraph_node').order_by(NodeRun.id).all()
         assert [row.status for row in rows] == ['succeeded', 'failed', 'succeeded', 'succeeded']
         assert [row.attempt for row in rows] == [1, 1, 2, 2]
+
+
+def test_active_dynamic_subgraph_retry_reuses_successful_child_and_retries_selected(client, app):
+    authenticated(client)
+    calls = []
+    attempts = {'second': 0}
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute planner':
+            return {'status': 'completed', 'nodes': [
+                {'id': 'first', 'prompt': 'draft'}, {'id': 'second', 'prompt': 'review'},
+            ]}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            if context['subgraph_node_id'] == 'second':
+                attempts['second'] += 1
+                if attempts['second'] == 1:
+                    return {'status': 'failed'}
+            return {'status': 'completed', 'child': context['subgraph_node_id']}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': 'ok'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    task = client.post('/api/hexa/tasks', json={'workflow': {
+        'nodes': [
+            node('planner'),
+            dynamic_subgraph_node('group', deps=['planner'], inputRefs=['planner']),
+            node('report', deps=['group'], inputRefs=['group'], final_report=True),
+        ],
+    }}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'dynamic-active-retry'}).json()
+    failed = wait_run(client, started['id'], {'failed'})
+    group = next(row for row in failed['nodes'] if row['node_id'] == 'group')
+    failed_child = next(row for row in client.get(f"/api/hexa/node-runs/{group['id']}/items").json()['items'] if row['status'] == 'failed')
+    from app.db.models import Run
+    with app.state.session_factory() as db:
+        db.get(Run, started['id']).status = 'running'
+        db.commit()
+    retried = client.post(
+        f"/api/hexa/runs/{started['id']}/nodes/group/retry",
+        json={'item_node_run_id': failed_child['id']},
+        headers={'Idempotency-Key': 'dynamic-active-retry-action'},
+    )
+    assert retried.status_code == 200, retried.text
+    completed = wait_run(client, started['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed
+    assert [call['subgraph_node_id'] for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second', 'second']

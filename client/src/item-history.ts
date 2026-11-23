@@ -8,10 +8,21 @@ export function manifestLabel(control: Pick<AppNodeRun, 'input'>): string {
   return Array.isArray(control.input?.subgraph_node_run_ids) ? '子编排节点历史' : '集合项历史';
 }
 
-export function itemRetryAction(run: AppRun, control: AppNodeRun, item: AppNodeRun, replaying: boolean): { kind: 'retry'; itemId: number } | { kind: 'resume'; body: { kind: 'rerun'; target_node: string; resume_from_run_id: number; item_node_run_id: number } } | null {
+export function itemRetryAction(run: AppRun, control: AppNodeRun, item: AppNodeRun, replaying: boolean, loadedItems: AppNodeRun[] = []): { kind: 'retry'; itemId: number } | { kind: 'resume'; body: { kind: 'rerun'; target_node: string; resume_from_run_id: number; item_node_run_id: number } } | null {
   if (replaying || !run || !control || !item) return null;
   const manifest = control.input?.item_node_run_ids || control.input?.subgraph_node_run_ids;
-  if (!Array.isArray(manifest) || !manifest.includes(item.id)) return null;
+  if (!Array.isArray(manifest)) return null;
+  if (!manifest.includes(item.id)) {
+    const outerManifest = control.input?.subgraph_node_run_ids;
+    const parentId = item.input?.subgraph_parent_node_run_id;
+    const parent = loadedItems.find(row => row.id === parentId);
+    if (item.execution_kind !== 'subgraph_node' || !Array.isArray(outerManifest)
+      || !parent || !outerManifest.includes(parent.id) || parent.execution_kind !== 'subgraph_node'
+      || parent.run_id !== run.id || parent.node_id !== control.node_id || parent.iteration !== control.iteration
+      || parent.input?.subgraph_parent_node_run_id !== control.id
+      || !Array.isArray(parent.input?.nested_subgraph_node_run_ids)
+      || !parent.input.nested_subgraph_node_run_ids.includes(item.id)) return null;
+  }
   if (item.run_id !== run.id || item.node_id !== control.node_id || item.iteration !== control.iteration) return null;
   if (!['foreach_item', 'dynamic_item', 'subgraph_node'].includes(item.execution_kind || '') || !['failed', 'canceled'].includes(item.status)) return null;
   if (['pending', 'running', 'waiting_human'].includes(run.status)) return { kind: 'retry', itemId: item.id };

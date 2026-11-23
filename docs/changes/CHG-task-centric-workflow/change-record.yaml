@@ -1083,7 +1083,7 @@ subgraph_item_retry:
   impact: [hexa-api/app/tasks/router.py, hexa-api/app/tasks/subgraph.py, hexa-api/tests/test_subgraph.py, client/src/item-history.ts, client/tests/item-history.test.mjs, docs/changes/CHG-task-centric-workflow/spec.md, docs/changes/CHG-task-centric-workflow/plan.md]
   verification:
     red: "目标活动子编排项重试测试先因 NodeRun retry 支持缺失而失败；修复测试夹具导入后目标行为通过。"
-    backend: "python -m pytest -q hexa-api/tests/test_subgraph.py; 24 passed"
+    backend: "python -m pytest -q hexa-api/tests/test_subgraph.py; 25 passed; includes active dynamic subgraph selected-child retry"
     client: "npm.cmd test --prefix client -- --test-name-pattern=\"subgraph|item history\"; 67 passed"
     static: "python -m py_compile hexa-api/app/tasks/router.py hexa-api/app/tasks/subgraph.py; YAML safe_load; git diff --check; passed"
     postgres: "HEXA_TEST_POSTGRES_URL=postgresql://postgres@127.0.0.1:55438/postgres python -m pytest -q hexa-api/tests/test_postgres_migrations.py; 2 passed; isolated schema created and dropped"
@@ -1095,3 +1095,30 @@ subgraph_item_retry:
     - "客户端浏览器视觉与终态子编排重试旅程沿用既有证据，本切片未新增 Playwright 旅程。"
   remaining: [PostgreSQL fresh/upgrade, real Gateway/BYOK smoke, browser terminal subgraph retry, native tool approval runtime]
   next_action: "补浏览器活动/终态子编排重试旅程，再继续 Gateway native tool approval。"
+
+subgraph_browser_recovery:
+  date: "2026-11-23"
+  owner: Codex
+  status: verified_slice
+  baseline: 48d3bfbe
+  branch: codex/agent-orchestration
+  reuse_decision: extend existing item-history action and terminal resume; preserve two-level manifests and immutable Run history
+  acceptance_ids: [AC-32, AC-40]
+  scope: nested leaf action eligibility, preserved nested dispatch metadata, static/nested browser recovery and active dynamic retry regression
+  references: [spec.md#验收, plan.md#2026-11-24-子编排项级重试实施, visual-contract.md#项级历史2026-11-23]
+  verification:
+    red: "客户端目标单测先 1 failed/7 passed，nested leaf 操作返回 null；浏览器普通恢复通过、嵌套叶子恢复按钮缺失。补 UI 资格判断后浏览器仍因嵌套标签缺失失败，后端单测明确报 KeyError nested_subgraph_parent，证实派发覆盖输入时丢失嵌套元数据。首次浏览器 422 来自测试未声明父依赖，修复夹具，不计有效 Red。"
+    backend: "python -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_manifest_pages.py --tb=short; exit 0; 92 passed in 149.09s. 最后加强恢复提示词断言后定向重跑 nested_static_subgraph_resume/active_dynamic_subgraph_retry，2 passed；生产代码未再修改。"
+    client_unit: "npm.cmd test --prefix client; exit 0; 68 passed，含正常活动/终态嵌套叶子、跨 Run/iteration/节点、伪造父清单、缺少分页、成功项与重放拒绝。"
+    typecheck_build: "npm.cmd run typecheck --prefix client; npm.cmd run build --prefix client; exit 0；主 chunk 963.86 kB，保留既有包体积 advisory。"
+    browser_e2e: "cd client; npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium --grep 'subgraph resumes'; exit 0; 2 passed in 1.4m. 真实本地 FastAPI/SQLite/Cookie/GatewayClient 与受控 HTTP Gateway；普通和两层子编排指定失败叶子、新 Run、成功兄弟复用、旧 Run/尝试不变、刷新清单验证。"
+    browser_regression: "Chromium/Edge fanout history、nested history、delayed previous anchor 共 8 passed；item pages 初始两浏览器因旧按钮名称超时，确认当前执行清单语义后同步测试和视觉契约，定向重跑 2 passed。没有弱化分页 offset、错误保留或恢复载荷断言。"
+    visual: "Chromium Windows 1440x900 / 390x900；恢复入口在视口内、至少 44px、页面无横向溢出。已查看桌面和移动失败态截图，嵌套叶子/成功兄弟/错误码/恢复入口可读；截图留在 client/.artifacts/orchestration/subgraph-recovery-{1440,390}.png，SHA256 分别 AF7892222A5EA6562BE002B8433CB191F9AF8D32220BC335F68200727187AB63 / 22CFDB46604D64DCB16358028100AF64AF6B0E66EB4E744782F635FA5BAAE819。"
+    hygiene: "YAML safe_load、修改 Python 文件 AST parse、git diff --check 均通过；截图目录确认被 Git 忽略。"
+  security_review: "UI 只从已加载当前外层清单及其内层清单判断操作，后端仍独立验证任务权限和完整归属。派发仅保留既有嵌套标记、父局部 ID 与提示词前缀，并经原有 redact；未新增权限、网络目标、凭据、插件包复制或 Cloud 入口。自查不代替独立评审/远端 CI。"
+  limitations:
+    - "HTTP Gateway 为受控夹具，不证明真实 Provider/Runner 原生执行或工具审批；tool_approvals 仍不广告。"
+    - "本轮未重跑 PostgreSQL migration smoke，未改模型或迁移；沿用 subgraph_item_retry 的 2 passed 证据。真实多进程接管、Linux、部署与原生审批仍待验证，不能声明完整引擎可发布。"
+    - "新嵌套子编排恢复旅程和截图使用 Chromium；Edge 验证集合项历史回归，未验证新嵌套恢复完整旅程。"
+  remaining: [real Gateway/BYOK smoke, native tool approval interception and exact continuation, multiprocess lease takeover, Linux deployment, Edge nested recovery journey]
+  next_action: "提交本地独立分支；随后选择具有真实副作用前 native hook 的 Runner 适配审批，保持 UHP proposal 和 coverage fail closed。"

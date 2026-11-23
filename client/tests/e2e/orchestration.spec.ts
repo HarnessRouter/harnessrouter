@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { mkdir } from 'node:fs/promises';
 import { api, newTask, openTasks, saveWorkflow, signIn } from './helpers';
 
 test('orchestration settings persist through the editor, execution and historical reload', async ({ page }) => {
@@ -141,3 +142,90 @@ test('dynamic DAG reads a JSON text plan through HTTP and preserves local result
   const items = page.getByRole('region', { name: '集合项历史' });
   await expect(items.getByRole('listitem')).toHaveCount(3);
 });
+
+for (const nested of [false, true]) {
+  test(`${nested ? 'nested' : 'static'} subgraph resumes the selected failed child without repeating successful work`, async ({ page }) => {
+    await signIn(page);
+    const identity = `subgraph-${nested}-${Date.now()}`;
+    const spaces = await api(page, '/api/hexa/workspaces');
+    const children = [
+      { id: 'first', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'E2E_OUT:successful-child' },
+      { id: 'second', agent_id: 'e2e-agent', model: 'e2e-model', prompt: `E2E_FAIL:${identity}`, deps: ['first'], inputRefs: ['first'] },
+    ];
+    const created = await api(page, '/api/hexa/tasks', { method: 'POST', body: {
+      title: identity, workspace_id: spaces.body.selected_id, workflow: { nodes: [
+        { id: 'source', name: '来源', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'E2E_OUT:source' },
+        { id: 'group', name: '子编排处理', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'child work', deps: ['source'], inputRefs: ['source'], subgraph: {
+          max_concurrency: 1,
+          nodes: nested ? [{ id: 'outer', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'outer work', subgraph: { max_concurrency: 1, nodes: children } }] : children,
+        } },
+        { id: 'report', name: '最终报告', agent_id: 'e2e-agent', model: 'e2e-model', prompt: 'E2E_OUT:report', deps: ['group'], inputRefs: ['group'], final_report: true },
+      ] },
+    } });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const started = await page.evaluate(async taskId => {
+      const response = await fetch(`/api/hexa/tasks/${taskId}/runs`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } });
+      return { status: response.status, body: await response.json() };
+    }, created.body.id);
+    expect(started.status).toBe(202);
+    let failed: any;
+    await expect.poll(async () => {
+      failed = (await api(page, `/api/hexa/runs/${started.body.id}`)).body;
+      return failed.status;
+    }, { timeout: 30000 }).toBe('failed');
+    const oldControl = failed.nodes.find((row: any) => row.node_id === 'group');
+    const before = (await api(page, `/api/hexa/node-runs/${oldControl.id}`)).body;
+    const oldItems = (await api(page, `/api/hexa/node-runs/${oldControl.id}/items`)).body.items;
+    const successful = oldItems.find((row: any) => row.input?.subgraph_node_id === 'first');
+    const selected = oldItems.find((row: any) => row.input?.subgraph_node_id === 'second');
+    expect(successful.status).toBe('succeeded');
+    expect(selected.status).toBe('failed');
+    await page.goto(`/runs/${failed.id}`);
+    await page.getByRole('button', { name: '打开流程图', exact: true }).click();
+    await page.getByRole('button', { name: '子编排处理 节点', exact: true }).click();
+    await page.getByRole('tab', { name: '调试' }).click();
+    const history = page.getByRole('region', { name: '子编排节点历史' });
+    const selectedRow = history.getByRole('listitem').filter({ hasText: `${nested ? '嵌套子节点' : '子节点'} second` });
+    const resumeButton = selectedRow.getByRole('button', { name: '新建 Run 恢复此项', exact: true });
+    await expect(resumeButton).toBeVisible();
+    if (nested) {
+      await mkdir('.artifacts/orchestration', { recursive: true });
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await resumeButton.scrollIntoViewIfNeeded();
+        await expect(resumeButton).toBeInViewport();
+        expect((await resumeButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: `.artifacts/orchestration/subgraph-recovery-${width}.png` });
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+    const resumed = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/tasks/${created.body.id}/runs`));
+    await resumeButton.click();
+    const resumeResponse = await resumed;
+    expect(resumeResponse.status()).toBe(202);
+    expect(resumeResponse.request().postDataJSON().item_node_run_id).toBe(selected.id);
+    const newRun = await resumeResponse.json();
+    expect(newRun.id).not.toBe(failed.id);
+    let completed: any;
+    await expect.poll(async () => {
+      completed = (await api(page, `/api/hexa/runs/${newRun.id}`)).body;
+      return completed.status;
+    }, { timeout: 30000 }).toBe('completed');
+    const control = completed.nodes.find((row: any) => row.node_id === 'group');
+    const newItems = (await api(page, `/api/hexa/node-runs/${control.id}/items`)).body.items;
+    const reused = newItems.find((row: any) => row.input?.subgraph_node_id === 'first');
+    expect(reused.input.reused_from).toBe(successful.id);
+    expect(reused.output).toEqual(successful.output);
+    expect(newItems.find((row: any) => row.input?.subgraph_node_id === 'second').status).toBe('succeeded');
+    expect((await api(page, `/api/hexa/runs/${failed.id}`)).body).toEqual(failed);
+    expect((await api(page, `/api/hexa/node-runs/${oldControl.id}`)).body).toEqual(before);
+    await page.goto(`/runs/${newRun.id}`);
+    await page.reload();
+    await page.getByRole('button', { name: '打开流程图', exact: true }).click();
+    await page.getByRole('button', { name: '子编排处理 节点', exact: true }).click();
+    await page.getByRole('tab', { name: '调试' }).click();
+    await expect(history).toContainText(`复用自 #${successful.id}`);
+    await expect(history.getByRole('button', { name: '新建 Run 恢复此项' })).toHaveCount(0);
+  });
+}

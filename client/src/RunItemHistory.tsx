@@ -43,7 +43,7 @@ export function RunItemHistory({ run, control, replaying, busy, action }: {
     {error && <p role="alert">{error}</p>}
     {page && !page.items.length && <p>当前节点没有执行清单历史。</p>}
     {!!page?.items.length && <ol>{page.items.map(item => {
-      const operation = itemRetryAction(run, control, item, replaying);
+      const operation = itemRetryAction(run, control, item, replaying, page.items);
       return <li key={item.id}>
         <div><strong>{attemptLabel(item)}</strong><span> · {nodeLabels[item.status] || item.status}</span></div>
         {item.error_code && <p>{item.error_code}</p>}

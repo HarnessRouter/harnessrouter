@@ -55,3 +55,25 @@ test('nested subgraph history labels inner children separately', () => {
   assert.equal(attemptLabel({ execution_kind: 'subgraph_node', attempt: 1, iteration: 1,
     input: { subgraph_node_id: 'leaf', nested_subgraph_parent: true } }), '第 1 轮 · 嵌套子节点 leaf · 尝试 1');
 });
+
+test('nested subgraph retry requires a verified parent manifest from the loaded page', () => {
+  const run = { id: 7, task_id: 4, status: 'failed' };
+  const control = { id: 10, run_id: 7, node_id: 'group', iteration: 1, input: { subgraph_node_run_ids: [11] } };
+  const parent = { id: 11, run_id: 7, node_id: 'group', iteration: 1, execution_kind: 'subgraph_node',
+    input: { subgraph_parent_node_run_id: 10, nested_subgraph_node_run_ids: [12] } };
+  const leaf = { id: 12, run_id: 7, node_id: 'group', iteration: 1, status: 'failed', execution_kind: 'subgraph_node',
+    input: { subgraph_parent_node_run_id: 11, nested_subgraph_parent: true } };
+  assert.deepEqual(itemRetryAction(run, control, leaf, false, [parent, leaf]), {
+    kind: 'resume', body: { kind: 'rerun', target_node: 'group', resume_from_run_id: 7, item_node_run_id: 12 },
+  });
+  assert.deepEqual(itemRetryAction({ ...run, status: 'running' }, control, leaf, false, [parent, leaf]), { kind: 'retry', itemId: 12 });
+  for (const invalidParent of [
+    { ...parent, run_id: 8 }, { ...parent, node_id: 'other' }, { ...parent, iteration: 2 },
+    { ...parent, execution_kind: 'node' },
+    { ...parent, input: { ...parent.input, subgraph_parent_node_run_id: 99 } },
+    { ...parent, input: { ...parent.input, nested_subgraph_node_run_ids: [13] } },
+  ]) assert.equal(itemRetryAction(run, control, leaf, false, [invalidParent, leaf]), null);
+  assert.equal(itemRetryAction(run, control, leaf, false, [leaf]), null);
+  assert.equal(itemRetryAction(run, control, { ...leaf, status: 'succeeded' }, false, [parent, leaf]), null);
+  assert.equal(itemRetryAction(run, control, leaf, true, [parent, leaf]), null);
+});
