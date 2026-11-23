@@ -106,7 +106,21 @@ def manifest_records(db, anchor):
     if not isinstance(state, dict):
         raise ValueError('invalid anchor input')
     if 'subgraph_node_run_ids' in state:
-        members(state.get('subgraph_node_run_ids', []), {'subgraph_node'})
+        outer_rows = members(state.get('subgraph_node_run_ids', []), {'subgraph_node'})
+        # A static nested subgraph is represented by the outer child NodeRun
+        # plus its own explicit child manifest.  Keep both levels in one
+        # paged result, while validating the complete tree before returning
+        # any page so a malformed later entry cannot leak an earlier one.
+        for outer in outer_rows:
+            outer_state = json.loads(outer.input_json)
+            if not isinstance(outer_state, dict):
+                raise ValueError('invalid subgraph child input')
+            nested_ids = outer_state.get('nested_subgraph_node_run_ids', [])
+            nested_rows = members(nested_ids, {'subgraph_node'})
+            for nested in nested_rows:
+                nested_state = json.loads(nested.input_json)
+                if not isinstance(nested_state, dict) or nested_state.get('subgraph_parent_node_run_id') != outer.id:
+                    raise ValueError('nested subgraph ownership mismatch')
         if state.get('subgraph_aggregate_node_run_id') is not None:
             members([state['subgraph_aggregate_node_run_id']], {'subgraph_aggregate'})
         if len(selected) > 500:

@@ -163,15 +163,8 @@ def validate_dynamic_plan(item, known_ids):
         raise TaskError('invalid_workflow', 'dynamic_plan.topology 只支持 list 或 dag。', 422)
 
 
-def validate_subgraph(item, known_ids):
-    """Validate a bounded static child DAG owned by one parent NodeRun."""
-    subgraph = item.get('subgraph')
-    if subgraph is None:
-        return
-    if any(item.get(mode) is not None for mode in ('repeat', 'foreach', 'loop', 'dynamic_plan')):
-        raise TaskError('invalid_workflow', 'subgraph 不能与 repeat、foreach、loop 或 dynamic_plan 同时启用。', 422)
-    if not item.get('deps'):
-        raise TaskError('invalid_workflow', 'subgraph 节点必须依赖父工作流节点。', 422)
+def _validate_subgraph_shape(subgraph, known_ids, *, depth=0):
+    """Validate one bounded subgraph scope; static scopes may nest once."""
     if not isinstance(subgraph, dict) or set(subgraph) - {'max_concurrency', 'nodes', 'dynamic'}:
         raise TaskError('invalid_workflow', 'subgraph 只支持 max_concurrency、nodes 或 dynamic。', 422)
     concurrency = subgraph.get('max_concurrency', 1)
@@ -182,10 +175,10 @@ def validate_subgraph(item, known_ids):
     if (children is None) == (dynamic is None):
         raise TaskError('invalid_workflow', 'subgraph 必须二选一配置 nodes 或 dynamic。', 422)
     if dynamic is not None:
-        if not isinstance(dynamic, dict) or set(dynamic) - {'source', 'path', 'max_nodes', 'mode'}:
-            raise TaskError('invalid_workflow', 'subgraph.dynamic 只支持 source、path、max_nodes 和 mode。', 422)
+        if depth or not isinstance(dynamic, dict) or set(dynamic) - {'source', 'path', 'max_nodes', 'mode'}:
+            raise TaskError('invalid_workflow', '动态子编排只能作为顶层子编排，不能递归。', 422)
         source = dynamic.get('source')
-        if not isinstance(source, str) or source not in set(item.get('deps', [])) or source not in known_ids:
+        if not isinstance(source, str) or source not in known_ids:
             raise TaskError('invalid_workflow', 'subgraph.dynamic.source 必须是父节点的依赖。', 422)
         if not isinstance(dynamic.get('path'), str) or not CONDITION_PATH.fullmatch(dynamic['path']):
             raise TaskError('invalid_workflow', 'subgraph.dynamic.path 格式无效。', 422)
@@ -198,16 +191,12 @@ def validate_subgraph(item, known_ids):
         raise TaskError('invalid_workflow', 'subgraph.nodes 必须包含 1 到 10 个静态节点。', 422)
     child_ids = set()
     specs = []
-    allowed_child_fields = {'id', 'name', 'agent_id', 'model', 'prompt', 'deps', 'inputRefs', 'final_report', 'x', 'y'}
+    allowed_child_fields = {'id', 'name', 'agent_id', 'model', 'prompt', 'deps', 'inputRefs', 'final_report', 'x', 'y', 'subgraph'}
     for child in children:
         if not isinstance(child, dict):
             raise TaskError('invalid_workflow', 'subgraph 子节点格式无效。', 422)
         if set(child) - allowed_child_fields:
             raise TaskError('invalid_workflow', 'subgraph 子节点包含不受支持的字段。', 422)
-        if child.get('node_type') in {'human', 'human_gate'} or child.get('requires_human'):
-            raise TaskError('invalid_workflow', 'subgraph 暂不支持人工子节点。', 422)
-        if any(child.get(mode) is not None for mode in ('repeat', 'foreach', 'loop', 'dynamic_plan', 'subgraph')):
-            raise TaskError('invalid_workflow', 'subgraph 只支持静态 Agent 子节点，不能递归或展开。', 422)
         child_id = child.get('id')
         if not isinstance(child_id, str) or not child_id.strip() or len(child_id) > 255 or child_id in child_ids:
             raise TaskError('invalid_workflow', 'subgraph 子节点 ID 无效或重复。', 422)
@@ -217,6 +206,23 @@ def validate_subgraph(item, known_ids):
         validate_workflow(WorkflowSpec(tuple(specs)), max_nodes=10, max_edges=20)
     except (KeyError, TypeError, ValueError) as exc:
         raise TaskError('invalid_workflow', 'subgraph 子节点、依赖或输入映射无效。', 422) from exc
+    for child in children:
+        if child.get('subgraph') is not None:
+            if depth >= 1:
+                raise TaskError('invalid_workflow', 'subgraph 最多支持两层静态嵌套。', 422)
+            _validate_subgraph_shape(child['subgraph'], child_ids, depth=depth + 1)
+
+
+def validate_subgraph(item, known_ids):
+    """Validate a bounded subgraph scope owned by one parent NodeRun."""
+    subgraph = item.get('subgraph')
+    if subgraph is None:
+        return
+    if any(item.get(mode) is not None for mode in ('repeat', 'foreach', 'loop', 'dynamic_plan')):
+        raise TaskError('invalid_workflow', 'subgraph 不能与 repeat、foreach、loop 或 dynamic_plan 同时启用。', 422)
+    if not item.get('deps'):
+        raise TaskError('invalid_workflow', 'subgraph 节点必须依赖父工作流节点。', 422)
+    _validate_subgraph_shape(subgraph, set(item.get('deps', [])), depth=0)
 
 
 def workflow_from_json(value):
@@ -485,6 +491,17 @@ async def prepare_run(db, task, body, key, gateway, secrets):
             if item.get('model') not in available:
                 raise ValueError('model unavailable')
             for child in item.get('subgraph', {}).get('nodes', []):
+                if child.get('subgraph') is not None:
+                    for nested_child in child.get('subgraph', {}).get('nodes', []):
+                        nested_agent_id = nested_child.get('agent_id', '')
+                        if nested_agent_id not in agents:
+                            raise ValueError('nested subgraph agent unavailable')
+                        if nested_agent_id not in catalogs:
+                            catalogs[nested_agent_id] = await gateway.list_agent_models(nested_agent_id)
+                        nested_available = {row['id'] for row in catalogs[nested_agent_id].get('models', []) if row.get('available', True)}
+                        if nested_child.get('model') not in nested_available:
+                            raise ValueError('nested subgraph model unavailable')
+                    continue
                 child_agent_id = child.get('agent_id', '')
                 if child_agent_id not in agents:
                     raise ValueError('subgraph agent unavailable')
@@ -671,6 +688,12 @@ class TaskExecutor:
                             from app.tasks.subgraph import _children, _refs
                             parent = db.get(NodeRun, state['subgraph_parent_node_run_id'])
                             context['refs'] = state.get('parent_refs', []) + _refs(_children(db, parent), state)
+                            if state.get('nested_subgraph_parent') and parent and parent.status == 'succeeded' and parent.output_json:
+                                context['refs'].append({'id': state.get('nested_parent_node_id'), 'node_run_id': parent.id,
+                                                        'output': json.loads(parent.output_json)})
+                                context['prompt'] = state.get('nested_prompt_prefix', '') + '\n' + item.get('prompt', '')
+                            elif state.get('nested_subgraph_parent'):
+                                context['prompt'] = state.get('nested_prompt_prefix', '') + '\n' + item.get('prompt', '')
                             if state.get('dynamic'):
                                 dynamic_prompt = state.get('dynamic_node', {}).get('prompt', '')
                                 context['prompt'] = state.get('dynamic_parent_prompt', '') + '\n' + dynamic_prompt

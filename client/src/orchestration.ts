@@ -1,6 +1,42 @@
 import type { JsonValue, OrchestrationNode } from './app-types.ts';
 
 const pathPattern = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+
+function staticSubgraphIssue(subgraph: NonNullable<OrchestrationNode['subgraph']>, prefix: string, depth: number): string | undefined {
+  if (subgraph.dynamic) return depth ? `${prefix}动态子编排不能嵌套。` : undefined;
+  const children = subgraph.nodes;
+  if (!Array.isArray(children) || !children.length || children.length > 10) return `${prefix}子编排必须包含 1 到 10 个静态子节点。`;
+  if (!Number.isInteger(subgraph.max_concurrency ?? 1) || (subgraph.max_concurrency ?? 1) < 1 || (subgraph.max_concurrency ?? 1) > 10) return `${prefix}子编排并发数必须是 1 到 10 的整数。`;
+  const ids = children.map(child => child.id);
+  if (children.some(child => typeof child.id !== 'string' || !child.id.trim() || child.repeat || child.foreach || child.loop || child.dynamic_plan)) return `${prefix}子编排只支持静态 Agent DAG；不能使用循环或集合展开。`;
+  if (new Set(ids).size !== ids.length) return `${prefix}子编排子节点 ID 不能重复。`;
+  const known = new Set(ids);
+  for (const child of children) {
+    const deps = child.deps || [], inputRefs = child.inputRefs || [];
+    if (!Array.isArray(deps) || !Array.isArray(inputRefs)) return `${prefix}子编排子节点 deps 和 inputRefs 必须是数组。`;
+    if (new Set(deps).size !== deps.length || new Set(inputRefs).size !== inputRefs.length) return `${prefix}子编排子节点依赖或 inputRefs 不能重复。`;
+    if (deps.some(dep => !known.has(dep))) return `${prefix}子编排子节点包含未知依赖。`;
+    if (inputRefs.some(ref => !deps.includes(ref))) return `${prefix}子编排子节点 inputRefs 必须属于 deps。`;
+    if (child.subgraph) {
+      if (depth >= 1) return `${prefix}子编排最多支持两层静态嵌套。`;
+      const issue = staticSubgraphIssue(child.subgraph, `${prefix}子节点 ${child.id}：`, depth + 1);
+      if (issue) return issue;
+    }
+  }
+  const visiting = new Set<string>(), visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return false;
+    if (visited.has(id)) return true;
+    visiting.add(id);
+    const child = children.find(item => item.id === id)!;
+    if ((child.deps || []).every(dep => visit(dep))) {
+      visiting.delete(id); visited.add(id); return true;
+    }
+    return false;
+  };
+  if (ids.some(id => !visit(id))) return `${prefix}子编排子节点依赖不能形成环。`;
+}
+
 export function parseComparison(text: string): JsonValue {
   try { return JSON.parse(text) as JsonValue; } catch { return text; }
 }
@@ -23,32 +59,9 @@ export function orchestrationIssue(workflow: { max_concurrency?: number; nodes: 
       if (!Number.isInteger(dynamic.max_nodes) || dynamic.max_nodes < 1 || dynamic.max_nodes > 10) return `${prefix}动态子编排节点上限必须是 1 到 10 的整数。`;
       if (dynamic.mode && !['serial', 'parallel'].includes(dynamic.mode)) return `${prefix}动态子编排调度模式无效。`;
     }
-    if (node.subgraph && node.subgraph.nodes !== undefined && (!Array.isArray(node.subgraph.nodes) || !node.subgraph.nodes.length || node.subgraph.nodes.length > 10)) return `${prefix}子编排必须包含 1 到 10 个静态子节点。`;
-    if (node.subgraph?.nodes) {
-      const children = node.subgraph.nodes;
-      if (children.some(child => typeof child.id !== 'string' || !child.id.trim() || child.subgraph || child.repeat || child.foreach || child.loop || child.dynamic_plan)) return `${prefix}子编排只支持不可递归的静态 Agent 子节点。`;
-      const ids = children.map(child => child.id);
-      if (new Set(ids).size !== ids.length) return `${prefix}子编排子节点 ID 不能重复。`;
-      const known = new Set(ids);
-      for (const child of children) {
-        const deps = child.deps || [], inputRefs = child.inputRefs || [];
-        if (!Array.isArray(deps) || !Array.isArray(inputRefs)) return `${prefix}子编排子节点 deps 和 inputRefs 必须是数组。`;
-        if (new Set(deps).size !== deps.length || new Set(inputRefs).size !== inputRefs.length) return `${prefix}子编排子节点依赖或 inputRefs 不能重复。`;
-        if (deps.some(dep => !known.has(dep))) return `${prefix}子编排子节点包含未知依赖。`;
-        if (inputRefs.some(ref => !deps.includes(ref))) return `${prefix}子编排子节点 inputRefs 必须属于 deps。`;
-      }
-      const visiting = new Set<string>(), visited = new Set<string>();
-      const visit = (id: string): boolean => {
-        if (visiting.has(id)) return false;
-        if (visited.has(id)) return true;
-        visiting.add(id);
-        const child = children.find(item => item.id === id)!;
-        if ((child.deps || []).every(dep => visit(dep))) {
-          visiting.delete(id); visited.add(id); return true;
-        }
-        return false;
-      };
-      if (ids.some(id => !visit(id))) return `${prefix}子编排子节点依赖不能形成环。`;
+    if (node.subgraph) {
+      const issue = staticSubgraphIssue(node.subgraph, prefix, 0);
+      if (issue) return issue;
     }
     if ((node.repeat || node.foreach) && (node.requires_human || ['human', 'human_gate'].includes(node.node_type || ''))) return `${prefix}人工确认节点仅支持单次执行。`;
     for (const config of [node.condition, node.foreach]) {

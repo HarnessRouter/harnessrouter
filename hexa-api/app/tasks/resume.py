@@ -3,7 +3,29 @@ import json
 
 from app.db.models import NodeRun, Run
 from app.tasks.fanout import fanout_items, retry_fanout, node_record_usage
-from app.tasks.subgraph import _children as subgraph_items
+from app.tasks.subgraph import _children as subgraph_items, _nested_children
+
+
+def _subgraph_tree(db, control):
+    """Return all materialized static-subgraph children under a control."""
+    result = []
+
+    def visit(parent):
+        children = _children_for(parent)
+        result.extend(children)
+        for child in children:
+            visit(child)
+
+    def _children_for(parent):
+        state = json.loads(parent.input_json)
+        if state.get('nested_subgraph_node_run_ids'):
+            return _nested_children(db, parent)
+        return []
+
+    result.extend(subgraph_items(db, control))
+    for child in list(result):
+        visit(child)
+    return result
 
 
 def validate_resume(db, task, revision, definition, body, *, latest_nodes, error):
@@ -32,6 +54,7 @@ def validate_resume(db, task, revision, definition, body, *, latest_nodes, error
     if item.get('subgraph'):
         try:
             children = subgraph_items(db, control)
+            all_children = _subgraph_tree(db, control)
         except (ValueError, TypeError, KeyError):
             raise error('invalid_resume', '来源子图清单不可用。', 422) from None
     else:
@@ -39,7 +62,7 @@ def validate_resume(db, task, revision, definition, body, *, latest_nodes, error
     if not children:
         raise error('invalid_resume', '来源集合未展开，请整节点重跑。', 422)
     selected_id = body.get('item_node_run_id')
-    if selected_id is not None and not any(child.id == selected_id and child.status in ('failed', 'canceled') for child in children):
+    if selected_id is not None and not any(child.id == selected_id and child.status in ('failed', 'canceled') for child in (all_children if item.get('subgraph') else children)):
         raise error('invalid_retry_item', '只能选择当前清单中失败或取消的项。', 422)
     return source, rows, item, control, children
 
@@ -84,6 +107,20 @@ def seed_resume(db, run, resume, body, *, encoded, downstream_nodes, error):
                 if not nested_aggregate or nested_aggregate.run_id != source.id or nested_aggregate.node_id != prior.node_id:
                     raise error('invalid_resume', '来源嵌套聚合记录不可用。', 422)
                 state['nested_aggregate_node_run_id'] = copy_record(nested_aggregate).id
+            if 'nested_subgraph_node_run_ids' in state:
+                entries = [db.get(NodeRun, identity) for identity in state['nested_subgraph_node_run_ids']]
+                if any(row is None or row.run_id != source.id or row.node_id != prior.node_id
+                       or row.iteration != prior.iteration or row.execution_kind != 'subgraph_node'
+                       for row in entries):
+                    raise error('invalid_resume', '来源嵌套子编排清单不可用。', 422)
+                state['nested_subgraph_node_run_ids'] = [copy_record(row).id for row in entries]
+                parent_id = state.get('subgraph_parent_node_run_id')
+                if parent_id in mapping:
+                    state['subgraph_parent_node_run_id'] = mapping[parent_id].id
+            if 'subgraph_parent_node_run_id' in state:
+                parent_id = state['subgraph_parent_node_run_id']
+                if parent_id in mapping:
+                    state['subgraph_parent_node_run_id'] = mapping[parent_id].id
             if 'outer_item_node_run_id' in state:
                 parent = db.get(NodeRun, state['outer_item_node_run_id'])
                 if not parent or parent.run_id != source.id or parent.node_id != prior.node_id or parent.execution_kind != 'foreach_item':
@@ -167,11 +204,24 @@ def seed_resume(db, run, resume, body, *, encoded, downstream_nodes, error):
     if item.get('subgraph'):
         retry = copied_control
         retry.status = 'running'
+        selected_source_id = body.get('item_node_run_id')
         for child in copied_children:
             child_state = json.loads(child.input_json)
-            if child_state.get('reused_from') == body.get('item_node_run_id'):
-                child.status, child.output_json, child.error_code = 'idle', None, None
-                child.started_at, child.finished_at = None, None
+            nested_ids = child_state.get('nested_subgraph_node_run_ids', [])
+            nested_children = [db.get(NodeRun, identity) for identity in nested_ids]
+            retry_rows = [child, *nested_children]
+            selected = next((row for row in retry_rows if json.loads(row.input_json).get('reused_from') == selected_source_id), None)
+            for retry_row in retry_rows:
+                if retry_row.id == getattr(selected, 'id', None) or (selected_source_id is None and retry_row.status in ('failed', 'canceled')):
+                    retry_row.status, retry_row.output_json, retry_row.error_code = 'idle', None, None
+                    retry_row.started_at, retry_row.finished_at = None, None
+                elif retry_row.status in ('failed', 'canceled'):
+                    retry_row.status, retry_row.output_json = 'canceled', None
+                    retry_row.error_code = 'subgraph_sibling_failed'
+                    retry_row.finished_at = retry_row.finished_at
+            if nested_children and (selected is not None or any(row.status == 'idle' for row in nested_children)):
+                child.status, child.output_json, child.error_code = 'running', None, None
+                child.finished_at = None
             elif child.status in ('failed', 'canceled'):
                 child.status, child.output_json, child.error_code = 'canceled', None, 'subgraph_sibling_failed'
     else:

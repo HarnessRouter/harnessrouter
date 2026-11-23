@@ -8,7 +8,20 @@ export interface NodeForeach { source: string; path: string; max_items: number; 
 export interface NodeLoop { body: string[]; max_iterations: number; until: NodeCondition }
 export interface NodeDynamicPlan { source: string; path: string; max_items: number; mode?: 'serial' | 'parallel'; topology?: 'list' | 'dag' }
 export interface NodeDynamicSubgraph { source: string; path: string; max_nodes: number; mode?: 'serial' | 'parallel' }
-export interface NodeSubgraph { max_concurrency?: number; nodes?: Array<OrchestrationNode & { id: string; name?: string; agent_id?: string; model?: string; prompt?: string; deps?: string[]; inputRefs?: string[]; final_report?: boolean; x?: number; y?: number }>; dynamic?: NodeDynamicSubgraph }
+export interface SubgraphNode extends Omit<OrchestrationNode, 'subgraph'> {
+  id: string;
+  name?: string;
+  agent_id?: string;
+  model?: string;
+  prompt?: string;
+  deps?: string[];
+  inputRefs?: string[];
+  final_report?: boolean;
+  x?: number;
+  y?: number;
+  subgraph?: NodeSubgraph;
+}
+export interface NodeSubgraph { max_concurrency?: number; nodes?: SubgraphNode[]; dynamic?: NodeDynamicSubgraph }
 export interface OrchestrationNode {
   condition?: NodeCondition;
   repeat?: NodeRepeat;

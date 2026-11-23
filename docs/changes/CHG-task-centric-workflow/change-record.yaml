@@ -41,6 +41,30 @@ dynamic_subgraph_slice:
   rollback: "停止带 dynamic subgraph 的活动 Run 后回退执行器、校验、客户端和文档；历史 NodeRun 保留，旧执行器不得继续新动态子编排 Run。"
   remaining: [PostgreSQL/Linux, real Provider and deployment validation]
   next_action: "提交本地分支；继续处理跨页动态清单历史和真实运行时门禁。"
+nested_subgraph_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: cb379f11
+  branch: codex/agent-orchestration
+  status: verified_internal_and_client_slice
+  references: [spec.md#有界静态子编排, plan.md#有界静态子编排实施2026-11-24]
+  reuse_decision: extend the existing parent-child NodeRun manifests; keep a bounded two-level static scope in one Run
+  acceptance_ids: [AC-32]
+  changes:
+    - "静态子编排最多支持两层；第三层及以上、动态子编排嵌套、子图内控制模式和跨子图引用仍拒绝。"
+    - "内层叶子、内层控制节点、外层控制节点和聚合记录使用显式 parent/run/iteration 清单关系；清单 API 先完整校验再分页。"
+    - "终态恢复复制嵌套清单到新 Run，成功叶子复用，指定失败叶子重试，旧 Run 保持只读；客户端校验、类型、编辑入口和历史标签同步支持二层。"
+  verification:
+    red: "新增二层保存边界、运行作用域、恢复复制和客户端三层拒绝场景；首次实现暴露动态恢复回归失败和旧清单断言过时，已收窄恢复条件并修正断言。"
+    backend: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py; exit 0; 22 passed；定向恢复、嵌套运行和动态恢复 3 passed。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_manifest_pages.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py --tb=short; exit 0; 141 passed in 172.83s。覆盖首次运行、清单分页、动态 DAG、二层集合、动态/静态子编排和终态恢复。"
+    client: "npm.cmd test; exit 0; 66 passed；npm.cmd run typecheck; exit 0；npm.cmd run build; exit 0，保留既有约 963 KB 主 chunk advisory。新增二层校验、编辑数据类型和嵌套历史标签覆盖。"
+    browser: "npx.cmd playwright test -c playwright.app.config.ts tests/app-ui/tasks.spec.ts -g \"static subgraph|subgraph|窄屏\" --project=chromium --workers=1; exit 0; 2 passed，覆盖静态子编排编辑/保存/重开和动态子编排配置/窄屏。"
+  security_review: "嵌套清单必须属于同一 Run、同一 workflow node/iteration，并通过 parent NodeRun 关系校验；恢复不复制旧 Run 的 continuation 或审批状态；客户端不提供第三层入口。"
+  limitations: [PostgreSQL/Linux, real Provider/Gateway deployment, native tool approval runtime]
+  rollback: "停止带 nested static subgraph 的活动 Run 后回退执行器、校验、客户端和文档；历史 NodeRun 保留，旧执行器不得继续新二层 Run。"
+  remaining: [PostgreSQL/Linux, real Provider and deployment validation]
+  next_action: "完成最终验证后提交本地分支；保持动态子编排不可嵌套，并继续独立推进真实运行时门禁。"
 approval_binding_slice:
   date: "2026-11-24"
   owner: Codex

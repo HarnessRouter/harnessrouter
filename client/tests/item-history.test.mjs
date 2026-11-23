@@ -41,3 +41,8 @@ test('subgraph history uses its persisted child manifest and local identity', ()
   assert.equal(attemptLabel({ ...item, execution_kind: 'subgraph_aggregate' }), '第 2 轮 · 子编排聚合 · 尝试 3');
   assert.equal(hasManifest({ id: 19, node_id: 'group', input: {} }), false);
 });
+
+test('nested subgraph history labels inner children separately', () => {
+  assert.equal(attemptLabel({ execution_kind: 'subgraph_node', attempt: 1, iteration: 1,
+    input: { subgraph_node_id: 'leaf', nested_subgraph_parent: true } }), '第 1 轮 · 嵌套子节点 leaf · 尝试 1');
+});

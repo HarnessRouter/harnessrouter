@@ -12,7 +12,7 @@ from app.tasks.dynamic_graph import graph_ready, graph_valid
 
 def _children(db, control):
     state = json.loads(control.input_json)
-    ids = state.get('subgraph_node_run_ids', [])
+    ids = state.get('subgraph_node_run_ids', state.get('nested_subgraph_node_run_ids', []))
     rows = [db.get(NodeRun, identity) for identity in ids]
     if any(row is None or row.run_id != control.run_id or row.node_id != control.node_id
             or row.iteration != control.iteration or row.execution_kind != 'subgraph_node'
@@ -35,6 +35,17 @@ def _manifest_output(rows):
     return [{'id': json.loads(row.input_json)['subgraph_node_id'], 'status': row.status,
              **({'output': json.loads(row.output_json)} if row.output_json else {}),
              **({'error_code': row.error_code} if row.error_code else {})} for row in rows]
+
+
+def _nested_children(db, control):
+    state = json.loads(control.input_json)
+    ids = state.get('nested_subgraph_node_run_ids', [])
+    rows = [db.get(NodeRun, identity) for identity in ids]
+    if any(row is None or row.run_id != control.run_id or row.node_id != control.node_id
+            or row.iteration != control.iteration or row.execution_kind != 'subgraph_node'
+           for row in rows):
+        raise ValueError('invalid nested subgraph manifest')
+    return rows
 
 
 def _dynamic_values(value, config):
@@ -118,12 +129,14 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                                         'subgraph_node_id': child['id'],
                                         'subgraph_parent_node_run_id': control.id,
                                         'subgraph_index': index,
+                                        'prompt': child.get('prompt', ''),
                                         'inputRefs': child.get('inputRefs', []),
                                         'deps': child.get('deps', []),
                                         'parent_refs': parent_refs,
                                         **({'dynamic': True, 'dynamic_node': child,
                                             'dynamic_parent_prompt': item.get('prompt', '')}
-                                           if dynamic is not None else {})}),
+                                           if dynamic is not None else {}),
+                                        **({'nested_subgraph': child['subgraph']} if child.get('subgraph') else {})}),
                 )
                 db.add(child_row)
                 db.flush()
@@ -146,6 +159,65 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                     row.status, row.error_code, row.finished_at = 'canceled', 'subgraph_sibling_failed', now
             control.status, control.error_code, control.finished_at = 'failed', 'subgraph_child_failed', now
             changed = True
+            continue
+        for child in children:
+            child_state = json.loads(child.input_json)
+            nested_config = child_state.get('nested_subgraph')
+            if not nested_config or child.status not in ('idle', 'running'):
+                continue
+            nested_ids = child_state.get('nested_subgraph_node_run_ids')
+            nested_rows = _nested_children(db, child) if nested_ids else []
+            if child.status == 'idle' and not nested_rows:
+                nested_created = []
+                for nested_index, nested in enumerate(nested_config['nodes']):
+                    nested_row = NodeRun(
+                        run_id=run.id, node_id=item['id'], iteration=child.iteration,
+                        attempt=1, execution_kind='subgraph_node', foreach_index=nested_index,
+                        input_json=encoded({'_orchestration_role': 'subgraph_node',
+                                            'subgraph_node_id': nested['id'],
+                                            'subgraph_parent_node_run_id': child.id,
+                                            'subgraph_index': nested_index,
+                                            'inputRefs': nested.get('inputRefs', []),
+                                            'deps': nested.get('deps', []),
+                                            'parent_refs': child_state.get('parent_refs', []),
+                                            'nested_subgraph_parent': True,
+                                            'nested_parent_node_id': child_state.get('subgraph_node_id'),
+                                            'nested_prompt_prefix': child_state.get('prompt', '')}),
+                    )
+                    db.add(nested_row)
+                    db.flush()
+                    nested_created.append(nested_row)
+                child_state['nested_subgraph_node_run_ids'] = [row.id for row in nested_created]
+                child.input_json = encoded(child_state)
+                child.status, child.started_at = 'running', child.started_at or now
+                changed = True
+                nested_rows = nested_created
+            if child.status not in ('idle', 'running'):
+                continue
+            nested_failed = next((row for row in nested_rows if row.status in ('failed', 'canceled')), None)
+            if nested_failed:
+                for row in nested_rows:
+                    if row.status == 'idle':
+                        row.status, row.error_code, row.finished_at = 'canceled', 'subgraph_sibling_failed', now
+                child.status, child.error_code, child.finished_at = 'failed', 'subgraph_child_failed', now
+                changed = True
+                continue
+            if nested_rows and all(row.status in ('succeeded', 'skipped') for row in nested_rows):
+                child.output_json = encoded({'nodes': _manifest_output(nested_rows), 'status': 'completed'})
+                child.status, child.finished_at = 'succeeded', now
+                changed = True
+                continue
+            nested_by_id = {json.loads(row.input_json)['subgraph_node_id']: row for row in nested_rows}
+            nested_config_by_id = {nested['id']: nested for nested in nested_config['nodes']}
+            nested_idle = [row for row in nested_rows if row.status == 'idle' and all(
+                nested_by_id[dep].status == 'succeeded'
+                for dep in json.loads(row.input_json).get('deps', []))]
+            nested_idle = nested_idle[:1]
+            nested_candidates = [( 'subgraph_node', nested_config_by_id[json.loads(row.input_json)['subgraph_node_id']], row)
+                                 for row in nested_idle]
+            candidates.extend(nested_candidates)
+            if nested_candidates:
+                changed = False
             continue
         is_dynamic = bool(state.get('dynamic'))
         if (is_dynamic and not children) or (children and all(row.status in ('succeeded', 'skipped') for row in children)):

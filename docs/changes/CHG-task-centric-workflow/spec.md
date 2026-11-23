@@ -486,8 +486,9 @@ Agent/模型授权、MCP 配置、权限策略或未预检的工作流修改。�
 
 节点可以声明一个 `subgraph`，作为父 NodeRun 的静态子编排作用域。`subgraph` 只接受 `max_concurrency`（1 至 10）和
 `nodes`（1 至 10 个子节点）；子节点只能包含 `id`、Agent/model/prompt、`deps`、`inputRefs`、`final_report` 和布局字段。
-子图在 WorkflowRevision 保存时完整校验为无环 DAG，子节点不能使用 `repeat`、`foreach`、`loop`、`dynamic_plan`、人工门控或
-另一个 `subgraph`。父节点必须有外部依赖，不能同时声明其他控制模式。
+子图在 WorkflowRevision 保存时完整校验为无环 DAG，子节点不能使用 `repeat`、`foreach`、`loop`、`dynamic_plan` 或人工门控。
+静态子图允许最多两层：第一层静态子节点可以包含一个静态 `subgraph`，第二层只能包含叶子 Agent 节点；第三层及以上、动态
+子编排嵌套和跨子图依赖均拒绝。父节点必须有外部依赖，不能同时声明其他控制模式。
 
 运行时先完成父节点依赖，再一次性持久化子节点清单；每个子节点使用独立 `NodeRun(execution_kind=subgraph_node)`，并携带父
 NodeRun ID、子节点 ID、索引和父输入引用。调度只选择当前子图内依赖已成功的子节点，遵守子图并发上限；所有子节点成功后写入
@@ -495,8 +496,10 @@ NodeRun ID、子节点 ID、索引和父输入引用。调度只选择当前子�
 `subgraph_child_failed`，下游保持 idle。子图清单、聚合和每次重启都沿同一 Run/iteration 归属检查，最多计入 Run 的 500 条
 NodeRun 限制；清单损坏或归属不符返回 `fanout_manifest_unavailable`。
 
-子图定义来自已保存 WorkflowRevision，运行过程中不能由 Agent 输出创建、修改或扩展；当前不支持递归子图、动态子图、子图内人工
-节点、子图内集合/循环和跨子图依赖。暂停、取消、重试、终态恢复必须复用父 Run 的状态边界，不能把子 NodeRun 提升成独立 Run。
+子图定义来自已保存 WorkflowRevision，运行过程中不能由 Agent 输出创建、修改或扩展；静态嵌套最多两层，动态子编排不能嵌套静态或
+动态子编排，子图内仍不支持人工节点、集合/循环和跨子图依赖。嵌套静态子图的叶子 NodeRun、内层聚合和外层聚合都属于同一
+Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。暂停、取消、重试、终态恢复必须复用父 Run 的状态边界，不能
+把子 NodeRun 提升成独立 Run。
 
 ### 受限动态子编排
 
@@ -605,7 +608,7 @@ NodeRun 限制；清单损坏或归属不符返回 `fanout_manifest_unavailable`
 - **AC-20 有界跨节点循环：** 固定 `loop.body` 只能引用当前节点和已声明依赖，且包含检查节点；每轮按静态依赖顺序追加 NodeRun，终止条件满足后释放下游，达到上限记录 `loop_limit_exceeded`；不生成动态节点、不接受无界循环或任意回边。
 - **AC-22 循环组合展开：** 循环体中的有限 foreach/dynamic_plan 按每轮独立 `iteration` 展开并追加 item/aggregate NodeRun；第二轮不能读取或覆盖第一轮聚合，检查节点必须等待当前轮聚合完成；历史 API 能按 iteration 分页返回全部记录。嵌套 loop、动态边和动态修改循环体仍返回 422。
 - **AC-21 受限动态计划：** `dynamic_plan` 只能从依赖节点的数组读取最多 10 个严格 `{id,prompt}` 项；项级 Agent 配置固定继承静态节点，运行时持久化清单并按模式执行，聚合到独立 `dynamic_aggregate`；非法项、重复 ID、超限和额外执行配置在 Gateway 派发前失败；不生成可递归动态子图、不修改 WorkflowRevision。
-- **AC-32 有界静态子编排：** 保存时拒绝空/超限/有环/递归/带控制模式/人工节点/未知字段的 `subgraph`；运行时持久化父子清单，按子图并发上限派发，子图聚合后才释放父节点下游；失败取消未开始兄弟并保留子项历史；重启和清单 API 验证同 Run、父 NodeRun、iteration 归属，模型输出不能修改拓扑。
+- **AC-32 有界静态子编排：** 保存时拒绝空/超限/有环/三层及以上嵌套/动态嵌套/带控制模式/人工节点/未知字段的 `subgraph`；允许最多两层静态子编排。运行时持久化父子清单，按各层子图并发上限派发，内层完成并聚合后才完成外层控制节点，外层聚合后才释放父节点下游；失败取消未开始兄弟并保留叶子、内层聚合和外层控制历史；终态恢复只复制同一 Run 中可验证的嵌套清单，成功叶子复用、指定失败叶子重试，清单 API 验证同 Run、父 NodeRun、iteration 和层级归属，模型输出不能修改拓扑。
 
 分页接口保留原有资源数组字段，并返回 `pagination.offset`、`pagination.limit` 和 `pagination.has_more`。任务、Run、Run 节点、NodeRun 尝试、模板和 Artifact 列表均不得要求客户端一次性读取无界历史数据。
 

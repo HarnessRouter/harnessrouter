@@ -43,7 +43,7 @@ def workflow():
     {'max_concurrency': 2, 'nodes': [node('a'), node('a')]},
     {'max_concurrency': 2, 'nodes': [node('a', deps=['missing'])]},
     {'max_concurrency': 2, 'nodes': [node('a', deps=['b']), node('b', deps=['a'])]},
-    {'max_concurrency': 2, 'nodes': [node('a', subgraph={'nodes': [node('inner')]})]},
+    {'max_concurrency': 2, 'nodes': [node('a', subgraph={'nodes': [node('inner', subgraph={'nodes': [node('mid', subgraph={'nodes': [node('leaf')]})]})]})]},
     {'max_concurrency': 11, 'nodes': [node('a')]},
 ])
 def test_subgraph_validation_rejects_unbounded_or_recursive_shapes(subgraph):
@@ -225,6 +225,108 @@ def test_dynamic_subgraph_empty_plan_aggregates_successfully(client, app):
     started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'dynamic-empty'}).json()
     result = wait_run(client, started['id'], {'completed', 'failed'})
     assert result['status'] == 'completed', result
+
+
+def test_nested_static_subgraph_runs_in_one_parent_run_and_releases_downstream(client, app):
+    authenticated(client)
+    calls = []
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'value': 'source'}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            assert context['subgraph_node_id'] == 'leaf'
+            assert context['prompt'].endswith('\nleaf work')
+            return {'status': 'completed', 'child': 'leaf'}
+        if context['prompt'] == 'execute report':
+            assert context['refs'][0]['output']['status'] == 'completed'
+            return {'status': 'completed', 'report': 'nested'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    nested = {
+        'max_concurrency': 1,
+        'nodes': [{
+            'id': 'outer', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'prompt': 'outer control',
+            'subgraph': {'max_concurrency': 1, 'nodes': [
+                {'id': 'leaf', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'prompt': 'leaf work'},
+            ]},
+        }],
+    }
+    definition = {'nodes': [
+        node('source'),
+        node('group', deps=['source'], inputRefs=['source'], subgraph=nested),
+        node('report', deps=['group'], inputRefs=['group'], final_report=True),
+    ]}
+    created = client.post('/api/hexa/tasks', json={'workflow': definition})
+    assert created.status_code == 201, created.text
+    task = created.json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'nested-subgraph'}).json()
+    result = wait_run(client, started['id'], {'completed', 'failed'})
+    assert result['status'] == 'completed', result
+    assert [call['subgraph_node_id'] for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['leaf']
+    group = next(row for row in result['nodes'] if row['node_id'] == 'group')
+    items = client.get(f"/api/hexa/node-runs/{group['id']}/items").json()['items']
+    assert {item['input'].get('subgraph_node_id') for item in items if item['execution_kind'] == 'subgraph_node'} == {'outer', 'leaf'}
+    assert next(item for item in items if item['input'].get('subgraph_node_id') == 'leaf')['input']['subgraph_parent_node_run_id'] == next(item for item in items if item['input'].get('subgraph_node_id') == 'outer')['id']
+
+
+def test_nested_static_subgraph_resume_reuses_outer_and_retries_failed_leaf(client, app):
+    authenticated(client)
+    calls = []
+    attempts = {'leaf': 0}
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'value': 'source'}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            attempts['leaf'] += 1
+            if attempts['leaf'] == 1:
+                return {'status': 'failed'}
+            return {'status': 'completed', 'child': 'leaf'}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': 'nested-resumed'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    definition = {'nodes': [
+        node('source'),
+        node('group', deps=['source'], inputRefs=['source'], subgraph={
+            'max_concurrency': 1,
+            'nodes': [{
+                'id': 'outer', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'prompt': 'outer control',
+                'subgraph': {'max_concurrency': 1, 'nodes': [
+                    {'id': 'leaf', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'prompt': 'leaf work'},
+                ]},
+            }],
+        }),
+        node('report', deps=['group'], inputRefs=['group'], final_report=True),
+    ]}
+    task = client.post('/api/hexa/tasks', json={'workflow': definition}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'nested-resume-first'}).json()
+    failed = wait_run(client, started['id'], {'failed'})
+    group = next(row for row in failed['nodes'] if row['node_id'] == 'group')
+    items = client.get(f"/api/hexa/node-runs/{group['id']}/items").json()['items']
+    leaf = next(item for item in items if item['input'].get('subgraph_node_id') == 'leaf')
+    resumed = client.post(f"/api/hexa/tasks/{task['id']}/runs", json={
+        'kind': 'rerun', 'target_node': 'group', 'resume_from_run_id': failed['id'],
+        'item_node_run_id': leaf['id'],
+    }, headers={'Idempotency-Key': 'nested-resume-second'})
+    assert resumed.status_code == 202, resumed.text
+    completed = wait_run(client, resumed.json()['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed
+    assert attempts['leaf'] == 2
+    assert client.get(f"/api/hexa/runs/{failed['id']}").json() == failed
+    new_group = next(row for row in completed['nodes'] if row['node_id'] == 'group')
+    items_response = client.get(f"/api/hexa/node-runs/{new_group['id']}/items")
+    assert items_response.status_code == 200, items_response.text
+    new_items = items_response.json()['items']
+    assert {item['input'].get('subgraph_node_id') for item in new_items if item['execution_kind'] == 'subgraph_node'} == {'outer', 'leaf'}
+    assert all(item['run_id'] == completed['id'] for item in new_items)
 
 
 @pytest.mark.parametrize('mode', ['serial', 'parallel'])
