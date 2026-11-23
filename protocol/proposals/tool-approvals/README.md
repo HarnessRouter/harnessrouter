@@ -1,6 +1,6 @@
 # Durable tool approval — local proposal
 
-Status: **draft, not implemented or advertised**. Base: UHP `2026-10-19`.
+Status: **draft; runtime interception and wire API unimplemented, capability not advertised**. Base: UHP `2026-10-19`.
 Tracking: [Hexa task Change](../../../docs/changes/CHG-task-centric-workflow/change-record.yaml).
 This is a local proposal, not an accepted UEP or a new published UHP version.
 
@@ -58,4 +58,6 @@ Rejected alternatives: reusing a general confirm answer (no exact invocation bin
 | A-08 | Native deny remains effective; disabled/skipped plugin tools cannot execute |
 | A-09 | SSE, read-back, schemas and receipts agree; secrets absent from every output |
 
-Implement Gateway durable store and native interception first, then conformance against a real supported runtime, then Hexa snapshot/client and human UI. Schema tests validate shapes only; they do not satisfy A-01–A-09. This draft does not change the shipped Gateway or grant approval coverage to existing runtimes.
+Implement Gateway durable store and native interception first, then conformance against a real supported runtime, then Hexa snapshot/client and human UI. Schema tests validate shapes only; they do not satisfy A-01–A-09. This draft does not change the shipped Gateway execution path or grant approval coverage to existing runtimes.
+
+An internal journal is now implemented in `gateway/tool_approvals.py`, reusing the configured control store and CAS. It stores scoped requests, immutable decisions, continuation reservations and monotonic receipts; isolated SQLite tests include concurrent writers and process reopening. Its caller must be a trusted native adapter that supplies authenticated scope, a canonical execution binding and fresh native permission facts. It is not wired into HTTP, SSE, Runner dispatch or Hexa, and does not compute RFC 8785 descriptors or prove pre-side-effect interception. No runtime has approval coverage from this journal alone. Recovery is explicit and requires confirmation that the owning runtime/lease has stopped; it must not race a live owner. Records have no automatic TTL so expiry cannot silently free a command for execution again; retention requires a later audited cleanup policy.

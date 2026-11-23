@@ -400,10 +400,27 @@ EffectivePermission
 过期时间。审批记录、决定、执行回执和 `side_effect_state` 必须可在断线或重启后读取；`unknown` 结果必须要求 reconciliation，
 不得盲目重放。
 
-本 Change 只提交 `protocol/proposals/tool-approvals/` 的本地规范草案，不修改已发布的 UHP schema、Gateway discovery 或
-现有运行代码。草案以 UHP `2026-10-19` 为基线，采用新增能力和新增 item/error 的兼容扩展；只有 Gateway 的前置拦截、持久化
+`protocol/proposals/tool-approvals/` 保留为本地规范草案，不修改已发布的 UHP schema 或 Gateway discovery。实施从内部持久化
+审批日志开始，尚未接通的原生拦截不得视为审批覆盖。草案以 UHP `2026-10-19` 为基线，采用新增能力和新增 item/error 的兼容扩展；只有 Gateway 的前置拦截、持久化
 恢复、Runner 原生执行约束和 conformance suite 一起实现后，才能发布新的日期版本并宣称支持。Gateway 不具备指定策略的审批
 覆盖时，Hexa 必须在 Run 启动前返回配置不可用，不能提交任务后再根据流事件推断“已经审批”。
+
+### Gateway 内部审批日志
+
+复用 Gateway control store 的原子 create 与 ETag CAS，审批按组织、主体、Session、Response 隔离；同一作用域的 command 只能
+生成一个审批 ID。记录只接受安全 Request 字段，执行描述符及凭据不进入日志；preview 必须由受信任适配器事先脱敏。
+内部日志要求期限在未来且不超过 24 小时，不通过自动 TTL 删除已到期命令。`request_hash` 由后续受信任的原生拦截器按
+提案生成；日志不通过客户端参数构造执行命令，也不自行宣称已实现 RFC 8785 绑定。
+
+决定、继续保留和执行开始分别是持久化转换。决定必须有幂等键；同键异参冲突，其他键不能覆盖已有决定。已记录决定即使后来失效，
+原键同参重放仍返回原决定回执，不恢复执行资格；读取当前记录才能判断最新执行结果。继续保留只能指定
+一个 continuation；开始执行前再次检查当前绑定、原生拒绝、过期与撤销，CAS 只允许一个调用方获得开始许可。决定和保留
+均不执行工具。执行结果只允许由 started 转为 completed/failed；已保留或已开始的崩溃调用变为 unknown 并要求 reconciliation，
+不得重新获得执行许可。取消/撤销在开始前阻断后续调用，已开始的副作用只能记录不确定性，不能声称已经撤回。
+
+**AC-29 内部审批日志：** 真实 SQLite 控制存储验证作用域隔离、重开后读取、同 command 去重、决定重放/冲突、并发开始唯一性、
+过期/撤销/绑定变化/原生拒绝零执行许可、终态单向和崩溃 unknown；存储异常必须传播，不能 fail open。该验收仅证明日志边界，
+不代替 A-01 至 A-09 的真实 Gateway/Runner 拦截、HTTP/SSE、Hexa UI 与原生 runtime conformance。
 
 ## 当前编排边界
 

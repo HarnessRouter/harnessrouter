@@ -1,4 +1,26 @@
 id: CHG-task-centric-workflow
+approval_journal_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 46e86e0b
+  branch: codex/agent-orchestration
+  status: verified_internal_slice
+  reuse_decision: extend existing control store CAS with isolated internal approval journal; do not advertise runtime coverage
+  references: [spec.md#gateway-内部审批日志, plan.md#内部审批日志实施2026-11-24, ../../../protocol/proposals/tool-approvals/README.md]
+  acceptance_ids: [AC-29]
+  verification:
+    red: "首次 collection 因模块不存在失败，不计有效 Red；建立空接口后 24 failed in 3.54s，均由 NotImplementedError；实现后 24 passed。失效决定重放补测先 2 failed，调整回执查验顺序后通过。"
+    unit_integration: "37 journal tests: 固定字段/绑定/状态、真实 SQLite、配置 store factory、独立 Python 进程重开、多实例多线程决定/开始/撤销竞争；没有 mock 被测状态机，存储异常单独注入验证 fail closed。"
+    regression: "python -X utf8 -m pytest -q gateway/tests/test_tool_approval_journal.py gateway/tests/test_plugins.py gateway/tests/test_harness_idempotency.py gateway/tests/test_input_requests.py gateway/tests/test_input_history.py protocol/proposals/tool-approvals/test_schema.py; exit 0; 174 passed, 55 warnings in 24.06s。"
+    initial_regression_failure: "默认 GBK 下原 test_input_requests.py 的 Path.read_text() 读 UTF-8 app.py 失败，1 failed, 173 passed；UTF-8 模式完整重跑通过。既有 FastAPI on_event 弃用及 input_history auth_from_conn 未 await 警告保留，未改相关生产代码。"
+    orchestration_audit: "python -m pytest -q hexa-api/tests/test_dynamic_dag.py; exit 0; 34 passed in 41.29s；复核 graph_ready、manifest、plan_refs 和 resume 同 Run/节点/轮次重映射，无额外编排生产修改。"
+    e2e: "独立进程重开仅为持久化集成证据；审批 HTTP/SSE/真实 Runner/完整用户 E2E not_evaluated，因本切片没有外部接线，不能据此声明运行时审批完成。客户端未改，不重复已有浏览器与构建证据。"
+    hygiene: "git diff --check；Python AST/Change YAML 解析通过。"
+  security_review: "按四项作用域生成不可混淆 ID 并核对存储归属；固定字段拒绝 auth/headers/任意参数；参数化 SQLite 和 ETag CAS 复用现有实现；错误不含请求值；决定不派发副作用；单次 start 许可、撤销后禁用、unknown 不重放。preview 脱敏、RFC8785 binding、native allow 事实及确认原 owner 已停止由未来受信任 adapter 提供，当前不接受外部输入或广告 capability。"
+  limitations: [Linux and optional remote control backing not_evaluated, no native adapter or wire API, no production approval coverage, no automatic retention cleanup]
+  rollback: 删除未接线模块并回退文档即可，保留已有 control.db，不修改或删除历史审批记录；无迁移、部署、远端写入或 UI 修改。
+  remaining: [native interception and canonical binding, authenticated HTTP inspection and decisions, exact runtime continuation, real runtime conformance, Hexa preflight and UI]
+  next_action: 选择支持精确持久化 continuation 的原生 Runtime，先实现副作用前拦截及绑定，再接 HTTP/SSE 与 Hexa；不扩大为递归动态子图。
 dynamic_dag_slice:
   date: "2026-11-24"
   owner: Codex

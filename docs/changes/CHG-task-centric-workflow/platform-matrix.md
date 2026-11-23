@@ -50,4 +50,10 @@ Gateway 仅作为 `hexa-api` 的外部执行依赖；Gateway 原有回归测试�
 
 ## 2026-11-23 终态集合恢复
 
+后续内部审批日志切片（2026-11-24）：复用 Gateway `control.db` 的原子 create/ETag CAS，无迁移、Shell 执行或新依赖。
+Windows/Python 3.13/真实 SQLite 覆盖独立进程重开、多线程决定/开始/撤销竞争、原 store factory、过期/恢复/未知回执；测试子进程
+通过 argv 调用 Python，不构造 Shell 命令。原用户提问测试存在默认 GBK 读 UTF-8 源码问题，回归以 `python -X utf8` 执行。
+Linux、可选远端 control backing、真实 Runner、HTTP/SSE 审批及部署 not_evaluated；无 runtime capability 广告或 UI 修改。
+证据与剩余接线统一见 Change `approval_journal_slice`。
+
 复用 ORM 与持久化 JSON 引用，无数据库列、Shell、原生模块或系统路径变更。Windows / SQLite 覆盖新 Run 恢复、引用身份和旧历史不变；HTTP 夹具覆盖实际 GatewayClient、失败响应、补跑和重启只读。当前源码真实 PostgreSQL、Linux 与真实 Provider 仍 not_evaluated；本批未新增迁移，也不宣称可发布。最终测试数量及 Chromium 流程证据见 Change `terminal_fanout_resume`；新增项级 UI 入口仍属后续工作。

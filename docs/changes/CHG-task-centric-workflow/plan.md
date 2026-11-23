@@ -69,11 +69,19 @@ secret；Gateway/Runner 继续负责插件物化、sandbox、MCP 连接和 comma
 
 工具审批单独作为本地提案维护于 `protocol/proposals/tool-approvals/`。提案要求 Gateway 在副作用前持久化拦截精确调用、支持
 幂等决定、精确恢复和执行回执，并要求 Runtime 原生拒绝优先于人工批准。它不把 `input_required` 或 function-call SSE 当作
-授权机制，也不修改当前已发布协议、discovery、Gateway 或 Runner。实现顺序是 Gateway durable store 和 interception、Runner
-原生约束、真实运行时 conformance，最后接入 Hexa Run 预检、审批卡和审计；在此之前工具审批能力必须保持未广告、未实现。
+授权机制，不修改当前已发布协议和 discovery。实现顺序是 Gateway durable store 和 interception、Runner
+原生约束、真实运行时 conformance，最后接入 Hexa Run 预检、审批卡和审计；在此之前工具审批覆盖必须保持未广告。
 
 验证：草案 JSON Schema 的元校验和 6 个 shape tests；真实 A-01 至 A-09、跨重启恢复、原生沙箱和生产 Gateway 均为后续验证，不能
 用 fake Gateway 或 schema tests 代替。
+
+### 内部审批日志实施（2026-11-24）
+
+按 AC-29 新增独立 `gateway/tool_approvals.py`，复用 control_store 的容器、异常和 ETag CAS，不新增数据库、HTTP 路由或依赖。
+先写单元/SQLite 集成 Red，再实现 create/read/decide/reserve/start/finish/void/recover；所有授权关键失败传播，记录不设自动 TTL，
+避免过期删除让同一 command 重获许可。原生拦截器将来负责 canonical descriptor、当前权限事实与安全 preview；日志只保存固定
+字段和 digest。用独立存储实例、多线程及进程重开验证持久化和竞争，辅以原 control store/插件回归。完整 HTTP/runtime E2E
+尚依赖下一阶段接线，必须单独记录未验证。回退模块及调用前停止接入中的审批任务，保留 control.db 历史；本切片无外部调用方。
 
 ## 2026-11-23 完整引擎推进
 
