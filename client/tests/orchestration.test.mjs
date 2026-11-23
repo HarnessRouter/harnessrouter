@@ -54,3 +54,12 @@ test('static subgraphs reject duplicate, unknown, cyclic and invalid child refer
   assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a', deps: ['a'] }] } }] }), /环/);
   assert.match(orchestrationIssue({ nodes: [{ ...base, subgraph: { nodes: [{ id: 'a', deps: 'source' }] } }] }), /必须是数组/);
 });
+
+test('dynamic subgraphs validate a bounded source and local execution mode', () => {
+  const node = { id: 'group', deps: ['planner'], subgraph: { max_concurrency: 2, dynamic: { source: 'planner', path: 'nodes', max_nodes: 3, mode: 'parallel' } } };
+  assert.equal(orchestrationIssue({ nodes: [node] }), undefined);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { ...node.subgraph, dynamic: { ...node.subgraph.dynamic, source: 'missing' } } }] }), /来源/);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { ...node.subgraph, dynamic: { ...node.subgraph.dynamic, path: '../nodes' } } }] }), /路径/);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { ...node.subgraph, dynamic: { ...node.subgraph.dynamic, max_nodes: 11 } } }] }), /节点上限/);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { ...node.subgraph, dynamic: { ...node.subgraph.dynamic, mode: 'bad' } } }] }), /调度模式/);
+});

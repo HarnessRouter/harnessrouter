@@ -172,12 +172,28 @@ def validate_subgraph(item, known_ids):
         raise TaskError('invalid_workflow', 'subgraph 不能与 repeat、foreach、loop 或 dynamic_plan 同时启用。', 422)
     if not item.get('deps'):
         raise TaskError('invalid_workflow', 'subgraph 节点必须依赖父工作流节点。', 422)
-    if not isinstance(subgraph, dict) or set(subgraph) - {'max_concurrency', 'nodes'}:
-        raise TaskError('invalid_workflow', 'subgraph 只支持 max_concurrency 和 nodes。', 422)
+    if not isinstance(subgraph, dict) or set(subgraph) - {'max_concurrency', 'nodes', 'dynamic'}:
+        raise TaskError('invalid_workflow', 'subgraph 只支持 max_concurrency、nodes 或 dynamic。', 422)
     concurrency = subgraph.get('max_concurrency', 1)
-    children = subgraph.get('nodes')
     if type(concurrency) is not int or not 1 <= concurrency <= 10:
         raise TaskError('invalid_workflow', 'subgraph.max_concurrency 必须是 1 到 10 之间的整数。', 422)
+    children = subgraph.get('nodes')
+    dynamic = subgraph.get('dynamic')
+    if (children is None) == (dynamic is None):
+        raise TaskError('invalid_workflow', 'subgraph 必须二选一配置 nodes 或 dynamic。', 422)
+    if dynamic is not None:
+        if not isinstance(dynamic, dict) or set(dynamic) - {'source', 'path', 'max_nodes', 'mode'}:
+            raise TaskError('invalid_workflow', 'subgraph.dynamic 只支持 source、path、max_nodes 和 mode。', 422)
+        source = dynamic.get('source')
+        if not isinstance(source, str) or source not in set(item.get('deps', [])) or source not in known_ids:
+            raise TaskError('invalid_workflow', 'subgraph.dynamic.source 必须是父节点的依赖。', 422)
+        if not isinstance(dynamic.get('path'), str) or not CONDITION_PATH.fullmatch(dynamic['path']):
+            raise TaskError('invalid_workflow', 'subgraph.dynamic.path 格式无效。', 422)
+        if type(dynamic.get('max_nodes')) is not int or not 1 <= dynamic['max_nodes'] <= 10:
+            raise TaskError('invalid_workflow', 'subgraph.dynamic.max_nodes 必须是 1 到 10 之间的整数。', 422)
+        if dynamic.get('mode', 'serial') not in {'serial', 'parallel'}:
+            raise TaskError('invalid_workflow', 'subgraph.dynamic.mode 只支持 serial 或 parallel。', 422)
+        return
     if not isinstance(children, list) or not 1 <= len(children) <= 10:
         raise TaskError('invalid_workflow', 'subgraph.nodes 必须包含 1 到 10 个静态节点。', 422)
     child_ids = set()
@@ -585,6 +601,7 @@ class TaskExecutor:
                     from app.tasks.subgraph import advance_subgraphs
                     subgraph_calls, subgraph_changed = advance_subgraphs(
                         db, run, definition, rows, encoded=encoded,
+                        value_at_path=value_at_path, condition_matches=condition_matches,
                     )
                     if fanout_changed or subgraph_changed:
                         db.commit()
@@ -649,9 +666,17 @@ class TaskExecutor:
                             context['subgraph_node_id'] = state['subgraph_node_id']
                             context['subgraph_parent_node_run_id'] = state['subgraph_parent_node_run_id']
                             context['subgraph_index'] = state['subgraph_index']
+                            context['deps'] = state.get('deps', [])
+                            context['inputRefs'] = state.get('inputRefs', [])
                             from app.tasks.subgraph import _children, _refs
                             parent = db.get(NodeRun, state['subgraph_parent_node_run_id'])
                             context['refs'] = state.get('parent_refs', []) + _refs(_children(db, parent), state)
+                            if state.get('dynamic'):
+                                dynamic_prompt = state.get('dynamic_node', {}).get('prompt', '')
+                                context['prompt'] = state.get('dynamic_parent_prompt', '') + '\n' + dynamic_prompt
+                                context['dynamic'] = True
+                                context['dynamic_node'] = state.get('dynamic_node', {})
+                                context['dynamic_parent_prompt'] = state.get('dynamic_parent_prompt', '')
                             context['_orchestration_role'] = 'subgraph_node'
                         if unit_kind in ('foreach_item', 'dynamic_item', 'foreach_nested_item'):
                             context['refs'] = json.loads(rows[item['id']].input_json).get('refs', inputs)

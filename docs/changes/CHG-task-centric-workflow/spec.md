@@ -498,6 +498,41 @@ NodeRun 限制；清单损坏或归属不符返回 `fanout_manifest_unavailable`
 子图定义来自已保存 WorkflowRevision，运行过程中不能由 Agent 输出创建、修改或扩展；当前不支持递归子图、动态子图、子图内人工
 节点、子图内集合/循环和跨子图依赖。暂停、取消、重试、终态恢复必须复用父 Run 的状态边界，不能把子 NodeRun 提升成独立 Run。
 
+### 受限动态子编排
+
+静态 `subgraph` 可以声明 `dynamic` 描述，以从一个已声明的外部依赖结果生成一次性局部子图：
+
+```json
+{
+  "subgraph": {
+    "max_concurrency": 2,
+    "dynamic": {
+      "source": "planner",
+      "path": "nodes",
+      "max_nodes": 10,
+      "mode": "parallel"
+    }
+  }
+}
+```
+
+`dynamic.source` 必须是父节点的 `deps`，`path` 使用固定字段路径，`max_nodes` 为 1 至 10，`mode` 只能是
+`serial` 或 `parallel`。来源值可以是 JSON 数组或只解码一次后的 JSON 数组字符串。每个生成项严格接受
+`id`、`prompt`、`deps`、`inputRefs`、`condition` 和 `allow_missing_inputs`；不得带 Agent、模型、Tool、Skill、MCP、
+权限、插件、人工节点、集合、循环、动态计划、子编排或任意额外字段。节点 ID 在本次父 NodeRun/iteration 内唯一，依赖
+只能指向同一动态子图，`inputRefs` 必须属于 `deps`，局部图必须无环且最多 200 条边。动态节点的 Agent、模型、权限和工具
+全部继承父静态节点在 Run 启动时的 capability snapshot，模型只能追加该项的 `prompt`。
+
+父节点依赖完成后，运行时必须先完整解析、校验并写入不可变动态清单，任何局部子节点调用前不得部分展开。清单记录使用
+`subgraph_node`，并在输入中保存 `dynamic=true`、局部节点定义摘要、父输入引用和来源摘要；动态拓扑不修改
+`WorkflowRevision`、Run 初始工作流快照或其他节点。调度、条件跳过、`subgraph_aggregate`、失败取消、暂停、取消、重试和
+终态恢复复用静态子图语义；恢复只复制成功子节点和指定失败子节点，旧 Run 清单保持只读。来源缺失、非数组、非法图、超过
+节点/边/输出/记录上限或清单损坏时，父节点在首次子调用前失败，使用 `subgraph_dynamic_invalid`、
+`subgraph_dynamic_limit_exceeded` 或 `fanout_manifest_unavailable`，不得调用 Gateway。
+
+动态子编排不能嵌套另一个动态或静态子编排，不能跨子图引用节点，不能让模型输出修改已冻结拓扑。它是受限的运行时
+局部 DAG，不是任意代码执行或通用运行时工作流编辑器。
+
 不可变的 WorkflowRevision、Run 初始快照和配置摘要不得因运行时展开而改写；派生计划与执行清单作为运行记录保存。
 无界循环和任意回边仍拒绝；运行中语义改图必须保存新版本并创建新 Run。工具审批的 Gateway/Runner 扩展保持独立实施门禁。
 

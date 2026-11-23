@@ -18,6 +18,18 @@ def subgraph_node(node_id='group', **kwargs):
     })
 
 
+def dynamic_subgraph_node(node_id='group', **kwargs):
+    return node(node_id, **kwargs, subgraph={
+        'max_concurrency': 2,
+        'dynamic': {
+            'source': 'planner',
+            'path': 'nodes',
+            'max_nodes': 10,
+            'mode': 'parallel',
+        },
+    })
+
+
 def workflow():
     return {'max_concurrency': 2, 'nodes': [
         node('source'),
@@ -48,6 +60,171 @@ def test_subgraph_requires_parent_dependency_and_rejects_other_control_modes():
     }, repeat={'max_iterations': 1, 'until': {'op': 'exists', 'path': 'done'}})]}
     with pytest.raises(TaskError):
         workflow_from_json(value)
+
+
+@pytest.mark.parametrize('dynamic', [
+    {'source': 'missing', 'path': 'nodes', 'max_nodes': 2},
+    {'source': 'source', 'path': '../nodes', 'max_nodes': 2},
+    {'source': 'source', 'path': 'nodes', 'max_nodes': 11},
+    {'source': 'source', 'path': 'nodes', 'max_nodes': 2, 'extra': True},
+])
+def test_dynamic_subgraph_validation_rejects_unsafe_shapes(dynamic):
+    with pytest.raises(TaskError) as failure:
+        workflow_from_json({'nodes': [node('source'), node('group', deps=['source'], subgraph={
+            'max_concurrency': 1, 'dynamic': dynamic,
+        })]})
+    assert failure.value.code == 'invalid_workflow'
+
+
+def test_dynamic_subgraph_requires_exactly_one_static_or_dynamic_definition():
+    for subgraph in [
+        {'max_concurrency': 1},
+        {'max_concurrency': 1, 'nodes': [node('child')], 'dynamic': {'source': 'source', 'path': 'nodes', 'max_nodes': 2}},
+    ]:
+        with pytest.raises(TaskError):
+            workflow_from_json({'nodes': [node('source'), node('group', deps=['source'], subgraph=subgraph)]})
+
+
+def test_dynamic_subgraph_runs_frozen_local_dag_and_inherits_parent_execution(client, app):
+    authenticated(client)
+    calls = []
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute planner':
+            return {'status': 'completed', 'nodes': [
+                {'id': 'first', 'prompt': 'draft'},
+                {'id': 'second', 'prompt': 'review', 'deps': ['first'], 'inputRefs': ['first']},
+            ]}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            assert context['subgraph_node_id'] in {'first', 'second'}
+            assert context['prompt'].endswith('\ndraft') or context['prompt'].endswith('\nreview')
+            if context['subgraph_node_id'] == 'second':
+                assert context['inputRefs'] == ['first']
+                assert any(ref['id'] == 'first' and ref['output']['child'] == 'first' for ref in context['refs'])
+            return {'status': 'completed', 'child': context['subgraph_node_id']}
+        if context['prompt'] == 'execute report':
+            assert context['refs'][0]['output']['status'] == 'completed'
+            return {'status': 'completed', 'report': 'ok'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    definition = {'max_concurrency': 2, 'nodes': [
+        node('planner'),
+        dynamic_subgraph_node('group', deps=['planner'], inputRefs=['planner']),
+        node('report', deps=['group'], inputRefs=['group'], final_report=True),
+    ]}
+    created = client.post('/api/hexa/tasks', json={'workflow': definition})
+    assert created.status_code == 201, created.text
+    task = created.json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'dynamic-subgraph'}).json()
+    result = wait_run(client, started['id'], {'completed', 'failed'})
+    assert result['status'] == 'completed', result
+    child_calls = [call for call in calls if call.get('_orchestration_role') == 'subgraph_node']
+    assert [call['subgraph_node_id'] for call in child_calls] == ['first', 'second']
+    group = next(row for row in result['nodes'] if row['node_id'] == 'group')
+    assert group['output']['status'] == 'completed'
+
+
+def test_dynamic_subgraph_invalid_output_fails_before_child_dispatch(client, app):
+    authenticated(client)
+    calls = []
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute planner':
+            return {'status': 'completed', 'nodes': [{'id': 'bad', 'prompt': 'x', 'model': 'do-not-accept'}]}
+        pytest.fail('dynamic child was dispatched before full validation')
+
+    app.state.gateway.create_response = gateway
+    definition = {'nodes': [
+        node('planner'),
+        dynamic_subgraph_node('group', deps=['planner'], inputRefs=['planner']),
+    ]}
+    created = client.post('/api/hexa/tasks', json={'workflow': definition})
+    assert created.status_code == 201, created.text
+    task = created.json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'dynamic-subgraph-invalid'}).json()
+    result = wait_run(client, started['id'], {'completed', 'failed'})
+    assert result['status'] == 'failed', result
+    group = next(row for row in result['nodes'] if row['node_id'] == 'group')
+    assert group['error_code'] == 'subgraph_dynamic_invalid'
+    assert not any(call.get('_orchestration_role') == 'subgraph_node' for call in calls)
+
+
+def test_dynamic_subgraph_terminal_resume_reuses_success_and_retries_failed_child(client, app):
+    authenticated(client)
+    calls = []
+    attempts = {'second': 0}
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute planner':
+            return {'status': 'completed', 'nodes': [
+                {'id': 'first', 'prompt': 'draft'},
+                {'id': 'second', 'prompt': 'review', 'deps': ['first'], 'inputRefs': ['first']},
+            ]}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            if context['subgraph_node_id'] == 'second':
+                attempts['second'] += 1
+                if attempts['second'] == 1:
+                    return {'status': 'failed'}
+            return {'status': 'completed', 'child': context['subgraph_node_id']}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': 'ok'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    definition = {'nodes': [
+        node('planner'),
+        dynamic_subgraph_node('group', deps=['planner'], inputRefs=['planner']),
+        node('report', deps=['group'], inputRefs=['group'], final_report=True),
+    ]}
+    created = client.post('/api/hexa/tasks', json={'workflow': definition})
+    assert created.status_code == 201, created.text
+    task = created.json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'dynamic-resume-first'}).json()
+    failed = wait_run(client, started['id'], {'failed'})
+    group = next(row for row in failed['nodes'] if row['node_id'] == 'group')
+    failed_child = next(row for row in client.get(f"/api/hexa/node-runs/{group['id']}/items").json()['items'] if row['status'] == 'failed')
+    resumed = client.post(f"/api/hexa/tasks/{task['id']}/runs", json={
+        'kind': 'rerun', 'target_node': 'group', 'resume_from_run_id': failed['id'],
+        'item_node_run_id': failed_child['id'],
+    }, headers={'Idempotency-Key': 'dynamic-resume-second'})
+    assert resumed.status_code == 202, resumed.text
+    completed = wait_run(client, resumed.json()['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed
+    assert [context['subgraph_node_id'] for context in calls if context.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second', 'second']
+    assert client.get(f"/api/hexa/runs/{failed['id']}").json() == failed
+
+
+def test_dynamic_subgraph_empty_plan_aggregates_successfully(client, app):
+    authenticated(client)
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        if context['prompt'] == 'execute planner':
+            return {'status': 'completed', 'nodes': []}
+        if context['prompt'] == 'execute report':
+            assert context['refs'][0]['output']['nodes'] == []
+            return {'status': 'completed', 'report': 'empty'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    definition = {'nodes': [
+        node('planner'),
+        dynamic_subgraph_node('group', deps=['planner'], inputRefs=['planner']),
+        node('report', deps=['group'], inputRefs=['group'], final_report=True),
+    ]}
+    created = client.post('/api/hexa/tasks', json={'workflow': definition})
+    assert created.status_code == 201, created.text
+    task = created.json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'dynamic-empty'}).json()
+    result = wait_run(client, started['id'], {'completed', 'failed'})
+    assert result['status'] == 'completed', result
 
 
 @pytest.mark.parametrize('mode', ['serial', 'parallel'])

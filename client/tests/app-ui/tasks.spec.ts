@@ -370,6 +370,30 @@ test('static subgraph children can be edited and persist across reopening', asyn
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('bounded dynamic subgraph configuration persists across reopening', async ({ page }) => {
+  const fixture = await taskFixture(page);
+  fixture.tasks[2].workflow = structuredClone(fixture.tasks[0].workflow);
+  await enter(page);
+  await page.getByRole('row', { name: /待配置的草稿/ }).click();
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await page.getByLabel('执行 Agent 前人工确认输入').uncheck();
+  await page.getByLabel('执行模式').selectOption('dynamic_subgraph');
+  await page.getByLabel('动态子编排路径').fill('plan.nodes');
+  await page.getByLabel('动态子编排节点上限').fill('6');
+  await page.getByLabel('动态子编排调度').selectOption('serial');
+  await page.getByRole('button', { name: '保存任务流程' }).click();
+  await expect.poll(() => fixture.writes.length).toBe(1);
+  const group = fixture.writes[0].body.workflow.nodes.find((node: any) => node.id === 'report');
+  expect(group.subgraph.dynamic).toMatchObject({ path: 'plan.nodes', max_nodes: 6, mode: 'serial' });
+  await page.getByRole('button', { name: '编辑流程', exact: true }).click();
+  await page.getByRole('group', { name: '节点 汇总报告', exact: true }).click();
+  await expect(page.getByLabel('执行模式')).toHaveValue('dynamic_subgraph');
+  await expect(page.getByLabel('动态子编排路径')).toHaveValue('plan.nodes');
+  await expect(page.getByLabel('动态子编排节点上限')).toHaveValue('6');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 for (const width of [1440, 800, 390]) test(`orchestration inspector remains usable at ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   const fixture = await taskFixture(page);

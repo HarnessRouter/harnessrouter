@@ -15,8 +15,16 @@ export function orchestrationIssue(workflow: { max_concurrency?: number; nodes: 
     if (node.subgraph && (node.repeat || node.foreach || node.loop || node.dynamic_plan)) return `${prefix}子编排不能与其他展开或循环同时启用。`;
     if (node.subgraph && !node.deps?.length) return `${prefix}子编排节点必须依赖父工作流节点。`;
     if (node.subgraph && (!Number.isInteger(node.subgraph.max_concurrency ?? 1) || (node.subgraph.max_concurrency ?? 1) < 1 || (node.subgraph.max_concurrency ?? 1) > 10)) return `${prefix}子编排并发数必须是 1 到 10 的整数。`;
-    if (node.subgraph && (!Array.isArray(node.subgraph.nodes) || !node.subgraph.nodes.length || node.subgraph.nodes.length > 10)) return `${prefix}子编排必须包含 1 到 10 个静态子节点。`;
-    if (node.subgraph) {
+    if (node.subgraph && ((node.subgraph.nodes === undefined) === (node.subgraph.dynamic === undefined))) return `${prefix}子编排必须二选一配置静态节点或动态来源。`;
+    if (node.subgraph?.dynamic) {
+      const dynamic = node.subgraph.dynamic;
+      if (!node.deps?.includes(dynamic.source)) return `${prefix}动态子编排来源必须是父节点的依赖。`;
+      if (!pathPattern.test(dynamic.path)) return `${prefix}动态子编排路径格式无效。`;
+      if (!Number.isInteger(dynamic.max_nodes) || dynamic.max_nodes < 1 || dynamic.max_nodes > 10) return `${prefix}动态子编排节点上限必须是 1 到 10 的整数。`;
+      if (dynamic.mode && !['serial', 'parallel'].includes(dynamic.mode)) return `${prefix}动态子编排调度模式无效。`;
+    }
+    if (node.subgraph && node.subgraph.nodes !== undefined && (!Array.isArray(node.subgraph.nodes) || !node.subgraph.nodes.length || node.subgraph.nodes.length > 10)) return `${prefix}子编排必须包含 1 到 10 个静态子节点。`;
+    if (node.subgraph?.nodes) {
       const children = node.subgraph.nodes;
       if (children.some(child => typeof child.id !== 'string' || !child.id.trim() || child.subgraph || child.repeat || child.foreach || child.loop || child.dynamic_plan)) return `${prefix}子编排只支持不可递归的静态 Agent 子节点。`;
       const ids = children.map(child => child.id);

@@ -7,7 +7,8 @@ export interface NodeRepeat { max_iterations: number; until: { path: string; op:
 export interface NodeForeach { source: string; path: string; max_items: number; mode?: 'serial' | 'parallel'; nested?: { path: string; max_items: number; mode?: 'serial' | 'parallel' } }
 export interface NodeLoop { body: string[]; max_iterations: number; until: NodeCondition }
 export interface NodeDynamicPlan { source: string; path: string; max_items: number; mode?: 'serial' | 'parallel'; topology?: 'list' | 'dag' }
-export interface NodeSubgraph { max_concurrency?: number; nodes: Array<OrchestrationNode & { id: string; name?: string; agent_id?: string; model?: string; prompt?: string; deps?: string[]; inputRefs?: string[]; final_report?: boolean; x?: number; y?: number }> }
+export interface NodeDynamicSubgraph { source: string; path: string; max_nodes: number; mode?: 'serial' | 'parallel' }
+export interface NodeSubgraph { max_concurrency?: number; nodes?: Array<OrchestrationNode & { id: string; name?: string; agent_id?: string; model?: string; prompt?: string; deps?: string[]; inputRefs?: string[]; final_report?: boolean; x?: number; y?: number }>; dynamic?: NodeDynamicSubgraph }
 export interface OrchestrationNode {
   condition?: NodeCondition;
   repeat?: NodeRepeat;

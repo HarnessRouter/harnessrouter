@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 
 from app.db.models import NodeRun
+from app.tasks.dynamic_graph import graph_ready, graph_valid
 
 
 def _children(db, control):
@@ -36,7 +37,43 @@ def _manifest_output(rows):
              **({'error_code': row.error_code} if row.error_code else {})} for row in rows]
 
 
-def advance_subgraphs(db, run, definition, rows, *, encoded, now=None):
+def _dynamic_values(value, config):
+    """Decode exactly once and validate a bounded local DAG."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, list) or len(value) > config['max_nodes'] or not graph_valid(value):
+        return None
+    return value
+
+
+def _dynamic_ready(children, condition_matches, now):
+    by_id = {json.loads(row.input_json)['subgraph_node_id']: row for row in children}
+    ready, changed = [], False
+    for child in children:
+        if child.status != 'idle':
+            continue
+        state = json.loads(child.input_json)
+        dynamic_node = state.get('dynamic_node', {})
+        deps = [by_id[identity] for identity in dynamic_node.get('deps', [])]
+        if not all(dep.status == 'succeeded' or (dep.status == 'skipped' and dynamic_node.get('allow_missing_inputs')) for dep in deps):
+            continue
+        condition = dynamic_node.get('condition')
+        if condition:
+            source = by_id[condition['source']]
+            output = json.loads(source.output_json) if source.output_json else None
+            if not condition_matches(condition, output):
+                child.status, child.error_code, child.finished_at = 'skipped', 'condition_not_matched', now
+                changed = True
+                continue
+        ready.append(child)
+    return ready, changed
+
+
+def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
+                      condition_matches=None, now=None):
     """Return child dispatch candidates and whether a durable transition occurred."""
     now = now or datetime.now(timezone.utc)
     candidates, changed = [], False
@@ -52,15 +89,28 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, now=None):
         if control.status == 'idle' and not children:
             if any(rows[dep].status != 'succeeded' for dep in item.get('deps', [])):
                 continue
+            dynamic = config.get('dynamic')
+            dynamic_nodes = config.get('nodes', [])
+            dynamic_snapshot = None
+            if dynamic is not None:
+                source = rows[dynamic['source']]
+                source_output = json.loads(source.output_json) if source.output_json else None
+                value = value_at_path(source_output, dynamic['path']) if value_at_path else None
+                dynamic_snapshot = _dynamic_values(value, dynamic)
+                if dynamic_snapshot is None:
+                    control.status, control.error_code, control.finished_at = 'failed', 'subgraph_dynamic_invalid', now
+                    return candidates, True
+                dynamic_nodes = [{**child, 'agent_id': item.get('agent_id'), 'model': item.get('model')}
+                                 for child in dynamic_snapshot]
             from app.tasks.fanout import node_record_usage
-            if node_record_usage(db, run.id) + len(config['nodes']) + 1 > 500:
+            if node_record_usage(db, run.id) + len(dynamic_nodes) + 1 > 500:
                 control.status, control.error_code, control.finished_at = 'failed', 'storage_limit_exceeded', now
                 changed = True
                 continue
             parent_refs = [{'id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)}
                            for ref in item.get('inputRefs', []) if rows[ref].status == 'succeeded' and rows[ref].output_json]
             created = []
-            for index, child in enumerate(config['nodes']):
+            for index, child in enumerate(dynamic_nodes):
                 child_row = NodeRun(
                     run_id=run.id, node_id=item['id'], iteration=control.iteration,
                     attempt=1, execution_kind='subgraph_node', foreach_index=index,
@@ -70,14 +120,19 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, now=None):
                                         'subgraph_index': index,
                                         'inputRefs': child.get('inputRefs', []),
                                         'deps': child.get('deps', []),
-                                        'parent_refs': parent_refs}),
+                                        'parent_refs': parent_refs,
+                                        **({'dynamic': True, 'dynamic_node': child,
+                                            'dynamic_parent_prompt': item.get('prompt', '')}
+                                           if dynamic is not None else {})}),
                 )
                 db.add(child_row)
                 db.flush()
                 created.append(child_row)
             state = {**state, '_orchestration_role': 'subgraph_control',
                      'subgraph_node_run_ids': [row.id for row in created],
-                     'subgraph_aggregate_node_run_id': None}
+                     'subgraph_aggregate_node_run_id': None,
+                     **({'dynamic': True, 'dynamic_source': dynamic['source'],
+                         'dynamic_path': dynamic['path'], 'dynamic_nodes': dynamic_nodes} if dynamic is not None else {})}
             control.input_json = encoded(state)
             control.status, control.started_at = 'running', control.started_at or now
             changed = True
@@ -92,7 +147,8 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, now=None):
             control.status, control.error_code, control.finished_at = 'failed', 'subgraph_child_failed', now
             changed = True
             continue
-        if children and all(row.status == 'succeeded' for row in children):
+        is_dynamic = bool(state.get('dynamic'))
+        if (is_dynamic and not children) or (children and all(row.status in ('succeeded', 'skipped') for row in children)):
             aggregate_id = state.get('subgraph_aggregate_node_run_id')
             aggregate = db.get(NodeRun, aggregate_id) if aggregate_id else None
             if aggregate is None:
@@ -113,20 +169,32 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, now=None):
             changed = True
             continue
         by_id = {json.loads(row.input_json)['subgraph_node_id']: row for row in children}
-        idle = []
-        for child in children:
-            if child.status != 'idle':
+        if is_dynamic and condition_matches:
+            idle, graph_changed = _dynamic_ready(children, condition_matches, now)
+            if graph_changed:
+                changed = True
                 continue
-            child_state = json.loads(child.input_json)
-            deps = [by_id[identity] for identity in child_state.get('deps', [])]
-            if all(dep.status == 'succeeded' for dep in deps):
-                idle.append(child)
-        if config.get('max_concurrency', 1) == 1:
+            if not idle and not any(row.status == 'running' for row in children):
+                control.status, control.error_code, control.finished_at = 'failed', 'subgraph_dynamic_dependency_unavailable', now
+                changed = True
+                continue
+        else:
+            idle = []
+            for child in children:
+                if child.status != 'idle':
+                    continue
+                child_state = json.loads(child.input_json)
+                deps = [by_id[identity] for identity in child_state.get('deps', [])]
+                if all(dep.status == 'succeeded' for dep in deps):
+                    idle.append(child)
+        mode = config.get('dynamic', {}).get('mode', 'serial') if is_dynamic else 'parallel' if config.get('max_concurrency', 1) > 1 else 'serial'
+        if mode == 'serial':
             idle = idle[:1]
         else:
             running = sum(row.status == 'running' for row in children)
             idle = idle[:max(0, config['max_concurrency'] - running)]
-        child_by_id = {child['id']: child for child in config['nodes']}
+        child_by_id = ({child['id']: child for child in state.get('dynamic_nodes', [])}
+                       if is_dynamic else {child['id']: child for child in config['nodes']})
         candidates.extend([('subgraph_node', child_by_id[json.loads(row.input_json)['subgraph_node_id']], row)
                            for row in idle])
     return candidates, changed
