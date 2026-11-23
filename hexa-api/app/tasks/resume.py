@@ -3,6 +3,7 @@ import json
 
 from app.db.models import NodeRun, Run
 from app.tasks.fanout import fanout_items, retry_fanout, node_record_usage
+from app.tasks.subgraph import _children as subgraph_items
 
 
 def validate_resume(db, task, revision, definition, body, *, latest_nodes, error):
@@ -22,13 +23,19 @@ def validate_resume(db, task, revision, definition, body, *, latest_nodes, error
     if source.workflow_revision_id != revision.id or snapshot.get('workflow') != definition or snapshot.get('input') != task.input_text:
         raise error('resume_revision_conflict', '工作流或输入已经改变，请整节点重跑。', 409)
     item = next((node for node in definition['nodes'] if node['id'] == body['target_node']), None)
-    if not item or not (item.get('foreach') or item.get('dynamic_plan')):
+    if not item or not (item.get('foreach') or item.get('dynamic_plan') or item.get('subgraph')):
         raise error('invalid_resume', '恢复目标必须是集合展开节点。', 422)
     rows = latest_nodes(db, source.id)
     control = rows[item['id']]
     if control.status not in ('failed', 'canceled'):
         raise error('invalid_resume', '只能恢复失败或取消的集合。', 422)
-    children = fanout_items(db, control, 'dynamic' if item.get('dynamic_plan') else 'foreach')
+    if item.get('subgraph'):
+        try:
+            children = subgraph_items(db, control)
+        except (ValueError, TypeError, KeyError):
+            raise error('invalid_resume', '来源子图清单不可用。', 422) from None
+    else:
+        children = fanout_items(db, control, 'dynamic' if item.get('dynamic_plan') else 'foreach')
     if not children:
         raise error('invalid_resume', '来源集合未展开，请整节点重跑。', 422)
     selected_id = body.get('item_node_run_id')
@@ -106,6 +113,14 @@ def seed_resume(db, run, resume, body, *, encoded, downstream_nodes, error):
                 refs.append({**ref, 'run_id': run.id, 'node_run_id': copy_record(upstream).id})
             if 'refs' in state:
                 state['refs'] = refs
+            parent_refs = []
+            for ref in state.get('parent_refs', []):
+                upstream = db.get(NodeRun, ref['node_run_id'])
+                if not upstream or upstream.run_id != source.id or upstream.status != 'succeeded':
+                    raise error('invalid_resume', '来源子编排父输入引用不可用。', 422)
+                parent_refs.append({**ref, 'run_id': run.id, 'node_run_id': copy_record(upstream).id})
+            if 'parent_refs' in state:
+                state['parent_refs'] = parent_refs
             if 'plan_refs' in state:
                 local_refs = []
                 for ref in state['plan_refs']:
@@ -139,11 +154,30 @@ def seed_resume(db, run, resume, body, *, encoded, downstream_nodes, error):
     copied_control = copy_record(control)
     copied_children = [copy_record(child) for child in children]
     state = json.loads(copied_control.input_json)
-    state['item_node_run_ids'] = [child.id for child in copied_children]
+    if item.get('subgraph'):
+        state['subgraph_node_run_ids'] = [child.id for child in copied_children]
+        state['subgraph_aggregate_node_run_id'] = None
+        for child in copied_children:
+            child_state = json.loads(child.input_json)
+            child_state['subgraph_parent_node_run_id'] = copied_control.id
+            child.input_json = encoded(child_state)
+    else:
+        state['item_node_run_ids'] = [child.id for child in copied_children]
     copied_control.input_json = encoded(state)
-    retry = retry_fanout(db, run, item, copied_control,
-                         mapping[body['item_node_run_id']].id if body.get('item_node_run_id') else None,
-                         encoded=encoded, error=error)
+    if item.get('subgraph'):
+        retry = copied_control
+        retry.status = 'running'
+        for child in copied_children:
+            child_state = json.loads(child.input_json)
+            if child_state.get('reused_from') == body.get('item_node_run_id'):
+                child.status, child.output_json, child.error_code = 'idle', None, None
+                child.started_at, child.finished_at = None, None
+            elif child.status in ('failed', 'canceled'):
+                child.status, child.output_json, child.error_code = 'canceled', None, 'subgraph_sibling_failed'
+    else:
+        retry = retry_fanout(db, run, item, copied_control,
+                             mapping[body['item_node_run_id']].id if body.get('item_node_run_id') else None,
+                             encoded=encoded, error=error)
     if item.get('requires_human'):
         retry.status = 'idle'
     db.flush()

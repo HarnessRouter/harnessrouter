@@ -113,3 +113,46 @@ def test_subgraph_failure_blocks_downstream_and_keeps_child_history(client, app)
     assert client.get(f"/api/hexa/node-runs/{group['id']}/items").status_code == 200
     assert next(row for row in result['nodes'] if row['node_id'] == 'report')['status'] == 'idle'
     assert [call.get('subgraph_node_id') for call in calls if call.get('_orchestration_role') == 'subgraph_node'] == ['first']
+
+
+def test_terminal_subgraph_resume_reuses_success_and_retries_failed_child(client, app):
+    authenticated(client)
+    calls = []
+    second_attempt = {'value': 0}
+
+    async def gateway(text, previous, key, **kwargs):
+        context = json.loads(text)
+        calls.append(context)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'items': []}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            if context['subgraph_node_id'] == 'first':
+                return {'status': 'completed', 'child': 'first'}
+            second_attempt['value'] += 1
+            if second_attempt['value'] == 1:
+                return {'status': 'failed'}
+            return {'status': 'completed', 'child': 'second'}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': 'ok'}
+        pytest.fail('unexpected subgraph call')
+
+    app.state.gateway.create_response = gateway
+    task = client.post('/api/hexa/tasks', json={'workflow': workflow()}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'subgraph-resume-first'}).json()
+    failed = wait_run(client, started['id'], {'failed'})
+    group = next(row for row in failed['nodes'] if row['node_id'] == 'group')
+    children = client.get(f"/api/hexa/node-runs/{group['id']}/items").json()['items']
+    failed_child = next(row for row in children if row['status'] == 'failed')
+    resumed = client.post(f"/api/hexa/tasks/{task['id']}/runs", json={
+        'kind': 'rerun', 'target_node': 'group', 'resume_from_run_id': failed['id'],
+        'item_node_run_id': failed_child['id'],
+    }, headers={'Idempotency-Key': 'subgraph-resume-second'})
+    assert resumed.status_code == 202, resumed.json()
+    completed = wait_run(client, resumed.json()['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed
+    assert [context.get('subgraph_node_id') for context in calls
+            if context.get('_orchestration_role') == 'subgraph_node'] == ['first', 'second', 'second']
+    resumed_child = next(row for row in completed['nodes'] if row['node_id'] == 'group')
+    resumed_items = client.get(f"/api/hexa/node-runs/{resumed_child['id']}/items").json()['items']
+    assert all(ref['run_id'] == completed['id'] for item in resumed_items for ref in item['input'].get('parent_refs', []))
+    assert client.get(f"/api/hexa/runs/{failed['id']}").json() == failed

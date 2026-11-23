@@ -36,3 +36,11 @@ test('dynamic topology is opt-in and rejects unknown values', () => {
   assert.equal(orchestrationIssue({ nodes: [node] }), undefined);
   assert.match(orchestrationIssue({ nodes: [{ ...node, dynamic_plan: { ...node.dynamic_plan, topology: 'unknown' } }] }), /拓扑/);
 });
+
+test('static subgraphs validate bounded non-recursive child definitions', () => {
+  const node = { id: 'group', deps: ['source'], subgraph: { max_concurrency: 2, nodes: [{ id: 'child' }] } };
+  assert.equal(orchestrationIssue({ nodes: [node] }), undefined);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, deps: [] }] }), /必须依赖/);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { max_concurrency: 11, nodes: [{ id: 'child' }] } }] }), /并发数/);
+  assert.match(orchestrationIssue({ nodes: [{ ...node, subgraph: { max_concurrency: 1, nodes: [{ id: 'child', subgraph: {} }] } }] }), /不可递归/);
+});

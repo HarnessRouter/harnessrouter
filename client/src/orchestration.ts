@@ -12,6 +12,11 @@ export function orchestrationIssue(workflow: { max_concurrency?: number; nodes: 
     if (node.repeat && node.foreach) return `${prefix}重复与集合展开不能同时启用。`;
     if (node.loop && (node.repeat || node.foreach)) return `${prefix}循环不能与重复或集合展开同时启用。`;
     if (node.dynamic_plan && (node.repeat || node.foreach || node.loop)) return `${prefix}动态计划不能与重复、集合展开或循环同时启用。`;
+    if (node.subgraph && (node.repeat || node.foreach || node.loop || node.dynamic_plan)) return `${prefix}子编排不能与其他展开或循环同时启用。`;
+    if (node.subgraph && !node.deps?.length) return `${prefix}子编排节点必须依赖父工作流节点。`;
+    if (node.subgraph && (!Number.isInteger(node.subgraph.max_concurrency ?? 1) || (node.subgraph.max_concurrency ?? 1) < 1 || (node.subgraph.max_concurrency ?? 1) > 10)) return `${prefix}子编排并发数必须是 1 到 10 的整数。`;
+    if (node.subgraph && (!Array.isArray(node.subgraph.nodes) || !node.subgraph.nodes.length || node.subgraph.nodes.length > 10)) return `${prefix}子编排必须包含 1 到 10 个静态子节点。`;
+    if (node.subgraph && node.subgraph.nodes.some(child => !child.id || child.subgraph || child.repeat || child.foreach || child.loop || child.dynamic_plan)) return `${prefix}子编排只支持不可递归的静态 Agent 子节点。`;
     if ((node.repeat || node.foreach) && (node.requires_human || ['human', 'human_gate'].includes(node.node_type || ''))) return `${prefix}人工确认节点仅支持单次执行。`;
     for (const config of [node.condition, node.foreach]) {
       if (config && !node.deps?.includes(config.source)) return `${prefix}条件或集合来源必须是前置依赖。`;
