@@ -1,4 +1,26 @@
 id: CHG-task-centric-workflow
+runtime_lease_registration_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_internal_boundary
+  baseline: 004f135b
+  branch: codex/agent-orchestration
+  references: [spec.md#可信-runtime-登记与排他租约, plan.md#2026-11-24-可信-runtime-登记与-lease-fencing]
+  acceptance_ids: [AC-46]
+  reuse_decision: add a standard-library SQLite CAS registry and protected Runner endpoints; keep Gateway approval journal separate
+  changes:
+    - "新增 runner/runtime_lease.py，支持 durable runtime_id/owner/fence/heartbeat/expiry、同 owner 幂等、过期接管和旧 owner fencing。"
+    - "新增 Runner 内部 acquire/renew/release/inspect lease 端点；错误只返回稳定脱敏 code，不暴露 checkpoint、参数或凭据。"
+    - "LangGraph native adapter 在 pending/resume 前要求有效 RuntimeLease owner/fence；lease 丢失 fail closed。"
+  verification:
+    red: "新增 runner/tests/test_runtime_lease.py 先于实现建立 4 项 Red 目标（竞争、接管、重开、旧 owner 失败）；实现后 Windows 4 passed。"
+    unit: "python -X utf8 -m pytest -q runner/tests/test_runtime_lease.py runner/tests/test_langgraph_approval_boundary.py runner/tests/test_approval_policy_boundary.py --tb=short; exit 0；19 passed。"
+    http: "runner/tests/test_runtime_lease_http.py 已写入，当前 Windows 因 Runner 依赖 POSIX pwd 的既有平台边界 skip；Linux Runner 镜像需补跑真实 FastAPI/internal middleware。"
+    static: "python -X utf8 -m py_compile runner/runtime_lease.py runner/langgraph_approval.py runner/server.py；通过。"
+  security_review: "Registry 使用 SQLite BEGIN IMMEDIATE 和 fence；过期/错误 owner 不得 renew、release 或 adapter checkpoint/resume。租约只提供排他执行权，不授予工具权限；tool_approvals capability、UHP 和 Response/SSE 均未打开。"
+  limitations: [shared production control store, Gateway-to-Runner authenticated registration, native pre-side-effect interception, Response/SSE, UHP capability, real Provider, deployed failover]
+  remaining: [shared production control store, Gateway-to-Runner authenticated registration, native pre-side-effect interception, Response/SSE, UHP capability, real Provider, deployed failover]
+  next_action: "在 Linux Runner 目标环境补 HTTP/internal middleware 验证，再接 Gateway 的受信任注册调用和 Runtime session 精确 continuation；完成前保持 tool_approvals 不广告。"
 durable_denial_continuation:
   date: "2026-11-24"
   owner: Codex

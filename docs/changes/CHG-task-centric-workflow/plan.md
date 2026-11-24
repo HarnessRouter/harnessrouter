@@ -326,3 +326,21 @@ CAS 开始许可、完成/恢复和 gate 的 resume_denial。工具 receipt 不�
 HTTP 隔离/撤销、proposal schema。新字段只加入本地 proposal，不改已发布 UHP 版本或 discovery。生产可信注册、
 排他 Runtime lease、Response/SSE 和 Hexa 待批接线仍继续实施。回退前停止相关 Runtime，保留历史 continuation receipt，
 不能用旧实现重放带 started/unknown 的拒绝决定。
+
+## 2026-11-24 可信 Runtime 登记与 lease fencing
+
+依据 spec 的 AC-46，先在 Runner 增加与 FastAPI、Provider 和可选 Runtime 依赖无关的持久化
+`RuntimeLeaseRegistry`。用 Red 测试固定同 owner 幂等、不同 owner 冲突、过期接管递增 fence、重开存储、
+旧 owner renew/release/断言失败和两个独立进程竞争；再实现跨进程 CAS。SQLite 仅作为本地/测试 backing，
+生产多副本必须使用共享控制存储，不能由每个进程维护自己的 lease 文件。
+
+随后提供仅内部鉴权可达的 Runner acquire/renew/release/inspect 端点，统一返回脱敏的
+`runtime_lease_conflict`、`runtime_lease_lost`、`runtime_lease_invalid` 或 `runtime_lease_unavailable`。
+所有端点只返回 runtime identity、owner、fence 和时间戳，不返回 checkpoint、工具参数或凭据。HTTP 测试
+验证同一 fence 续租/释放和旧 owner 拒绝；Windows 执行无 POSIX 依赖的 registry 单测，Linux Runner 目标环境
+补跑真实 FastAPI/internal middleware 入口。
+
+最后将 lease guard 接到受控 LangGraph adapter：pending checkpoint 读取、bound gate 前置校验和同一 session
+resume 都必须带有效 owner/fence。lease 丢失时停止新副作用；已开始的动作继续沿用 Gateway unknown/
+reconciliation 语义。adapter 的进程内锁不作为跨进程 authority。本切片不注册真实 Provider、不打开
+`tool_approvals` discovery、不接 Response/SSE，也不解除 Hexa 工作流审批策略门禁。

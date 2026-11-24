@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langgraph_approval import LangGraphApprovalAdapter, NativeApprovalError
+from runtime_lease import RuntimeLeaseRegistry, RuntimeLeaseToken
 
 
 @pytest.mark.parametrize('case', ['no-interrupt', 'multiple-interrupts', 'no-next', 'nested', 'errored',
@@ -41,3 +42,24 @@ def test_malformed_or_uncovered_interrupt_unit_boundary(case):
         'write_report': {'name': 'write_report', 'origin': 'runtime'}})
     with pytest.raises(NativeApprovalError, match='^native_approval_unavailable$'):
         native._action(snapshot)
+
+
+def test_native_adapter_requires_live_runtime_lease(tmp_path):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.sqlite3'))
+    lease = registry.acquire('runtime', 'owner', ttl=2, now=10.0)
+    native = LangGraphApprovalAdapter(None, {'configurable': {'thread_id': 's'}}, {},
+                                      lease_registry=registry,
+                                      lease_token=RuntimeLeaseToken('runtime', 'owner', lease.fence),
+                                      clock=lambda: 10.5)
+    native._assert_runtime_lease()
+    native.clock = lambda: 13.0
+    with pytest.raises(NativeApprovalError, match='^runtime_lease_lost$'):
+        native._assert_runtime_lease()
+
+
+def test_native_adapter_rejects_malformed_lease_binding(tmp_path):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.sqlite3'))
+    native = LangGraphApprovalAdapter(None, {'configurable': {'thread_id': 's'}}, {},
+                                      lease_registry=registry, lease_token=None)
+    with pytest.raises(NativeApprovalError, match='^runtime_lease_required$'):
+        native._assert_runtime_lease()

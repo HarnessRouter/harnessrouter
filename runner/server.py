@@ -94,8 +94,66 @@ import tracecontext   # the caller's W3C trace context: its checks and a child f
 import ask_user_mcp   # the `ask_user` tool a base asks the person through, and what its arguments mean (#476)
 import roder_backend   # Roder's app-server base: its builder, tool table and stream (runner/roder_backend.py)
 from approval_policy import approval_policy_error
+from runtime_lease import (LeaseConflict, LeaseError, LeaseLost, RuntimeLeaseRegistry,
+                            RuntimeLeaseToken)
 
 app = FastAPI(title="harness-runner")
+
+
+class RuntimeLeaseBody(BaseModel):
+    runtime_id: str
+    owner: str
+    ttl_seconds: float = 30.0
+    fence: int | None = None
+
+
+_runtime_lease_registry: RuntimeLeaseRegistry | None = None
+_runtime_lease_registry_path: str | None = None
+_runtime_lease_registry_lock = threading.Lock()
+
+
+def _runtime_leases() -> RuntimeLeaseRegistry:
+    """Return the Runner's durable native-runtime ownership registry.
+
+    The path is deployment state, never workspace state.  It survives a Runner
+    process restart, while a fresh owner must still acquire a new fence after
+    the old lease expires.
+    """
+    global _runtime_lease_registry, _runtime_lease_registry_path
+    path = os.environ.get("HR_RUNTIME_LEASE_DB", "/data/runtime-leases.sqlite3")
+    with _runtime_lease_registry_lock:
+        if _runtime_lease_registry is None or _runtime_lease_registry_path != path:
+            _runtime_lease_registry = RuntimeLeaseRegistry(path)
+            _runtime_lease_registry_path = path
+        return _runtime_lease_registry
+
+
+def _lease_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, LeaseConflict):
+        return HTTPException(409, detail={"code": "runtime_lease_conflict",
+                                          "message": "Another Runtime owner holds this lease."})
+    if isinstance(error, LeaseLost):
+        return HTTPException(409, detail={"code": "runtime_lease_lost",
+                                          "message": "The Runtime lease is no longer authoritative."})
+    if isinstance(error, LeaseError):
+        return HTTPException(422, detail={"code": "runtime_lease_invalid",
+                                          "message": "The Runtime lease request is invalid."})
+    return HTTPException(503, detail={"code": "runtime_lease_unavailable",
+                                      "message": "The Runtime lease store is unavailable."})
+
+
+def _lease_json(lease) -> dict:
+    return {"runtime_id": lease.runtime_id, "owner": lease.owner,
+            "fence": lease.fence, "heartbeat_at": lease.heartbeat_at,
+            "expires_at": lease.expires_at}
+
+
+def _require_runtime_lease_internal(request: Request) -> None:
+    """Lease registration is never exposed by an unkeyed Runner deployment."""
+    if not _INTERNAL_KEY or not hmac.compare_digest(
+            request.headers.get("x-harness-internal", ""), _INTERNAL_KEY):
+        raise HTTPException(401, detail={"code": "internal_key_required",
+                                          "message": "Internal Runner authentication is required."})
 
 
 @app.exception_handler(RequestValidationError)
@@ -17278,6 +17336,62 @@ def _runner_state() -> dict:
 def readyz() -> JSONResponse:
     state = _runner_state()
     return JSONResponse({"ok": bool(state.get("ready")), **state}, status_code=200 if state.get("ready") else 503)
+
+
+@app.post("/internal/runtime-leases/acquire")
+def acquire_runtime_lease(body: RuntimeLeaseBody, request: Request) -> dict:
+    """Acquire the exclusive owner fence used by a native Runtime adapter."""
+    _require_runtime_lease_internal(request)
+    try:
+        lease = _runtime_leases().acquire(body.runtime_id, body.owner,
+                                           ttl=body.ttl_seconds, now=time.time())
+        return _lease_json(lease)
+    except Exception as error:  # noqa: BLE001 - map only safe lease diagnostics
+        raise _lease_http_error(error) from None
+
+
+@app.post("/internal/runtime-leases/renew")
+def renew_runtime_lease(body: RuntimeLeaseBody, request: Request) -> dict:
+    _require_runtime_lease_internal(request)
+    if body.fence is None:
+        raise HTTPException(422, detail={"code": "runtime_lease_invalid",
+                                          "message": "A lease fence is required."})
+    try:
+        lease = _runtime_leases().renew(
+            RuntimeLeaseToken(body.runtime_id, body.owner, body.fence),
+            ttl=body.ttl_seconds, now=time.time())
+        return _lease_json(lease)
+    except Exception as error:  # noqa: BLE001
+        raise _lease_http_error(error) from None
+
+
+@app.post("/internal/runtime-leases/release")
+def release_runtime_lease(body: RuntimeLeaseBody, request: Request) -> dict:
+    _require_runtime_lease_internal(request)
+    if body.fence is None:
+        raise HTTPException(422, detail={"code": "runtime_lease_invalid",
+                                          "message": "A lease fence is required."})
+    try:
+        lease = _runtime_leases().release(
+            RuntimeLeaseToken(body.runtime_id, body.owner, body.fence), now=time.time())
+        return _lease_json(lease)
+    except Exception as error:  # noqa: BLE001
+        raise _lease_http_error(error) from None
+
+
+@app.get("/internal/runtime-leases/{runtime_id}")
+def inspect_runtime_lease(runtime_id: str, request: Request) -> dict:
+    _require_runtime_lease_internal(request)
+    try:
+        lease = _runtime_leases().inspect(runtime_id)
+        if lease is None:
+            raise HTTPException(404, detail={"code": "runtime_lease_not_found",
+                                              "message": "Runtime lease not found."})
+        return _lease_json(lease)
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        raise _lease_http_error(error) from None
 
 
 @app.get("/backends")

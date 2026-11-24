@@ -589,6 +589,45 @@ expiry/void/native deny/changed binding 零投递、存储失败零派发、异�
 真实 HITL/SQLite 原生旅程用独立 OS 进程捕获、拒绝、重放；工具文件从始至终不存在，原 interrupt 被 reject 消费，
 拒绝投递状态 completed 和工具 not_started 同时成立。本验收不证明 UHP Response/SSE、生产 Runner lease、真实 Provider 或 Hexa UI。
 
+### 可信 Runtime 登记与排他租约
+
+生产 Runtime 在接入 Gateway durable approval 前，必须先由 Runner 内部受保护接口登记并取得自己的
+`RuntimeLease`。登记的身份至少包含不可变的 `runtime_id`、调用方生成的 `owner` 和单调递增的
+`lease_fence`；租约还保存 `heartbeat_at` 与 `expires_at`。同一 `runtime_id` 的未过期租约只能有一个
+owner。相同 owner 的重试是幂等的，不能递增 fence；不同 owner 只有在旧租约已过期后才能接管，接管必须递增
+fence。Runner 重启后从持久控制存储恢复租约事实，不得把进程内锁或新进程启动当作自动接管依据。
+
+每个 checkpoint 读取、工具调用绑定、审批决定后的 approve/deny continuation 和结果写回，都必须在同一
+Runtime owner 的有效 `owner + lease_fence` 下执行。heartbeat/renew 和 release 必须使用相同 fence；旧 owner、
+过期 owner、错误 owner 或错误 fence 的续租、释放、checkpoint 读取和迟到写回都必须 fail closed，返回稳定的
+`runtime_lease_lost` 诊断，不得继续调用工具。租约只提供排他执行权，不提供任何工具权限，也不能替代
+Gateway 的 approval request、CurrentApproval 或原生 Runtime policy。
+
+Runner 的内部 lease 端点为实现边界，不是公开 UHP 资源：
+
+```text
+POST /internal/runtime-leases/acquire
+POST /internal/runtime-leases/renew
+POST /internal/runtime-leases/release
+GET  /internal/runtime-leases/{runtime_id}
+```
+
+这些端点只能由 Gateway/Runner 内部认证路径调用；公开客户端、模型输出和插件代码不能创建或修改登记。
+错误按 `runtime_lease_conflict`、`runtime_lease_lost`、`runtime_lease_invalid` 和
+`runtime_lease_unavailable` 脱敏返回。Registry 使用跨进程 CAS 持久化；本地测试可使用 SQLite，生产部署必须
+提供 Runner 多进程共享的可靠控制存储，不能把单进程 SQLite 文件复制成多个独立权威副本。
+
+LangGraph adapter 或其他 native adapter 只有在拿到该 lease 后才可读取持久 checkpoint、向 Gateway 创建精确
+approval binding，或恢复同一 session。adapter 内部 asyncio/thread lock 只能减少同一进程重复工作，不能充当
+跨进程 lease。owner 丢失后，尚未开始的动作必须停止；已开始但结果不确定的动作沿用 `unknown` 和
+`reconciliation_required`，不得通过重新 acquire 自动重放。
+
+**AC-46 可信 Runtime 登记与租约：** 单元和独立进程测试验证首次登记、同 owner 幂等、未过期 owner 冲突、
+过期接管递增 fence、重开控制存储、renew/release fence 校验和旧 owner 失败；Runner HTTP 测试验证内部端点
+的稳定错误码和同一 fence 传播。native adapter 在 lease 有效时可进入 checkpoint 边界，lease 过期或 binding
+缺失时返回 `runtime_lease_lost`/`runtime_lease_required` 且不读取或恢复工具。该验收不证明 Gateway→Runner
+生产注册、Response/SSE、UHP capability、真实 Provider 或多副本部署已经完成。
+
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是

@@ -10,6 +10,9 @@ import asyncio
 import copy
 import hashlib
 import json
+import time
+
+from runtime_lease import LeaseError, LeaseLost, RuntimeLeaseRegistry, RuntimeLeaseToken
 
 
 class NativeApprovalError(Exception):
@@ -30,15 +33,36 @@ def _json(value):
 
 
 class LangGraphApprovalAdapter:
-    def __init__(self, graph, config, catalog):
+    def __init__(self, graph, config, catalog, *, lease_registry: RuntimeLeaseRegistry | None = None,
+                 lease_token: RuntimeLeaseToken | None = None, clock=time.time):
         self.graph = graph
         self.config = copy.deepcopy(config)
         self.catalog = copy.deepcopy(catalog)
+        self.lease_registry = lease_registry
+        self.lease_token = lease_token
+        self.clock = clock
         self._lock = asyncio.Lock()
 
     @staticmethod
     def _unavailable():
         raise NativeApprovalError('native_approval_unavailable')
+
+    def _assert_runtime_lease(self):
+        """Require the durable owner fence when this adapter is production-bound.
+
+        The optional arguments keep the controlled adapter usable for format
+        tests. A registered runtime must always provide both values; without
+        them a native checkpoint cannot safely be read or resumed.
+        """
+        if self.lease_registry is None and self.lease_token is None:
+            return
+        if not isinstance(self.lease_registry, RuntimeLeaseRegistry) or not isinstance(
+                self.lease_token, RuntimeLeaseToken):
+            raise NativeApprovalError('runtime_lease_required')
+        try:
+            self.lease_registry.assert_owner(self.lease_token, now=self.clock())
+        except (LeaseLost, LeaseError):
+            raise NativeApprovalError('runtime_lease_lost') from None
 
     def _action(self, snapshot):
         """Validate the intentionally narrow HITL coverage before binding anything."""
@@ -72,6 +96,7 @@ class LangGraphApprovalAdapter:
 
     async def pending(self):
         """Read the latest durable native checkpoint, never a client-supplied call."""
+        self._assert_runtime_lease()
         # Optional backend dependencies stay out of the common Runner environment.
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -128,6 +153,7 @@ class LangGraphApprovalAdapter:
         if decision not in ('approve', 'deny') or not isinstance(pending, PendingInvocation):
             self._unavailable()
         async with self._lock:
+            self._assert_runtime_lease()
             try:
                 current = await self.pending()
             except NativeApprovalError:
