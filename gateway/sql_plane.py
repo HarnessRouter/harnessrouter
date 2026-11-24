@@ -417,5 +417,7 @@ async def introspect(engine: str, dsn: str, *, sample_rows: int = 0,
 
 def _quote_ident(engine: str, schema: str, table: str) -> str:
     if engine == "postgres":
+        schema, table = schema.replace('"', '""'), table.replace('"', '""')
         return f'"{schema}"."{table}"'
+    schema, table = schema.replace("`", "``"), table.replace("`", "``")
     return f"`{schema}`.`{table}`"
