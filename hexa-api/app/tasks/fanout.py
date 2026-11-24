@@ -37,6 +37,15 @@ def node_record_usage(db, run_id):
     reserved += sum('nested_item_node_run_ids' in json.loads(row.input_json)
                     and 'nested_aggregate_node_run_id' not in json.loads(row.input_json)
                     for row in outer_controls)
+    # Static/dynamic subgraphs also append a final aggregate record. Nested
+    # scopes aggregate on their existing control row, so reserve only roots.
+    subgraphs = db.scalars(select(NodeRun).where(
+        NodeRun.run_id == run_id, NodeRun.execution_kind == 'node',
+        NodeRun.status.in_(('idle', 'running')),
+    )).all()
+    reserved += sum('subgraph_node_run_ids' in json.loads(row.input_json)
+                    and not json.loads(row.input_json).get('subgraph_aggregate_node_run_id')
+                    for row in subgraphs)
     return count + reserved
 
 

@@ -1527,6 +1527,35 @@ final_orchestration_validation:
   remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP conformance]
   next_action: "在认证的 Linux Gateway/Runner 环境补插件物化、原生审批 checkpoint 和同一 session continuation；完成前保持 tool_approvals 不广告。"
 
+nested_subgraph_scheduler_audit:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: cb5692f6
+  branch: codex/agent-orchestration
+  reuse_decision: extend existing bounded subgraph scheduler and shared record budget; no migration or UHP capability change
+  acceptance_ids: [AC-15, AC-32, AC-40]
+  scope: nested concurrency, parent dependencies and slots, bounded manifests and aggregate output
+  references: [spec.md#有界静态子编排, plan.md#2026-11-24-嵌套静态子编排调度审计]
+  verification:
+    baseline: "既有 dynamic_dag/subgraph/nested_foreach/fanout_retry/fanout_resume 回归 148 passed in 208.01s。"
+    red: "新增内层 max_concurrency=2 的 API 行为测试失败：peak=1，预期 2；exit 1。"
+    red_boundaries: "test_subgraph_scheduling.py 首次 6 failed：外层依赖和槽位未限制内层启动、根聚合未预留、内外聚合超限仍成功、retry 未计算成功副本。"
+    unit_integration: "最终 python -X utf8 -m pytest -q hexa-api/tests/test_subgraph_scheduling.py hexa-api/tests/test_subgraph.py --tb=short；exit 0；37 passed in 46.67s。含纯 readiness 单元、SQLite 持久化预算边界、真实 API 两层并发及总上限组合；Gateway 使用受控边界。"
+    sqlite_regression: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph_scheduling.py hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_orchestration_safety.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py --tb=short；exit 0；294 passed in 403.21s。该进程启动后抽取无行为变化的 _static_ready 并增加 3 项边界，最终受影响子编排 37 项重验通过。"
+    postgres_regression: "HEXA_TEST_POSTGRES_URL 指向本地 55438 PostgreSQL，隔离 schema；subgraph_scheduling/subgraph/dynamic_dag/nested_foreach/fanout_retry/fanout_resume/orchestration_safety；exit 0；187 passed in 377.40s。最终 helper 抽取与边界测试后 subgraph_scheduling/subgraph 再验 37 passed in 45.46s。"
+    linux: "docker run --rm --entrypoint sh -v <worktree>:/workspace -w /workspace hexa-orchestration-api-check:20261124 -c 'pip install -q pytest==8.4.2 && python -X utf8 -m pytest -q hexa-api/tests/test_subgraph_scheduling.py hexa-api/tests/test_subgraph.py --tb=short'；exit 0；37 passed in 48.88s，1 个第三方 anyio deprecation warning。挂载最终源码执行，未替换生产容器。"
+    e2e: "cd client; npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium --grep 'subgraph resumes'；exit 0；2 passed in 1.4m。真实本地 HTTP App/SQLite/Cookie/GatewayClient 与受控 Gateway，覆盖普通/嵌套指定项恢复、成功兄弟复用、旧历史和刷新。之后仅抽取 readiness helper，最终专项复验，不改 UI。"
+  changes:
+    - "内层上限不再固定为 1；普通子节点和嵌套控制共享外层 readiness/槽位，内层叶子继承显式选择的外层局部输入。"
+    - "根子图聚合预留纳入统一预算；嵌套展开先完整检查，retry 计算成功副本、控制和聚合；恰好 500 可用，超限拒绝。"
+    - "内层控制聚合与根聚合检查 UTF-8 1 MiB 上限，超限不持久化大输出。"
+  security_review: "执行身份与权限快照不变；调度仅消费已保存依赖和清单，不引入表达式、Shell、路径或外部端点。新增 parent_refs 仅由同一 Run、同一清单且已成功的显式 inputRefs 构建，Gateway 仍执行不可变能力摘要校验。无迁移或 UHP capability 广告。"
+  rollback: "停止受影响活动 Run 后回退本切片执行器和测试；无迁移，旧 Run/NodeRun/Receipt/Event 保留。"
+  limitations: [authenticated live Gateway/BYOK, native approval interception and exact continuation, UHP approval capability negotiation, deployed multi-replica failover]
+  remaining: [authenticated live Gateway/BYOK, native approval interception and exact continuation, UHP approval capability negotiation, deployed multi-replica failover]
+  next_action: "继续审计组合编排与真实运行时门禁；保持 tool_approvals 不广告，整体目标保持进行中。"
+
 linux_runner_conformance_slice:
   date: "2026-11-24"
   owner: Codex

@@ -103,3 +103,7 @@ Windows/Python 3.13 的无平台依赖 Runner 策略单测 3 项通过，覆盖�
 ## 工作区恢复边界（2026-11-24）
 
 客户端使用标准 Promise、请求代次与 React 状态，无 OS API、Shell、路径或权限分支。Windows Chromium/Edge 在 1440x900 / 390x900 验证加载、失败重试、深链详情、明确 null 和辅助目录故障；真实本地 HTTP API/SQLite 的工作区隔离、模板版本和协调器旅程通过。Linux/macOS 浏览器未单独运行，不以 Windows 结果替代；本次未改后端、迁移或 Runner，复用已有后端证据。具体命令、数量与截图哈希见 Change `workspace_restoration_boundary`。
+
+## 嵌套子编排调度（2026-11-24）
+
+复用 Python、SQLAlchemy 和不可变 JSON 清单，无平台分支、路径或进程接口变更。Windows/SQLite 与 Windows API + Linux PostgreSQL 验证每层 readiness、并发槽位、记录预算及 UTF-8 输出上限；Linux API 镜像挂载最终源码运行相同专项，37 项通过。Chromium 普通/嵌套恢复旅程验证真实本地 HTTP API 与受控 Gateway；无 UI 修改。真实 Provider、原生审批和部署多副本故障切换仍未验证，实际命令与结果统一见 Change `nested_subgraph_scheduler_audit`。

@@ -39,6 +39,15 @@ def _manifest_output(rows):
              **({'error_code': row.error_code} if row.error_code else {})} for row in rows]
 
 
+def _static_ready(rows, limit):
+    """Select ready children; a running nested control occupies one local slot."""
+    by_id = {json.loads(row.input_json)['subgraph_node_id']: row for row in rows}
+    slots = max(0, limit - sum(row.status == 'running' for row in rows))
+    return [row for row in rows if row.status == 'idle' and all(
+        by_id[dep].status == 'succeeded'
+        for dep in json.loads(row.input_json).get('deps', []))][:slots]
+
+
 def _nested_children(db, control):
     state = json.loads(control.input_json)
     ids = state.get('nested_subgraph_node_run_ids', [])
@@ -68,7 +77,10 @@ def retry_subgraph(db, run, item, control, selected_id, *, encoded, error):
     }
     if not retry_source:
         raise error('invalid_retry_item', '当前子编排没有可重试的失败项。', 422)
-    if _record_count(db, run.id) + len(retry_source) + 1 > 500:
+    from app.tasks.fanout import node_record_usage
+    # Every child is cloned to preserve immutable parent ownership, including
+    # successful siblings. Reserve the new control and its final aggregate too.
+    if node_record_usage(db, run.id) + len(all_children) + 2 > 500:
         raise error('storage_limit_exceeded', '运行超过 500 条尝试限制。', 422)
     retry = NodeRun(
         run_id=run.id, node_id=control.node_id, iteration=control.iteration,
@@ -134,11 +146,6 @@ def retry_subgraph(db, run, item, control, selected_id, *, encoded, error):
     state['retry_subgraph_node_run_ids'] = new_retry_ids
     retry.input_json = encoded(state)
     return retry
-
-
-def _record_count(db, run_id):
-    from sqlalchemy import func, select
-    return db.scalar(select(func.count()).select_from(NodeRun).where(NodeRun.run_id == run_id)) or 0
 
 
 def _dynamic_values(value, config):
@@ -263,6 +270,11 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
             control.status, control.error_code, control.finished_at = 'failed', 'subgraph_child_failed', now
             changed = True
             continue
+        # Share one ready selection across normal children and nested controls.
+        # Nested leaves are later scheduled inside their own scope.
+        admitted = []
+        if not state.get('dynamic'):
+            admitted = _static_ready(children, config.get('max_concurrency', 1))
         for child in children:
             child_state = json.loads(child.input_json)
             nested_config = child_state.get('nested_subgraph')
@@ -271,6 +283,13 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
             nested_ids = child_state.get('nested_subgraph_node_run_ids')
             nested_rows = _nested_children(db, child) if nested_ids else []
             if child.status == 'idle' and not nested_rows:
+                if child not in admitted:
+                    continue
+                from app.tasks.fanout import node_record_usage
+                if node_record_usage(db, run.id) + len(nested_config['nodes']) > 500:
+                    child.status, child.error_code, child.finished_at = 'failed', 'storage_limit_exceeded', now
+                    changed = True
+                    continue
                 nested_created = []
                 run_snapshot = json.loads(run.snapshot_json)
                 for nested_index, nested in enumerate(nested_config['nodes']):
@@ -283,7 +302,7 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                                             'subgraph_index': nested_index,
                                             'inputRefs': nested.get('inputRefs', []),
                                             'deps': nested.get('deps', []),
-                                            'parent_refs': child_state.get('parent_refs', []),
+                                            'parent_refs': child_state.get('parent_refs', []) + _refs(children, child_state),
                                             'nested_subgraph_parent': True,
                                             'nested_parent_node_id': child_state.get('subgraph_node_id'),
                                             'nested_prompt_prefix': child_state.get('prompt', ''),
@@ -314,34 +333,41 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                 changed = True
                 continue
             if nested_rows and all(row.status in ('succeeded', 'skipped') for row in nested_rows):
-                child.output_json = encoded({'nodes': _manifest_output(nested_rows), 'status': 'completed'})
+                output = encoded({'nodes': _manifest_output(nested_rows), 'status': 'completed'})
+                if len(output.encode('utf-8')) > 1024 * 1024:
+                    child.status, child.error_code, child.finished_at = 'failed', 'storage_limit_exceeded', now
+                    changed = True
+                    continue
+                child.output_json = output
                 child.status, child.finished_at = 'succeeded', now
                 changed = True
                 continue
-            nested_by_id = {json.loads(row.input_json)['subgraph_node_id']: row for row in nested_rows}
             nested_config_by_id = {nested['id']: nested for nested in nested_config['nodes']}
-            nested_idle = [row for row in nested_rows if row.status == 'idle' and all(
-                nested_by_id[dep].status == 'succeeded'
-                for dep in json.loads(row.input_json).get('deps', []))]
-            nested_idle = nested_idle[:1]
+            # A nested static scope has its own bounded scheduler.  The outer
+            # workflow executor still applies its global max_concurrency when
+            # it truncates the combined candidate list.
+            nested_idle = _static_ready(nested_rows, nested_config.get('max_concurrency', 1))
             nested_candidates = [( 'subgraph_node', nested_config_by_id[json.loads(row.input_json)['subgraph_node_id']], row)
                                  for row in nested_idle]
             candidates.extend(nested_candidates)
-            if nested_candidates:
-                changed = False
             continue
         is_dynamic = bool(state.get('dynamic'))
         if (is_dynamic and not children) or (children and all(row.status in ('succeeded', 'skipped') for row in children)):
             aggregate_id = state.get('subgraph_aggregate_node_run_id')
             aggregate = db.get(NodeRun, aggregate_id) if aggregate_id else None
             if aggregate is None:
+                output = encoded({'nodes': _manifest_output(children), 'status': 'completed'})
+                if len(output.encode('utf-8')) > 1024 * 1024:
+                    control.status, control.error_code, control.finished_at = 'failed', 'storage_limit_exceeded', now
+                    changed = True
+                    continue
                 aggregate = NodeRun(run_id=run.id, node_id=item['id'], iteration=control.iteration,
                                     attempt=control.attempt, execution_kind='subgraph_aggregate',
                                     input_json=encoded({'_orchestration_role': 'subgraph_aggregate',
                                                         'subgraph_parent_node_run_id': control.id,
                                                         'subgraph_node_run_ids': [row.id for row in children],
                                                         'item_count': len(children)}),
-                                    output_json=encoded({'nodes': _manifest_output(children), 'status': 'completed'}),
+                                    output_json=output,
                                     status='succeeded', started_at=control.started_at or now, finished_at=now)
                 db.add(aggregate)
                 db.flush()
@@ -362,18 +388,12 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                 changed = True
                 continue
         else:
-            idle = []
-            for child in children:
-                if child.status != 'idle':
-                    continue
-                child_state = json.loads(child.input_json)
-                deps = [by_id[identity] for identity in child_state.get('deps', [])]
-                if all(dep.status == 'succeeded' for dep in deps):
-                    idle.append(child)
+            idle = [child for child in admitted
+                    if not json.loads(child.input_json).get('nested_subgraph')]
         mode = config.get('dynamic', {}).get('mode', 'serial') if is_dynamic else 'parallel' if config.get('max_concurrency', 1) > 1 else 'serial'
         if mode == 'serial':
             idle = idle[:1]
-        else:
+        elif is_dynamic:
             running = sum(row.status == 'running' for row in children)
             idle = idle[:max(0, config['max_concurrency'] - running)]
         child_by_id = ({child['id']: child for child in state.get('dynamic_nodes', [])}

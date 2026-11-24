@@ -282,6 +282,55 @@ def test_nested_static_subgraph_runs_in_one_parent_run_and_releases_downstream(c
     assert leaf['input']['nested_prompt_prefix'] == 'outer control'
 
 
+@pytest.mark.parametrize('global_limit,inner_limit,expected_peak', [(2, 2, 2), (1, 2, 1), (3, 1, 1)])
+def test_nested_static_subgraph_honors_inner_concurrency(client, app, global_limit, inner_limit, expected_peak):
+    """Nested scopes use their own limit while remaining inside the parent scope."""
+    authenticated(client)
+    active, peak, calls = set(), 0, []
+
+    async def gateway(text, previous, key, **kwargs):
+        nonlocal peak
+        context = json.loads(text)
+        if context['prompt'] == 'execute source':
+            return {'status': 'completed', 'value': 'source'}
+        if context.get('_orchestration_role') == 'subgraph_node':
+            calls.append(context['subgraph_node_id'])
+            active.add(context['subgraph_node_id'])
+            peak = max(peak, len(active))
+            await asyncio.sleep(0.03)
+            active.remove(context['subgraph_node_id'])
+            return {'status': 'completed', 'child': context['subgraph_node_id']}
+        if context['prompt'] == 'execute report':
+            return {'status': 'completed', 'report': 'nested-concurrency'}
+        pytest.fail(f'unexpected prompt: {context}')
+
+    app.state.gateway.create_response = gateway
+    definition = {'max_concurrency': global_limit, 'nodes': [
+        node('source'),
+        node('group', deps=['source'], inputRefs=['source'], subgraph={
+            'max_concurrency': 1,
+            'nodes': [{
+                'id': 'outer', 'agent_id': 'agent-1', 'model': 'gpt-6.1',
+                'prompt': 'outer control',
+                'subgraph': {'max_concurrency': inner_limit, 'nodes': [
+                    node('leaf-a'), node('leaf-b'),
+                ]},
+            }],
+        }),
+        node('report', deps=['group'], inputRefs=['group'], final_report=True),
+    ]}
+    task = client.post('/api/hexa/tasks', json={'workflow': definition}).json()
+    started = client.post(
+        f"/api/hexa/tasks/{task['id']}/runs",
+        headers={'Idempotency-Key': 'nested-inner-concurrency'},
+    ).json()
+    result = wait_run(client, started['id'], {'completed', 'failed'})
+
+    assert result['status'] == 'completed', result
+    assert sorted(calls) == ['leaf-a', 'leaf-b']
+    assert peak == expected_peak
+
+
 def test_nested_static_subgraph_resume_reuses_outer_and_retries_failed_leaf(client, app):
     authenticated(client)
     calls = []
