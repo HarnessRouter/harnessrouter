@@ -550,10 +550,12 @@ def build_router(app, require_session, user_id):
 
     def safe_definition(definition):
         workflow_from_json(definition)
-        fields = ('id', 'name', 'agent_id', 'model', 'prompt', 'deps', 'inputRefs', 'requires_human', 'node_type', 'human_action', 'final_report', 'allow_skip', 'allow_missing_inputs', 'condition', 'repeat', 'foreach', 'loop', 'dynamic_plan', 'subgraph', 'x', 'y')
+        fields = ('id', 'name', 'agent_id', 'model', 'prompt', 'deps', 'inputRefs', 'requires_human', 'node_type', 'human_action', 'final_report', 'allow_skip', 'allow_missing_inputs', 'condition', 'repeat', 'foreach', 'loop', 'dynamic_plan', 'subgraph', 'tool_approval_policy', 'x', 'y')
         result = {'nodes': [{key: value for key, value in item.items() if key in fields} for item in definition['nodes']]}
         if 'max_concurrency' in definition:
             result['max_concurrency'] = definition['max_concurrency']
+        if 'tool_approval_policy' in definition:
+            result['tool_approval_policy'] = definition['tool_approval_policy']
         return result
 
     @router.get('/templates')

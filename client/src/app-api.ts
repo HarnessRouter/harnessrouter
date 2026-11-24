@@ -1,4 +1,4 @@
-import type { OrchestrationNode } from './app-types';
+import type { OrchestrationNode, ToolApprovalPolicy } from './app-types';
 export interface AppAgent {
   id: string;
   name: string;
@@ -222,7 +222,7 @@ export function appSelectWorkspace(workspaceId: number) {
 }
 
 export interface AppTaskNode extends OrchestrationNode { id: string; name?: string; agent_id?: string; model?: string; prompt?: string; deps?: string[]; inputRefs?: string[]; final_report?: boolean; requires_human?: boolean; node_type?: 'agent' | 'human' | 'human_gate'; human_action?: 'select_outputs' | 'approve' | 'edit'; allow_skip?: boolean; x?: number; y?: number; [key: string]: unknown }
-export interface AppWorkflow { nodes: AppTaskNode[]; max_concurrency?: number }
+export interface AppWorkflow { nodes: AppTaskNode[]; max_concurrency?: number; tool_approval_policy?: ToolApprovalPolicy }
 export interface AppPagination { offset: number; limit: number; has_more: boolean }
 export interface AppTask { id: number; title: string; description: string; input?: string; workspace_id?: number | null; status: string; current_revision: number; current_revision_id?: number | null; workflow_state?: 'draft' | 'saved'; workflow_revision?: { id: number; revision: number; kind: 'saved' } | null; source_template?: { id: number; version_id: number; version: number } | null; workflow: AppWorkflow | null; current_result: Record<string, number>; stale_nodes?: string[]; latest_run_id?: number | null; source_template_id?: number | null; source_template_version_id?: number | null; source_template_version?: number | null }
 export interface AppArtifact { id: number; task_id: number; run_id: number; node_run_id: number; filename: string; media_type: string; bytes: number; cleanup_status?: string; created_at?: string | null }

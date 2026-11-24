@@ -7,6 +7,7 @@ import { AppApiError, appControlRun, appCreateTask, appGetRun, appGetTask, appLi
 import { watchCoordinatorRun } from './coordinator-monitor';
 import { coordinatorSummary, dispatchableTasks, latestOutput, mergeCoordinatorRun, runProgress, statusLabel, statusTone, type CoordinatorRow } from './super-agent-coordinator';
 import { mergePage, nextOffset } from './pagination';
+import { workflowPayload } from './task-workbench';
 
 const errorText = (cause: unknown) => cause instanceof AppApiError ? cause.message : '服务暂时不可用，请重试。';
 const terminal = (run?: AppRun) => !!run && ['completed', 'failed', 'canceled'].includes(run.status);
@@ -120,11 +121,11 @@ export function SuperAgentCoordinator({ workspaceId, agents, onOpenTasks, visibl
   const savePlan = async (draft: ClientTemplate) => {
     if (!editor) return;
     if (editor.kind === 'task') {
-      const task = await appCreateTask({ title: draft.title, description: draft.description, input: editor.input, workspace_id: workspaceId, workflow: { nodes: draft.nodes, ...(draft.max_concurrency !== undefined ? { max_concurrency: draft.max_concurrency } : {}) } });
+      const task = await appCreateTask({ title: draft.title, description: draft.description, input: editor.input, workspace_id: workspaceId, workflow: workflowPayload(draft) });
       if (!mounted.current) return;
       setTasks(current => mergePage(current, [task])); setNotice('任务方案已保存，可以选择并分发。');
     } else {
-      await appSaveTemplate({ title: draft.title, workspace_id: workspaceId, workflow: { nodes: draft.nodes, ...(draft.max_concurrency !== undefined ? { max_concurrency: draft.max_concurrency } : {}) } });
+      await appSaveTemplate({ title: draft.title, workspace_id: workspaceId, workflow: workflowPayload(draft) });
       if (!mounted.current) return;
       setNotice('模板已保存，可在模板管理中使用该版本创建任务。');
     }

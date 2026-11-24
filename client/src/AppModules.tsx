@@ -52,6 +52,7 @@ function normalizeTemplate(value: unknown): ClientTemplate {
   return {
     id: typeof input.id === 'string' && input.id ? input.id : defaultTemplate.id,
     max_concurrency: input.max_concurrency,
+    ...(input.tool_approval_policy !== undefined ? { tool_approval_policy: structuredClone(input.tool_approval_policy) } : {}),
     title: typeof input.title === 'string' && input.title ? input.title : defaultTemplate.title,
     description: typeof input.description === 'string' ? input.description : defaultTemplate.description,
     version: Number.isFinite(input.version) ? Number(input.version) : 1,

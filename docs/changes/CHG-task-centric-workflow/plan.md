@@ -266,6 +266,12 @@ native tool approval 仍按既有独立门禁记录。动态子编排不得与�
 RunEvent、CommandReceipt、Lease 和 reconciliation 回归；真实 Gateway/Runner、PostgreSQL、Linux
 及 native tool approval 仍单独验收。
 
+## 2026-11-24 工作流审批策略保存与启动门禁
+
+依据 spec 的 AC-43，复用工作流 JSON、模板 safe_definition、prepare_run 与 TaskExecutor 的派发边界，不新增迁移或授权控件。先写目标失败测试，覆盖风险列表严格校验、模板保留、顶层/节点/嵌套子图的零派发拒绝，以及已有 Run 的恢复防绕过；再实现统一策略校验与检测。客户端 workflowDraft 及保存转换必须克隆并保留顶层和节点策略，任务、模板和协调器共用转换，防止一次普通编辑删去授权要求。当前不允许仅凭 Gateway capability 放行，避免未接通的待批结果被当作普通 incomplete 失败或成功。未知动态字段继续由已有 graph whitelist 拒绝。
+
+执行目标单元/API 集成测试及能力快照、模板、子编排、重试恢复回归；E2E 验证使用真实本地任务 HTTP/API 与 SQLite，Gateway 为可观测受控边界，不代表真实 Provider 审批闭环。Gateway/Runner 原生 checkpoint、可信登记、SSE 和同一 session 精确 continuation 仍按独立验收推进。实际结果与平台限制记录在 change-record.yaml；回滚只回退校验和门禁，不能用旧执行器运行带策略定义。
+
 ## 2026-11-24 Runner 审批策略 fail-closed 接线
 
 在 Runner 的 `TurnReq` 接收 `tool_approval_policy` 作为保留字段，但在尚无 native checkpoint、精确

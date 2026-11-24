@@ -10,7 +10,7 @@ import {
 } from './app-api';
 import { RunItemHistory } from './RunItemHistory';
 import { Templates } from './AppModules';
-import { activeRun, flowEdgeTone, nodeStatusLive, nodeStatusTone, statusLive, taskLabels, runLabels, nodeLabels, statusTone, taskProgress, workflowDraft, snapshotEvents, waitingGate, latestRunOutputs } from './task-workbench';
+import { activeRun, flowEdgeTone, nodeStatusLive, nodeStatusTone, statusLive, taskLabels, runLabels, nodeLabels, statusTone, taskProgress, workflowDraft, workflowPayload, snapshotEvents, waitingGate, latestRunOutputs } from './task-workbench';
 import { WorkflowCanvas } from './workflow-canvas';
 import { layoutRunNodes, replayStates } from './run-history';
 import { mergePage, nextOffset } from './pagination';
@@ -378,10 +378,10 @@ export function AppTasks({ section = 'mine', onSectionChange, selectedRunId = ''
       onBack={() => setEditor(null)} onUse={() => { if (editor.template) void execute(async () => { const template = await readCurrentTemplate(editor.template!); setEditor(null); setTemplates(current => current.map(item => item.id === template.id ? template : item)); openCreate(template); }); }}
       onSave={async draft => {
         if (editor.task) {
-          const task = await appSaveTaskWorkflow(editor.task.id, editor.task.current_revision, { nodes: draft.nodes, ...(draft.max_concurrency !== undefined ? { max_concurrency: draft.max_concurrency } : {}) });
+          const task = await appSaveTaskWorkflow(editor.task.id, editor.task.current_revision, workflowPayload(draft));
           setTasks(current => current.map(t => t.id === task.id ? task : t));
         } else {
-          const template = await appSaveTemplate({ title: draft.title, workspace_id: workspaceId, workflow: { nodes: draft.nodes, ...(draft.max_concurrency !== undefined ? { max_concurrency: draft.max_concurrency } : {}) }, expected_revision: editor.draft.version }, editor.template?.id);
+          const template = await appSaveTemplate({ title: draft.title, workspace_id: workspaceId, workflow: workflowPayload(draft), expected_revision: editor.draft.version }, editor.template?.id);
           setTemplates(current => [template, ...current.filter(t => t.id !== template.id)]); setListIds(current => ({ ...current, templates: [template.id, ...current.templates.filter(id => id !== template.id)] })); setTemplateId(template.id);
         }
         setEditor(null);

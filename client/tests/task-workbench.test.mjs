@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { taskProgress, snapshotEvents, workflowDraft, waitingGate, nodeStatusTone, nodeStatusLive, flowEdgeTone, latestRunOutputs } from '../src/task-workbench.ts';
+import { taskProgress, snapshotEvents, workflowDraft, workflowPayload, waitingGate, nodeStatusTone, nodeStatusLive, flowEdgeTone, latestRunOutputs } from '../src/task-workbench.ts';
 
 test('progress uses the bound run attempts, never a percentage inferred from task status', () => {
   const run = { workflow: { nodes: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }, nodes: [{ node_id: 'a', status: 'succeeded' }, { node_id: 'b', status: 'failed' }] };
@@ -23,6 +23,27 @@ test('replay contains only recorded attempt transitions with actual node ids and
   const events = snapshotEvents({ nodes: [{ node_id: 'a', status: 'succeeded', started_at: '2026-11-18T01:00:00', finished_at: '2026-11-18T01:01:00' }, { node_id: 'b', status: 'idle' }, { node_id: 'c', status: 'failed', finished_at: '2026-11-18T01:02:00' }] });
   assert.deepEqual(events.map(e => [e.nodeId, e.status]), [['a', 'running'], ['a', 'succeeded'], ['c', 'failed']]);
   assert.equal(events[1].time, '2026-11-18T01:01:00');
+});
+
+test('editor drafts keep approval requirements without mutating the saved workflow', () => {
+  const workflow = { tool_approval_policy: { require: ['external_write'] }, nodes: [
+    { id: 'a', tool_approval_policy: { require: ['destructive'] } },
+  ] };
+  const draft = workflowDraft(workflow);
+  assert.deepEqual(draft.tool_approval_policy, workflow.tool_approval_policy);
+  assert.deepEqual(workflowPayload(draft).tool_approval_policy, workflow.tool_approval_policy);
+  assert.deepEqual(workflowPayload(draft).nodes[0].tool_approval_policy, workflow.nodes[0].tool_approval_policy);
+  draft.tool_approval_policy.require.push('credential_access');
+  draft.nodes[0].tool_approval_policy.require.push('permission_change');
+  assert.deepEqual(workflow.tool_approval_policy.require, ['external_write']);
+  assert.deepEqual(workflow.nodes[0].tool_approval_policy.require, ['destructive']);
+});
+
+test('workflow submissions preserve invalid explicit policies for server rejection and omit absent policies', () => {
+  for (const policy of [null, {}, { require: [] }]) {
+    assert.deepEqual(workflowPayload(workflowDraft({ nodes: [], tool_approval_policy: policy })).tool_approval_policy, policy);
+  }
+  assert.deepEqual(workflowPayload(workflowDraft({ nodes: [] })), { nodes: [] });
 });
 
 test('human gate only offers succeeded dependencies for the ready gate in the bound run', () => {

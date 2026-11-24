@@ -27,6 +27,47 @@ def is_explicit_human_node(item):
     return item.get('node_type') in {'human', 'human_gate'}
 
 
+TOOL_APPROVAL_RISKS = frozenset({
+    'read_only', 'workspace_read', 'workspace_write', 'local_process', 'network_read',
+    'external_write', 'credential_access', 'destructive', 'permission_change',
+})
+
+
+def validate_tool_approval_policy(value, *, owner='workflow'):
+    """Validate the saved approval requirement without granting any capability.
+
+    The policy is deliberately a narrow declaration.  Runtime approval is still a
+    separate Gateway/Runner capability and is fail-closed at Run start.
+    """
+    if value is None or not isinstance(value, dict) or set(value) != {'require'}:
+        raise TaskError('invalid_workflow', f'{owner}.tool_approval_policy 只支持 require 风险列表。', 422)
+    risks = value.get('require')
+    if (not isinstance(risks, list) or not risks
+            or any(not isinstance(risk, str) or risk not in TOOL_APPROVAL_RISKS for risk in risks)
+            or len(risks) != len(set(risks))):
+        raise TaskError('invalid_workflow', f'{owner}.tool_approval_policy.require 包含无效或重复风险。', 422)
+
+
+def validate_tool_approval_policy_if_present(item, *, owner='workflow'):
+    if 'tool_approval_policy' in item:
+        validate_tool_approval_policy(item.get('tool_approval_policy'), owner=owner)
+
+
+def workflow_requires_tool_approval(definition):
+    if isinstance(definition, dict) and 'tool_approval_policy' in definition:
+        return True
+    for item in (definition.get('nodes') or []) if isinstance(definition, dict) else []:
+        if isinstance(item, dict) and 'tool_approval_policy' in item:
+            return True
+        for child in ((item.get('subgraph') or {}).get('nodes') or []) if isinstance(item, dict) else []:
+            if isinstance(child, dict) and 'tool_approval_policy' in child:
+                return True
+            for nested in ((child.get('subgraph') or {}).get('nodes') or []) if isinstance(child, dict) else []:
+                if isinstance(nested, dict) and 'tool_approval_policy' in nested:
+                    return True
+    return False
+
+
 class TaskError(ValueError):
     def __init__(self, code, message, status=409):
         super().__init__(message)
@@ -322,12 +363,13 @@ def _validate_subgraph_shape(subgraph, known_ids, *, depth=0):
         raise TaskError('invalid_workflow', 'subgraph.nodes 必须包含 1 到 10 个静态节点。', 422)
     child_ids = set()
     specs = []
-    allowed_child_fields = {'id', 'name', 'agent_id', 'model', 'prompt', 'deps', 'inputRefs', 'final_report', 'x', 'y', 'subgraph'}
+    allowed_child_fields = {'id', 'name', 'agent_id', 'model', 'prompt', 'deps', 'inputRefs', 'final_report', 'x', 'y', 'subgraph', 'tool_approval_policy'}
     for child in children:
         if not isinstance(child, dict):
             raise TaskError('invalid_workflow', 'subgraph 子节点格式无效。', 422)
         if set(child) - allowed_child_fields:
             raise TaskError('invalid_workflow', 'subgraph 子节点包含不受支持的字段。', 422)
+        validate_tool_approval_policy_if_present(child, owner='subgraph node')
         child_id = child.get('id')
         if not isinstance(child_id, str) or not child_id.strip() or len(child_id) > 255 or child_id in child_ids:
             raise TaskError('invalid_workflow', 'subgraph 子节点 ID 无效或重复。', 422)
@@ -360,11 +402,16 @@ def workflow_from_json(value):
     if not isinstance(value, dict) or not isinstance(value.get('nodes'), list):
         raise TaskError('invalid_workflow', '工作流格式无效。', 422)
     workflow_concurrency(value)
+    if 'tool_approval_policy' in value:
+        validate_tool_approval_policy(value.get('tool_approval_policy'))
     known_ids = {item.get('id') for item in value['nodes'] if isinstance(item, dict)}
     for item in value['nodes']:
         if isinstance(item, dict):
+            validate_tool_approval_policy_if_present(item, owner=f"node {item.get('id', '')}")
             if is_explicit_human_node(item) and any(item.get(mode) is not None for mode in ('repeat', 'foreach', 'loop', 'dynamic_plan')):
                 raise TaskError('invalid_workflow', '人工节点只支持单次执行模式。', 422)
+            if is_explicit_human_node(item) and item.get('tool_approval_policy') is not None:
+                raise TaskError('invalid_workflow', '人工节点不能声明工具审批策略。', 422)
             validate_condition(item, known_ids)
             validate_repeat(item)
             validate_foreach(item, known_ids)
@@ -670,6 +717,8 @@ async def prepare_run(db, task, body, key, gateway, secrets):
     revision = current_revision(db, task)
     definition = json.loads(revision.definition_json)
     workflow_from_json(definition)
+    if workflow_requires_tool_approval(definition):
+        raise TaskError('configuration_unavailable', '工具审批运行时尚未接通，不能启动需要审批的工作流。', 422)
     if not definition['nodes']:
         raise TaskError('invalid_workflow', '请先添加 Agent 节点。', 422)
     active = db.scalar(select(Run).where(Run.task_id == task.id, Run.status.in_(ACTIVE)))
@@ -961,6 +1010,26 @@ class TaskExecutor:
                     task = db.get(Task, run.task_id)
                     snapshot = json.loads(run.snapshot_json)
                     definition = snapshot['workflow']
+                    if workflow_requires_tool_approval(definition):
+                        run.status = 'failed'
+                        if task:
+                            task.status = 'failed'
+                        for row in all_node_runs(db, run.id):
+                            receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
+                            if receipt and receipt.side_effect_state in ('started', 'unknown'):
+                                receipt.side_effect_state = 'unknown'
+                                receipt.reconciliation_required = True
+                                receipt.error_code = row.error_code = 'interrupted_unknown_outcome'
+                                append_run_event(db, run.id, 'node.unknown', node_run_id=row.id,
+                                                 data={'node_id': row.node_id, 'error_code': row.error_code})
+                            if row.status in ('idle', 'queued', 'running'):
+                                row.status = 'failed'
+                                if not (receipt and receipt.reconciliation_required):
+                                    row.error_code = 'configuration_unavailable'
+                                row.finished_at = datetime.now(timezone.utc)
+                        append_run_event(db, run.id, 'run.failed', data={'error_code': 'configuration_unavailable'})
+                        db.commit()
+                        return
                     max_concurrency = workflow_concurrency(definition)
                     rows = latest_nodes(db, run.id)
                     nodes = {item['id']: item for item in definition['nodes']}

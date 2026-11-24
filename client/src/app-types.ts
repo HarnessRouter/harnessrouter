@@ -3,6 +3,7 @@ export type OutputPredicate = { path: string } & (
   { op: 'eq' | 'neq'; value: JsonValue } | { op: 'in'; value: JsonValue[] } | { op: 'exists'; value?: never }
 );
 export type NodeCondition = OutputPredicate & { source: string };
+export interface ToolApprovalPolicy { require: string[] }
 export interface NodeRepeat { max_iterations: number; until: { path: string; op: 'eq'; value: JsonValue } | { path: string; op: 'exists'; value?: never } }
 export interface NodeForeach { source: string; path: string; max_items: number; mode?: 'serial' | 'parallel'; nested?: { path: string; max_items: number; mode?: 'serial' | 'parallel' } }
 export interface NodeLoop { body: string[]; max_iterations: number; until: NodeCondition }
@@ -23,6 +24,7 @@ export interface SubgraphNode extends Omit<OrchestrationNode, 'subgraph'> {
 }
 export interface NodeSubgraph { max_concurrency?: number; nodes?: SubgraphNode[]; dynamic?: NodeDynamicSubgraph }
 export interface OrchestrationNode {
+  tool_approval_policy?: ToolApprovalPolicy;
   condition?: NodeCondition;
   repeat?: NodeRepeat;
   foreach?: NodeForeach;
@@ -57,4 +59,5 @@ export interface ClientTemplate {
   nodes: TemplateNode[];
   version: number;
   max_concurrency?: number;
+  tool_approval_policy?: ToolApprovalPolicy;
 }

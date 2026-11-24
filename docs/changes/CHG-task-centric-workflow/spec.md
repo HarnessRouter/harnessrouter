@@ -504,6 +504,14 @@ owner 的兼容放行规则。映射或日志缺失、主体不符返回统一 4
 `hexa_approval_unavailable`。引用含待接线审批索引的旧 Response 的普通继续也必须拒绝，不得把待批当普通消息忽略。
 现有不带新字段的任务与 input_required 流程不变；discovery 不广告 tool_approvals。
 
+### 工作流审批策略的保存与启动门禁
+
+工作流及静态 Agent 节点可保存 `tool_approval_policy: {"require": ["external_write"]}`。`require` 必须是非空、无重复的风险名称数组，范围使用上文工具风险分类；只接受 `require`，拒绝 null、空对象、未知字段、永久授权及凭据。静态子编排节点遵循相同规则；人工节点不能声明工具策略。工作流策略是所有 Agent 节点的下限，节点策略只能增加需要审批的风险；模型生成的动态项不能声明或修改该策略。
+
+策略属于 WorkflowRevision/TemplateVersion 的执行定义，保存为模板、从模板创建任务、编辑器往返保存和另存新版本必须保留，不得静默删去。编辑器的审批配置只做原样保留，暂不新增授权控件；API 继续承担严格校验。当前 Hexa 尚无待批 NodeRun 状态、审批决定和精确 continuation 的完整接线，因此含任一有效策略的工作流启动必须返回 `422 configuration_unavailable`，在创建 Run/NodeRun/事件及调用 Gateway 前拒绝；即使远端 discovery 声称支持，也不能放行。旧的无策略工作流保持兼容。调度已有持久化 Run 时仍执行同一门禁，避免绕过创建接口或重启恢复后自动派发；已有 started/unknown 回执保持 unknown 与 reconciliation_required。
+
+**AC-43 工作流审批策略不被忽略：** 校验正常策略和非法值；任务保存、模板导出/导入和新版本保留策略。顶层、节点和两层静态子编排的审批需求均在 Run 创建前拒绝，零 Gateway 调用且没有新 Run/NodeRun；远端 capability 为 true 也不绕过本地门禁。已持久化、待派发的带策略 Run 收敛为配置不可用且零 Gateway 调用。该门禁不构造审批记录、不声称支持 durable approval；以后打开门禁必须同时满足 A-01 至 A-09 和 Hexa 待批/继续接线。
+
 ### ACP 原生权限 hook 的前置边界
 
 ACP Runner 的 `session/request_permission` 是原生权限请求入口，不能被当作普通 `tool_call` 事件处理。Runner

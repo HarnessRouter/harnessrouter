@@ -1,4 +1,22 @@
 id: CHG-task-centric-workflow
+workflow_approval_policy_boundary:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: dd4889d3
+  branch: codex/agent-orchestration
+  status: in_progress
+  references: [spec.md#工作流审批策略的保存与启动门禁, plan.md#2026-11-24-工作流审批策略保存与启动门禁]
+  reuse_decision: extend existing workflow JSON, template whitelist and executor dispatch guard; preserve policies through existing client editor
+  acceptance_ids: [AC-43]
+  scope: never silently discard a saved approval requirement or execute it on an unsupported Hexa approval runtime
+  verification:
+    red: "目标测试证实顶层/节点策略未校验、模板丢失策略、已持久化 Run 继续派发；新增 inflight 场景证实 started/unknown receipt 在策略门禁下必须转为 unknown。"
+    backend: "python -X utf8 -m pytest -q hexa-api/tests/test_task_approval_policy.py hexa-api/tests/test_capability_snapshot.py hexa-api/tests/test_tasks_api.py hexa-api/tests/test_subgraph.py hexa-api/tests/test_reconciliation.py hexa-api/tests/test_run_leases.py --tb=short; exit 0；136 passed。Linux 容器 python:3.12-slim 同一策略 suite；exit 0；74 passed，含 started/unknown 回执收敛。"
+    client: "client node --experimental-strip-types --test tests/*.test.mjs; exit 0；73 passed。npm.cmd run typecheck; exit 0。npm.cmd run build; exit 0，保留既有约 965 KB 主 chunk advisory。"
+    browser: "npx.cmd playwright test -c playwright.e2e.config.ts tests/e2e/approval-policy.spec.ts --project=chromium --workers=1; exit 0；3 passed，覆盖桌面、390px 窄屏、错误可见、无 Run、模板新版本策略保留。关键窄屏截图 approval-unavailable.png SHA-256 为 7110ED97236F29B73F8D837226529F2F17C8FCD70D6446EADA6AD764CB055099。"
+    hygiene: "python -m py_compile hexa-api/app/tasks/service.py hexa-api/app/tasks/router.py；YAML safe_load；git diff --check；均通过。"
+  remaining: [native pre-side-effect interception, durable Gateway-to-Runner registration, exact ACP continuation, response/SSE resume, UHP approval capability negotiation, real Provider and deployed failover validation]
+  next_action: "提交当前本地独立分支；tool_approvals 继续保持不广告，待 Gateway/Runner 原生 checkpoint、可信登记、SSE/Response resume 和真实 Linux/Provider conformance 完成后再单独打开生产审批能力。"
 subgraph_slice:
   date: "2026-11-24"
   owner: Codex

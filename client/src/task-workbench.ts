@@ -33,11 +33,19 @@ export function taskProgress(run?: AppRun): { done: number; total: number; perce
 }
 
 export function workflowDraft(workflow?: AppWorkflow | null) {
-  return { ...(workflow?.max_concurrency !== undefined ? { max_concurrency: workflow.max_concurrency } : {}), nodes: (workflow?.nodes || []).map((node, index) => ({
+  return { ...workflowPayload(workflow ?? { nodes: [] }), nodes: (workflow?.nodes || []).map((node, index) => ({
     ...structuredClone(node), name: node.name || node.id, deps: [...(node.deps || [])],
     x: Number.isFinite(node.x) ? Number(node.x) : 20 + index * 220,
     y: Number.isFinite(node.y) ? Number(node.y) : 80,
   })) };
+}
+
+export function workflowPayload(workflow: AppWorkflow): AppWorkflow {
+  return structuredClone({
+    nodes: workflow.nodes,
+    ...(workflow.max_concurrency !== undefined ? { max_concurrency: workflow.max_concurrency } : {}),
+    ...(workflow.tool_approval_policy !== undefined ? { tool_approval_policy: workflow.tool_approval_policy } : {}),
+  });
 }
 
 export function snapshotEvents(run: AppRun): Array<HistoryEvent & { time: string }> {
