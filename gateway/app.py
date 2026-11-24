@@ -8064,19 +8064,46 @@ class _RespTranslator:
 
 
 # ── input parsing (string | array of items with input_text/input_file/input_image) ──────
+def _given_filename(p: dict) -> str | None:
+    """The name a part gives its file, or None: a value that is not a name (a number, an object, blank) is no name,
+    rather than something the turn later joins into its prompt as if it were one."""
+    name = p.get("filename")
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def _b64_or_none(b64: str) -> str | None:
+    """The base64 payload with any line breaks taken out, or None when it does not decode. The runner writes what
+    decodes and skips what does not, while the prompt still says the file is there, so a payload that is not
+    base64 is refused at the parse, where the caller is told, not dropped in the runner."""
+    b64 = "".join(b64.split())
+    try:
+        return b64 if b64 and base64.b64decode(b64, validate=True) else None
+    except ValueError:
+        return None
+
+
 def _decode_input_file(p: dict) -> tuple[str | None, str | None, str | None, str | None]:
     """→ (filename, base64, media_type, file_id). base64/file_id are mutually exclusive sources."""
-    fname = p.get("filename")
+    fname = _given_filename(p)
     fd = p.get("file_data")
     if isinstance(fd, str) and fd:
         media, b64 = "application/octet-stream", fd
         if fd.startswith("data:"):
             head, _, b64 = fd.partition(",")
             media = head[5:].split(";")[0] or media
+        # An inline file used to be dropped in silence when it had no name or its bytes did not decode: the
+        # request answered 200 and the agent never saw it, as an input_image was.
+        if not fname:
+            raise uhp_error(400, "invalid_input", "An input_file sent inline (file_data) carries a filename: "
+                                                  "the name the agent finds it under.", "input")
+        b64 = _b64_or_none(b64)
+        if b64 is None:
+            raise uhp_error(400, "invalid_input", "An input_file's file_data is base64, as a data URL "
+                                                  "(data:application/pdf;base64,...) or on its own.", "input")
         return fname, b64, media, None
     if p.get("file_id"):
         return fname, None, None, p["file_id"]
-    return fname, None, None, None
+    raise uhp_error(400, "invalid_input", "An input_file carries file_data (inline) or file_id.", "input")
 
 
 # An input_image reaches the agent the way an input_file does: as a file in its working directory. It used to be
@@ -8095,6 +8122,7 @@ def _decode_input_image(p: dict) -> tuple[str | None, str | None, str | None, st
     url = p.get("image_url")
     if isinstance(url, dict):
         url = url.get("url")
+    given = _given_filename(p)
     if isinstance(url, str) and url:
         if not url.startswith("data:"):
             raise uhp_error(400, "invalid_input", "An input_image is sent inline as a data URL (data:image/png;base64,...) "
@@ -8102,13 +8130,14 @@ def _decode_input_image(p: dict) -> tuple[str | None, str | None, str | None, st
         head, _, b64 = url.partition(",")
         media = head[5:].split(";")[0].lower()
         ext = _INPUT_IMAGE_EXT.get(media)
+        b64 = _b64_or_none(b64) or ""
         if not ext or ";base64" not in head or not b64:
             raise uhp_error(400, "invalid_input", "An input_image's data URL is a base64 image "
                                                   f"({', '.join(sorted(set(_INPUT_IMAGE_EXT.values())))}).", "input")
-        name = p.get("filename") or f"image-{hashlib.sha256(b64.encode()).hexdigest()[:12]}.{ext}"
+        name = given or f"image-{hashlib.sha256(b64.encode()).hexdigest()[:12]}.{ext}"
         return name, b64, media, None
     if p.get("file_id"):
-        return p.get("filename"), None, None, p["file_id"]
+        return given, None, None, p["file_id"]
     raise uhp_error(400, "invalid_input", "An input_image carries image_url (a data URL) or file_id.", "input")
 
 
