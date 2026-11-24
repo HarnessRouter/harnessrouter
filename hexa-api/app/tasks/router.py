@@ -383,7 +383,13 @@ def build_router(app, require_session, user_id):
                     else:
                         if node_record_usage(db, run_id) >= 500:
                             raise TaskError('storage_limit_exceeded', '运行超过 500 次尝试限制。', 422)
-                        db.add(NodeRun(run_id=run_id, node_id=node_id, attempt=row.attempt + 1, iteration=row.iteration, status='idle'))
+                        previous_state = json.loads(row.input_json or '{}')
+                        retry_state = {}
+                        if isinstance(previous_state.get('execution_binding'), dict):
+                            retry_state['execution_binding'] = previous_state['execution_binding']
+                        db.add(NodeRun(run_id=run_id, node_id=node_id, attempt=row.attempt + 1,
+                                       iteration=row.iteration, status='idle',
+                                       input_json=encoded(retry_state)))
                     append_run_event(db, run.id, 'node.retry_requested', node_run_id=row.id,
                                      data={'node_id': node_id, 'item_node_run_id': body.item_node_run_id})
                 else:

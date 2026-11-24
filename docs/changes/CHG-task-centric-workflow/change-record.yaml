@@ -1348,3 +1348,27 @@ execution_binding_dispatch_audit:
   rollback: "Revert this dispatch-path check and stop newly configured Runs; no data or migration rollback is needed."
   remaining: [authenticated live Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, deployed multi-replica failover, Linux Runner ACP conformance]
   next_action: "Obtain an authenticated live Gateway/Runner test route for plugin and native approval conformance; until then keep tool_approvals unadvertised and the goal active."
+plain_node_retry_binding:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: e913dd92
+  branch: codex/agent-orchestration
+  references: [spec.md#agent-能力插件与权限审批, plan.md#受限动态子编排实施2026-11-24]
+  reuse_decision: extend the existing node retry route and immutable execution_binding; no migration, UHP, plugin format, or new permission grant
+  scope: preserve the persisted Run capability binding when an ordinary failed or canceled node receives an in-Run retry
+  acceptance_ids: [AC-40, AC-42]
+  changes:
+    - "普通节点 retry 创建新 NodeRun 时复制旧 attempt 的 execution_binding；只复制绑定字段，不复制旧输入、输出、回执或状态。"
+    - "新 attempt 在调度暂停时即可读到原绑定，恢复调度后 Gateway 上下文和 capability_digest 继续使用同一 Run snapshot identity。"
+  verification:
+    red: "新增普通节点 retry 绑定测试先暴露 retry 新 attempt 的 input_json 为空；生产修复后目标测试通过。"
+    targeted: "python -X utf8 -m pytest -q hexa-api/tests/test_task_workflows.py::test_plain_node_retry_preserves_frozen_execution_binding --tb=short; exit 0；1 passed。"
+    integration: "测试通过真实任务 API、TaskExecutor、SQLite 持久化和受控 Gateway；重试请求在暂停 schedule 时检查新 NodeRun 持久化绑定，随后恢复执行并检查 Gateway 上下文。"
+    regression: "SQLite：python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py hexa-api/tests/test_task_workflows.py --tb=short; exit 0；254 passed in 301.51s。PostgreSQL：同一套命令并设置 HEXA_TEST_POSTGRES_URL=postgresql+psycopg://postgres@127.0.0.1:55438/postgres，隔离 schema；exit 0；254 passed in 348.55s。"
+    hygiene: "python -m py_compile hexa-api/app/tasks/router.py hexa-api/tests/test_task_workflows.py；git diff --check；YAML safe_load；passed。"
+  security_review: "retry 不接受客户端 execution_binding 或执行配置；只复制服务端旧 attempt 的无密钥绑定。派发前仍由 common executor 校验绑定与 Run snapshot，缺失、篡改或摘要不一致时 fail closed。"
+  limitations: [authenticated live Gateway/BYOK smoke, native approval interception and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP conformance]
+  rollback: "停止新普通 retry 派发后回退 router 绑定复制和测试；无迁移或协议回滚，历史 NodeRun 保留。"
+  remaining: [authenticated live Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, deployed multi-replica failover, Linux Runner ACP conformance]
+  next_action: "继续保持 tool_approvals 不广告；在具备认证的 Gateway/Runner 环境后补原生审批与真实 Provider 验证，整体目标保持进行中。"

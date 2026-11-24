@@ -191,7 +191,7 @@ foreach 是固定数量的节点执行，不创建新的工作流节点、不修
 
 每次 foreach/dynamic_plan 展开在控制 NodeRun 输入中固定 `item_node_run_ids`，调度和聚合只读取该清单，不以同节点所有历史项拼接当前结果。聚合记录的 attempt 等于控制尝试，项数保存在 item_count；聚合输入保留上游成功引用，供结果过期判断。
 
-所有运行时派生的 Agent NodeRun 都必须在创建事务中保存无密钥 `execution_binding`，包括 foreach/dynamic_plan 项、二层 foreach 叶子、子编排节点、重试替换项和循环新轮次节点。绑定至少包含 Agent/model、Run capability snapshot digest、Gateway capability digest、可选 permission policy digest 及 `source=run_snapshot`。恢复只复制原绑定及其来源引用；派发前必须校验绑定与当前 Run 快照一致，缺失、篡改或摘要变化以 `configuration_changed` 失败，不得从当前 Harness、模型输出或客户端参数重新推导执行权限。
+所有运行时派生的 Agent NodeRun 都必须在创建事务中保存无密钥 `execution_binding`，包括 foreach/dynamic_plan 项、二层 foreach 叶子、子编排节点、普通节点 retry 的新 attempt、重试替换项和循环新轮次节点。绑定至少包含 Agent/model、Run capability snapshot digest、Gateway capability digest、可选 permission policy digest 及 `source=run_snapshot`。恢复只复制原绑定及其来源引用；派发前必须校验绑定与当前 Run 快照一致，缺失、篡改或摘要变化以 `configuration_changed` 失败，不得从当前 Harness、模型输出或客户端参数重新推导执行权限。普通节点 retry 必须从失败/取消旧 attempt 的持久化输入复制绑定；没有绑定的历史记录保持兼容，但不得借 retry 新增或扩大执行权限。
 
 活动 Run 中对失败集合调用节点 retry，追加控制尝试；已成功项沿用原记录，失败或取消项追加独立尝试并递增 attempt，原输入、输出和失败状态不变。请求可用 `item_node_run_id` 指定当前清单中的一个失败/取消项；其他因 sibling_failed 而从未执行的取消项一起恢复，其他独立失败项保持失败，需分别显式重试。旧项、其他轮次、成功项以及其他节点/Run 的 ID 均拒绝。空清单与未展开控制记录区分，不能因重试而把非法输入转为成功。
 

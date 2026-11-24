@@ -200,6 +200,55 @@ def test_blank_task_and_invalid_config_are_safe(client):
     assert response.json()['detail']['code'] == 'configuration_unavailable'
 
 
+def test_plain_node_retry_preserves_frozen_execution_binding(client, app, monkeypatch):
+    authenticated(client)
+    calls = []
+
+    async def retryable_gateway(text, previous, key, **kwargs):
+        calls.append((json.loads(text), kwargs))
+        if len(calls) == 1:
+            return {'status': 'incomplete', 'value': 'retry me'}
+        return {'status': 'completed', 'value': 'retried'}
+
+    app.state.gateway.create_response = retryable_gateway
+    task = client.post('/api/hexa/tasks', json={'title': '普通节点重试绑定', 'workflow': {
+        'nodes': [
+            node('worker'),
+            node('hold', node_type='human'),
+        ],
+    }}).json()
+    started = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'plain-retry-start'})
+    assert started.status_code == 202
+    run_id = started.json()['id']
+    waiting = wait_run(client, run_id, {'waiting_human'})
+    worker = next(row for row in waiting['nodes'] if row['node_id'] == 'worker')
+    assert worker['status'] == 'failed'
+
+    before = client.get(f'/api/hexa/node-runs/{worker["id"]}').json()['attempts']
+    original_binding = before[0]['input']['execution_binding']
+    schedule = app.state.task_executor.schedule
+    monkeypatch.setattr(app.state.task_executor, 'schedule', lambda run_id: None)
+    retried = client.post(
+        f'/api/hexa/runs/{run_id}/nodes/worker/retry',
+        headers={'Idempotency-Key': 'plain-retry'},
+    )
+    assert retried.status_code == 200
+    pending = client.get(f'/api/hexa/node-runs/{worker["id"]}').json()['attempts']
+    replacement = next(row for row in pending if row['attempt'] == 2)
+    assert replacement['input']['execution_binding'] == original_binding
+
+    monkeypatch.setattr(app.state.task_executor, 'schedule', schedule)
+    import asyncio
+    asyncio.run(app.state.task_executor.execute(run_id))
+    completed = wait_run(client, run_id, {'waiting_human'})
+    attempts = client.get(f'/api/hexa/node-runs/{worker["id"]}').json()['attempts']
+    replacement = next(row for row in attempts if row['attempt'] == 2)
+    assert replacement['input']['execution_binding'] == original_binding
+    assert calls[1][0]['execution_binding'] == original_binding
+    assert calls[1][1]['capability_digest'] == original_binding['gateway_capability_digest']
+    assert completed['status'] == 'waiting_human'
+
+
 def test_complete_five_agents_selection_two_validators_report(client, app):
     authenticated(client)
     collectors = [f'collect-{index}' for index in range(5)]
