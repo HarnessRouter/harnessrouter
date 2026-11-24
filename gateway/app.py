@@ -24289,6 +24289,17 @@ def _plugin_path_ok(path, name: str) -> str:
     return path
 
 
+_FRONTMATTER_MAX = 65536     # what a SKILL.md frontmatter reader reads: a name and a description are short
+
+
+def _frontmatter_uncomment(v: str) -> str:
+    """v without a YAML comment, which starts at a `#` at the start or after whitespace. One linear
+    search: `(^|\\s+)#.*$` backtracked over a run of spaces with no `#` (20K spaces took 1.7 s and
+    200K minutes), and a plugin's SKILL.md reaches this reader in the gateway every org shares."""
+    m = re.search(r"(?:^|\s)#", v)
+    return (v[:m.start()] if m else v).rstrip()
+
+
 def _frontmatter_close(s: str, q: str) -> int:
     """Where the quoted value that opens s ends: a double-quoted one skips backslash escapes, and in
     a single-quoted one '' is a quote. -1 when it never closes."""
@@ -24323,12 +24334,12 @@ def _frontmatter_value(v: str, more: list[str]) -> str:
             return json.loads('"' + body + '"')
         except ValueError:
             return re.sub(r"\\(.)", r"\1", body)
-    head = re.sub(r"(^|\s+)#.*$", "", v)
+    head = _frontmatter_uncomment(v)
     if re.fullmatch(r"[>|][1-9+-]{0,2}", head):
         return " ".join(lines)              # a `>` or `|` block, as one line
     # A plain value ends at a ` #` comment, and indented lines after it continue it; with nothing
     # after the colon, the value is those lines.
-    rest = (re.sub(r"(^|\s+)#.*$", "", x) for x in lines)
+    rest = (_frontmatter_uncomment(x) for x in lines)
     return " ".join(p for p in (head, *rest) if p)
 
 
@@ -24338,7 +24349,7 @@ def _plugin_frontmatter(text: str) -> dict:
     indented lines continue it), a double-quoted value with backslash escapes, a single-quoted
     value ('' is one quote), and a `>` or `|` block. Each comes back as one line. The gateway's
     SKILL.md readers all read it here, and the runner's _frontmatter reads it the same way."""
-    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", (text or "").lstrip("\ufeff"), flags=re.S)
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", (text or "").lstrip("\ufeff")[:_FRONTMATTER_MAX], flags=re.S)
     entries: list[tuple[str, str, list[str]]] = []
     for line in (m.group(1) if m else "").splitlines():
         if line.startswith((" ", "\t")) or not line.strip():

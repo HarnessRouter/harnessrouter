@@ -20,7 +20,15 @@ export function skillSlug(n: string): string {
 }
 export const isSkillName = (n: string) => n.length <= SKILL_NAME_MAX && NAME_RE.test(n);
 
-const COMMENT = /(^|\s+)#.*$/;
+/** What a frontmatter reader reads: a name and a description are short. */
+const FRONTMATTER_MAX = 65536;
+
+/** A value without its YAML comment, which starts at a `#` at the start or after whitespace. One
+ *  linear search: `(^|\s+)#.*$` backtracked over a long run of spaces with no `#`. */
+function uncomment(v: string): string {
+  const i = v.search(/(?:^|\s)#/);
+  return (i >= 0 ? v.slice(0, i) : v).trimEnd();
+}
 
 /** One frontmatter value as YAML reads it, from its first line and the indented lines after it. The
  *  server reads a SKILL.md the same way, so the editor shows what the agent is told:
@@ -47,9 +55,9 @@ export function frontmatterValue(first: string, more: string[]): string {
     if (q === "'") return body.replace(/''/g, "'");
     try { return JSON.parse(`"${body}"`) as string; } catch { return body.replace(/\\(.)/g, '$1'); }
   }
-  const head = t.replace(COMMENT, '');
+  const head = uncomment(t);
   if (/^[>|][1-9+-]{0,2}$/.test(head)) return lines.join(head.startsWith('|') ? '\n' : ' ');
-  return [head, ...lines.map((x) => x.replace(COMMENT, ''))].filter(Boolean).join(' ');
+  return [head, ...lines.map(uncomment)].filter(Boolean).join(' ');
 }
 
 /** SKILL.md split into its frontmatter's name and description, the other frontmatter lines (kept
@@ -58,7 +66,7 @@ export function frontmatterValue(first: string, more: string[]): string {
  *  value the editor saves, which no YAML reader accepts. */
 export function splitSkillMd(text: string): { name: string; description: string; rest: string[]; body: string } {
   const src = (text || '').replace(/^\uFEFF/, '');
-  const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/.exec(src);
+  const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/.exec(src.slice(0, FRONTMATTER_MAX));
   if (!m) return { name: '', description: '', rest: [], body: text || '' };
   const lines = m[1].split(/\r?\n/);
   let name = '', description = '';
@@ -66,8 +74,13 @@ export function splitSkillMd(text: string): { name: string; description: string;
   for (let i = 0; i < lines.length; i++) {
     const k = /^(name|description):\s*(.*)$/.exec(lines[i]);
     if (!k) { rest.push(lines[i]); continue; }
-    const more: string[] = [];
-    while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) more.push(lines[++i]);
+    // Its indented lines, and the blank lines between them (a block's second paragraph); a blank
+    // line after the last one belongs to the frontmatter.
+    let j = i + 1;
+    while (j < lines.length && (/^\s+\S/.test(lines[j]) || !lines[j].trim())) j++;
+    while (j > i + 1 && !lines[j - 1].trim()) j--;
+    const more = lines.slice(i + 1, j);
+    i = j - 1;
     const v = frontmatterValue(k[2], more);
     if (k[1] === 'name') name = v; else description = v;
   }
