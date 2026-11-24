@@ -450,6 +450,16 @@ def test_a_connection_string_with_no_database_says_so(api, kit):
     assert r.status_code == 400 and "names no database" in r.json()["error"]["message"]
 
 
+@pytest.mark.parametrize("port", ["abc", "99999", "0"])
+def test_an_invalid_connection_string_port_is_a_safe_error(api, kit, port):
+    password = "invalid-port-password"
+    r = _launch(api, kit, "postgres", f"postgresql://u:{password}@host:{port}/db")
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["code"] == "invalid_connection_string"
+    assert password not in err["message"]
+
+
 def test_no_key_to_encrypt_with_is_a_sentence_naming_the_variable(api, kit, monkeypatch):
     """The 501 the operator of a keyless instance must see. Not a 500, and not a plaintext write."""
     monkeypatch.delenv("HR_SECRET_KEY", raising=False)

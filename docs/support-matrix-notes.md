@@ -6,6 +6,22 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## Qwen4-Max (2026-11-22, six days after Alibaba released it)
+
+**What it is.** The first and so far only model of the Qwen 4 family (released 2026-11-16): closed weights, 1M-token context, text, image and video in, tools. Alibaba Cloud Model Studio names no preview, snapshot or `-latest` alias beside `qwen4-max` (its model and pricing pages, updated 2026-11-21). List price $1.50 in / $4.50 out per million tokens, cached input $0.075, one tier up to 1M; thinking is on by default at the provider and its tokens bill as output.
+
+**Which connections serve it.** On the test instance (main 93994cfc plus the qwen4-max placement), a real turn per pair on qwen, pi and hermes. A turn passed only if the served model was the one asked for and the turn echoed a unique codeword.
+
+| Connection | qwen | pi | hermes |
+|---|---|---|---|
+| OpenRouter (`qwen/qwen4-max`) | pass | pass | pass |
+| Vercel AI Gateway (`alibaba/qwen4-max`) | pass | pass | pass |
+| TokenRouter | `404 model_not_found` | `404 model_not_found` | `404 model_not_found` |
+
+TokenRouter's list leaves it out (`_TOKENROUTER_NO_CHANNEL`). LLMTR publishes `qwen/qwen4-max` with tools and is offered from that list; the test instance has no LLMTR connection, so it was not called, as for the GPT-6.2 line.
+
+**The Vercel and OpenRouter columns.** All five scenarios on every base that offers it: the 24 bases that offer Qwen3.8-Max, and fast-agent. 25 of 25 pairs pass on Vercel and 25 of 25 on OpenRouter, every turn on the column's own connection and served as Qwen4-Max itself. cline passes every scenario with its record `unlabelled`, because cline's turns don't report a served model (as for every model there). fast-agent offers it although it does not offer Qwen3.8-Max: that exclusion is for Qwen3.8-Max's own measured answer there, and Qwen4-Max passed. No default changed.
+
 ## GPT-6.2 Astra and Sol (2026-11-17, the day OpenAI released them)
 
 **Which connections serve them.** On the test instance (main 8b204a6a plus the 6.2 placement), a real turn per pair on codex and pi (both models) and qwen (Sol, chat-only). A turn passed only if the served model was the one asked for and the turn echoed a unique codeword.
