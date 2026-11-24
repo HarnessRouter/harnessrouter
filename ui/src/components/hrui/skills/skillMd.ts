@@ -20,32 +20,71 @@ export function skillSlug(n: string): string {
 }
 export const isSkillName = (n: string) => n.length <= SKILL_NAME_MAX && NAME_RE.test(n);
 
+/** What a frontmatter reader reads: a name and a description are short. */
+const FRONTMATTER_MAX = 65536;
+
+/** A value without its YAML comment, which starts at a `#` at the start or after whitespace. One
+ *  linear search: `(^|\s+)#.*$` backtracked over a long run of spaces with no `#`. */
+function uncomment(v: string): string {
+  const i = v.search(/(?:^|\s)#/);
+  return (i >= 0 ? v.slice(0, i) : v).trimEnd();
+}
+
+/** One frontmatter value as YAML reads it, from its first line and the indented lines after it. The
+ *  server reads a SKILL.md the same way, so the editor shows what the agent is told:
+ *  - a quoted value runs to its closing quote (over more lines if it has to) and a comment may
+ *    follow it; double quotes take backslash escapes, single quotes write a quote as '';
+ *  - a `>` block is joined with spaces and a `|` block keeps its lines;
+ *  - a plain value ends at a ` #` comment, and indented lines continue it. */
+export function frontmatterValue(first: string, more: string[]): string {
+  const lines = more.map((x) => x.trim()).filter(Boolean);
+  const t = first.trim();
+  if (t.startsWith('"') || t.startsWith("'")) {
+    const q = t[0];
+    const raw = [t, ...lines].join(' ');
+    let end = -1;
+    for (let i = 1; i < raw.length; i++) {
+      if (q === '"' && raw[i] === '\\') { i++; continue; }
+      if (raw[i] === q) {
+        if (q === "'" && raw[i + 1] === "'") { i++; continue; }
+        end = i;
+        break;
+      }
+    }
+    const body = end > 0 ? raw.slice(1, end) : raw.slice(1);
+    if (q === "'") return body.replace(/''/g, "'");
+    try { return JSON.parse(`"${body}"`) as string; } catch { return body.replace(/\\(.)/g, '$1'); }
+  }
+  const head = uncomment(t);
+  if (/^[>|][1-9+-]{0,2}$/.test(head)) return lines.join(head.startsWith('|') ? '\n' : ' ');
+  return [head, ...lines.map(uncomment)].filter(Boolean).join(' ');
+}
+
 /** SKILL.md split into its frontmatter's name and description, the other frontmatter lines (kept
- *  as they are), and the body the editor shows. */
+ *  as they are), and the body the editor shows. The indented lines that continue a name or a
+ *  description are part of it: left among the other lines, they were written back under the quoted
+ *  value the editor saves, which no YAML reader accepts. */
 export function splitSkillMd(text: string): { name: string; description: string; rest: string[]; body: string } {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/.exec(text || '');
+  const src = (text || '').replace(/^\uFEFF/, '');
+  const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/.exec(src.slice(0, FRONTMATTER_MAX));
   if (!m) return { name: '', description: '', rest: [], body: text || '' };
   const lines = m[1].split(/\r?\n/);
   let name = '', description = '';
   const rest: string[] = [];
-  const unq = (v: string) => {
-    const t = v.trim();
-    if (/^".*"$/.test(t)) { try { return JSON.parse(t) as string; } catch { return t.slice(1, -1); } }
-    return /^'.*'$/.test(t) ? t.slice(1, -1).replace(/''/g, "'") : t;
-  };
   for (let i = 0; i < lines.length; i++) {
     const k = /^(name|description):\s*(.*)$/.exec(lines[i]);
     if (!k) { rest.push(lines[i]); continue; }
-    let v = k[2];
-    // a block scalar (description: > or |) runs on over its indented lines
-    if (/^[>|][-+]?\s*$/.test(v.trim()) || v.trim() === '') {
-      const more: string[] = [];
-      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) more.push(lines[++i].trim());
-      v = more.join(v.trim().startsWith('|') ? '\n' : ' ');
-    } else v = unq(v);
+    // Its indented lines, and the blank lines between them (a block's second paragraph); a blank
+    // line after the last one belongs to the frontmatter.
+    let j = i + 1;
+    while (j < lines.length && (/^\s+\S/.test(lines[j]) || !lines[j].trim())) j++;
+    while (j > i + 1 && !lines[j - 1].trim()) j--;
+    const more = lines.slice(i + 1, j);
+    i = j - 1;
+    const v = frontmatterValue(k[2], more);
     if (k[1] === 'name') name = v; else description = v;
   }
-  return { name, description, rest, body: text.slice(m[0].length).replace(/^\r?\n/, '') };
+  return { name, description, rest, body: src.slice(m[0].length).replace(/^\r?\n/, '') };
 }
 
 /** SKILL.md's frontmatter, line by line, exactly as joinSkillMd writes it (the editor shows these). */

@@ -24289,34 +24289,79 @@ def _plugin_path_ok(path, name: str) -> str:
     return path
 
 
-def _plugin_frontmatter(text: str) -> dict:
-    """The top-level scalars of a SKILL.md frontmatter: plain values, quoted values, trailing
-    comments dropped, and `>` / `|` block scalars joined, which is what the Agent Skills fields
-    (name, description) are written with in practice."""
-    m = re.match(r"^---\r?\n(.*?)\r?\n---", text or "", flags=re.S)
-    out: dict = {}
-    key, block = None, None
-    for line in (m.group(1) if m else "").splitlines():
-        if line.startswith((" ", "\t")):
-            if key and block is not None:
-                block.append(line.strip())
+_FRONTMATTER_MAX = 65536     # what a SKILL.md frontmatter reader reads: a name and a description are short
+
+
+def _frontmatter_uncomment(v: str) -> str:
+    """v without a YAML comment, which starts at a `#` at the start or after whitespace. One linear
+    search: `(^|\\s+)#.*$` backtracked over a run of spaces with no `#` (20K spaces took 1.7 s and
+    200K minutes), and a plugin's SKILL.md reaches this reader in the gateway every org shares."""
+    m = re.search(r"(?:^|\s)#", v)
+    return (v[:m.start()] if m else v).rstrip()
+
+
+def _frontmatter_close(s: str, q: str) -> int:
+    """Where the quoted value that opens s ends: a double-quoted one skips backslash escapes, and in
+    a single-quoted one '' is a quote. -1 when it never closes."""
+    i = 1
+    while i < len(s):
+        if q == '"' and s[i] == "\\":
+            i += 2
             continue
-        if key and block is not None:
-            out[key] = " ".join(block).strip()
-            block = None
-        key = None
-        if ":" not in line:
+        if s[i] == q:
+            if q == "'" and s[i + 1:i + 2] == "'":
+                i += 2
+                continue
+            return i
+        i += 1
+    return -1
+
+
+def _frontmatter_value(v: str, more: list[str]) -> str:
+    """One top-level value, read as YAML reads it, given its first line and the indented lines
+    after it, joined into one line."""
+    lines = [x.strip() for x in more if x.strip()]
+    if v[:1] in ("'", '"'):
+        # A quoted value runs to its closing quote, over more lines if it has to, and a comment may
+        # follow it: `"Formats issues like #123" # note` is "Formats issues like #123". Double quotes
+        # take backslash escapes, which is how the console writes a description (JSON.stringify).
+        q, raw = v[0], " ".join([v] + lines)
+        end = _frontmatter_close(raw, q)
+        body = raw[1:end] if end > 0 else raw[1:]
+        if q == "'":
+            return body.replace("''", "'")
+        try:
+            return json.loads('"' + body + '"')
+        except ValueError:
+            return re.sub(r"\\(.)", r"\1", body)
+    head = _frontmatter_uncomment(v)
+    if re.fullmatch(r"[>|][1-9+-]{0,2}", head):
+        return " ".join(lines)              # a `>` or `|` block, as one line
+    # A plain value ends at a ` #` comment, and indented lines after it continue it; with nothing
+    # after the colon, the value is those lines.
+    rest = (_frontmatter_uncomment(x) for x in lines)
+    return " ".join(p for p in (head, *rest) if p)
+
+
+def _plugin_frontmatter(text: str) -> dict:
+    """The top-level scalars of a SKILL.md frontmatter, read as YAML reads the forms the Agent
+    Skills fields (name, description) are written in: a plain value (a ` #` comment ends it,
+    indented lines continue it), a double-quoted value with backslash escapes, a single-quoted
+    value ('' is one quote), and a `>` or `|` block. Each comes back as one line. The gateway's
+    SKILL.md readers all read it here, and the runner's _frontmatter reads it the same way."""
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", (text or "").lstrip("\ufeff")[:_FRONTMATTER_MAX], flags=re.S)
+    entries: list[tuple[str, str, list[str]]] = []
+    for line in (m.group(1) if m else "").splitlines():
+        if line.startswith((" ", "\t")) or not line.strip():
+            if entries:
+                entries[-1][2].append(line)
+            continue
+        if line.startswith("#") or ":" not in line:
+            entries.append(("", "", []))    # a comment or a stray line ends the value before it
             continue
         k, v = line.split(":", 1)
-        key, v = k.strip(), v.strip()
-        v = re.sub(r"\s+#.*$", "", v)
-        if v in (">", "|", ">-", "|-", ">+", "|+"):
-            block = []
-            continue
-        out[key] = v.strip("'\"")
-    if key and block is not None:
-        out[key] = " ".join(block).strip()
-    return out
+        entries.append((k.strip(), v.strip(), []))
+    return {k: _frontmatter_value(v, more) for k, v, more in entries if k}
 
 
 def _plugin_command_ok(cmd) -> str | None:
@@ -25442,17 +25487,21 @@ def _setup_build_plugin(t: str) -> dict:
     return {"name": label, "about": about, "tools": tools}
 
 
-def _setup_build_skill_md(files) -> str:
+def _setup_skill_md(files) -> str:
     md = next((f for f in files or [] if isinstance(f, dict) and str(f.get("path") or "").lower() == "skill.md"), None)
-    return str((md or {}).get("content") or "")[:1500]
+    return str((md or {}).get("content") or "")
+
+
+def _setup_build_skill_md(files) -> str:
+    return _setup_skill_md(files)[:1500]
 
 
 def _setup_skill_about(sk: dict) -> str:
-    """A skill's description, from its SKILL.md's frontmatter when it is inline ('' when it is not)."""
+    """A skill's description, from its SKILL.md's frontmatter when it is inline ('' when it is not).
+    The whole SKILL.md, not the builder's 1,500-character excerpt, so a long frontmatter still ends."""
     files = sk.get("files") if isinstance(sk.get("files"), list) else None
-    md = _setup_build_skill_md(files) if files else str(sk.get("content") or "")
-    m = re.search(r"^description:\s*(.+)$", md, re.MULTILINE)
-    return m.group(1).strip().strip("\"'")[:240] if m else ""
+    md = _setup_skill_md(files) if files else str(sk.get("content") or "")
+    return " ".join(str(_plugin_frontmatter(md).get("description") or "").split())[:240]
 
 
 def _setup_build_mcp_id(url: str) -> str:
