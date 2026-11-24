@@ -1757,3 +1757,23 @@ linux_runner_conformance_slice:
   rollback: "仅追加验证记录，无运行数据、协议版本或生产配置变更。"
   remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, real Provider validation]
   next_action: "在认证的 Gateway/Runner 组合环境接入受信任 native adapter；在四项证据齐全前保持 tool_approvals 不广告。"
+
+orchestration_completion_audit:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_orchestration_scope
+  baseline: 14b3d008
+  branch: codex/agent-orchestration
+  scope: "对照当前编排规范完成交付前审计；确认任务层支持的静态 DAG、条件、repeat、foreach、dynamic_plan、loop、嵌套 foreach、静态/动态/嵌套子编排、项级重试、终态恢复、事件、租约、回执和能力绑定均有实现与回归证据。"
+  acceptance_ids: [AC-15, AC-16, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-26, AC-28, AC-32, AC-34, AC-35, AC-36, AC-37, AC-38, AC-39, AC-40, AC-42]
+  references: [spec.md#当前编排边界, spec.md#有界静态子编排, spec.md#受限动态计划, spec.md#动态计划-dag, spec.md#集合项重试与执行清单, plan.md#2026-11-24-嵌套静态子编排调度审计]
+  verification:
+    sqlite: "cd hexa-api; python -X utf8 -m pytest -q tests/test_task_concurrency.py tests/test_task_workflows.py tests/test_dynamic_dag.py tests/test_fanout_resume.py tests/test_fanout_retry.py tests/test_nested_foreach.py tests/test_subgraph.py tests/test_subgraph_scheduling.py tests/test_tasks_api.py tests/test_run_events.py tests/test_execution_progress.py tests/test_orchestration_safety.py --tb=short; exit 0；306 passed in 448.11s。覆盖静态并发、条件、repeat、串并行 foreach、动态计划/DAG、循环、嵌套 foreach、静态/动态/嵌套子编排、项级重试、终态恢复、分页/事件、回执、租约和安全边界。"
+    postgres: "既有隔离 PostgreSQL 编排回归记录保持有效：动态 DAG、嵌套 foreach、子编排、重试/恢复、事件、回执、租约和 reconciliation 已通过；本轮未改生产实现或数据库 schema。"
+    linux_runner: "既有 Linux Runner conformance 记录保持有效：Plugin materialization、PLUGIN_ROOT/PLUGIN_DATA containment、stdio MCP、ACP permission hook、session continuation 和 fail-closed approval policy 112 passed。"
+    static: "PowerShell YAML safe_load、Python compile checks 和 git diff --check passed。"
+  conclusion: "当前 Hexa 任务层编排范围已完成并可进入交付评审；Run 运行时仍保持不可变快照、清单化派发、历史追加和不确定副作用不自动重放。"
+  security_review: "模型输出不能修改拓扑、Agent/model、Tool/Skill/MCP/Plugin、权限策略或能力快照；动态计划和子编排只接受受限结构；派发前校验 execution_binding；跨 Run、跨清单、跨 iteration 的引用与恢复被拒绝。"
+  limitations: [authenticated live Gateway/BYOK/Provider smoke, native pre-side-effect approval and exact continuation, UHP tool_approvals capability publication, deployed multi-replica failover]
+  remaining: [production native approval continuation, UHP approval capability negotiation, authenticated live Gateway/BYOK/Provider smoke, deployed multi-replica failover]
+  next_action: "编排进入交付评审；后续优先接入受信生产 Runner backend factory、Gateway Response/SSE continuation 和 UHP tool_approvals conformance，完成前保持该能力未广告。"
