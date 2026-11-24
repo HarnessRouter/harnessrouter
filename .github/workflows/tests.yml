@@ -111,6 +111,22 @@ jobs:
       # cache in the checkout.
       - run: sudo -E env "PATH=$PATH" HR_REQUIRE_ROOT_TESTS=1 python -m pytest runner/tests/test_root_writes_stay_in_the_session.py -q -rs -p no:cacheprovider
 
+  native-approval:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runner/native_tests/requirements.txt
+      # Separate optional Runtime environment; no provider or approval capability claims.
+      - run: python -m pip install -r runner/native_tests/requirements.txt
+      - run: python -m pytest -q runner/native_tests runner/tests/test_langgraph_approval_boundary.py
+
   integration:
     runs-on: ubuntu-latest
     steps:

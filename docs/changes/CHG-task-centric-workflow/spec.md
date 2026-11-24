@@ -557,6 +557,23 @@ checkpoint 可取得日志的单次 start 许可，派发使用保存的原参�
 SQLite 验证 Request 与密文原子创建、重开后恢复精确字节、并发只有一条 adapter 调用、所有 deny/expiry/revoke/change/failure
 零执行、损坏/错误 key 拒绝、执行异常和取消为 unknown。HTTP 读回不得泄漏密封字段；真实 native Runner 的端到端覆盖另验。
 
+### LangGraph checkpoint adapter 的受限验证边界
+
+为验证原生恢复语义，内部 adapter 只接受持久化 checkpointer 的根图中单个 HITL interrupt、单个 action_request，
+以及匹配工具名且同时允许 approve/reject 的 review_config。批量工具、子图 interrupt、内存 checkpointer、缺少
+checkpoint ID 或格式不明的 interrupt 均拒绝，不能退回 ACP 自动允许。工具身份来自可信 catalog，不能从标题推测权限。
+
+adapter 固定 thread/namespace/checkpoint/interrupt 身份、保存状态的完整性承诺和 checkpoint 内规范化工具参数，
+恢复前读取 thread 最新状态重新比较；checkpoint 推进或参数改变时零执行。参数以 Runtime 保存的对象为权威，
+不声称保留模型最初 JSON 文本的空格/键顺序。恢复只提交指向原 interrupt 的 `Command(resume=...)`，不提交新 prompt。
+读取、校验与恢复要求调用方持有同一 Runtime 的排他执行权；本 adapter 不提供跨进程 lease，不信任客户端的配置或原生许可。
+
+**AC-44 原生 checkpoint 受控切片：** 使用真实 LangChain HITL middleware、LangGraph 和 SQLite checkpointer，
+在独立重开的 Runtime 中仍恢复同一次工具调用；与 Gateway sealed gate/journal 组合验证待批零工具调用、批准并发只执行一次、
+deny/expiry/void/native deny 零执行、checkpoint/配置变化拒绝、start 后异常为 unknown 且不重放。测试模型为确定性受控模型，
+工具写临时文件；该证据不代表真实 Provider、现有 dcode ACP 的生产接线、Gateway Response/SSE、Hexa 审批 UI 或 UHP 发布。
+本切片中 durable deny 阻止恢复；把拒绝事实继续交回 Agent 的生产链路仍须另实现和验收。
+
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是

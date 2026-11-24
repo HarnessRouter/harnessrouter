@@ -1,0 +1,311 @@
+"""Real HITL graph + SQLite; deterministic model/tool, no Provider or UHP proof."""
+import asyncio
+from dataclasses import replace
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+import pytest
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'runner'))
+sys.path.insert(0, str(ROOT / 'gateway'))
+from approval_execution import BoundApprovalGate, Invocation
+from tool_approvals import ApprovalError, ApprovalJournal, ApprovalScope
+import control_sqlite
+try:
+    from langgraph_approval import NativeApprovalError, LangGraphApprovalAdapter
+except ModuleNotFoundError:
+    NativeApprovalError = LangGraphApprovalAdapter = None
+
+SCOPE = ApprovalScope('native-org', 'owner', 'native-session', 'native-response')
+TOOL = {'name': 'write_report', 'origin': 'runtime'}
+CONFIG = {'configurable': {'thread_id': 'native-session'}}
+
+
+class ScriptedModel(BaseChatModel):
+    """The only fake boundary: deterministically propose one real tool call."""
+    calls: int = 0
+    count: int = 1
+
+    @property
+    def _llm_type(self):
+        return 'controlled-native-approval-test'
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.calls += 1
+        if any(isinstance(message, ToolMessage) for message in messages):
+            answer = AIMessage(content='Report saved')
+        else:
+            answer = AIMessage(content='', tool_calls=[
+                {'name': 'write_report', 'args': {'text': 'private-report-marker'},
+                 'id': f'call-{index}', 'type': 'tool_call'} for index in range(self.count)])
+        return ChatResult(generations=[ChatGeneration(message=answer)])
+
+
+def graph(saver, path, model=None, crash=False):
+    @tool
+    def write_report(text: str) -> str:
+        """Append a report to the controlled temporary workspace."""
+        with path.open('a', encoding='utf-8') as stream:
+            stream.write(text + '\n')
+        if crash:
+            raise RuntimeError('private-tool-crash-marker')
+        return 'saved'
+
+    return create_agent(model or ScriptedModel(), tools=[write_report], checkpointer=saver,
+                        middleware=[HumanInTheLoopMiddleware(interrupt_on={
+                            'write_report': {'allowed_decisions': ['approve', 'reject']}})])
+
+
+def adapter(runtime, catalog=None):
+    assert LangGraphApprovalAdapter is not None, 'native checkpoint adapter is not implemented'
+    return LangGraphApprovalAdapter(runtime, CONFIG, catalog or {'write_report': TOOL})
+
+
+def gate_for(path):
+    return BoundApprovalGate(ApprovalJournal(control_sqlite.SqliteContainer(str(path)), control_sqlite), b'k' * 32)
+
+
+def bound(pending, **changes):
+    call = Invocation(command_id=pending.command_id, tool=pending.tool,
+                      arguments=pending.arguments, checkpoint=pending.checkpoint,
+                      workspace='controlled-workspace', runtime={'name': 'langgraph-test', 'version': '1.1.8'},
+                      policy_digest='a' * 64, capability_digest='b' * 64,
+                      credential_versions={}, environment_versions={})
+    return replace(call, **changes)
+
+
+async def decide(gate, call, choice='approve', record=None):
+    if record is None:
+        record = await gate.capture(SCOPE, call, expires_at=int(time.time()) + 600, preview='Write report')
+    req = record['request']
+    decision = {'type': 'tool_approval_response', 'approval_id': req['id'], 'command_id': call.command_id,
+                'request_hash': req['request_hash'], 'decision': choice}
+    first = await gate.journal.decide(SCOPE, call.command_id, decision, 'decision-key')
+    assert await gate.journal.decide(SCOPE, call.command_id, decision, 'decision-key') == first
+    return record
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_reopen_and_concurrent_approval_resumes_original_tool_once(tmp_path):
+    path, state, control = tmp_path / 'report.txt', tmp_path / 'runtime.db', tmp_path / 'control.db'
+    model = ScriptedModel()
+    async with AsyncSqliteSaver.from_conn_string(str(state)) as saver:
+        runtime = graph(saver, path, model)
+        await runtime.ainvoke({'messages': [('user', 'write report')]}, CONFIG)
+        assert not path.exists() and model.calls == 1
+        pending = await adapter(runtime).pending()
+        call = bound(pending)
+        record = await gate_for(control).capture(SCOPE, call, expires_at=int(time.time()) + 600, preview='Write report')
+        assert 'private-report-marker' not in json.dumps(record)
+        assert json.loads(pending.arguments) == {'text': 'private-report-marker'}
+
+    # Close/reopen both stores and reconstruct the graph. No replacement prompt/model request.
+    model = ScriptedModel()
+    async with AsyncSqliteSaver.from_conn_string(str(state)) as saver:
+        runtime = graph(saver, path, model)
+        native = adapter(runtime)
+        assert await native.pending() == pending
+        gate = gate_for(control)
+        await decide(gate, call, record=record)
+        current = bound(await native.pending())
+
+        async def dispatch(saved):
+            assert saved.arguments == call.arguments and saved.checkpoint == call.checkpoint
+            return await native.resume(pending, 'approve')
+
+        results = await asyncio.gather(*(gate.execute(SCOPE, call.command_id, 'resume-1', current,
+                                                     native_allowed=True, dispatch=dispatch) for _ in range(6)))
+        assert sum(result is not None for result in results) == 1
+        assert path.read_text().splitlines() == ['private-report-marker']
+        assert model.calls == 1  # only the answer AFTER the tool; no regenerated invocation
+        assert (await gate.journal.read(SCOPE, call.command_id))['receipt']['side_effect_state'] == 'completed'
+        assert not (await runtime.aget_state(CONFIG)).interrupts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reason', ['deny', 'expired', 'voided', 'native-deny', 'policy', 'capability', 'plugin'])
+async def test_gateway_denial_and_stale_consent_never_resume_native_tool(tmp_path, reason):
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = adapter(runtime)
+        pending = await native.pending()
+        call = bound(pending)
+        gate = gate_for(tmp_path / 'control.db')
+        record = await decide(gate, call, 'deny' if reason == 'deny' else 'approve')
+        if reason == 'expired':
+            gate.journal.clock = lambda: record['request']['expires_at'] + 1
+        elif reason == 'voided':
+            await gate.journal.void(SCOPE, call.command_id)
+        current = call
+        if reason == 'policy':
+            current = replace(call, policy_digest='c' * 64)
+        elif reason == 'capability':
+            current = replace(call, capability_digest='d' * 64)
+        elif reason == 'plugin':
+            current = replace(call, tool={'name': 'write_report', 'origin': 'plugin', 'plugin_name': 'report',
+                                         'plugin_version': '2', 'plugin_digest': 'e' * 64})
+        with pytest.raises(ApprovalError):
+            await gate.execute(SCOPE, call.command_id, 'resume', current, native_allowed=reason != 'native-deny',
+                               dispatch=lambda saved: native.resume(pending, 'approve'))
+        assert not path.exists()
+        assert (await runtime.aget_state(CONFIG)).interrupts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['checkpoint', 'arguments'])
+async def test_native_checkpoint_change_blocks_resume_even_with_saved_approval(tmp_path, change):
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = adapter(runtime)
+        pending = await native.pending()
+        snapshot = await runtime.aget_state(CONFIG)
+        if change == 'arguments':
+            message = snapshot.values['messages'][-1].model_copy(deep=True)
+            message.tool_calls[0]['args'] = {'text': 'replaced'}
+            await runtime.aupdate_state(CONFIG, {'messages': [message]})
+        else:
+            await runtime.aupdate_state(CONFIG, {'messages': []})
+        with pytest.raises(NativeApprovalError, match='native_approval_changed'):
+            await native.resume(pending, 'approve')
+        assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_native_reject_continues_without_running_the_tool(tmp_path):
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = adapter(runtime)
+        await native.resume(await native.pending(), 'deny')
+        assert not path.exists()
+        assert not (await runtime.aget_state(CONFIG)).interrupts
+
+
+@pytest.mark.asyncio
+async def test_native_error_after_effect_is_unknown_and_gateway_never_replays(tmp_path):
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path, crash=True)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = adapter(runtime)
+        pending = await native.pending()
+        call = bound(pending)
+        gate = gate_for(tmp_path / 'control.db')
+        await decide(gate, call)
+        with pytest.raises(RuntimeError):
+            await gate.execute(SCOPE, call.command_id, 'resume', call, native_allowed=True,
+                               dispatch=lambda saved: native.resume(pending, 'approve'))
+        receipt = (await gate.journal.read(SCOPE, call.command_id))['receipt']
+        assert receipt['side_effect_state'] == 'unknown' and receipt['reconciliation_required'] is True
+        assert await gate.execute(SCOPE, call.command_id, 'resume', call, native_allowed=True,
+                                  dispatch=lambda saved: native.resume(pending, 'approve')) is None
+        assert path.read_text().splitlines() == ['private-report-marker']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('unsupported', ['memory', 'batch', 'unknown-tool'])
+async def test_unsupported_checkpoint_or_tool_coverage_is_refused(tmp_path, unsupported):
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        selected = InMemorySaver() if unsupported == 'memory' else saver
+        runtime = graph(selected, path, ScriptedModel(count=2 if unsupported == 'batch' else 1))
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        assert LangGraphApprovalAdapter is not None, 'native checkpoint adapter is not implemented'
+        with pytest.raises(NativeApprovalError, match='native_approval_unavailable'):
+            await adapter(runtime, {'other': {'name': 'other', 'origin': 'runtime'}} if unsupported == 'unknown-tool' else None).pending()
+        assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_sqlite_is_not_a_durable_checkpoint(tmp_path):
+    async with AsyncSqliteSaver.from_conn_string(':memory:') as saver:
+        runtime = graph(saver, tmp_path / 'report.txt')
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        with pytest.raises(NativeApprovalError, match='^native_approval_unavailable$'):
+            await adapter(runtime).pending()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_native_adapter_resume_revalidates_after_first_completion(tmp_path):
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = adapter(runtime)
+        pending = await native.pending()
+        results = await asyncio.gather(*(native.resume(pending, 'approve') for _ in range(4)), return_exceptions=True)
+        assert sum(isinstance(result, dict) for result in results) == 1
+        assert sum(isinstance(result, NativeApprovalError) for result in results) == 3
+        assert path.read_text().splitlines() == ['private-report-marker']
+
+
+def test_separate_process_restarts_resume_saved_native_checkpoint(tmp_path):
+    def process(phase):
+        result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(__file__).resolve()), phase, str(tmp_path)],
+                                capture_output=True, text=True, timeout=45,
+                                env={**os.environ, 'LANGSMITH_TRACING': 'false', 'LANGCHAIN_TRACING_V2': 'false'})
+        assert result.returncode == 0, result.stderr
+        assert 'private-report-marker' not in result.stdout
+        return json.loads(result.stdout)
+    first = process('capture')
+    assert first['state'] == 'pending' and not (tmp_path / 'report.txt').exists()
+    second = process('resume')
+    assert second['request_hash'] == first['request_hash'] and second['state'] == 'completed'
+    third = process('replay')
+    assert third['request_hash'] == first['request_hash'] and third['state'] == 'completed'
+    assert (tmp_path / 'report.txt').read_text().splitlines() == ['private-report-marker']
+
+
+async def _process_journey(phase, folder):
+    """Separate OS processes share only two SQLite stores; no serialized fake state."""
+    async with AsyncSqliteSaver.from_conn_string(str(folder / 'runtime.db')) as saver:
+        runtime = graph(saver, folder / 'report.txt')
+        native = adapter(runtime)
+        gate = gate_for(folder / 'control.db')
+        if phase == 'capture':
+            await runtime.ainvoke({'messages': [('user', 'write report')]}, CONFIG)
+            call = bound(await native.pending())
+            record = await gate.capture(SCOPE, call, expires_at=int(time.time()) + 600, preview='Write report')
+            (folder / 'command.txt').write_text(call.command_id)
+        else:
+            command = (folder / 'command.txt').read_text()
+            call = await gate.load(SCOPE, command)
+            record = await gate.journal.read(SCOPE, command)
+            if phase == 'resume':
+                await decide(gate, call, record=record)
+                pending = await native.pending()
+                await gate.execute(SCOPE, command, 'process-resume', bound(pending), native_allowed=True,
+                                   dispatch=lambda saved: native.resume(pending, 'approve'))
+            else:
+                async def forbidden(saved):
+                    raise AssertionError('completed command was replayed')
+                assert await gate.execute(SCOPE, command, 'process-resume', call, native_allowed=True,
+                                          dispatch=forbidden) is None
+            record = await gate.journal.read(SCOPE, command)
+        print(json.dumps({'request_hash': record['request']['request_hash'],
+                          'state': record.get('receipt', {}).get('side_effect_state', record['state'])}))
+
+
+if __name__ == '__main__':
+    asyncio.run(_process_journey(sys.argv[1], Path(sys.argv[2])))

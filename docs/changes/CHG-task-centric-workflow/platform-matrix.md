@@ -87,6 +87,21 @@ Windows/Python 3.13 的 `runner/tests/test_acp_turn.py -k permission` 通过，�
 未作为通过证据。Linux ACP 终端、真实 Agent、native checkpoint、Gateway durable approval 和 UHP capability 仍为
 `not_evaluated`，本切片不宣称工具审批已完成。
 
+## 2026-11-24 LangGraph native checkpoint adapter
+
+Windows/Python 3.13 and the Linux Runner image used the optional, isolated
+`runner/native_tests/requirements.txt`; both ran the real LangGraph HITL
+middleware, SQLite checkpointer, Gateway sealed invocation gate and durable
+journal. The controlled suite passed 31 tests on each platform, including
+separate process capture/resume/replay, concurrent single start, deny/expiry/
+void/native deny, changed checkpoint/configuration, and unknown-after-effect.
+The boundary suite rejects memory checkpoints, batch/subgraph/free-form or
+unsupported interrupts. This adapter is unregistered and its dependencies are
+not part of ordinary Runner installation. Production Runner registration,
+cross-process Runtime lease, dcode ACP, Response/SSE continuation, durable
+denial continuation, real Provider, UHP capability publication and deployment
+remain not_evaluated; `tool_approvals` is still not advertised.
+
 ## 2026-11-24 Run capability binding
 
 Windows/Python 3.13 的 Gateway Harness 摘要、Hexa API Gateway SSE、能力快照和 NodeRun 传播测试通过；摘要只覆盖安全能力身份，

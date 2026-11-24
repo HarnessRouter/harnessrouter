@@ -65,3 +65,11 @@ An internal journal is implemented in `gateway/tool_approvals.py`, reusing the c
 The internal bound gate is implemented in `gateway/approval_execution.py`. It validates bounded UTF-8 JSON arguments, keeps the original argument bytes and opaque native checkpoint, derives RFC 8785/HMAC commitments, and seals the descriptor, arguments and checkpoint with AES-GCM in the same control-store create as the public request. A restart or concurrent resume can dispatch only the saved invocation after a fresh binding and one durable start permit; adapter exceptions and cancellation become `unknown` and are never blindly replayed. This is an adapter boundary and a controlled SQLite/callback proof, not native Runtime coverage. It does not register a runtime, produce SSE, resume a Response, or advertise `tool_approvals`.
 
 The HTTP endpoints do not compute RFC 8785 descriptors or prove pre-side-effect interception. No runtime has approval coverage; exact Response resume, SSE and Hexa integration remain unimplemented. Recovery is explicit and requires confirmation that the owning runtime/lease has stopped; it must not race a live owner. Records have no automatic TTL so expiry cannot silently free a command for execution again; retention requires a later audited cleanup policy. HTTP read/decision responses use `Cache-Control: no-store`; storage outages return safe 503 errors rather than missing-record or successful-decision responses. Replaying a saved decision after expiry/revocation returns the original receipt only and never restores execution eligibility.
+
+An unregistered internal LangGraph adapter now exercises actual HITL interrupts and persistent SQLite checkpoints
+with the sealed gate in a [controlled native suite](../../../runner/native_tests/README.md). A scripted model proposes
+one tool, a real tool writes a temporary file, and separate processes capture, resume and replay the same stored
+decision. It covers single root interrupts only; it does not integrate dcode ACP, authenticate a Runner, provide
+an execution lease, continue a durable denial, produce Response/SSE or advertise any capability. Checkpoint argument
+objects are authoritative for this adapter; it makes no claim to preserve original model JSON text. Production
+coverage, provider verification and A-01–A-09 remain open.

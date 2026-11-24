@@ -1,4 +1,20 @@
 id: CHG-task-centric-workflow
+langgraph_native_checkpoint_slice:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 8e110b34
+  branch: codex/agent-orchestration
+  status: in_progress
+  references: [spec.md#langgraph-checkpoint-adapter-的受限验证边界, plan.md#2026-11-24-langgraph-原生-checkpoint-受控切片]
+  acceptance_ids: [AC-44]
+  reuse_decision: extend internal Runner checkpoint boundary and reuse Gateway sealed invocation gate; no public Runtime registration
+  verification:
+    red: "新增 native suite 首次因 runner/langgraph_approval.py 不存在而收集失败；修复模型签名后仍因 adapter 未实现失败，分别证明目标测试和覆盖边界先于实现。"
+    windows: "python -X utf8 -m pytest -q runner/native_tests/test_langgraph_approval.py runner/tests/test_langgraph_approval_boundary.py runner/tests/test_approval_policy_boundary.py --tb=short; exit 0；31 passed。Gateway durable approval 回归另行 136 passed。"
+    linux: "runner 镜像安装 runner/native_tests/requirements.txt 后，pytest -p no:cacheprovider native suite、boundary、ACP、dcode 和 policy；exit 0；31 passed。完整 Gateway approval/journal/schema 回归 136 passed。"
+    static: "python -m py_compile runner/langgraph_approval.py runner/native_tests/test_langgraph_approval.py runner/tests/test_langgraph_approval_boundary.py；git diff --check；passed。"
+  security_review: "adapter 只接受持久化 SQLite 根图单 interrupt/单 action，tool 身份来自可信 catalog；拒绝内存、批量、子图、free-form、allow-only review 和异常 task。恢复重新读取 checkpoint 并只提交原 interrupt；参数不经客户端替换。跨进程唯一 start 仍由 Gateway gate，adapter 自身锁不作 lease。"
+  remaining: [adapter implementation and controlled native tests, production Runtime lease and registration, durable deny continuation, Response/SSE, UHP and Hexa integration, live Provider]
 workflow_approval_policy_boundary:
   date: "2026-11-24"
   owner: Codex

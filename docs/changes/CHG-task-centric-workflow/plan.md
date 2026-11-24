@@ -304,3 +304,15 @@ RunEvent、Lease 和全任务 API 回归。真实 PostgreSQL、Linux/Runner、Pr
 复用 AC-32 的两层静态作用域、AC-15 总并发和现有 NodeRun 清单。先用行为测试暴露内层上限被固定为 1、外层依赖/槽位未约束内层启动，以及嵌套展开/聚合配额缺口；再统一每层就绪和容量计算。内层作用域占一个外层槽位，其叶子只受内层和顶层实际调用上限限制。记录预算沿用 node_record_usage，并为运行中的子图聚合预留；追加清单前完成容量检查，输出序列化后检查字节上限。项级重试按实际复制的完整父子清单计算预算。保持工作流快照、历史和审批门禁不变。
 
 验证纯调度/预算单元、真实 API/SQLite 与 PostgreSQL 集成、现有浏览器嵌套恢复旅程及动态 DAG/foreach/恢复相关回归。实际命令、Red/Green 和未验证边界统一写入 change-record.yaml。没有数据库迁移或 UHP 发布；回退执行器变更时停止受影响活动 Run，历史记录保留。
+
+## 2026-11-24 LangGraph 原生 checkpoint 受控切片
+
+依据 AC-44，复用 Runner 内部 adapter 边界和 Gateway BoundApprovalGate，不改现有 ACP prompt 语义。
+先通过真实 HITL middleware、确定性测试模型、SQLite checkpointer 的失败测试约束副作用前暂停和 exact resume；
+实现仅支持根图、一个 interrupt 和一个 action 的 adapter。可信 catalog 决定 tool provenance，checkpoint 的参数对象
+是本切片执行参数真源。完整 state 序列化仅作为私有完整性承诺，不暴露到普通运行日志或 public hash。
+
+测试分层：纯 adapter 格式/覆盖边界单元；真实 graph/checkpointer 与 Gateway journal/gate 集成；重开原生 Runtime
+并从已保存 checkpoint 批准后写临时文件的受控旅程。Windows 和 Linux 分别执行，测试依赖单独固定版本，
+不把 LangGraph 安装到现有所有 Runner 的公共依赖。生产 Runtime 的进程锁/lease、可信登记、durable deny continuation、
+Response/SSE、UHP/Hexa 能力门禁继续保留；不得以本切片解除门禁。回退仅删除内部未注册 adapter 及测试，审批历史不变。
