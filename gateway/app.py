@@ -15221,26 +15221,24 @@ async def _ssrf_check(url: str) -> str | None:
     common setup, the operator already has full access to that machine, and blocking it would
     remove a real capability while protecting nobody from anybody.
     """
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+        # urlparse checks a port only when it is read, so it is read here: "host:abc" or "host:99999" is an
+        # address that is not valid, and reading it later raised past every caller as a 500.
+        port = u.port
+    except Exception:  # noqa: BLE001
+        return "invalid url"
     if _pool_is_local():
-        from urllib.parse import urlparse
-        try:
-            u = urlparse(url)
-        except Exception:  # noqa: BLE001
-            return "invalid url"
         if u.scheme not in ("http", "https"):
             return "MCP endpoints must be http or https"
         return None if u.hostname else "url has no host"
 
-    from urllib.parse import urlparse
-    try:
-        u = urlparse(url)
-    except Exception:  # noqa: BLE001
-        return "invalid url"
     if u.scheme != "https":
         return "only https MCP endpoints are allowed"
     if not u.hostname:
         return "url has no host"
-    return await _internal_target(u.hostname, u.port or 443)
+    return await _internal_target(u.hostname, port or 443)
 
 
 # The internal ranges Python's own classifiers do not call internal. Named here rather than folded
@@ -17098,11 +17096,12 @@ async def _provider_url_check(url: str) -> str | None:
     refused = "the finished file was offered from an address this will not fetch"
     try:
         u = urlparse(url)
+        port = u.port   # checked only when read (a port that is not a number, or out of range)
     except Exception:  # noqa: BLE001
         return refused
     if u.scheme not in ("http", "https") or not u.hostname:
         return refused
-    bad = await _internal_target(u.hostname, u.port or (443 if u.scheme == "https" else 80))
+    bad = await _internal_target(u.hostname, port or (443 if u.scheme == "https" else 80))
     if not bad:
         return None
     # The host, in the log, where an operator can act on it — and only the host: a result_url
@@ -22520,9 +22519,10 @@ def _own_service_address(url: str) -> str:
     """Why this address is this instance's own gateway or runner, which is not a memory service."""
     try:
         u = urllib.parse.urlsplit(url)
+        port = u.port or 0   # checked only when read (a port that is not a number, or out of range)
     except ValueError:
         return "it is not a valid address"
-    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and (u.port or 0) in (3000, 8080, 8081):
+    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and port in (3000, 8080, 8081):
         return "it is this instance itself"
     return ""
 
@@ -26064,6 +26064,7 @@ async def _cloud_base_refused(base: str) -> str | None:
     from urllib.parse import urlparse
     try:
         u = urlparse(str(base or ""))
+        port = u.port   # checked only when read (a port that is not a number, or out of range)
     except ValueError:
         return "invalid url"
     if not u.hostname:
@@ -26072,7 +26073,7 @@ async def _cloud_base_refused(base: str) -> str | None:
         return None if u.scheme in ("http", "https") else "the address must be http or https"
     if u.scheme != "https":
         return "only https addresses are allowed"
-    return await _internal_target(u.hostname, u.port or 443)
+    return await _internal_target(u.hostname, port or 443)
 
 
 class _CloudKeyRefused(HTTPException):
