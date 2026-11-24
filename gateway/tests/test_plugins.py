@@ -116,6 +116,34 @@ def test_no_manifest_is_refused(api):
     assert r.status_code == 422 and r.json()["error"]["code"] == "plugin_invalid"
 
 
+@pytest.mark.parametrize("text,where", [
+    ('{"name": "x"', "line 1 column 13"),                       # the closing brace is missing
+    ('{\n  "name": "x",\n}', "line 3 column 1"),                # a trailing comma
+])
+def test_a_malformed_manifest_is_refused_with_where_the_parser_stopped(api, text, where):
+    """#725, the gateway's half: an API caller sees where the mistake is, and never the file's text."""
+    files = [{"path": "plugin.json", "content": text}] + _package(manifest=None)
+    r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code", "plugins": [{"files": files}]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "plugin_invalid"
+    reason = r.json()["error"]["detail"]["reason"]
+    assert reason.startswith("plugin.json is not valid JSON: ") and reason.endswith(where), reason
+    assert '"name"' not in r.json()["error"]["message"]
+
+
+def test_a_manifest_that_is_not_utf8_says_so(api):
+    files = [{"path": "plugin.json", "content_b64": "/w=="}] + _package(manifest=None)
+    r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code", "plugins": [{"files": files}]})
+    assert r.status_code == 422 and r.json()["error"]["detail"]["reason"] == "plugin.json is not UTF-8 text"
+
+
+def test_a_malformed_mcp_json_is_skipped_with_where_the_parser_stopped(api):
+    files = _package(manifest=MANIFEST) + [{"path": "mcp.json", "content": '{"mcpServers": {'}]
+    h = _create(api, plugins=[{"files": files}])
+    (pl,) = h["plugins"]
+    [skip] = [s for s in pl["skipped"] if s["path"] == "mcp.json"]
+    assert skip["reason"].startswith("mcp.json is not valid JSON: ") and "line 1 column" in skip["reason"]
+
+
 def test_unknown_schema_is_refused_naming_the_supported_ones(api):
     m = {**MANIFEST, "$schema": "https://agent-plugins.org/schemas/0.0.1/plugin.schema.json"}
     r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code",
