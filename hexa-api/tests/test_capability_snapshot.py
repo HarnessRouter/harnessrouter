@@ -74,3 +74,31 @@ def test_run_preflight_rejects_skipped_enabled_plugin(client, app):
     )
     assert response.status_code == 422
     assert response.json()['detail']['code'] == 'configuration_unavailable'
+
+
+def test_run_dispatch_carries_gateway_capability_digest_from_the_run_snapshot(client, app):
+    from tests.test_task_workflows import node, wait_run
+    from tests.test_conversations import login
+
+    digest = 'a' * 64
+    captured = []
+    login(client)
+
+    async def listed_agents(_api_key):
+        return [{"id": "agent-1", "name": "产品分析师", "base": "openai",
+                 "default_model": "gpt-6.1", "capabilityDigest": digest}]
+
+    async def response(text, previous, key, **kwargs):
+        captured.append(kwargs)
+        return {"response_id": "capability-bound", "text": "ok", "status": "completed"}
+
+    app.state.gateway.list_agents = listed_agents
+    app.state.gateway.create_response = response
+    task = client.post('/api/hexa/tasks', json={
+        'title': 'Capability binding',
+        'workflow': {'nodes': [node('work', model='gpt-6.1', final_report=True)]},
+    }).json()
+    started = client.post(f'/api/hexa/tasks/{task["id"]}/runs', headers={'Idempotency-Key': 'capability-bound'}).json()
+    completed = wait_run(client, started['id'], {'completed', 'failed'})
+    assert completed['status'] == 'completed', completed
+    assert captured and captured[0]['capability_digest'] == digest

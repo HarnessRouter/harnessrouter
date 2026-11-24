@@ -11,10 +11,12 @@ import httpx
 class GatewayError(RuntimeError):
     """A safe, user-facing Gateway failure without upstream secrets."""
 
-    def __init__(self, message: str, *, uncertain: bool = False, response_id: str | None = None):
+    def __init__(self, message: str, *, uncertain: bool = False, response_id: str | None = None,
+                 code: str = ''):
         super().__init__(message)
         self.uncertain = uncertain
         self.response_id = response_id
+        self.code = code
 
 
 class GatewayClient:
@@ -194,12 +196,14 @@ class GatewayClient:
     async def cancel_response(self, response_id: str):
         return await self.json_request('POST', f'/v1/responses/{quote(response_id, safe="")}/cancel')
 
-    async def create_response(self, text: str, previous_response_id: str | None, idempotency_key: str, *, agent_id: str = '', model: str = '', workspace_id: str = '', content: list | None = None, on_progress=None, on_execution=None) -> dict[str, Any]:
+    async def create_response(self, text: str, previous_response_id: str | None, idempotency_key: str, *, agent_id: str = '', model: str = '', workspace_id: str = '', capability_digest: str = '', content: list | None = None, on_progress=None, on_execution=None) -> dict[str, Any]:
         from app.gateway.execution import PublicExecution
         execution = PublicExecution()
         payload: dict[str, Any] = {"input": [{"role": "user", "content": content or text}], "stream": True, "store": True}
         if agent_id:
             payload['metadata'] = {'harness_id': agent_id}
+            if capability_digest:
+                payload['metadata']['capability_digest'] = capability_digest
         if model:
             payload['model'] = model
         if previous_response_id:
@@ -211,7 +215,15 @@ class GatewayClient:
                     if response.status_code in (401, 403):
                         raise GatewayError("Gateway 鉴权失败。")
                     if not response.is_success:
-                        raise GatewayError("Gateway 请求失败。", uncertain=response.status_code >= 500)
+                        code = ''
+                        try:
+                            body = await response.aread()
+                            parsed = json.loads(body.decode('utf-8')) if body else {}
+                            code = str((parsed.get('error') or {}).get('code') or '') if isinstance(parsed, dict) else ''
+                        except (UnicodeDecodeError, ValueError):
+                            pass
+                        raise GatewayError("Gateway 请求失败。", uncertain=response.status_code >= 500,
+                                            code=code)
                     response_id = ""
                     text_parts: list[str] = []
                     final_status = ""

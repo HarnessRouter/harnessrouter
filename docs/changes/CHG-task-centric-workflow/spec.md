@@ -696,6 +696,7 @@ Run，并通过 `subgraph_parent_node_run_id` 和显式清单区分作用域。�
 - **AC-37 显式 reconciliation：** 对带已有 `response_id` 的 unknown 回执，读取 Gateway terminal 状态可以一次性收敛 NodeRun、回执和事实事件；running、读取失败和缺少 response ID 保持 unknown；重复幂等请求不重新查询、不调用 `create_response`，不得由 reconciliation 产生新的 Agent 副作用。
 - **AC-38 能力快照：** Run 创建前读取 UHP discovery 和每个实际使用 Harness 的 direct/plugin/builtin/runtime 能力，保留启用状态、来源、插件 manifest/package/component digest、skipped、disabled tools 与组合 digest；快照不得包含 headers、auth、env、凭据、插件文件或工具参数，动态项和子编排只能继承该快照。
 - **AC-39 Plugin preflight：** 启用 Plugin 的 skipped、缺少 package、冲突、unsupported transport 或缺少必要 UHP capability 在首个 NodeRun 前返回 `configuration_unavailable`；disabled Plugin 可被审计但其派生 MCP/Skill/Tool 不进入有效组合；不支持审批的 Gateway 不得被任务层宣称为支持工具审批。
+- **AC-42 能力绑定：** Gateway Harness 详情返回由 Gateway 计算的 secret-free `capabilityDigest`。Run snapshot 保存该值；每次 NodeRun 派发将其作为 `metadata.capability_digest` 回传。Gateway 在 session/provider/Runner 分配前重新计算当前 Harness 摘要，摘要格式非法返回 `invalid_input`，摘要变化返回 `hexa_capability_changed`，不得执行节点。旧 Gateway/fixture 未返回摘要时保持兼容，但不能声称具有该一致性门禁。
 - **AC-40 子编排项级重试：** 活动 Run 中子编排清单里的失败/取消 `subgraph_node` 可以按项重试；服务端追加新的 attempt，成功兄弟和旧失败记录保持不变，父聚合在当前清单全部完成后才成功。嵌套子编排必须同时重映射父子清单；终态恢复继续创建新 Run，不能修改旧 Run。清单外、其他 Run、其他 iteration、成功项和聚合项必须拒绝。
 
   子编排历史界面同时支持第一层失败项和第二层失败叶子的上述操作。第二层操作仅在已加载分页中存在当前父控制清单包含的外层记录、其内层清单包含目标叶子、父子归属及 Run/节点/iteration 一致时显示；父记录尚未加载时不推断可恢复。点击提交叶子 ID，由服务端重新校验完整清单；成功兄弟只复用结果，终态旧 Run 及其尝试保持不变。

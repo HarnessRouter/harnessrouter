@@ -132,6 +132,10 @@ def capability_snapshot(agent, discovery=None):
         plugins.append(plugin_record)
     effective = {
         'agent_id': str(agent.get('id') or ''), 'base': str(agent.get('base') or ''),
+        # Gateway owns this digest. Hexa retains its own secret-free snapshot digest below, but
+        # sends this value back on every NodeRun so Gateway can reject a changed Harness before
+        # allocating a session or dispatching a provider call.
+        'gateway_capability_digest': str(agent.get('capabilityDigest') or agent.get('capability_digest') or ''),
         'components': sorted(components, key=lambda item: (item.get('kind', ''), item.get('name', ''), item.get('plugin', ''))),
         'disabled_tools': sorted({str(item) for item in (agent.get('disabledTools', agent.get('disabled_tools', [])) or []) if isinstance(item, str)}),
         'plugins': plugins,
@@ -1198,12 +1202,16 @@ class TaskExecutor:
             'model': item.get('model', ''),
             'context': context,
         }).encode()).hexdigest()
+        run_snapshot = {}
         with self.session_factory() as db:
             if lease_fence is not None:
                 run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
                 if not run or run.lease_owner != self.lease_owner or run.lease_fence != lease_fence or (lease_lost and lease_lost.is_set()):
                     db.rollback()
                     return
+            current_run = db.get(Run, run_id)
+            if current_run:
+                run_snapshot = json.loads(current_run.snapshot_json)
             receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == attempt_id))
             if receipt is None:
                 receipt = CommandReceipt(node_run_id=attempt_id, command_id=command_id,
@@ -1236,7 +1244,12 @@ class TaskExecutor:
         async def execution(details):
             save_progress(details=details)
         try:
-            result = await self.gateway.create_response(encoded(context), None, f'hexa-task-{run_id}-{attempt_id}', agent_id=item['agent_id'], model=item['model'], workspace_id=workspace_id, on_progress=progress, on_execution=execution)
+            agent_snapshot = (run_snapshot.get('capabilities') or {}).get(item.get('agent_id', ''), {})
+            result = await self.gateway.create_response(
+                encoded(context), None, f'hexa-task-{run_id}-{attempt_id}',
+                agent_id=item['agent_id'], model=item['model'], workspace_id=workspace_id,
+                capability_digest=agent_snapshot.get('gateway_capability_digest', ''),
+                on_progress=progress, on_execution=execution)
             if result.get('execution'):
                 await execution(result['execution'])
             if result.get('status') != 'completed':
@@ -1247,7 +1260,10 @@ class TaskExecutor:
             raise
         except Exception as exc:
             exception_response_id = getattr(exc, 'response_id', None)
-            error = 'agent_failed' if isinstance(exc, GatewayError) and not exc.uncertain else 'interrupted_unknown_outcome'
+            error = ('configuration_changed' if isinstance(exc, GatewayError)
+                     and getattr(exc, 'code', '') == 'hexa_capability_changed'
+                     else 'agent_failed' if isinstance(exc, GatewayError) and not exc.uncertain
+                     else 'interrupted_unknown_outcome')
         uncertain = error == 'interrupted_unknown_outcome'
         with self.session_factory() as db:
             run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())

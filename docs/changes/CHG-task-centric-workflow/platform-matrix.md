@@ -87,4 +87,11 @@ Windows/Python 3.13 的 `runner/tests/test_acp_turn.py -k permission` 通过，�
 未作为通过证据。Linux ACP 终端、真实 Agent、native checkpoint、Gateway durable approval 和 UHP capability 仍为
 `not_evaluated`，本切片不宣称工具审批已完成。
 
+## 2026-11-24 Run capability binding
+
+Windows/Python 3.13 的 Gateway Harness 摘要、Hexa API Gateway SSE、能力快照和 NodeRun 传播测试通过；摘要只覆盖安全能力身份，
+不包含 MCP headers、env、auth 或插件文件。Gateway 在请求进入 session/provider/Runner 前校验 `metadata.capability_digest`，
+旧 Gateway/fixture 因未返回摘要继续兼容但不具备一致性门禁。Linux、真实多副本 Gateway、Provider、Runner 和部署环境仍为
+`not_evaluated`；本切片没有新增 UHP `tool_approvals` capability。
+
 复用 ORM 与持久化 JSON 引用，无数据库列、Shell、原生模块或系统路径变更。Windows / SQLite 覆盖新 Run 恢复、引用身份和旧历史不变；HTTP 夹具覆盖实际 GatewayClient、失败响应、补跑和重启只读。当前源码真实 PostgreSQL、Linux 与真实 Provider 仍 not_evaluated；本批未新增迁移，也不宣称可发布。最终测试数量及 Chromium 流程证据见 Change `terminal_fanout_resume`；新增项级 UI 入口仍属后续工作。

@@ -4458,6 +4458,100 @@ def _mcp_list(v: dict | None) -> list[dict]:
     return [s for s in a if isinstance(s, dict)] if isinstance(a, list) else []
 
 
+def _capability_mcp_summary(server: dict) -> dict:
+    """Return the non-secret identity of one MCP server for a run binding.
+
+    Headers and environment values are deliberately excluded.  They are runtime credentials,
+    not capability identity, and must never become recoverable from a public digest.  The fields
+    here are the fields that decide which server the runner is asked to mount.
+    """
+    result = {
+        "name": str(server.get("name") or ""),
+        "transport": str(server.get("transport") or server.get("type") or ""),
+    }
+    for key in ("url", "command", "cwd"):
+        value = server.get(key)
+        if isinstance(value, str) and value:
+            if key == "url":
+                parts = urllib.parse.urlsplit(value)
+                value = urllib.parse.urlunsplit((parts.scheme, parts.hostname or "", parts.path, "", ""))
+            result[key] = value
+    if isinstance(server.get("args"), list):
+        result["args"] = [str(item) for item in server["args"][:32]]
+    return result
+
+
+def _capability_skill_summary(skill: dict) -> dict:
+    result = {"name": str(skill.get("name") or skill.get("id") or "")}
+    if isinstance(skill.get("description"), str):
+        result["description"] = skill["description"]
+    return result
+
+
+def _harness_capability_digest(v: dict | None) -> str:
+    """Digest the safe Harness capability composition used by a task Run.
+
+    This is intentionally a Gateway-owned digest.  Hexa records and echoes it, while the Gateway
+    recomputes it immediately before dispatch.  Secret headers, env values and plugin file bytes
+    are excluded; changes to the effective component names, transports, plugin versions, enabled
+    state, skipped components or disabled tools invalidate the binding.
+    """
+    value = v or {}
+    try:
+        skills = json.loads(value.get("skills") or "[]")
+    except Exception:  # noqa: BLE001
+        skills = []
+    plugins = []
+    for plugin in _plugins_of(value):
+        manifest = plugin.get("manifest") if isinstance(plugin.get("manifest"), dict) else {}
+        plugins.append({
+            "name": str(plugin.get("name") or ""),
+            "enabled": plugin.get("enabled", True) is not False,
+            "blob": str(plugin.get("blob") or ""),
+            "manifest": {key: manifest[key] for key in ("name", "version")
+                         if isinstance(manifest.get(key), str)},
+            "mcpServers": [_capability_mcp_summary(item) for item in plugin.get("mcpServers") or []
+                           if isinstance(item, dict)],
+            "skills": [_capability_skill_summary(item) for item in plugin.get("skills") or []
+                       if isinstance(item, dict)],
+            "skipped": [{"path": str(item.get("path") or ""),
+                         "reason": str(item.get("reason") or "")}
+                        for item in plugin.get("skipped") or [] if isinstance(item, dict)],
+        })
+    payload = {
+        "base": str(value.get("base") or ""),
+        "mcpServers": [_capability_mcp_summary(item) for item in _mcp_list(value)
+                       if isinstance(item, dict)],
+        "skills": [_capability_skill_summary(item) for item in skills
+                    if isinstance(item, dict)],
+        "plugins": sorted(plugins, key=lambda item: item["name"]),
+        "disabledTools": [],
+    }
+    # disabled_tools is normally a JSON list, while malformed legacy rows are treated as empty
+    # by the runtime.  Keep the digest aligned with that runtime representation.
+    try:
+        disabled = json.loads(value.get("disabled_tools") or "[]")
+    except Exception:  # noqa: BLE001
+        disabled = []
+    payload["disabledTools"] = sorted(str(item) for item in disabled if isinstance(item, str))
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _validate_capability_binding(metadata: dict, hv: dict | None) -> None:
+    """Validate an optional Hexa Run binding before any turn resources are allocated."""
+    requested = str((metadata or {}).get("capability_digest") or "").strip()
+    if not requested:
+        return
+    if not re.fullmatch(r"[0-9a-f]{64}", requested):
+        raise uhp_error(422, "invalid_input", "capability_digest must be a SHA-256 digest.",
+                        "metadata.capability_digest")
+    if not hv or not hmac.compare_digest(requested, _harness_capability_digest(hv)):
+        raise uhp_error(409, "hexa_capability_changed",
+                        "The Harness capabilities changed since this Run was created.",
+                        "metadata.capability_digest")
+
+
 _MCP_NAME_RE = re.compile(r"[^a-zA-Z0-9_]+")
 
 
@@ -12740,6 +12834,9 @@ async def create_response(body: CreateResponseBody, request: Request):
     # only for the organization and workspace that own it: see _turn_harness_owned.
     _turn_harness_check(harness_id, hv)
     _turn_harness_owned(principal, hv)
+    # The Run was created against a safe Harness composition. Refuse a changed binding before
+    # session allocation, provider routing, credit admission or Runner dispatch.
+    _validate_capability_binding(meta, hv)
     # The project layer this task reads: the request's, else the harness's. Resolved and checked
     # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
     # failed turn.
@@ -22178,6 +22275,9 @@ def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
     except Exception:  # noqa: BLE001
         created = 0
     return {"id": v.get("id"), "name": v.get("name"), "base": v.get("base"),
+            # A task may bind a Run to this safe composition digest. It contains no credentials
+            # or package bytes and is recomputed by the Gateway before each response dispatch.
+            "capabilityDigest": _harness_capability_digest(v),
             # The starter kit that provisioned this Harness, when one did. The kit's app uses it
             # to find its own Harness instead of asking the user to choose from a list. Under its
             # current id, also for a Harness launched before the kit was renamed.

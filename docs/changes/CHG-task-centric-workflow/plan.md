@@ -83,6 +83,15 @@ handler 原样接收 `session/request_permission` 的 params；空决定、非�
 Response/SSE continuation，也不把受控 fake 的回复当作副作用未发生的证据；下一步必须选择能提供 native checkpoint 的真实
 Runner，再把 handler 与 durable approval、CommandReceipt 和同一 ACP session 的精确恢复绑定。
 
+### Run capability binding slice（2026-11-24）
+
+Gateway 负责计算 Harness 的安全能力组合摘要，并在 Harness 详情返回 `capabilityDigest`。Hexa 在 Run 创建时保存该摘要，
+TaskExecutor 每次 NodeRun 调用 `GatewayClient.create_response` 时通过 `metadata.capability_digest` 传回。Gateway 在任何
+session/provider/Runner 分配前重新计算摘要；无效摘要拒绝，变更返回 `hexa_capability_changed`。Hexa 将该确定性错误记录为
+`configuration_changed`，不把它包装成 unknown 副作用。摘要只覆盖 base、direct MCP/Skill、Plugin manifest/version/enable 状态、
+派生组件、skipped 和 disabled tools，不包含 headers、env、auth 或插件文件。该切片只保证执行配置一致性，不改变 UHP
+`tool_approvals` 能力，也不代表原生权限审批已经实现。
+
 ### 内部审批日志实施（2026-11-24）
 
 按 AC-29 新增独立 `gateway/tool_approvals.py`，复用 control_store 的容器、异常和 ETag CAS，不新增数据库、HTTP 路由或依赖。

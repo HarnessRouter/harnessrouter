@@ -48,6 +48,20 @@ async def test_truncated_stream_retains_id_for_status_recovery(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_capability_change_error_code_is_preserved_from_gateway(monkeypatch):
+    import json
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        409, json={'error': {'code': 'hexa_capability_changed'}}))
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(transport=transport, **kwargs))
+    from app.gateway.client import GatewayError
+    with pytest.raises(GatewayError) as caught:
+        await GatewayClient('http://gateway.test', 'test-key').create_response(
+            'hi', None, 'stable', agent_id='agent-1', capability_digest='a' * 64)
+    assert caught.value.code == 'hexa_capability_changed'
+
+
+@pytest.mark.anyio
 async def test_gateway_sse_adapter_collects_utf8_delta_response_id_and_terminal_status():
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer server-only-gateway-key"

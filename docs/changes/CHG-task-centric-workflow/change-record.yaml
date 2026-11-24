@@ -1192,3 +1192,24 @@ acp_permission_hook_slice:
   rollback: "停止未来注入 handler 的调用后回退 acp_turn.py 和单测；保留既有 ACP autonomous 行为，当前无协议字段、迁移或外部数据。"
   remaining: [native interception, exact ACP continuation, durable Gateway binding, UHP capability negotiation, Linux Runner conformance, real Provider validation]
   next_action: "选择具备副作用前 native checkpoint 的真实 Runner，验证 deny 不执行工具并能在同一 ACP session 精确恢复；完成前保持 tool_approvals 不广告。"
+
+run_capability_binding_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: ff14ea03
+  branch: codex/agent-orchestration
+  reuse_decision: extend the existing Gateway-owned plugin capability snapshot and Run execution snapshot; no new database column or UHP approval capability
+  scope: Gateway capabilityDigest, Hexa Run snapshot propagation, pre-dispatch digest validation, deterministic configuration-change error
+  acceptance_ids: [AC-38, AC-39, AC-42]
+  references: [spec.md#agent-能力插件与权限审批, plan.md#run-capability-binding-slice-2026-11-24]
+  verification:
+    red: "新增摘要安全性、HTTP error code 保留和 NodeRun 传播断言先失败于缺少 Gateway digest 传递/校验；修复后通过。"
+    gateway: "cd gateway; python -X utf8 -m pytest -q tests/test_turn_harness.py --tb=short; exit 0；2 passed。覆盖摘要排除 secret、插件版本变化导致 digest 变化、Harness 输出返回同一 digest。"
+    api: "cd hexa-api; python -X utf8 -m pytest -q tests/test_gateway_sse.py tests/test_capability_snapshot.py --tb=short; exit 0；11 passed。覆盖 Gateway error code 读取、snapshot 和真实 NodeRun 调用参数传播。"
+    static: "python -m py_compile gateway/app.py hexa-api/app/gateway/client.py hexa-api/app/tasks/service.py; git diff --check; passed。"
+  security_review: "Gateway digest 只覆盖非秘密能力身份；MCP headers、env、auth、插件文件字节不进入 digest。摘要格式严格为小写 SHA-256；不匹配在 session/provider/Runner 分配前拒绝，避免旧 Run 静默使用变更后的插件组合。Gateway error code 仅用于本地确定性状态映射，不改变 approval gate。"
+  limitations: [legacy Gateway/fixture without capabilityDigest keeps compatibility and lacks binding, native tool approval, UHP capability negotiation, Linux/Provider/deployment validation]
+  rollback: "停止带 capability_digest 的新 Run 后回退 Gateway/Hexa 传播和文档；旧 Gateway 调用路径仍可运行，无迁移或 Cloud 产品入口。"
+  remaining: [native tool approval interception, exact ACP continuation, UHP approval capability, legacy Gateway upgrade, Linux/Provider/deployment validation]
+  next_action: "升级真实部署 Gateway 与 Hexa API 后验证配置变更拒绝，再选择具备 native checkpoint 的 Runner 接入 durable approval。"
