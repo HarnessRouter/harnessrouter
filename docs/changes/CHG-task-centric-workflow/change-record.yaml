@@ -1486,3 +1486,25 @@ cancel_reconciliation_regression:
   rollback: "回退新增竞态回归测试和对应 Change 记录，不改变生产数据。"
   remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
   next_action: "继续验证真实 Gateway/Runner 的 response read 与 native approval 边界；保持 tool_approvals 不广告。"
+
+final_orchestration_validation:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: c8935ba1
+  branch: codex/agent-orchestration
+  scope: "完成当前编排引擎、Gateway Plugin 能力快照、审批 fail-closed 边界和客户端工作台的交付前回归。"
+  verification:
+    orchestration: "python -X utf8 -m pytest -q hexa-api/tests/test_task_workflows.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_subgraph.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py --tb=short; exit 0；255 passed in 310.04s。"
+    gateway: "python -X utf8 -m pytest -q gateway/tests/test_plugins.py gateway/tests/test_tool_approval_journal.py gateway/tests/test_approval_execution.py gateway/tests/test_tool_approval_http.py --tb=short; exit 0；150 passed in 25.70s。覆盖 UHP Plugin 契约、审批日志、密封调用 gate、HTTP 作用域和 fail-closed 输入。"
+    protocol: "python -X utf8 -m pytest -q protocol/proposals/tool-approvals/test_schema.py --tb=short; exit 0；3 passed。"
+    runner_policy: "python -X utf8 -m pytest -q runner/tests/test_approval_policy_boundary.py --tb=short; exit 0；6 passed。"
+    client: "cd client; npm.cmd test; exit 0；71 passed；npm.cmd run typecheck; exit 0。"
+    static: "PowerShell YAML safe_load、Python compile checks 和 git diff --check passed。"
+  limitations:
+    - "Runner 插件测试依赖 Unix pwd 模块，当前 Windows 主机无法收集；Linux Runner/ACP 真实 conformance 未评估。"
+    - "认证后的真实 Gateway/BYOK/Provider 冒烟、Gateway 原生副作用前拦截、精确 continuation、UHP tool_approvals capability 发布和部署多实例故障转移仍未完成。"
+  security_review: "当前审批能力只在内部 journal/bound gate 和 fail-closed 边界验证，Gateway 未广告 tool_approvals；编排派生节点继续继承 Run 启动时的不可变能力绑定，模型输出不能扩大工具、Plugin、Skill、MCP 或权限。"
+  rollback: "停止带新编排能力的活动 Run 后回退对应执行器、校验和客户端提交；历史 Run、NodeRun、RunEvent、CommandReceipt 保持只读。"
+  remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP conformance]
+  next_action: "在认证的 Linux Gateway/Runner 环境补插件物化、原生审批 checkpoint 和同一 session continuation；完成前保持 tool_approvals 不广告。"
