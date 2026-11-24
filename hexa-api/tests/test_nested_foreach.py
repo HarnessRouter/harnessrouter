@@ -55,6 +55,7 @@ def test_nested_modes_obey_outer_boundary_and_global_limit(client, app, outer, i
     history = client.get(f"/api/hexa/node-runs/{target['id']}").json()['attempts']
     leaves = [row for row in history if row['execution_kind'] == 'foreach_nested_item']
     assert all('outer_item_node_run_id' in row['input'] for row in leaves)
+    assert all(row['input']['execution_binding']['source'] == 'run_snapshot' for row in leaves)
 
 
 @pytest.mark.parametrize('terminal', [False, True])

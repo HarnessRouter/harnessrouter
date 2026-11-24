@@ -204,6 +204,8 @@ native tool approval 仍按既有独立门禁记录。动态子编排不得与�
 
 派生节点还必须携带无密钥 `execution_binding`，引用 Run 创建时冻结的 Agent/model、能力摘要、Gateway 能力摘要和可选权限策略摘要。绑定写入动态清单和 NodeRun 输入，派发前校验其与 Run snapshot 一致；缺失、篡改或摘要变化都映射为 `configuration_changed` 并阻断 Gateway 调用，禁止从当前 Harness 重新推导权限。
 
+该绑定规则同时适用于 foreach/dynamic_plan 项、二层 foreach 叶子、集合重试替换项和 loop 新轮次节点；恢复路径只复制原绑定，不在新 Run 中按当前 Agent 配置重建。测试需检查绑定在 NodeRun 创建事务后已存在，并覆盖重试、终态恢复和循环第二轮的 Gateway 上下文。
+
 ## 终态集合恢复实施
 
 ### 项级历史界面接入

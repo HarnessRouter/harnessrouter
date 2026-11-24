@@ -550,6 +550,10 @@ def test_restricted_dynamic_plan_expands_safe_items_with_fixed_agent_and_aggrega
     ]
     attempts = client.get(f"/api/hexa/node-runs/{worker['id']}").json()['attempts']
     assert [row['execution_kind'] for row in attempts] == ['node', 'dynamic_item', 'dynamic_item', 'dynamic_item', 'dynamic_aggregate']
+    dynamic_attempts = [row for row in attempts if row['execution_kind'] == 'dynamic_item']
+    assert all(row['input']['execution_binding']['source'] == 'run_snapshot' for row in dynamic_attempts)
+    assert all(call['execution_binding']['capability_snapshot_digest']
+               for call in calls if 'dynamic_item' in call)
     assert [call['dynamic_item']['id'] for call in calls if 'dynamic_item' in call] == ['a', 'b', 'c']
 
 
@@ -609,6 +613,8 @@ def test_bounded_foreach_runs_each_item_and_aggregates_outputs(client, app):
     item_attempts = [row for row in attempts if row['execution_kind'] == 'foreach_item']
     assert [row['attempt'] for row in item_attempts] == [1, 1, 1]
     assert [row['foreach_index'] for row in item_attempts] == [0, 1, 2]
+    assert all(row['input']['execution_binding']['source'] == 'run_snapshot' for row in item_attempts)
+    assert all(call['execution_binding']['capability_snapshot_digest'] for call in calls[1:-1])
     assert [row['execution_kind'] for row in attempts if row['execution_kind'].endswith('_aggregate')] == ['foreach_aggregate']
     assert [call.get('foreach_item') for call in calls] == [None, 'alpha', 'beta', 'gamma', None]
 

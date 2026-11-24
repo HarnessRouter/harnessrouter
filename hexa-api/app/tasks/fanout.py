@@ -10,6 +10,12 @@ from sqlalchemy import select, func
 
 from app.db.models import NodeRun, Run
 from app.tasks.dynamic_graph import graph_valid, graph_ready
+from app.tasks.execution_binding import execution_binding
+
+
+def _run_binding(run, item):
+    """Freeze the parent node's execution identity in every derived item."""
+    return execution_binding(json.loads(run.snapshot_json), item.get('agent_id'), item.get('model'))
 
 
 def node_record_usage(db, run_id):
@@ -168,6 +174,7 @@ def advance_nested_foreach(db, run, item, control, outer, *, nested, encoded, va
                     'outer_foreach_index': outer.foreach_index,
                     'foreach_index': index,
                     'refs': state.get('refs', []),
+                    'execution_binding': _run_binding(run, item),
                     **({'loop_previous': state['loop_previous']} if state.get('loop_previous') else {}),
                 }),
             )
@@ -248,6 +255,7 @@ def retry_fanout(db, run, item, control, selected_id, *, encoded, error):
                 input_json=encoded({'_orchestration_role': f'{prefix}_item',
                                     f'{prefix}_item': child_state[f'{prefix}_item'],
                                     'foreach_index': child.foreach_index,
+                                    'execution_binding': child_state.get('execution_binding') or _run_binding(run, item),
                                     'retry_of': child.id,
                                     **({'loop_previous': state['loop_previous']} if state.get('loop_previous') else {})}),
             )
@@ -264,6 +272,7 @@ def retry_fanout(db, run, item, control, selected_id, *, encoded, error):
                             foreach_index=leaf.foreach_index,
                             input_json=encoded({**leaf_state, 'retry_of': leaf.id,
                                                 'outer_item_node_run_id': replacement.id,
+                                                'execution_binding': leaf_state.get('execution_binding') or _run_binding(run, item),
                                                 **({'loop_previous': state['loop_previous']} if state.get('loop_previous') else {})}),
                         )
                         db.add(new_leaf)
@@ -350,6 +359,7 @@ def advance_fanouts(db, run, definition, rows, *, encoded, value_at_path, condit
                             execution_kind=f'{prefix}_item', foreach_index=index,
                             input_json=encoded({'_orchestration_role': f'{prefix}_item',
                                                 f'{prefix}_item': value, 'foreach_index': index,
+                                                'execution_binding': _run_binding(run, item),
                                                 **({'loop_previous': previous} if previous else {})}),
                         )
                         db.add(child)

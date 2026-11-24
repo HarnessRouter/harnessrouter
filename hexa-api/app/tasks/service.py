@@ -1034,8 +1034,10 @@ class TaskExecutor:
                         context = redact({'task_input': snapshot['input'], 'prompt': item.get('prompt', ''), 'refs': inputs}, self.secrets)
                         state = json.loads(row.input_json)
                         from app.tasks.execution_binding import execution_binding
-                        dynamic_binding_required = unit_kind == 'subgraph_node' and state.get('dynamic') is True
-                        binding = state.get('execution_binding') if unit_kind == 'subgraph_node' else None
+                        dynamic_binding_required = unit_kind in {
+                            'subgraph_node', 'foreach_item', 'dynamic_item', 'foreach_nested_item',
+                        }
+                        binding = state.get('execution_binding') if dynamic_binding_required else None
                         if not isinstance(binding, dict) and not dynamic_binding_required:
                             binding = execution_binding(snapshot, item.get('agent_id'), item.get('model'))
                         context['execution_binding'] = binding
@@ -1138,7 +1140,11 @@ class TaskExecutor:
                             row.status, row.error_code = 'failed', 'storage_limit_exceeded'
                             row.finished_at = datetime.now(timezone.utc)
                         else:
-                            db.add(NodeRun(run_id=run_id, node_id=row.node_id, attempt=row.attempt + 1, iteration=row.iteration, status='idle'))
+                            from app.tasks.execution_binding import execution_binding
+                            db.add(NodeRun(run_id=run_id, node_id=row.node_id, attempt=row.attempt + 1,
+                                           iteration=row.iteration, status='idle',
+                                           input_json=encoded({'execution_binding': execution_binding(
+                                               json.loads(run.snapshot_json), item.get('agent_id'), item.get('model'))})))
                             db.flush()
                     loop_changed = False
                     for item in definition['nodes']:
@@ -1166,10 +1172,18 @@ class TaskExecutor:
                         previous = {'iteration': row.iteration,
                                     'node_run_ids': [rows[identity].id for identity in loop['body']
                                                      if rows[identity].status == 'succeeded']}
+                        from app.tasks.execution_binding import execution_binding
+                        snapshot_for_binding = json.loads(run.snapshot_json)
+                        by_node_id = {node['id']: node for node in definition['nodes']}
                         for body_node_id in loop['body']:
                             db.add(NodeRun(run_id=run_id, node_id=body_node_id, attempt=1,
                                            iteration=next_iteration, status='idle',
-                                           input_json=encoded({'loop_previous': previous})))
+                                           input_json=encoded({
+                                               'loop_previous': previous,
+                                               'execution_binding': execution_binding(
+                                                   snapshot_for_binding, by_node_id[body_node_id].get('agent_id'),
+                                                   by_node_id[body_node_id].get('model')),
+                                           })))
                         db.flush()
                         loop_changed = True
                     if repeat_rows or loop_changed:
@@ -1251,7 +1265,9 @@ class TaskExecutor:
             save_progress(details=details)
         try:
             binding = context.get('execution_binding') if isinstance(context, dict) else None
-            dynamic_binding_required = bool(isinstance(context, dict) and context.get('dynamic') is True)
+            dynamic_binding_required = bool(isinstance(context, dict) and context.get('_orchestration_role') in {
+                'subgraph_node', 'foreach_item', 'dynamic_item', 'foreach_nested_item',
+            })
             if not isinstance(binding, dict) and not dynamic_binding_required:
                 from app.tasks.execution_binding import execution_binding
                 binding = execution_binding(run_snapshot, item.get('agent_id'), item.get('model'))

@@ -1292,3 +1292,40 @@ linux_api_delivery_slice:
   rollback: "No application data change beyond migration tables in the existing disposable test database; container and test schema were cleaned up."
   remaining: [deployed multi-process failover, real Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, Linux Runner conformance]
   next_action: "Run live Gateway plugin/Runner conformance where the authenticated runtime and provider are available; keep tool_approvals unadvertised until native interception and exact continuation pass."
+all_derived_execution_binding_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: db6068d1
+  branch: codex/agent-orchestration
+  reuse_decision: extend the existing execution_binding helper and Run capability snapshot; no migration, UHP field, plugin format, or new permission grant
+  scope: freeze execution binding at creation for foreach, dynamic_plan, nested foreach, retries and loop iterations
+  acceptance_ids: [AC-20, AC-22, AC-23, AC-24, AC-26, AC-28, AC-32, AC-38, AC-40, AC-42]
+  references: [spec.md#集合项重试与执行清单, spec.md#受限动态子编排, plan.md#受限动态子编排实施2026-11-24]
+  verification:
+    targeted: "python -X utf8 -m pytest -q hexa-api/tests/test_task_workflows.py -k \"bounded_foreach_runs_each_item_and_aggregates_outputs or restricted_dynamic_plan_expands_safe_items_with_fixed_agent_and_aggregates\" hexa-api/tests/test_nested_foreach.py -k \"nested_modes_obey_outer_boundary_and_global_limit or two_level_foreach_persists_outer_and_nested_manifests\" --tb=short; exit 0；5 passed in 8.59s。"
+    retry_loop_resume: "python -X utf8 -m pytest -q hexa-api/tests/test_task_workflows.py -k \"bounded_cross_node_loop or bounded_loop_reexpands_foreach_body_each_iteration or bounded_repeat_appends_attempts\" hexa-api/tests/test_fanout_retry.py -k \"retry_preserves_successful_items_and_appends_only_failed_calls or selected_retry_runs_even_when_another_item_remains_failed\" hexa-api/tests/test_fanout_resume.py -k \"resume or restore\" --tb=short; exit 0；52 passed in 81.08s。"
+    static: "python -m py_compile hexa-api/app/tasks/fanout.py hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_nested_foreach.py；git diff --check；YAML safe_load；passed。"
+  security_review: "Derived item, nested leaf, retry replacement and next-loop NodeRun bindings contain only Agent/model and digest references. They are persisted before dispatch and checked as required for orchestration roles. A missing or changed binding becomes configuration_changed before Gateway invocation; current Harness or client payload cannot widen permissions."
+  limitations: [full regression and PostgreSQL rerun pending, real Gateway/Runner native approval, deployed failover, Linux Runner ACP conformance]
+  rollback: "Stop new fanout/loop Run dispatches and revert the binding creation/required-check changes; historical NodeRun records remain immutable and no migration rollback is needed."
+  remaining: [full SQLite/PostgreSQL orchestration regression, real Gateway/BYOK smoke, native approval interception and exact continuation, UHP approval capability negotiation]
+  next_action: "Run complete SQLite and PostgreSQL orchestration suites, then commit the all-derived-node binding slice."
+postgres_all_derived_binding_verification:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: db6068d1
+  branch: codex/agent-orchestration
+  reuse_decision: no schema or protocol change; reuse execution_binding in persisted NodeRun inputs
+  scope: all derived NodeRun binding creation and required pre-dispatch validation across SQLite and PostgreSQL
+  acceptance_ids: [AC-20, AC-22, AC-23, AC-24, AC-26, AC-28, AC-32, AC-38, AC-40, AC-42]
+  verification:
+    sqlite: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py hexa-api/tests/test_task_workflows.py --tb=short; exit 0；253 passed in 280.85s。"
+    postgres: "HEXA_TEST_POSTGRES_URL=postgresql+psycopg://postgres@127.0.0.1:55438/postgres python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py hexa-api/tests/test_task_workflows.py --tb=short; exit 0；253 passed in 323.96s。每项使用临时隔离 schema。"
+    static: "python -m py_compile hexa-api/app/tasks/fanout.py hexa-api/app/tasks/service.py hexa-api/app/tasks/subgraph.py；YAML safe_load；git diff --check；passed。"
+  security_review: "foreach/dynamic_plan/nested leaf/subgraph/retry/loop-derived inputs now carry a secret-free binding before dispatch. Required orchestration roles fail closed on missing, changed or mismatched digest; permission policy digest remains an identity check and never grants access."
+  limitations: [real Gateway/Runner native approval, exact continuation and UHP capability negotiation, deployed multi-replica failover, real BYOK/Provider smoke]
+  rollback: "Revert the binding changes and stop newly configured derived-node Runs; no migration rollback is required, historical records remain readable."
+  remaining: [real Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, deployed failover and Linux Runner ACP conformance]
+  next_action: "Continue with live Gateway plugin materialization and native Runner checkpoint verification when authenticated runtime coverage is available; do not advertise tool_approvals before conformance."
