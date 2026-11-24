@@ -260,6 +260,20 @@ native tool approval 仍按既有独立门禁记录。动态子编排不得与�
 RunEvent、CommandReceipt、Lease 和 reconciliation 回归；真实 Gateway/Runner、PostgreSQL、Linux
 及 native tool approval 仍单独验收。
 
+## 2026-11-24 Runner 审批策略 fail-closed 接线
+
+在 Runner 的 `TurnReq` 接收 `tool_approval_policy` 作为保留字段，但在尚无 native checkpoint、精确
+ACP session continuation 和受信任 Gateway 注册路径时，必须在 Runner 状态检查及后端选择前拒绝。显式
+对象和显式 `null` 都视为调用方要求审批；不能因为值为空而回落到现有自动批准模式。未携带字段继续
+保持旧调用兼容。纯策略判定放在无平台依赖模块中，Runner 入口复用稳定错误码
+`hexa_approval_unavailable`，使 Windows 可以验证语义，Linux 再补真实入口验证。
+
+先写策略单元测试覆盖对象、显式 `null` 和字段缺失，再接入 `POST /turn` 的最早拒绝路径；目标测试
+通过后运行 Runner 语法检查、ACP hook 测试和相关 Gateway 审批预检回归。此切片不创建 approval record、
+不启动工具、不修改 UHP discovery、不广告 `tool_approvals`，也不改变既有 autonomous ACP 兼容路径。
+只有 native Runtime 能在副作用前保存 checkpoint、由 Gateway 持久化绑定并在同一 session 精确恢复后，
+才进入 UHP capability 和 Response/SSE continuation 接线。
+
 ## 2026-11-24 子编排项级重试实施
 
 复用 `NodeRun` 的 `subgraph_node` 清单、父子归属和现有 `retry` 控制入口。活动 Run 按失败/取消子节点

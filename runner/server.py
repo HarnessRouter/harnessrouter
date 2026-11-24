@@ -93,6 +93,7 @@ import reasoning      # how much a model thinks on a turn: levels and what sets 
 import tracecontext   # the caller's W3C trace context: its checks and a child for the relay (#473)
 import ask_user_mcp   # the `ask_user` tool a base asks the person through, and what its arguments mean (#476)
 import roder_backend   # Roder's app-server base: its builder, tool table and stream (runner/roder_backend.py)
+from approval_policy import approval_policy_error
 
 app = FastAPI(title="harness-runner")
 
@@ -18201,6 +18202,7 @@ class TurnReq(BaseModel):
     traceparent: str | None = None          # the caller's W3C trace context (#473); unset = the turn has none
     tracestate: str | None = None           # its vendor state for that trace; never `baggage`
     input_requests: bool = False            # claude: serve `ask_user`, and end the turn at its call (#476)
+    tool_approval_policy: object = None     # recognized, refused until native checkpoint/continuation exists
 
 
 def _session_tree_refused(e: OSError, ws: str) -> bool:
@@ -18219,6 +18221,19 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     """Start a turn. Its routes leave when its runner thread returns (_routes_end_with_turn), or here
     when none started: a builder that refused the turn, or a retry answered by the turn already
     running, may have registered routes that nothing would ever use."""
+    refusal = approval_policy_error(
+        req.tool_approval_policy,
+        field_present="tool_approval_policy" in req.model_fields_set,
+    )
+    if refusal:
+        raise HTTPException(
+            422,
+            detail={
+                "code": refusal,
+                "message": "This Runner cannot durably enforce tool approvals yet.",
+                "param": "tool_approval_policy",
+            },
+        )
     state = _runner_state()
     if not state.get("ready") or not state.get("accepting", state.get("ready")):
         raise HTTPException(503, detail={"code": "runner_not_ready", "message": "Runner is still preparing.",

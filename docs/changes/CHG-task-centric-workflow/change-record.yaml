@@ -1213,3 +1213,23 @@ run_capability_binding_slice:
   rollback: "停止带 capability_digest 的新 Run 后回退 Gateway/Hexa 传播和文档；旧 Gateway 调用路径仍可运行，无迁移或 Cloud 产品入口。"
   remaining: [native tool approval interception, exact ACP continuation, UHP approval capability, legacy Gateway upgrade, Linux/Provider/deployment validation]
   next_action: "升级真实部署 Gateway 与 Hexa API 后验证配置变更拒绝，再选择具备 native checkpoint 的 Runner 接入 durable approval。"
+
+runner_approval_policy_boundary_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 0bab2e4f
+  branch: codex/agent-orchestration
+  reuse_decision: add a platform-independent fail-closed policy boundary and reuse the existing Gateway error code; do not advertise runtime approval coverage
+  scope: Runner TurnReq reserved approval policy, pre-backend rejection, explicit-null handling
+  acceptance_ids: [AC-43]
+  references: [plan.md#2026-11-24-runner-审批策略-fail-closed-接线, platform-matrix.md#2026-11-24-runner-审批策略-fail-closed-接线, ../../../protocol/proposals/tool-approvals/README.md]
+  verification:
+    red: "完整 Runner 服务测试在 Windows 收集阶段被既有 POSIX pwd 依赖阻断；随后抽出无平台依赖策略判定，目标测试先覆盖对象、显式 null 和字段缺失。"
+    unit: "python -X utf8 -m pytest -q runner/tests/test_approval_policy_boundary.py --tb=short; exit 0；3 passed。"
+    static: "python -m py_compile runner/approval_policy.py runner/server.py; git diff --check; passed。"
+  security_review: "tool_approval_policy 只在调用方显式携带字段时触发拒绝，显式 null 不能绕过；拒绝发生在 Runner ready/backend selection/工具启动前。未携带字段保持旧兼容路径。未创建审批记录、未接收客户端参数替换、未修改 UHP discovery。"
+  limitations: [Windows full Runner import, Linux Runner HTTP, native checkpoint, exact ACP continuation, Gateway registration, Response/SSE resume, UHP capability, real Provider/deployment not_evaluated]
+  rollback: "停止携带审批策略的新调用后回退 Runner 字段、边界模块和单测；保留已有 Gateway durable journal 与历史回执，不改变旧 autonomous 调用。"
+  remaining: [native pre-side-effect interception, durable Gateway-to-Runner registration, exact continuation, UHP capability negotiation, Linux conformance, real Provider validation]
+  next_action: "选择具备副作用前 native checkpoint 的真实 Runner，接入受信任 adapter、Gateway approval journal 和同一 ACP session 恢复；完成前保持 tool_approvals 不广告。"

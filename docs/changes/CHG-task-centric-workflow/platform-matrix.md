@@ -95,3 +95,7 @@ Windows/Python 3.13 的 Gateway Harness 摘要、Hexa API Gateway SSE、能力�
 `not_evaluated`；本切片没有新增 UHP `tool_approvals` capability。
 
 复用 ORM 与持久化 JSON 引用，无数据库列、Shell、原生模块或系统路径变更。Windows / SQLite 覆盖新 Run 恢复、引用身份和旧历史不变；HTTP 夹具覆盖实际 GatewayClient、失败响应、补跑和重启只读。当前源码真实 PostgreSQL、Linux 与真实 Provider 仍 not_evaluated；本批未新增迁移，也不宣称可发布。最终测试数量及 Chromium 流程证据见 Change `terminal_fanout_resume`；新增项级 UI 入口仍属后续工作。
+
+## 2026-11-24 Runner 审批策略 fail-closed 接线
+
+Windows/Python 3.13 的无平台依赖 Runner 策略单测 3 项通过，覆盖审批对象、显式 `null` 和字段缺失；`runner/server.py` 入口语法检查通过，并在状态检查/后端选择前拒绝显式审批策略。Windows 无法导入 Runner 完整服务（既有 POSIX `pwd` 依赖），因此真实 `/turn` HTTP 入口未在本机执行。Linux Runner、真实 ACP Agent、Gateway native checkpoint、Response/SSE continuation、PostgreSQL 和部署仍为 `not_evaluated`。该切片没有新增 UHP capability，`tool_approvals` 继续保持未广告。
