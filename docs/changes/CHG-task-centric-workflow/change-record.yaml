@@ -1253,3 +1253,22 @@ execution_binding_slice:
   rollback: "停止带 execution_binding 的新动态/子编排 Run 后回退绑定写入与校验；历史 NodeRun 保留，旧 Run 不重新派发。"
   remaining: [native approval interception and durable continuation, UHP approval capability negotiation, real Gateway/BYOK smoke, PostgreSQL/Linux/deployment validation]
   next_action: "继续核对真实 Gateway/Runner 的副作用前审批 checkpoint；tool_approvals 完成前保持 UHP discovery 不广告该能力。"
+postgres_orchestration_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 02bdf7c2
+  branch: codex/agent-orchestration
+  reuse_decision: reuse the existing opt-in isolated-schema PostgreSQL harness and migration runner; no schema or UHP change
+  scope: PostgreSQL migration fresh/repeat/upgrade, independent lease fencing, and full orchestration regression on PostgreSQL
+  acceptance_ids: [AC-15, AC-20, AC-22, AC-26, AC-28, AC-32, AC-34, AC-35, AC-36, AC-37, AC-40, AC-42]
+  references: [spec.md#版本关系与保存边界, spec.md#run-lease-与-heartbeat, plan.md#run-lease-与-heartbeat-实施2026-11-24]
+  verification:
+    migration_and_process: "HEXA_TEST_POSTGRES_URL=postgresql+psycopg://postgres@127.0.0.1:55438/postgres python -X utf8 -m pytest -q hexa-api/tests/test_postgres_migrations.py hexa-api/tests/test_postgres_leases.py --tb=short; exit 0；5 passed in 24.46s。覆盖 fresh/repeat/check、旧库升级回填、历史保留、独立进程抢租、有效 owner 保护、过期 owner fencing 和一次性恢复。"
+    orchestration: "HEXA_TEST_POSTGRES_URL=postgresql+psycopg://postgres@127.0.0.1:55438/postgres python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py --tb=short; exit 0；190 passed in 297.78s。"
+    static: "YAML safe_load、Python compile、git diff --check；passed。"
+  security_review: "测试每次使用隔离 schema，结束后 CASCADE 删除，不接触 public schema。多进程租约测试证明有效 owner 不被第二 API/执行器恢复，过期 owner 递增 fence 并将不确定副作用标记 unknown；完整编排在 PostgreSQL 上保持同一 Run/NodeRun/receipt/event 语义。"
+  limitations: [Linux API delivery image and production deployment, real Gateway/BYOK/Provider smoke, native tool approval interception and exact continuation, Edge/browser nested recovery]
+  rollback: "本切片只增加验证记录；无需数据回滚。停止活动测试容器或隔离 schema 后即可清理。"
+  remaining: [Linux API delivery-image validation, deployed multi-process failover, real Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation]
+  next_action: "构建并启动 Linux API 交付镜像做 health/migration smoke；随后在真实 Gateway/Runner 可用时验证插件物化和原生审批 checkpoint。"
