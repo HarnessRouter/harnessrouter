@@ -100,6 +100,10 @@ def test_dynamic_subgraph_runs_frozen_local_dag_and_inherits_parent_execution(cl
             ]}
         if context.get('_orchestration_role') == 'subgraph_node':
             assert context['subgraph_node_id'] in {'first', 'second'}
+            assert context['execution_binding']['source'] == 'run_snapshot'
+            assert context['execution_binding']['agent_id'] == 'agent-1'
+            assert context['execution_binding']['model'] == 'gpt-6.1'
+            assert context['execution_binding']['capability_snapshot_digest']
             assert context['prompt'].endswith('\ndraft') or context['prompt'].endswith('\nreview')
             if context['subgraph_node_id'] == 'second':
                 assert context['inputRefs'] == ['first']

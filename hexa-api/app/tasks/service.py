@@ -1033,6 +1033,12 @@ class TaskExecutor:
                         inputs = [{'task_id': task.id, 'run_id': run.id, 'node_id': ref, 'node_run_id': rows[ref].id, 'output': json.loads(rows[ref].output_json)} for ref in refs if ref in rows and rows[ref].status == 'succeeded']
                         context = redact({'task_input': snapshot['input'], 'prompt': item.get('prompt', ''), 'refs': inputs}, self.secrets)
                         state = json.loads(row.input_json)
+                        from app.tasks.execution_binding import execution_binding
+                        dynamic_binding_required = unit_kind == 'subgraph_node' and state.get('dynamic') is True
+                        binding = state.get('execution_binding') if unit_kind == 'subgraph_node' else None
+                        if not isinstance(binding, dict) and not dynamic_binding_required:
+                            binding = execution_binding(snapshot, item.get('agent_id'), item.get('model'))
+                        context['execution_binding'] = binding
                         if unit_kind == 'subgraph_node':
                             state = json.loads(row.input_json)
                             context['subgraph_node_id'] = state['subgraph_node_id']
@@ -1244,6 +1250,15 @@ class TaskExecutor:
         async def execution(details):
             save_progress(details=details)
         try:
+            binding = context.get('execution_binding') if isinstance(context, dict) else None
+            dynamic_binding_required = bool(isinstance(context, dict) and context.get('dynamic') is True)
+            if not isinstance(binding, dict) and not dynamic_binding_required:
+                from app.tasks.execution_binding import execution_binding
+                binding = execution_binding(run_snapshot, item.get('agent_id'), item.get('model'))
+            from app.tasks.execution_binding import binding_matches
+            if not binding_matches(binding, run_snapshot, item.get('agent_id'), item.get('model'),
+                                   required=dynamic_binding_required):
+                raise GatewayError('执行配置绑定与节点不一致。', code='hexa_execution_binding_changed')
             agent_snapshot = (run_snapshot.get('capabilities') or {}).get(item.get('agent_id', ''), {})
             result = await self.gateway.create_response(
                 encoded(context), None, f'hexa-task-{run_id}-{attempt_id}',
@@ -1261,7 +1276,7 @@ class TaskExecutor:
         except Exception as exc:
             exception_response_id = getattr(exc, 'response_id', None)
             error = ('configuration_changed' if isinstance(exc, GatewayError)
-                     and getattr(exc, 'code', '') == 'hexa_capability_changed'
+                     and getattr(exc, 'code', '') in {'hexa_capability_changed', 'hexa_execution_binding_changed'}
                      else 'agent_failed' if isinstance(exc, GatewayError) and not exc.uncertain
                      else 'interrupted_unknown_outcome')
         uncertain = error == 'interrupted_unknown_outcome'

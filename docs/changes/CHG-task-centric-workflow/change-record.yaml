@@ -1233,3 +1233,23 @@ runner_approval_policy_boundary_slice:
   rollback: "停止携带审批策略的新调用后回退 Runner 字段、边界模块和单测；保留已有 Gateway durable journal 与历史回执，不改变旧 autonomous 调用。"
   remaining: [native pre-side-effect interception, durable Gateway-to-Runner registration, exact continuation, UHP capability negotiation, Linux conformance, real Provider validation]
   next_action: "选择具备副作用前 native checkpoint 的真实 Runner，接入受信任 adapter、Gateway approval journal 和同一 ACP session 恢复；完成前保持 tool_approvals 不广告。"
+execution_binding_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: edc501b5
+  branch: codex/agent-orchestration
+  reuse_decision: extend the existing Run capability snapshot and subgraph NodeRun manifest; no new database column, UHP field, plugin format, or permission grant
+  scope: immutable execution binding for static and dynamic derived subgraph nodes
+  acceptance_ids: [AC-28, AC-32, AC-38, AC-42]
+  references: [spec.md#受限动态子编排, spec.md#agent-能力插件与权限审批, plan.md#受限动态子编排实施2026-11-24]
+  verification:
+    unit: "python -X utf8 -m pytest -q hexa-api/tests/test_capability_snapshot.py --tb=short; exit 0；4 passed。覆盖 binding 生成、Agent/model 篡改、能力摘要篡改和缺失绑定的 fail-closed 判定。"
+    integration: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py --tb=short; exit 0；25 passed。覆盖动态局部 DAG、静态/嵌套子编排、重试、恢复和 Gateway 调用上下文中的 execution_binding。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_capability_snapshot.py hexa-api/tests/test_subgraph.py --tb=short; exit 0；29 passed。"
+    static: "python -m py_compile hexa-api/app/tasks/execution_binding.py hexa-api/app/tasks/subgraph.py hexa-api/app/tasks/service.py hexa-api/tests/test_capability_snapshot.py hexa-api/tests/test_subgraph.py；git diff --check；YAML safe_load；passed。"
+  security_review: "execution_binding 只包含 Agent/model 和 digest，不包含凭据、headers、env、插件文件或工具参数。派发前严格核对 Run snapshot；不一致统一以 configuration_changed 结束，不能回退到当前 Harness、动态节点声明或旧权限决定。permission_policy_digest 仅为绑定摘要，不授予权限。"
+  limitations: [real Gateway/Runner native approval, exact ACP continuation, PostgreSQL/multiprocess deployment, Linux/Provider smoke not_evaluated]
+  rollback: "停止带 execution_binding 的新动态/子编排 Run 后回退绑定写入与校验；历史 NodeRun 保留，旧 Run 不重新派发。"
+  remaining: [native approval interception and durable continuation, UHP approval capability negotiation, real Gateway/BYOK smoke, PostgreSQL/Linux/deployment validation]
+  next_action: "继续核对真实 Gateway/Runner 的副作用前审批 checkpoint；tool_approvals 完成前保持 UHP discovery 不广告该能力。"

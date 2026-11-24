@@ -3,7 +3,20 @@ from __future__ import annotations
 import json
 import types
 
+from app.tasks.execution_binding import binding_matches, execution_binding
 from app.tasks.service import capability_snapshot
+
+
+def test_derived_execution_binding_is_frozen_and_fails_closed_on_tampering():
+    snapshot = {'capabilities': {'agent-1': {
+        'digest': 'd' * 64, 'gateway_capability_digest': 'g' * 64,
+        'permission_policy_digest': 'p' * 64,
+    }}}
+    binding = execution_binding(snapshot, 'agent-1', 'gpt-6.1')
+    assert binding_matches(binding, snapshot, 'agent-1', 'gpt-6.1', required=True)
+    assert not binding_matches({**binding, 'model': 'other'}, snapshot, 'agent-1', 'gpt-6.1', required=True)
+    assert not binding_matches({**binding, 'capability_snapshot_digest': 'x' * 64}, snapshot, 'agent-1', 'gpt-6.1', required=True)
+    assert not binding_matches(None, snapshot, 'agent-1', 'gpt-6.1', required=True)
 
 
 def test_capability_snapshot_keeps_sources_and_omits_secrets():

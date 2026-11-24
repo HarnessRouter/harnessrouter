@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from app.db.models import NodeRun
 from app.tasks.dynamic_graph import graph_ready, graph_valid
+from app.tasks.execution_binding import execution_binding
 
 
 def _children(db, control):
@@ -195,6 +196,7 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
             dynamic = config.get('dynamic')
             dynamic_nodes = config.get('nodes', [])
             dynamic_snapshot = None
+            run_snapshot = json.loads(run.snapshot_json)
             if dynamic is not None:
                 source = rows[dynamic['source']]
                 source_output = json.loads(source.output_json) if source.output_json else None
@@ -203,7 +205,9 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                 if dynamic_snapshot is None:
                     control.status, control.error_code, control.finished_at = 'failed', 'subgraph_dynamic_invalid', now
                     return candidates, True
-                dynamic_nodes = [{**child, 'agent_id': item.get('agent_id'), 'model': item.get('model')}
+                binding = execution_binding(run_snapshot, item.get('agent_id'), item.get('model'))
+                dynamic_nodes = [{**child, 'agent_id': item.get('agent_id'), 'model': item.get('model'),
+                                  'execution_binding': binding}
                                  for child in dynamic_snapshot]
             from app.tasks.fanout import node_record_usage
             if node_record_usage(db, run.id) + len(dynamic_nodes) + 1 > 500:
@@ -225,6 +229,10 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                                         'inputRefs': child.get('inputRefs', []),
                                         'deps': child.get('deps', []),
                                         'parent_refs': parent_refs,
+                                        **({'execution_binding': child.get('execution_binding')} if child.get('execution_binding')
+                                           else {'execution_binding': execution_binding(run_snapshot,
+                                                                                         child.get('agent_id'),
+                                                                                         child.get('model'))}),
                                         **({'dynamic': True, 'dynamic_node': child,
                                             'dynamic_parent_prompt': item.get('prompt', '')}
                                            if dynamic is not None else {}),
@@ -264,6 +272,7 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
             nested_rows = _nested_children(db, child) if nested_ids else []
             if child.status == 'idle' and not nested_rows:
                 nested_created = []
+                run_snapshot = json.loads(run.snapshot_json)
                 for nested_index, nested in enumerate(nested_config['nodes']):
                     nested_row = NodeRun(
                         run_id=run.id, node_id=item['id'], iteration=child.iteration,
@@ -277,7 +286,10 @@ def advance_subgraphs(db, run, definition, rows, *, encoded, value_at_path=None,
                                             'parent_refs': child_state.get('parent_refs', []),
                                             'nested_subgraph_parent': True,
                                             'nested_parent_node_id': child_state.get('subgraph_node_id'),
-                                            'nested_prompt_prefix': child_state.get('prompt', '')}),
+                                            'nested_prompt_prefix': child_state.get('prompt', ''),
+                                            'execution_binding': execution_binding(run_snapshot,
+                                                                                   nested.get('agent_id'),
+                                                                                   nested.get('model'))}),
                     )
                     db.add(nested_row)
                     db.flush()

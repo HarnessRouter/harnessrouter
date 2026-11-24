@@ -202,6 +202,8 @@ Gateway response；running、读取失败和无 response ID 保持 unknown，ter
 入口；验证后端单元、API/受控 Gateway、暂停/失败/终态恢复、客户端校验、保存重开和窄屏编辑；真实 Provider、PostgreSQL、部署和
 native tool approval 仍按既有独立门禁记录。动态子编排不得与静态节点清单同时配置，也不得递归嵌套。
 
+派生节点还必须携带无密钥 `execution_binding`，引用 Run 创建时冻结的 Agent/model、能力摘要、Gateway 能力摘要和可选权限策略摘要。绑定写入动态清单和 NodeRun 输入，派发前校验其与 Run snapshot 一致；缺失、篡改或摘要变化都映射为 `configuration_changed` 并阻断 Gateway 调用，禁止从当前 Harness 重新推导权限。
+
 ## 终态集合恢复实施
 
 ### 项级历史界面接入
