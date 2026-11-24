@@ -1,4 +1,30 @@
 id: CHG-task-centric-workflow
+native_runtime_registration_binding:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: efbcc052
+  branch: codex/agent-orchestration
+  status: verified_internal_boundary
+  references: [spec.md#native-runtime-能力登记, plan.md#2026-11-24-native-runtime-能力登记绑定]
+  acceptance_ids: [AC-46, AC-47]
+  reuse_decision: extend the existing SQLite RuntimeLeaseRegistry and configured Gateway transport; do not add a second approval or plugin protocol
+  changes:
+    - "可信 adapter-only register 固化 runtime/session/instance/thread/version/checkpoint backend 与四项 native coverage，HTTP 只开放内部鉴权读取，登记不保存 checkpoint 内容、路径、参数或凭据。"
+    - "registration_id 纳入 lease/token/heartbeat，SQLite 同事务校验登记有效期、session/instance scope 和 owner/fence；登记丢失后历史 lease 仍阻止降级。"
+    - "Gateway 读取登记并严格核对可信预期 descriptor；native adapter 核对 thread/namespace，登记失效时不读 checkpoint 或恢复工具。"
+  verification:
+    red: "registry 首次 19 failed（register 缺失）；Gateway 12 failed（run_registered 缺失）；Linux HTTP 首次 fixture assertion 不计有效 Red，修复 fixture 后 2 failed/1 passed（缺 GET 和登记字段）；Gateway helper 1 failed（expected_runtime 缺失）。"
+    audit_red: "scope 同事务测试因缺 registration_scope 失败；登记丢失降级测试 DID NOT RAISE；native thread mismatch 在 Windows/Linux 均 DID NOT RAISE，随后修正。"
+    windows: "python -X utf8 -m pytest -q gateway/tests/test_runtime_ownership.py gateway/tests/test_tool_approval_http.py gateway/tests/test_approval_execution.py gateway/tests/test_denial_continuation.py runner/tests/test_runtime_registration.py runner/tests/test_runtime_lease.py runner/tests/test_langgraph_approval_boundary.py runner/native_tests/test_langgraph_approval.py --tb=short；最终组合 222 passed / 2 failed，失败均为独立进程 capture 超过 45s；不是全绿。首次同范围（thread 校验补充前）222 passed in 52.94s。"
+    windows_retry: "最终源码单独运行 runner/native_tests/test_langgraph_approval.py -k 'separate_process or invalid_registration'；exit 0；4 passed in 36.17s，覆盖两项原失败和登记 expiry/thread 校验；不增加 timeout 或降低断言。新增跨进程登记竞争另 1 passed in 24.45s。超时原因未证实，不能宣称稳定性问题已消除。"
+    linux_http: "一次性 harnessrouter/runner:hexa-p2-final 挂载 worktree；pytest==8.4.2 pytest-asyncio==1.3.0；runtime_registration_http/runtime_lease_http/runtime_registration/runtime_lease/approval_policy_boundary；exit 0；55 passed in 53.76s。包含 Gateway ownership 到真实 FastAPI/SQLite 的成功和登记丢失 unknown 旅程。"
+    linux_native: "同 Runner 镜像 fresh venv 安装 runner/native_tests/requirements.txt；native_tests/test_langgraph_approval.py、runtime_registration/runtime_lease/langgraph_approval_boundary；exit 0；80 passed in 32.79s。包含 registered approve/deny、expiry/thread mismatch 和跨进程唯一 owner。"
+    static: "最终生产 Python py_compile、YAML safe_load 与 git diff --check 通过；无 UI、数据库迁移脚本、依赖或已发布 UHP schema 改动。"
+  security_review: "SQL 全部参数化；无登记 HTTP 写接口；能力列表固定，内部认证、固定 session route 和禁止重定向复用；登记不授予工具权限。登记过期/丢失/替换或 heartbeat 失败不释放 unknown pin，不自动重放。"
+  unit_integration_e2e: "单元、SQLite 跨进程、Runner HTTP 和真实 LangGraph checkpoint 的受控旅程；完整用户审批 E2E 仍未接线，Response/SSE 和 Hexa UI 需后续验证。"
+  rollback: "停止相关 native Runtime 后回退代码，保留登记、lease registration_id 与 pin；禁止用旧审批执行器绕过已登记会话。无 UHP 发布或生产配置变更。"
+  limitations: [Windows combined-suite subprocess timeout cause unresolved with targeted retry passed, production adapter registration caller and liveness renewal, Response/SSE continuation, Hexa pending UI, shared multi-machine control store, real Provider, deployed failover, remote CI]
+  next_action: "将可信登记绑定接入生产 native adapter 的生命周期与精确 continuation，再推进 Response/SSE；tool_approvals 和 Hexa 策略门禁继续保持未开放。"
 runtime_ownership_pin_and_client:
   date: "2026-11-24"
   owner: Codex

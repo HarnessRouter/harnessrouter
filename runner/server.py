@@ -106,11 +106,13 @@ class RuntimeLeaseBody(BaseModel):
     owner: str = Field(min_length=1, max_length=1024)
     ttl_seconds: float = Field(default=30.0, gt=0, le=86400, allow_inf_nan=False)
     fence: int | None = Field(default=None, ge=1)
+    registration_id: str | None = Field(default=None, min_length=1, max_length=1024)
 
 
 _runtime_lease_registry: RuntimeLeaseRegistry | None = None
 _runtime_lease_registry_path: str | None = None
 _runtime_lease_registry_lock = threading.Lock()
+_RUNTIME_INSTANCE_ID = 'runner_' + uuid.uuid4().hex
 
 
 def _runtime_leases() -> RuntimeLeaseRegistry:
@@ -147,7 +149,7 @@ def _lease_json(lease) -> dict:
     return {"runtime_id": lease.runtime_id, "owner": lease.owner,
             "fence": lease.fence, "heartbeat_at": lease.heartbeat_at,
             "expires_at": lease.expires_at, 'execution_id': lease.execution_id,
-            'execution_state': lease.execution_state}
+            'execution_state': lease.execution_state, 'registration_id': lease.registration_id}
 
 
 def _require_runtime_lease_internal(request: Request) -> None:
@@ -17341,41 +17343,44 @@ def readyz() -> JSONResponse:
 
 
 @app.post("/internal/runtime-leases/acquire")
-def acquire_runtime_lease(body: RuntimeLeaseBody, request: Request) -> dict:
+def acquire_runtime_lease(body: RuntimeLeaseBody, request: Request, identifier: str = '') -> dict:
     """Acquire the exclusive owner fence used by a native Runtime adapter."""
     _require_runtime_lease_internal(request)
     try:
         lease = _runtime_leases().acquire(body.runtime_id, body.owner,
-                                           ttl=body.ttl_seconds, now=time.time())
+            ttl=body.ttl_seconds, now=time.time(), registration_id=body.registration_id,
+            registration_scope={'session_id': identifier, 'instance_id': _RUNTIME_INSTANCE_ID})
         return _lease_json(lease)
     except Exception as error:  # noqa: BLE001 - map only safe lease diagnostics
         raise _lease_http_error(error) from None
 
 
 @app.post("/internal/runtime-leases/renew")
-def renew_runtime_lease(body: RuntimeLeaseBody, request: Request) -> dict:
+def renew_runtime_lease(body: RuntimeLeaseBody, request: Request, identifier: str = '') -> dict:
     _require_runtime_lease_internal(request)
     if body.fence is None:
         raise HTTPException(422, detail={"code": "runtime_lease_invalid",
                                           "message": "A lease fence is required."})
     try:
         lease = _runtime_leases().renew(
-            RuntimeLeaseToken(body.runtime_id, body.owner, body.fence),
-            ttl=body.ttl_seconds, now=time.time())
+            RuntimeLeaseToken(body.runtime_id, body.owner, body.fence, body.registration_id),
+            ttl=body.ttl_seconds, now=time.time(),
+            registration_scope={'session_id': identifier, 'instance_id': _RUNTIME_INSTANCE_ID})
         return _lease_json(lease)
     except Exception as error:  # noqa: BLE001
         raise _lease_http_error(error) from None
 
 
 @app.post("/internal/runtime-leases/release")
-def release_runtime_lease(body: RuntimeLeaseBody, request: Request) -> dict:
+def release_runtime_lease(body: RuntimeLeaseBody, request: Request, identifier: str = '') -> dict:
     _require_runtime_lease_internal(request)
     if body.fence is None:
         raise HTTPException(422, detail={"code": "runtime_lease_invalid",
                                           "message": "A lease fence is required."})
     try:
         lease = _runtime_leases().release(
-            RuntimeLeaseToken(body.runtime_id, body.owner, body.fence), now=time.time())
+            RuntimeLeaseToken(body.runtime_id, body.owner, body.fence, body.registration_id), now=time.time(),
+            registration_scope={'session_id': identifier, 'instance_id': _RUNTIME_INSTANCE_ID})
         return _lease_json(lease)
     except Exception as error:  # noqa: BLE001
         raise _lease_http_error(error) from None
@@ -17393,6 +17398,23 @@ def inspect_runtime_lease(runtime_id: str, request: Request) -> dict:
     except HTTPException:
         raise
     except Exception as error:  # noqa: BLE001
+        raise _lease_http_error(error) from None
+
+
+@app.get('/internal/runtime-registrations/{runtime_id:path}')
+def inspect_runtime_registration(runtime_id: str, request: Request, identifier: str = ''):
+    _require_runtime_lease_internal(request)
+    try:
+        stored = _runtime_leases().inspect_registration(runtime_id)
+        if stored is None or stored['session_id'] != identifier:
+            raise HTTPException(404, detail={'code': 'runtime_registration_not_found',
+                                              'message': 'Runtime registration not found.'})
+        if stored['instance_id'] != _RUNTIME_INSTANCE_ID or stored['expires_at'] <= time.time():
+            raise LeaseLost('runtime registration is no longer authoritative')
+        return JSONResponse(stored, headers={'Cache-Control': 'no-store'})
+    except HTTPException:
+        raise
+    except Exception as error:
         raise _lease_http_error(error) from None
 
 

@@ -356,3 +356,19 @@ Gateway ownership client 复用内部 sandbox transport 作为依赖，固定 ac
 获取失败零 operation、renew 失败取消 operation、调用取消和成功释放，再用 Linux Runner 的真实 FastAPI+
 SQLite 验证客户端穿过内部鉴权边界。此步骤不接旧 autonomous turn、不提供 callback HTTP 注册，不放行
 现有审批策略门禁；后续由注册的 native Runtime 调用该内部 client。
+
+## 2026-11-24 Native Runtime 能力登记绑定
+
+依据 AC-47 扩展现有 Runner SQLite lease registry，同库事务保存 registration 与 lease 的关联，避免两个独立
+存储检查之间的替换竞态。可信 native adapter 使用内部 Python register，HTTP 仅允许内部 key 读取，不接受
+客户端/模型/插件上传能力声明。每个 Runner 进程生成 instance ID；登记描述符只包含安全身份和有限能力。
+租约 token 增加可选 registration_id，已有未登记受控 lease 保持兼容；存在登记的 runtime 必须携带匹配 ID。
+
+先写 registry 幂等、身份/能力、过期/替换、pin 冲突、重开和 token 失败测试建立 Red；再实现 SQLite 事务检查。
+HTTP 测试覆盖内部鉴权、Session/进程实例绑定和 register 不存在公开写入口。Gateway 在 configured transport
+读取登记，严格匹配可信调用方提供的预期 descriptor，再通过 RuntimeOwnership 传播登记 ID；heartbeat 丢失登记
+沿用 unknown 边界。native checkpoint 失效旅程使用真实 LangGraph/SQLite，模型仍为确定性受控模型。
+
+Windows 验证 registry/Gateway/native；Linux Runner 交付镜像执行 HTTP、registry 和相关原生组合。完整用户审批 E2E
+仍需后续 Response/SSE 和 Hexa 待批 UI，不能由内部测试替代。回退前停止 native runtime，保留登记和 pin；旧代码
+不能用无登记 lease 绕过已登记会话。结果统一记在 change-record.yaml，不发布新 UHP 版本或能力。

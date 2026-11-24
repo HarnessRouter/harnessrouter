@@ -2462,7 +2462,7 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
                                    headers=_pool_headers(), **kw)
 
 
-async def _run_owned_native_continuation(sid: str, runtime_id: str, operation):
+async def _run_owned_native_continuation(sid: str, runtime_id: str, operation, *, expected_runtime=None):
     """Internal adapter boundary; never chosen from a public request/metadata.
 
     This is separate from the legacy best-effort session harvesting lease. The
@@ -2481,7 +2481,10 @@ async def _run_owned_native_continuation(sid: str, runtime_id: str, operation):
             raise OwnershipError('runtime_lease_unavailable')
         return result.json()
 
-    return await RuntimeOwnership(transport).run(sid, runtime_id, operation)
+    coordinator = RuntimeOwnership(transport)
+    if expected_runtime is not None:
+        return await coordinator.run_registered(sid, runtime_id, expected_runtime, operation)
+    return await coordinator.run(sid, runtime_id, operation)
 
 
 async def _sandbox_file(sid: str, path: str, cap: int) -> tuple[int, bytes | None, str, int | None]:

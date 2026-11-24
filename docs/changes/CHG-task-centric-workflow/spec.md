@@ -646,6 +646,31 @@ Runner URL 或 owner/fence。owner 为每次协调操作分配的唯一值，同
 best-effort session lease。callback 结束后仍须核验有效租约才释放；失败/取消不凭空清除 Runner 的 execution pin。
 该 client 作为 trusted adapter 的内部协作边界使用，不开放新公开审批入口，不启用尚未支持的 Runtime。
 
+### Native Runtime 能力登记
+
+Runtime lease 只证明排他 owner，不能证明运行时支持审批。Runner 的可信 native adapter 必须通过内部 Python
+登记接口写入 `registration_id`、`runtime_id`、`session_id`、`instance_id`、Runtime name/version、原生
+thread/namespace、checkpoint backend 和能力清单。登记只接受 `checkpoint_before_tool`、`durable_checkpoint`、
+`exact_resume`、`deny_continuation` 四项均存在的明确覆盖；不接受未知能力或由公开请求声明的能力。
+checkpoint backend 当前只接受已验收的 `sqlite`；登记不保存数据库路径、工具参数、checkpoint 内容、认证或环境变量。
+thread 身份属于会话，具体 checkpoint/interrupt 仍由每个 Invocation 密封绑定。
+
+登记有独立有效期，不能通过 lease heartbeat 延长。相同实例和相同描述符的有效登记重试返回同一 ID，允许延长
+期限；不同描述符、实例或已到期登记必须生成新 ID，且仅在没有活动 lease 或 execution pin 时才能替换。
+Runner 重启生成新的进程实例 ID；持久登记可供审计，但新实例不能使用旧实例的登记取得或续用 lease。
+原生 adapter 重建、checkpoint 可用性验证和重新登记必须先于恢复。
+
+`GET /internal/runtime-registrations/{runtime_id}?identifier=<session>` 只提供内部鉴权读取；没有 HTTP 创建登记
+接口。缺失、过期或实例/会话不符返回稳定脱敏诊断。Gateway 必须核对预期 Runtime 身份、thread/namespace、
+checkpoint backend 和完整能力，再把 `registration_id` 加入 acquire/renew/release token；每次 heartbeat 核对
+返回登记 ID。登记存在时禁止不带 ID 的 lease 降级，registry 在同一 SQLite 事务中校验登记有效期和 lease 转换。
+登记丢失或替换后旧 token 不能读取 checkpoint、恢复或报告成功，unknown pin 保留。
+
+**AC-47 Native Runtime 登记绑定：** 单元和真实 SQLite/HTTP 集成验证相同描述符幂等、不同实例替换受活动 owner/pin
+约束、重开持久化、过期/丢失/替换/会话或实例不符拒绝、严格能力清单、旧 token fencing。Gateway 检查身份、能力、
+登记期限和 acquire/renew 的登记 ID；不一致时零 callback。受控原生旅程验证登记失效后零工具执行。本验收不代表已
+注册生产模型 Runtime、Response/SSE、公开 UHP capability 或 Hexa UI；生产接线继续遵循上述门禁。
+
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是

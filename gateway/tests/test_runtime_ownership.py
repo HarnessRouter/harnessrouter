@@ -173,3 +173,98 @@ async def test_lost_fence_timeout_and_failures_never_report_success(failure):
         assert canceled.is_set()
     if failure != 'release-failure':
         assert not any(path.endswith('/release') for path, _, _ in calls)
+
+
+def expected_native():
+    return {'runtime_name': 'langgraph', 'runtime_version': '1.1.8', 'thread_id': 'thread',
+            'checkpoint_ns': '', 'checkpoint_backend': 'sqlite',
+            'capabilities': ['checkpoint_before_tool', 'durable_checkpoint', 'exact_resume', 'deny_continuation']}
+
+
+def registration_transport(changes=None, lease_change=None):
+    lease_call, calls = runner_transport()
+    async def call(path, sid, method='POST', body=None):
+        if path.startswith('/internal/runtime-registrations/'):
+            calls.append((path, sid, None))
+            assert method == 'GET'
+            return {'runtime_id': 'runtime', 'registration_id': 'rtreg_trusted',
+                    'session_id': 'session', 'instance_id': 'runner-instance', **expected_native(),
+                    'heartbeat_at': time.time(), 'expires_at': time.time() + 300, **(changes or {})}
+        assert body['registration_id'] == 'rtreg_trusted'
+        value = await lease_call(path, sid, method, body)
+        return {**value, 'registration_id': 'rtreg_trusted', **(lease_change or {})}
+    return call, calls
+
+
+@pytest.mark.asyncio
+async def test_registered_native_operation_checks_descriptor_and_propagates_registration():
+    call, calls = registration_transport()
+    owner = coordinator(call)
+    assert hasattr(owner, 'run_registered'), 'registered Runtime ownership boundary missing'
+    async def operation(token):
+        assert token['registration_id'] == 'rtreg_trusted'
+        return 'done'
+    assert await owner.run_registered('session', 'runtime', expected_native(), operation) == 'done'
+    assert calls[0][0] == '/internal/runtime-registrations/runtime'
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('changes', [{'session_id': 'other'}, {'runtime_id': 'other'},
+    {'instance_id': ''}, {'runtime_version': 'wrong'}, {'thread_id': 'other'},
+    {'checkpoint_backend': 'memory'}, {'capabilities': ['exact_resume']}, {'expires_at': 0},
+    {'registration_id': ''}, {'heartbeat_at': float('nan')}])
+async def test_registration_mismatch_never_acquires_or_dispatches(changes):
+    call, calls = registration_transport(changes)
+    owner = coordinator(call)
+    assert hasattr(owner, 'run_registered'), 'registered Runtime ownership boundary missing'
+    async def forbidden(token):
+        pytest.fail('invalid registration dispatched')
+    with pytest.raises(OwnershipError, match='^runtime_registration_unavailable$'):
+        await owner.run_registered('session', 'runtime', expected_native(), forbidden)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_registered_acquire_cannot_return_different_registration_id():
+    call, calls = registration_transport(lease_change={'registration_id': 'wrong'})
+    owner = coordinator(call)
+    assert hasattr(owner, 'run_registered'), 'registered Runtime ownership boundary missing'
+    async def forbidden(token):
+        pytest.fail('wrong registration dispatched')
+    with pytest.raises(OwnershipError):
+        await owner.run_registered('session', 'runtime', expected_native(), forbidden)
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_registered_gateway_helper_uses_authenticated_fixed_session_route(monkeypatch):
+    import json
+    import httpx
+    import app as gateway
+    calls = []
+    def response(request):
+        calls.append(request)
+        assert request.url.host == 'runner'
+        assert request.headers['x-harness-internal'] == 'controlled-key'
+        assert request.url.params['identifier'] == 'session'
+        if request.method == 'GET':
+            return httpx.Response(200, json={'runtime_id': 'runtime', 'registration_id': 'rtreg_trusted',
+                'session_id': 'session', 'instance_id': 'runner-instance', **expected_native(),
+                'heartbeat_at': time.time(), 'expires_at': time.time() + 300})
+        body = json.loads(request.content)
+        assert body['registration_id'] == 'rtreg_trusted'
+        value = {**body, 'fence': 1, 'heartbeat_at': time.time(), 'expires_at': time.time() + 30,
+                 'execution_id': None, 'execution_state': None}
+        if request.url.path.endswith('/release'):
+            value.update(owner=None, heartbeat_at=None, expires_at=None)
+        return httpx.Response(200, json=value)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        monkeypatch.setattr(gateway, 'POOL_ENDPOINT', 'http://runner')
+        monkeypatch.setattr(gateway, 'INTERNAL_KEY', 'controlled-key')
+        monkeypatch.setattr(gateway, '_client', lambda: client)
+        async def operation(token):
+            return token['registration_id']
+        assert await gateway._run_owned_native_continuation('session', 'runtime', operation,
+                    expected_runtime=expected_native()) == 'rtreg_trusted'
+    assert len(calls) == 4

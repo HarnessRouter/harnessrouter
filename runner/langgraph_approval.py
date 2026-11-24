@@ -62,6 +62,15 @@ class LangGraphApprovalAdapter:
             raise NativeApprovalError('runtime_lease_required')
         try:
             current = self.lease_registry.assert_owner(self.lease_token, now=self.clock())
+            if current.registration_id is not None:
+                registration = self.lease_registry.inspect_registration(self.lease_token.runtime_id)
+                supplied = self.config.get('configurable', {})
+                if (registration is None or registration['registration_id'] != current.registration_id
+                        or registration['thread_id'] != supplied.get('thread_id')
+                        or registration['checkpoint_ns'] != supplied.get('checkpoint_ns', '')
+                        or registration['runtime_name'] != 'langgraph'
+                        or registration['checkpoint_backend'] != 'sqlite'):
+                    raise LeaseLost('runtime registration does not match native session')
             if operation is not None:
                 self.lease_registry.assert_execution(self.lease_token, operation, now=self.clock())
             elif current.execution_id is not None:

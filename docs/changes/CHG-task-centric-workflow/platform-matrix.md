@@ -140,3 +140,12 @@ Windows/Python 3.13 的无平台依赖 Runner 策略单测 3 项通过，覆盖�
 ## 嵌套子编排调度（2026-11-24）
 
 复用 Python、SQLAlchemy 和不可变 JSON 清单，无平台分支、路径或进程接口变更。Windows/SQLite 与 Windows API + Linux PostgreSQL 验证每层 readiness、并发槽位、记录预算及 UTF-8 输出上限；Linux API 镜像挂载最终源码运行相同专项，37 项通过。Chromium 普通/嵌套恢复旅程验证真实本地 HTTP API 与受控 Gateway；无 UI 修改。真实 Provider、原生审批和部署多副本故障切换仍未验证，实际命令与结果统一见 Change `nested_subgraph_scheduler_audit`。
+
+## Native Runtime 登记绑定（2026-11-24）
+
+Runner 继续以 Linux 交付镜像为 HTTP 目标；Windows 验证无 POSIX 依赖的登记/租约、Gateway transport 和真实
+LangGraph/SQLite 受控恢复。登记使用标准库 SQLite/UUID/JSON，不新增外部依赖、Shell、URL 配置或文件路径输入。
+测试进程以 Python argv 和有界 join/finally 清理，Linux 以一次性容器挂载当前源码，不修改运行中的生产容器。
+HTTP 内部 key、session/instance binding、登记过期/丢失及 unknown pin 分别验证；完整用户审批、真实 Provider、
+生产 adapter 生命周期、多机器共享控制存储和部署故障切换仍未验证。最终数量与命令见 Change
+`native_runtime_registration_binding`；公开 UHP tool_approvals 继续不广告。

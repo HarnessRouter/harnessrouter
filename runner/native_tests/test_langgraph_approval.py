@@ -36,6 +36,39 @@ TOOL = {'name': 'write_report', 'origin': 'runtime'}
 CONFIG = {'configurable': {'thread_id': 'native-session'}}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['expired', 'thread-mismatch'])
+async def test_invalid_registration_prevents_checkpoint_and_native_tool(tmp_path, failure):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'lease.db'))
+    registration = registry.register('runtime', {
+        'session_id': 'native-session', 'instance_id': 'native-instance', 'runtime_name': 'langgraph',
+        'runtime_version': '1.1.8', 'thread_id': 'native-session' if failure == 'expired' else 'other-thread', 'checkpoint_ns': '',
+        'checkpoint_backend': 'sqlite', 'capabilities': ['checkpoint_before_tool', 'durable_checkpoint',
+                                                      'exact_resume', 'deny_continuation']}, ttl=5, now=100)
+    token = registry.acquire('runtime', 'owner', ttl=30, now=101,
+                             registration_id=registration['registration_id']).token
+    output = tmp_path / 'tool.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'native.db')) as saver:
+        runtime = graph(saver, output)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        clock = [102]
+        native = LangGraphApprovalAdapter(runtime, CONFIG, {'write_report': TOOL}, lease_registry=registry,
+                                          lease_token=token, clock=lambda: clock[0])
+        if failure == 'thread-mismatch':
+            with pytest.raises(NativeApprovalError, match='^runtime_lease_lost$'):
+                await native.pending()
+            assert not output.exists()
+            return
+        pending = await native.pending()
+        clock[0] = 106
+        with pytest.raises(NativeApprovalError, match='^runtime_lease_lost$'):
+            await native.pending()
+        with pytest.raises(NativeApprovalError, match='^runtime_lease_lost$'):
+            await native.resume(pending, 'approve')
+        assert not output.exists()
+        assert (await runtime.aget_state(CONFIG)).interrupts
+
+
 class ScriptedModel(BaseChatModel):
     """The only fake boundary: deterministically propose one real tool call."""
     calls: int = 0
@@ -490,23 +523,34 @@ async def test_two_adapter_objects_share_one_durable_execution_pin(tmp_path, mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('choice', ['approve', 'deny'])
-async def test_ownership_coordinator_gate_native_journey(tmp_path, choice):
+@pytest.mark.parametrize('registered', [False, True])
+async def test_ownership_coordinator_gate_native_journey(tmp_path, choice, registered):
     """Real native checkpoint + gate + ownership registry; no Provider/Response proof."""
     from dataclasses import asdict
     from runtime_lease import RuntimeLeaseToken
 
     registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    expected = {'runtime_name': 'langgraph', 'runtime_version': '1.1.8', 'thread_id': 'native-session',
+                'checkpoint_ns': '', 'checkpoint_backend': 'sqlite', 'capabilities': [
+                    'checkpoint_before_tool', 'durable_checkpoint', 'exact_resume', 'deny_continuation']}
+    if registered:
+        registry.register('native-session', {'session_id': 'native-session', 'instance_id': 'native-instance',
+                                             **expected}, ttl=300, now=time.time())
     async def transport(path, sid, method='POST', body=None):
         assert sid == 'native-session'
+        if path.startswith('/internal/runtime-registrations/'):
+            assert method == 'GET'
+            return registry.inspect_registration('native-session')
         if path.endswith('/acquire'):
             state = registry.acquire(body['runtime_id'], body['owner'],
-                                     ttl=body['ttl_seconds'], now=time.time())
+                                     ttl=body['ttl_seconds'], now=time.time(), registration_id=body.get('registration_id'))
         elif path.endswith('/renew'):
-            state = registry.renew(RuntimeLeaseToken(body['runtime_id'], body['owner'], body['fence']),
+            state = registry.renew(RuntimeLeaseToken(body['runtime_id'], body['owner'], body['fence'], body.get('registration_id')),
                                    ttl=body['ttl_seconds'], now=time.time())
         else:
             assert path.endswith('/release')
-            state = registry.release(RuntimeLeaseToken(body['runtime_id'], body['owner'], body['fence']), now=time.time())
+            state = registry.release(RuntimeLeaseToken(body['runtime_id'], body['owner'], body['fence'], body.get('registration_id')),
+                                     now=time.time())
         return asdict(state)
 
     path = tmp_path / 'report.txt'
@@ -526,7 +570,11 @@ async def test_ownership_coordinator_gate_native_journey(tmp_path, choice):
             return await resume(SCOPE, call.command_id, 'owned-resume', bound(current), native_allowed=True,
                                 dispatch=lambda saved: native.resume(current, choice))
 
-        await RuntimeOwnership(transport).run('native-session', 'native-session', operation)
+        coordinator = RuntimeOwnership(transport)
+        if registered:
+            await coordinator.run_registered('native-session', 'native-session', expected, operation)
+        else:
+            await coordinator.run('native-session', 'native-session', operation)
         assert registry.inspect('native-session').owner is None
         assert not (await runtime.aget_state(CONFIG)).interrupts
         if choice == 'approve':
