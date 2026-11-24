@@ -1272,3 +1272,23 @@ postgres_orchestration_slice:
   rollback: "本切片只增加验证记录；无需数据回滚。停止活动测试容器或隔离 schema 后即可清理。"
   remaining: [Linux API delivery-image validation, deployed multi-process failover, real Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation]
   next_action: "构建并启动 Linux API 交付镜像做 health/migration smoke；随后在真实 Gateway/Runner 可用时验证插件物化和原生审批 checkpoint。"
+linux_api_delivery_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: c5393882
+  branch: codex/agent-orchestration
+  reuse_decision: use the existing hexa-api Dockerfile and migration CLI; no product or protocol change
+  scope: Linux container image build, PostgreSQL-backed migration startup, Uvicorn readiness and cleanup
+  acceptance_ids: [AC-34, AC-35, AC-36]
+  references: [spec.md#run-lease-与-heartbeat, plan.md#run-lease-与-heartbeat-实施2026-11-24]
+  verification:
+    image: "docker build -t hexa-orchestration-api-check:20261124 hexa-api; exit 0。Linux python:3.12-slim image built successfully from current branch."
+    container: "docker run --rm --name hexa-orchestration-api-check ... sh -c 'python migrate.py && uvicorn app.main:app --host 0.0.0.0 --port 4010'; exit 0。All migrations 001_initial.sql through 012_run_leases.sql applied; Uvicorn startup completed."
+    http: "curl.exe http://127.0.0.1:4011/healthz; exit 0；HTTP 200，body {\"status\":\"ok\"}。Container stopped after probe."
+    static: "YAML safe_load、git diff --check；passed。"
+  security_review: "Container used a disposable PostgreSQL test instance and non-production test credentials; no source, secret or public schema data was exported. The API image retained the existing external self-hosted Gateway boundary and did not restore Cloud deployment/provider capabilities."
+  limitations: [production deployment and multi-replica failover, real BYOK/Provider response, live Gateway plugin materialization, native approval interception and exact continuation, Linux Runner ACP conformance]
+  rollback: "No application data change beyond migration tables in the existing disposable test database; container and test schema were cleaned up."
+  remaining: [deployed multi-process failover, real Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, Linux Runner conformance]
+  next_action: "Run live Gateway plugin/Runner conformance where the authenticated runtime and provider are available; keep tool_approvals unadvertised until native interception and exact continuation pass."
