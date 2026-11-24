@@ -821,7 +821,6 @@ Not run in this column, 63 pairs the provider serves that the harness did not ru
 - codex x grok-4.3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x grok-4.6: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -848,6 +847,7 @@ Not run in this column, 63 pairs the provider serves that the harness did not ru
 - codex x qwen3.8-27b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x qwen4-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x step-3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: codex-tokenrouter
@@ -928,7 +928,7 @@ Not run in this column, 43 pairs the provider serves that the harness did not ru
 
 9 pairs, 43 of 44 scenario runs passed.
 
-Not run in this column, 58 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 59 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -987,6 +987,7 @@ Not run in this column, 58 pairs the provider serves that the harness did not ru
 - codex x qwen3.8-27b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x qwen4-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x step-3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: custom-openai-chat
@@ -1169,7 +1170,7 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 
 61 pairs, 305 of 305 scenario runs passed.
 
-Not run in this column, 11 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 12 pairs the provider serves that the harness did not run, with the reason:
 
 - dsh x claude-fable-5-2: not run, not run in this column
 - dsh x gpt-6.2-astra: not run, not run in this column
@@ -1182,6 +1183,7 @@ Not run in this column, 11 pairs the provider serves that the harness did not ru
 - dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x qwen4-max: not run, not run in this column
 
 ## Provider: dsh-tokenrouter
 
@@ -1310,7 +1312,7 @@ Not run in this column, 13 pairs the provider serves that the harness did not ru
 
 58 pairs, 290 of 290 scenario runs passed.
 
-Not run in this column, 9 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 10 pairs the provider serves that the harness did not run, with the reason:
 
 - dsh x claude-fable-5-2: not run, not run in this column
 - dsh x gpt-6.2-astra: not run, not run in this column
@@ -1321,6 +1323,7 @@ Not run in this column, 9 pairs the provider serves that the harness did not run
 - dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x qwen4-max: not run, not run in this column
 
 ## Provider: gemini-cli
 
@@ -1494,7 +1497,6 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - cline x grok-4.3: not run, not run in this column
 - cline x grok-4.5: not run, not run in this column
 - cline x grok-4.6: not run, not run in this column
-- cline x grok-build-0.1: not run, not run in this column
 - cline x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x hunyuan-4-preview: not run, not run in this column
 - cline x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1521,6 +1523,7 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - cline x qwen3.8-27b: not run, not run in this column
 - cline x qwen3.8-flash: not run, not run in this column
 - cline x qwen3.8-max: not run, not run in this column
+- cline x qwen4-max: not run, not run in this column
 - cline x step-3.7-flash: not run, not run in this column
 - dsh x claude-fable-5: not run, not run in this column
 - dsh x claude-fable-5-1: not run, not run in this column
@@ -1558,7 +1561,6 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - dsh x grok-4.3: not run, not run in this column
 - dsh x grok-4.5: not run, not run in this column
 - dsh x grok-4.6: not run, not run in this column
-- dsh x grok-build-0.1: not run, not run in this column
 - dsh x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x hunyuan-4-preview: not run, not run in this column
 - dsh x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1585,6 +1587,7 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - dsh x qwen3.8-27b: not run, not run in this column
 - dsh x qwen3.8-flash: not run, not run in this column
 - dsh x qwen3.8-max: not run, not run in this column
+- dsh x qwen4-max: not run, not run in this column
 - dsh x step-3.7-flash: not run, not run in this column
 - hermes x claude-fable-5: not run, not run in this column
 - hermes x claude-fable-5-1: not run, not run in this column
@@ -1622,7 +1625,6 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - hermes x grok-4.3: not run, not run in this column
 - hermes x grok-4.5: not run, not run in this column
 - hermes x grok-4.6: not run, not run in this column
-- hermes x grok-build-0.1: not run, not run in this column
 - hermes x hunyuan-3: not run, not run in this column
 - hermes x hunyuan-4-preview: not run, not run in this column
 - hermes x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1649,6 +1651,7 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - hermes x qwen3.8-27b: not run, not run in this column
 - hermes x qwen3.8-flash: not run, not run in this column
 - hermes x qwen3.8-max: not run, not run in this column
+- hermes x qwen4-max: not run, not run in this column
 - hermes x step-3.7-flash: not run, not run in this column
 - opencode x claude-fable-5: not run, not run in this column
 - opencode x claude-fable-5-1: not run, not run in this column
@@ -1686,7 +1689,6 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - opencode x grok-4.3: not run, not run in this column
 - opencode x grok-4.5: not run, not run in this column
 - opencode x grok-4.6: not run, not run in this column
-- opencode x grok-build-0.1: not run, not run in this column
 - opencode x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x hunyuan-4-preview: not run, not run in this column
 - opencode x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1713,6 +1715,7 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - opencode x qwen3.8-27b: not run, not run in this column
 - opencode x qwen3.8-flash: not run, not run in this column
 - opencode x qwen3.8-max: not run, not run in this column
+- opencode x qwen4-max: not run, not run in this column
 - opencode x step-3.7-flash: not run, not run in this column
 - pi x claude-fable-5: not run, not run in this column
 - pi x claude-fable-5-1: not run, not run in this column
@@ -1750,7 +1753,6 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - pi x grok-4.3: not run, not run in this column
 - pi x grok-4.5: not run, not run in this column
 - pi x grok-4.6: not run, not run in this column
-- pi x grok-build-0.1: not run, not run in this column
 - pi x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x hunyuan-4-preview: not run, not run in this column
 - pi x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1777,6 +1779,7 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - pi x qwen3.8-27b: not run, not run in this column
 - pi x qwen3.8-flash: not run, not run in this column
 - pi x qwen3.8-max: not run, not run in this column
+- pi x qwen4-max: not run, not run in this column
 - pi x step-3.7-flash: not run, not run in this column
 - qwen x claude-fable-5: not run, not run in this column
 - qwen x claude-fable-5-1: not run, not run in this column
@@ -1814,7 +1817,6 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - qwen x grok-4.3: not run, not run in this column
 - qwen x grok-4.5: not run, not run in this column
 - qwen x grok-4.6: not run, not run in this column
-- qwen x grok-build-0.1: not run, not run in this column
 - qwen x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x hunyuan-4-preview: not run, not run in this column
 - qwen x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1841,6 +1843,7 @@ Not run in this column, 385 pairs the provider serves that the harness did not r
 - qwen x qwen3.8-27b: not run, not run in this column
 - qwen x qwen3.8-flash: not run, not run in this column
 - qwen x qwen3.8-max: not run, not run in this column
+- qwen x qwen4-max: not run, not run in this column
 - qwen x step-3.7-flash: not run, not run in this column
 
 ## Provider: gemini-tokenrouter
@@ -2219,7 +2222,7 @@ Not run in this column, 271 pairs the provider serves that the harness did not r
 
 47 pairs, 234 of 235 scenario runs passed.
 
-Not run in this column, 355 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 361 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -2280,6 +2283,7 @@ Not run in this column, 355 pairs the provider serves that the harness did not r
 - cline x qwen3.8-27b: not run, not run in this column
 - cline x qwen3.8-flash: not run, not run in this column
 - cline x qwen3.8-max: not run, not run in this column
+- cline x qwen4-max: not run, not run in this column
 - cline x step-3.7-flash: not run, not run in this column
 - dsh x claude-fable-5: not run, not run in this column
 - dsh x claude-fable-5-1: not run, not run in this column
@@ -2339,6 +2343,7 @@ Not run in this column, 355 pairs the provider serves that the harness did not r
 - dsh x qwen3.8-27b: not run, not run in this column
 - dsh x qwen3.8-flash: not run, not run in this column
 - dsh x qwen3.8-max: not run, not run in this column
+- dsh x qwen4-max: not run, not run in this column
 - dsh x step-3.7-flash: not run, not run in this column
 - hermes x claude-fable-5: not run, not run in this column
 - hermes x claude-fable-5-1: not run, not run in this column
@@ -2398,6 +2403,7 @@ Not run in this column, 355 pairs the provider serves that the harness did not r
 - hermes x qwen3.8-27b: not run, not run in this column
 - hermes x qwen3.8-flash: not run, not run in this column
 - hermes x qwen3.8-max: not run, not run in this column
+- hermes x qwen4-max: not run, not run in this column
 - hermes x step-3.7-flash: not run, not run in this column
 - opencode x claude-fable-5: not run, not run in this column
 - opencode x claude-fable-5-1: not run, not run in this column
@@ -2457,6 +2463,7 @@ Not run in this column, 355 pairs the provider serves that the harness did not r
 - opencode x qwen3.8-27b: not run, not run in this column
 - opencode x qwen3.8-flash: not run, not run in this column
 - opencode x qwen3.8-max: not run, not run in this column
+- opencode x qwen4-max: not run, not run in this column
 - opencode x step-3.7-flash: not run, not run in this column
 - pi x claude-fable-5: not run, not run in this column
 - pi x claude-fable-5-1: not run, not run in this column
@@ -2516,6 +2523,7 @@ Not run in this column, 355 pairs the provider serves that the harness did not r
 - pi x qwen3.8-27b: not run, not run in this column
 - pi x qwen3.8-flash: not run, not run in this column
 - pi x qwen3.8-max: not run, not run in this column
+- pi x qwen4-max: not run, not run in this column
 - pi x step-3.7-flash: not run, not run in this column
 - qwen x claude-fable-5: not run, not run in this column
 - qwen x claude-fable-5-1: not run, not run in this column
@@ -2575,6 +2583,7 @@ Not run in this column, 355 pairs the provider serves that the harness did not r
 - qwen x qwen3.8-27b: not run, not run in this column
 - qwen x qwen3.8-flash: not run, not run in this column
 - qwen x qwen3.8-max: not run, not run in this column
+- qwen x qwen4-max: not run, not run in this column
 - qwen x step-3.7-flash: not run, not run in this column
 
 ## Provider: google
@@ -2843,7 +2852,7 @@ Not run in this column, 7 pairs the provider serves that the harness did not run
 
 55 pairs, 274 of 275 scenario runs passed.
 
-Not run in this column, 17 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 18 pairs the provider serves that the harness did not run, with the reason:
 
 - goose x claude-fable-5-2: not run, not run in this column
 - goose x claude-haiku-5.5: not run, not run in this column
@@ -2862,6 +2871,7 @@ Not run in this column, 17 pairs the provider serves that the harness did not ru
 - goose x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x muse-wonder-1.0: not run, not run in this column
+- goose x qwen4-max: not run, not run in this column
 
 ## Provider: goose-tokenrouter
 
@@ -2997,7 +3007,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 
 - goose x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 15 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 16 pairs the provider serves that the harness did not run, with the reason:
 
 - goose x claude-fable-5-2: not run, not run in this column
 - goose x claude-haiku-5.5: not run, not run in this column
@@ -3014,6 +3024,7 @@ Not run in this column, 15 pairs the provider serves that the harness did not ru
 - goose x gpt-6.2-sol: not run, not run in this column
 - goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x muse-wonder-1.0: not run, not run in this column
+- goose x qwen4-max: not run, not run in this column
 
 ## Provider: grok-default
 
@@ -3707,7 +3718,7 @@ Not run in this column, 6 pairs the provider serves that the harness did not run
 
 52 pairs, 259 of 259 scenario runs passed.
 
-Not run in this column, 20 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 21 pairs the provider serves that the harness did not run, with the reason:
 
 - omp x claude-fable-5-2: not run, not run in this column
 - omp x claude-haiku-5.5: not run, not run in this column
@@ -3729,6 +3740,7 @@ Not run in this column, 20 pairs the provider serves that the harness did not ru
 - omp x muse-wonder-1.0: not run, not run in this column
 - omp x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- omp x qwen4-max: not run, not run in this column
 
 ## Provider: omp-tokenrouter
 
@@ -3860,7 +3872,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 
 - omp x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 18 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 19 pairs the provider serves that the harness did not run, with the reason:
 
 - omp x claude-fable-5-2: not run, not run in this column
 - omp x claude-haiku-5.5: not run, not run in this column
@@ -3880,6 +3892,7 @@ Not run in this column, 18 pairs the provider serves that the harness did not ru
 - omp x muse-wonder-1.0: not run, not run in this column
 - omp x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- omp x qwen4-max: not run, not run in this column
 
 ## Provider: openai
 
@@ -4129,14 +4142,17 @@ Not run in this column, 93 pairs the provider serves that the harness did not ru
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
 | agentzero | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
+| agentzero | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 68% of input |
 | aider | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | aider | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | aider | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | FAIL | OpenRouter | recycle: answered without M1-gpt-6-sol: What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. ; served as openai/gpt-6-sol (the provider's alias of the same model) ; recycle: answered without M1-gpt-6-sol: What exact |
 | aider | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 51% of input |
+| aider | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 46% of input |
 | cheetahclaws | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | cheetahclaws | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | cheetahclaws | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | cheetahclaws | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 17% of input |
+| cheetahclaws | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 54% of input |
 | cline | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; 4 turn(s) unlabelled (finding below) |
 | cline | deepseek-v4.1-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter |  |
 | cline | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter |  |
@@ -4159,6 +4175,7 @@ Not run in this column, 93 pairs the provider serves that the harness did not ru
 | cline | qwen3.7-plus | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter |  |
 | cline | qwen3.8-27b | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter |  |
 | cline | qwen3.8-flash | pass | pass | pass (gpt-5.4) | pass | pass | OpenRouter |  |
+| cline | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | 4 turn(s) unlabelled (finding below) ; cache 81% of input |
 | codex | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter |  |
 | codex | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | codex | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
@@ -4213,6 +4230,7 @@ Not run in this column, 93 pairs the provider serves that the harness did not ru
 | dcode | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 68% of input |
 | dcode | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 67% of input |
 | dcode | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 67% of input |
+| dcode | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 68% of input |
 | dcode | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 66% of input |
 | docker-agent | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 100% of input |
 | docker-agent | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 100% of input |
@@ -4265,6 +4283,7 @@ Not run in this column, 93 pairs the provider serves that the harness did not ru
 | docker-agent | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 80% of input |
 | docker-agent | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 80% of input |
 | docker-agent | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 78% of input |
+| docker-agent | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 83% of input |
 | docker-agent | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 79% of input |
 | dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
@@ -4296,6 +4315,7 @@ Not run in this column, 93 pairs the provider serves that the harness did not ru
 | dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | OpenRouter | cache 82% of input |
 | dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
 | fast-agent | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 54% of input |
 | fast-agent | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 69% of input |
@@ -4345,10 +4365,13 @@ Not run in this column, 93 pairs the provider serves that the harness did not ru
 | fast-agent | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
+| fast-agent | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 68% of input |
 | fast-agent | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | goose | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | goose | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 52% of input |
+| goose | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 66% of input |
 | grok | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
+| grok | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 81% of input |
 | hermes | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | hermes | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
@@ -4404,19 +4427,27 @@ session_id: 20260913_060549_70cbeb |
 | hermes | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
 | hermes | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
+| hermes | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | OpenRouter | cache 94% of input |
 | hermes | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
+| jcode | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 69% of input |
 | kilo | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 69% of input |
+| kilo | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | OpenRouter | cache 79% of input |
 | kimi | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | kimi | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | kimi | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | kimi | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 50% of input |
+| kimi | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 71% of input |
+| mimo | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | OpenRouter | cache 79% of input |
 | minimax | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | minimax | minimax-m3.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter, Vercel AI Gateway | cache 60% of input |
+| minimax | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 72% of input |
+| nanobot | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 78% of input |
 | omp | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-astra (the provider's alias of the same model) |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | omp | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | omp | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | 1 turn(s) unlabelled (finding below) ; served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 100% of input |
+| omp | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | OpenRouter | cache 92% of input |
 | opencode | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | opencode | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | opencode | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 68% of input |
@@ -4465,11 +4496,14 @@ session_id: 20260913_060549_70cbeb |
 | opencode | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as qwen/qwen3.8-27b (the provider's alias of the same model) |
 | opencode | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as qwen/qwen3.8-flash (the provider's alias of the same model) |
 | opencode | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
+| opencode | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | OpenRouter | cache 79% of input |
 | opencode | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter |  |
 | openhands | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 69% of input |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | openhands | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 66% of input |
+| openhands | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 68% of input |
+| opensquilla | qwen4-max | pass | pass | pass (qwen3.8-max) | pass | pass | OpenRouter | cache 74% of input |
 | pi | claude-fable-5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | retested once; first try:  |
 | pi | claude-haiku-4.5 | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | retested once; first try:  |
 | pi | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
@@ -4518,6 +4552,7 @@ session_id: 20260913_060549_70cbeb |
 | pi | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as qwen/qwen3.8-27b (the provider's alias of the same model) |
 | pi | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as qwen/qwen3.8-flash (the provider's alias of the same model) |
 | pi | qwen3.8-max | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | retested once; first try:  |
+| pi | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | OpenRouter | cache 89% of input |
 | pi | step-3.7-flash | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenRouter | retested once; first try:  |
 | qwen | claude-fable-5 | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | qwen | claude-haiku-4.5 | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
@@ -4565,6 +4600,7 @@ session_id: 20260913_060549_70cbeb |
 | qwen | qwen3.8-27b | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter | served as qwen/qwen3.8-27b (the provider's alias of the same model) |
 | qwen | qwen3.8-flash | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter | served as qwen/qwen3.8-flash (the provider's alias of the same model) |
 | qwen | qwen3.8-max | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
+| qwen | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 61% of input |
 | qwen | step-3.7-flash | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | vibe | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 71% of input |
 | vibe | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 71% of input |
@@ -4619,9 +4655,11 @@ session_id: 20260913_060549_70cbeb |
 | vibe | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 35% of input |
 | vibe | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 61% of input |
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 53% of input |
+| vibe | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 55% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 65% of input |
+| zeroclaw | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | OpenRouter | cache 24% of input |
 
-490 pairs, 2409 of 2415 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
+515 pairs, 2529 of 2535 scenario runs passed; 8 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -4631,6 +4669,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - cline x claude-haiku-5.5: 4 turn(s) report no served model, so rule 2 could not judge them
 - cline x claude-haiku-5.5: no prompt cache reads over 51682 input tokens (every call paid full price)
 - cline x gpt-6.1-sol: 4 turn(s) report no served model, so rule 2 could not judge them
+- cline x qwen4-max: 4 turn(s) report no served model, so rule 2 could not judge them
 - codex x gpt-6.1-sol: 4 turn(s) report no served model, so rule 2 could not judge them
 - dcode x claude-fable-5: no prompt cache reads over 89782 input tokens (every call paid full price)
 - dcode x claude-fable-5-1: no prompt cache reads over 90714 input tokens (every call paid full price)
@@ -4657,7 +4696,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - pi x claude-haiku-5.5: no prompt cache reads over 25529 input tokens (every call paid full price)
 - qwen x claude-haiku-5.5: no prompt cache reads over 570679 input tokens (every call paid full price)
 
-Not run in this column, 1022 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 1365 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4702,7 +4741,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - agentzero x grok-4.3: not run, not run in this column
 - agentzero x grok-4.5: not run, not run in this column
 - agentzero x grok-4.6: not run, not run in this column
-- agentzero x grok-build-0.1: not run, not run in this column
 - agentzero x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x hunyuan-4-preview: not run, not run in this column
 - agentzero x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4770,7 +4808,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - aider x grok-4.3: not run, not run in this column
 - aider x grok-4.5: not run, not run in this column
 - aider x grok-4.6: not run, not run in this column
-- aider x grok-build-0.1: not run, not run in this column
 - aider x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - aider x hunyuan-4-preview: not run, not run in this column
 - aider x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4838,7 +4875,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - cheetahclaws x grok-4.3: not run, not run in this column
 - cheetahclaws x grok-4.5: not run, not run in this column
 - cheetahclaws x grok-4.6: not run, not run in this column
-- cheetahclaws x grok-build-0.1: not run, not run in this column
 - cheetahclaws x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cheetahclaws x hunyuan-4-preview: not run, not run in this column
 - cheetahclaws x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4956,7 +4992,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - codex x grok-4.3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x grok-4.6: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- codex x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4983,6 +5018,7 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - codex x qwen3.8-27b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x qwen4-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x step-3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x claude-fable-5-2: not run, not run in this column
 - dcode x gpt-5.3-codex: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5013,7 +5049,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - docker-agent x gpt-6.2-sol: not run, not run in this column
 - docker-agent x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- docker-agent x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5044,7 +5079,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - dsh x grok-4.3: not run, not run in this column
 - dsh x grok-4.5: not run, not run in this column
 - dsh x grok-4.6: not run, not run in this column
-- dsh x grok-build-0.1: not run, not run in this column
 - dsh x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x hunyuan-4-preview: not run, not run in this column
 - dsh x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5131,7 +5165,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - goose x grok-4.3: not run, not run in this column
 - goose x grok-4.5: not run, not run in this column
 - goose x grok-4.6: not run, not run in this column
-- goose x grok-build-0.1: not run, not run in this column
 - goose x hunyuan-3: not run, not run in this column
 - goose x hunyuan-4-preview: not run, not run in this column
 - goose x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5202,7 +5235,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - grok x grok-4.3: not run, not run in this column
 - grok x grok-4.5: not run, not run in this column
 - grok x grok-4.6: not run, not run in this column
-- grok x grok-build-0.1: not run, not run in this column
 - grok x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - grok x hunyuan-4-preview: not run, not run in this column
 - grok x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5248,6 +5280,77 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - hermes x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x muse-wonder-1.0: not run, not run in this column
+- jcode x claude-fable-5: not run, not run in this column
+- jcode x claude-fable-5-1: not run, not run in this column
+- jcode x claude-fable-5-2: not run, not run in this column
+- jcode x claude-haiku-4.5: not run, not run in this column
+- jcode x claude-haiku-5.5: not run, not run in this column
+- jcode x claude-opus-4.7: not run, not run in this column
+- jcode x claude-opus-4.8: not run, not run in this column
+- jcode x claude-opus-5: not run, not run in this column
+- jcode x claude-opus-5.5: not run, not run in this column
+- jcode x claude-sonnet-4.6: not run, not run in this column
+- jcode x claude-sonnet-5: not run, not run in this column
+- jcode x claude-sonnet-5.5: not run, not run in this column
+- jcode x deepseek-v4-flash: not run, not run in this column
+- jcode x deepseek-v4-pro: not run, not run in this column
+- jcode x deepseek-v4.1-flash: not run, not run in this column
+- jcode x gemini-3-flash-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x gemini-3.1-flash-lite: not run, not run in this column
+- jcode x gemini-3.1-pro-preview: not run, not run in this column
+- jcode x gemini-3.5-flash: not run, not run in this column
+- jcode x gemini-3.5-flash-lite: not run, not run in this column
+- jcode x gemini-3.6-flash: not run, not run in this column
+- jcode x gemini-3.7-flash: not run, not run in this column
+- jcode x gemini-3.8-flash: not run, not run in this column
+- jcode x gemini-4-argon: not run, not run in this column
+- jcode x glm-5.3: not run, not run in this column
+- jcode x glm-5.3-flash: not run, not run in this column
+- jcode x gpt-5.2: not run, not run in this column
+- jcode x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- jcode x gpt-5.4: not run, not run in this column
+- jcode x gpt-5.4-mini: not run, not run in this column
+- jcode x gpt-5.5: not run, not run in this column
+- jcode x gpt-5.6-luna: not run, not run in this column
+- jcode x gpt-5.6-sol: not run, not run in this column
+- jcode x gpt-5.6-terra: not run, not run in this column
+- jcode x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- jcode x gpt-6-luna: not run, not run in this column
+- jcode x gpt-6-sol: not run, not run in this column
+- jcode x gpt-6.1-sol: not run, not run in this column
+- jcode x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- jcode x gpt-6.2-sol: not run, not run in this column
+- jcode x grok-4.20: not run, not run in this column
+- jcode x grok-4.3: not run, not run in this column
+- jcode x grok-4.5: not run, not run in this column
+- jcode x grok-4.6: not run, not run in this column
+- jcode x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x kimi-k2.7-code: not run, not run in this column
+- jcode x kimi-k3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x mistral-medium-3.5: not run, not run in this column
+- jcode x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x muse-spark-1.2: not run, not run in this column
+- jcode x muse-spark-1.3: not run, not run in this column
+- jcode x muse-wonder-1.0: not run, not run in this column
+- jcode x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x nemotron-3.5-lightning: not run, not run in this column
+- jcode x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- jcode x qwen3.7-max: not run, not run in this column
+- jcode x qwen3.7-plus: not run, not run in this column
+- jcode x qwen3.8-27b: not run, not run in this column
+- jcode x qwen3.8-flash: not run, not run in this column
+- jcode x qwen3.8-max: not run, not run in this column
+- jcode x step-3.7-flash: not run, not run in this column
 - kilo x claude-fable-5: not run, not run in this column
 - kilo x claude-fable-5-1: not run, not run in this column
 - kilo x claude-fable-5-2: not run, not run in this column
@@ -5291,7 +5394,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - kilo x grok-4.3: not run, not run in this column
 - kilo x grok-4.5: not run, not run in this column
 - kilo x grok-4.6: not run, not run in this column
-- kilo x grok-build-0.1: not run, not run in this column
 - kilo x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kilo x hunyuan-4-preview: not run, not run in this column
 - kilo x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5359,7 +5461,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - kimi x grok-4.3: not run, not run in this column
 - kimi x grok-4.5: not run, not run in this column
 - kimi x grok-4.6: not run, not run in this column
-- kimi x grok-build-0.1: not run, not run in this column
 - kimi x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kimi x hunyuan-4-preview: not run, not run in this column
 - kimi x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5387,6 +5488,77 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - kimi x qwen3.8-flash: not run, not run in this column
 - kimi x qwen3.8-max: not run, not run in this column
 - kimi x step-3.7-flash: not run, not run in this column
+- mimo x claude-fable-5: not run, not run in this column
+- mimo x claude-fable-5-1: not run, not run in this column
+- mimo x claude-fable-5-2: not run, not run in this column
+- mimo x claude-haiku-4.5: not run, not run in this column
+- mimo x claude-haiku-5.5: not run, not run in this column
+- mimo x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x claude-opus-4.8: not run, not run in this column
+- mimo x claude-opus-5: not run, not run in this column
+- mimo x claude-opus-5.5: not run, not run in this column
+- mimo x claude-sonnet-4.6: not run, not run in this column
+- mimo x claude-sonnet-5: not run, not run in this column
+- mimo x claude-sonnet-5.5: not run, not run in this column
+- mimo x deepseek-v4-flash: not run, not run in this column
+- mimo x deepseek-v4-pro: not run, not run in this column
+- mimo x deepseek-v4.1-flash: not run, not run in this column
+- mimo x gemini-3-flash-preview: not run, not run in this column
+- mimo x gemini-3.1-flash-lite: not run, not run in this column
+- mimo x gemini-3.1-pro-preview: not run, not run in this column
+- mimo x gemini-3.5-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x gemini-3.5-flash-lite: not run, not run in this column
+- mimo x gemini-3.6-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x gemini-3.7-flash: not run, not run in this column
+- mimo x gemini-3.8-flash: not run, not run in this column
+- mimo x gemini-4-argon: not run, not run in this column
+- mimo x glm-5.3: not run, not run in this column
+- mimo x glm-5.3-flash: not run, not run in this column
+- mimo x gpt-5.2: not run, not run in this column
+- mimo x gpt-5.3-codex: not run, not run in this column
+- mimo x gpt-5.4: not run, not run in this column
+- mimo x gpt-5.4-mini: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x gpt-5.5: not run, not run in this column
+- mimo x gpt-5.6-luna: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x gpt-5.6-sol: not run, not run in this column
+- mimo x gpt-5.6-terra: not run, not run in this column
+- mimo x gpt-6-astra: not run, not run in this column
+- mimo x gpt-6-luna: not run, not run in this column
+- mimo x gpt-6-sol: not run, not run in this column
+- mimo x gpt-6.1-sol: not run, not run in this column
+- mimo x gpt-6.2-astra: not run, not run in this column
+- mimo x gpt-6.2-sol: not run, not run in this column
+- mimo x grok-4.20: not run, not run in this column
+- mimo x grok-4.3: not run, not run in this column
+- mimo x grok-4.5: not run, not run in this column
+- mimo x grok-4.6: not run, not run in this column
+- mimo x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x kimi-k2.7-code: not run, not run in this column
+- mimo x kimi-k3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x muse-glimmer-30b: not run, not run in this column
+- mimo x muse-spark-1.1: not run, not run in this column
+- mimo x muse-spark-1.2: not run, not run in this column
+- mimo x muse-spark-1.3: not run, not run in this column
+- mimo x muse-wonder-1.0: not run, not run in this column
+- mimo x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x nemotron-3.5-lightning: not run, not run in this column
+- mimo x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x qwen3.7-max: not run, not run in this column
+- mimo x qwen3.7-plus: not run, not run in this column
+- mimo x qwen3.8-27b: not run, not run in this column
+- mimo x qwen3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- mimo x qwen3.8-max: not run, not run in this column
+- mimo x step-3.7-flash: not run, not run in this column
 - minimax x claude-fable-5: not run, not run in this column
 - minimax x claude-fable-5-1: not run, not run in this column
 - minimax x claude-fable-5-2: not run, not run in this column
@@ -5430,7 +5602,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - minimax x grok-4.3: not run, not run in this column
 - minimax x grok-4.5: not run, not run in this column
 - minimax x grok-4.6: not run, not run in this column
-- minimax x grok-build-0.1: not run, not run in this column
 - minimax x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - minimax x hunyuan-4-preview: not run, not run in this column
 - minimax x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5457,6 +5628,77 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - minimax x qwen3.8-flash: not run, not run in this column
 - minimax x qwen3.8-max: not run, not run in this column
 - minimax x step-3.7-flash: not run, not run in this column
+- nanobot x claude-fable-5: not run, not run in this column
+- nanobot x claude-fable-5-1: not run, not run in this column
+- nanobot x claude-fable-5-2: not run, not run in this column
+- nanobot x claude-haiku-4.5: not run, not run in this column
+- nanobot x claude-haiku-5.5: not run, not run in this column
+- nanobot x claude-opus-4.7: not run, not run in this column
+- nanobot x claude-opus-4.8: not run, not run in this column
+- nanobot x claude-opus-5: not run, not run in this column
+- nanobot x claude-opus-5.5: not run, not run in this column
+- nanobot x claude-sonnet-4.6: not run, not run in this column
+- nanobot x claude-sonnet-5: not run, not run in this column
+- nanobot x claude-sonnet-5.5: not run, not run in this column
+- nanobot x deepseek-v4-flash: not run, not run in this column
+- nanobot x deepseek-v4-pro: not run, not run in this column
+- nanobot x deepseek-v4.1-flash: not run, not run in this column
+- nanobot x gemini-3-flash-preview: not run, not run in this column
+- nanobot x gemini-3.1-flash-lite: not run, not run in this column
+- nanobot x gemini-3.1-pro-preview: not run, not run in this column
+- nanobot x gemini-3.5-flash: not run, not run in this column
+- nanobot x gemini-3.5-flash-lite: not run, not run in this column
+- nanobot x gemini-3.6-flash: not run, not run in this column
+- nanobot x gemini-3.7-flash: not run, not run in this column
+- nanobot x gemini-3.8-flash: not run, not run in this column
+- nanobot x gemini-4-argon: not run, not run in this column
+- nanobot x glm-5.3: not run, not run in this column
+- nanobot x glm-5.3-flash: not run, not run in this column
+- nanobot x gpt-5.2: not run, not run in this column
+- nanobot x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- nanobot x gpt-5.4: not run, not run in this column
+- nanobot x gpt-5.4-mini: not run, not run in this column
+- nanobot x gpt-5.5: not run, not run in this column
+- nanobot x gpt-5.6-luna: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x gpt-5.6-sol: not run, not run in this column
+- nanobot x gpt-5.6-terra: not run, not run in this column
+- nanobot x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- nanobot x gpt-6-luna: not run, not run in this column
+- nanobot x gpt-6-sol: not run, not run in this column
+- nanobot x gpt-6.1-sol: not run, not run in this column
+- nanobot x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- nanobot x gpt-6.2-sol: not run, not run in this column
+- nanobot x grok-4.20: not run, not run in this column
+- nanobot x grok-4.3: not run, not run in this column
+- nanobot x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x grok-4.6: not run, not run in this column
+- nanobot x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x hunyuan-4-preview: not run, not run in this column
+- nanobot x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x kimi-k2.7-code: not run, not run in this column
+- nanobot x kimi-k3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x mistral-medium-3.5: not run, not run in this column
+- nanobot x muse-glimmer-30b: not run, not run in this column
+- nanobot x muse-spark-1.1: not run, not run in this column
+- nanobot x muse-spark-1.2: not run, not run in this column
+- nanobot x muse-spark-1.3: not run, not run in this column
+- nanobot x muse-wonder-1.0: not run, not run in this column
+- nanobot x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x nemotron-3.5-lightning: not run, not run in this column
+- nanobot x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- nanobot x qwen3.7-max: not run, not run in this column
+- nanobot x qwen3.7-plus: not run, not run in this column
+- nanobot x qwen3.8-27b: not run, not run in this column
+- nanobot x qwen3.8-flash: not run, not run in this column
+- nanobot x qwen3.8-max: not run, not run in this column
+- nanobot x step-3.7-flash: not run, not run in this column
 - omp x claude-fable-5: not run, not run in this column
 - omp x claude-fable-5-1: not run, not run in this column
 - omp x claude-fable-5-2: not run, not run in this column
@@ -5496,7 +5738,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - omp x grok-4.3: not run, not run in this column
 - omp x grok-4.5: not run, not run in this column
 - omp x grok-4.6: not run, not run in this column
-- omp x grok-build-0.1: not run, not run in this column
 - omp x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x hunyuan-4-preview: not run, not run in this column
 - omp x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5587,7 +5828,6 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - openhands x grok-4.3: not run, not run in this column
 - openhands x grok-4.5: not run, not run in this column
 - openhands x grok-4.6: not run, not run in this column
-- openhands x grok-build-0.1: not run, not run in this column
 - openhands x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - openhands x hunyuan-4-preview: not run, not run in this column
 - openhands x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5615,6 +5855,77 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - openhands x qwen3.8-flash: not run, not run in this column
 - openhands x qwen3.8-max: not run, not run in this column
 - openhands x step-3.7-flash: not run, not run in this column
+- opensquilla x claude-fable-5: not run, not run in this column
+- opensquilla x claude-fable-5-1: not run, not run in this column
+- opensquilla x claude-fable-5-2: not run, not run in this column
+- opensquilla x claude-haiku-4.5: not run, not run in this column
+- opensquilla x claude-haiku-5.5: not run, not run in this column
+- opensquilla x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x claude-opus-4.8: not run, not run in this column
+- opensquilla x claude-opus-5: not run, not run in this column
+- opensquilla x claude-opus-5.5: not run, not run in this column
+- opensquilla x claude-sonnet-4.6: not run, not run in this column
+- opensquilla x claude-sonnet-5: not run, not run in this column
+- opensquilla x claude-sonnet-5.5: not run, not run in this column
+- opensquilla x deepseek-v4-flash: not run, not run in this column
+- opensquilla x deepseek-v4-pro: not run, not run in this column
+- opensquilla x deepseek-v4.1-flash: not run, not run in this column
+- opensquilla x gemini-3-flash-preview: not run, not run in this column
+- opensquilla x gemini-3.1-flash-lite: not run, not run in this column
+- opensquilla x gemini-3.1-pro-preview: not run, not run in this column
+- opensquilla x gemini-3.5-flash: not run, not run in this column
+- opensquilla x gemini-3.5-flash-lite: not run, not run in this column
+- opensquilla x gemini-3.6-flash: not run, not run in this column
+- opensquilla x gemini-3.7-flash: not run, not run in this column
+- opensquilla x gemini-3.8-flash: not run, not run in this column
+- opensquilla x gemini-4-argon: not run, not run in this column
+- opensquilla x glm-5.3: not run, not run in this column
+- opensquilla x glm-5.3-flash: not run, not run in this column
+- opensquilla x gpt-5.2: not run, not run in this column
+- opensquilla x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- opensquilla x gpt-5.4: not run, not run in this column
+- opensquilla x gpt-5.4-mini: not run, not run in this column
+- opensquilla x gpt-5.5: not run, not run in this column
+- opensquilla x gpt-5.6-luna: not run, not run in this column
+- opensquilla x gpt-5.6-sol: not run, not run in this column
+- opensquilla x gpt-5.6-terra: not run, not run in this column
+- opensquilla x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- opensquilla x gpt-6-luna: not run, not run in this column
+- opensquilla x gpt-6-sol: not run, not run in this column
+- opensquilla x gpt-6.1-sol: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- opensquilla x gpt-6.2-sol: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x grok-4.3: not run, not run in this column
+- opensquilla x grok-4.5: not run, not run in this column
+- opensquilla x grok-4.6: not run, not run in this column
+- opensquilla x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x kimi-k2.7-code: not run, not run in this column
+- opensquilla x kimi-k3: not run, not run in this column
+- opensquilla x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x mistral-medium-3.5: not run, not run in this column
+- opensquilla x muse-glimmer-30b: not run, not run in this column
+- opensquilla x muse-spark-1.1: not run, not run in this column
+- opensquilla x muse-spark-1.2: not run, not run in this column
+- opensquilla x muse-spark-1.3: not run, not run in this column
+- opensquilla x muse-wonder-1.0: not run, not run in this column
+- opensquilla x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x nemotron-3.5-lightning: not run, not run in this column
+- opensquilla x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x qwen3.7-max: not run, not run in this column
+- opensquilla x qwen3.7-plus: not run, not run in this column
+- opensquilla x qwen3.8-27b: not run, not run in this column
+- opensquilla x qwen3.8-flash: not run, not run in this column
+- opensquilla x qwen3.8-max: not run, not run in this column
+- opensquilla x step-3.7-flash: not run, not run in this column
 - pi x claude-fable-5-1: not run, not run in this column
 - pi x claude-fable-5-2: not run, not run in this column
 - pi x claude-opus-5.5: not run, not run in this column
@@ -5681,6 +5992,77 @@ Not run in this column, 1022 pairs the provider serves that the harness did not 
 - vibe x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x claude-fable-5: not run, not run in this column
+- zeroclaw x claude-fable-5-1: not run, not run in this column
+- zeroclaw x claude-fable-5-2: not run, not run in this column
+- zeroclaw x claude-haiku-4.5: not run, not run in this column
+- zeroclaw x claude-haiku-5.5: not run, not run in this column
+- zeroclaw x claude-opus-4.7: not run, not run in this column
+- zeroclaw x claude-opus-4.8: not run, not run in this column
+- zeroclaw x claude-opus-5: not run, not run in this column
+- zeroclaw x claude-opus-5.5: not run, not run in this column
+- zeroclaw x claude-sonnet-4.6: not run, not run in this column
+- zeroclaw x claude-sonnet-5: not run, not run in this column
+- zeroclaw x claude-sonnet-5.5: not run, not run in this column
+- zeroclaw x deepseek-v4-flash: not run, not run in this column
+- zeroclaw x deepseek-v4-pro: not run, not run in this column
+- zeroclaw x deepseek-v4.1-flash: not run, not run in this column
+- zeroclaw x gemini-3-flash-preview: not run, not run in this column
+- zeroclaw x gemini-3.1-flash-lite: not run, not run in this column
+- zeroclaw x gemini-3.1-pro-preview: not run, not run in this column
+- zeroclaw x gemini-3.5-flash: not run, not run in this column
+- zeroclaw x gemini-3.5-flash-lite: not run, not run in this column
+- zeroclaw x gemini-3.6-flash: not run, not run in this column
+- zeroclaw x gemini-3.7-flash: not run, not run in this column
+- zeroclaw x gemini-3.8-flash: not run, not run in this column
+- zeroclaw x gemini-4-argon: not run, not run in this column
+- zeroclaw x glm-5.3: not run, not run in this column
+- zeroclaw x glm-5.3-flash: not run, not run in this column
+- zeroclaw x gpt-5.2: not run, not run in this column
+- zeroclaw x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- zeroclaw x gpt-5.4: not run, not run in this column
+- zeroclaw x gpt-5.4-mini: not run, not run in this column
+- zeroclaw x gpt-5.5: not run, not run in this column
+- zeroclaw x gpt-5.6-luna: not run, not run in this column
+- zeroclaw x gpt-5.6-sol: not run, not run in this column
+- zeroclaw x gpt-5.6-terra: not run, not run in this column
+- zeroclaw x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- zeroclaw x gpt-6-luna: not run, not run in this column
+- zeroclaw x gpt-6-sol: not run, not run in this column
+- zeroclaw x gpt-6.1-sol: not run, not run in this column
+- zeroclaw x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- zeroclaw x gpt-6.2-sol: not run, not run in this column
+- zeroclaw x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x grok-4.3: not run, not run in this column
+- zeroclaw x grok-4.5: not run, not run in this column
+- zeroclaw x grok-4.6: not run, not run in this column
+- zeroclaw x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x hunyuan-4-preview: not run, not run in this column
+- zeroclaw x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x kimi-k2.7-code: not run, not run in this column
+- zeroclaw x kimi-k3: not run, not run in this column
+- zeroclaw x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x mistral-medium-3.5: not run, not run in this column
+- zeroclaw x muse-glimmer-30b: not run, not run in this column
+- zeroclaw x muse-spark-1.1: not run, not run in this column
+- zeroclaw x muse-spark-1.2: not run, not run in this column
+- zeroclaw x muse-spark-1.3: not run, not run in this column
+- zeroclaw x muse-wonder-1.0: not run, not run in this column
+- zeroclaw x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x nemotron-3.5-lightning: not run, not run in this column
+- zeroclaw x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x qwen3.7-max: not run, not run in this column
+- zeroclaw x qwen3.7-plus: not run, not run in this column
+- zeroclaw x qwen3.8-27b: not run, not run in this column
+- zeroclaw x qwen3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x qwen3.8-max: not run, not run in this column
+- zeroclaw x step-3.7-flash: not run, not run in this column
 
 ## Provider: tokenrouter
 
@@ -6685,16 +7067,19 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 |---|---|---|---|---|---|---|---|---|
 | agentzero | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | agentzero | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 70% of input |
+| agentzero | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 69% of input |
 | aider | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | aider | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | aider | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | aider | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 51% of input |
 | aider | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 47% of input |
+| aider | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 46% of input |
 | cheetahclaws | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | cheetahclaws | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | cheetahclaws | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | cheetahclaws | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 17% of input |
 | cheetahclaws | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 29% of input |
+| cheetahclaws | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 55% of input |
 | claude-code | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 99% of input |
 | cline | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; 4 turn(s) unlabelled (finding below) |
 | cline | deepseek-v4.1-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway |  |
@@ -6721,6 +7106,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | cline | qwen3.7-plus | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway |  |
 | cline | qwen3.8-27b | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway |  |
 | cline | qwen3.8-flash | pass | pass | pass (gpt-5.4) | pass | pass | Vercel AI Gateway |  |
+| cline | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | 4 turn(s) unlabelled (finding below) ; cache 73% of input |
 | codex | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway |  |
 | codex | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | codex | gpt-6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
@@ -6778,6 +7164,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | dcode | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 61% of input |
 | dcode | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 66% of input |
 | dcode | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 73% of input |
+| dcode | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 68% of input |
 | dcode | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 49% of input |
 | docker-agent | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 73% of input |
 | docker-agent | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 73% of input |
@@ -6831,6 +7218,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | docker-agent | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 67% of input |
 | docker-agent | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 70% of input |
 | docker-agent | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 88% of input |
+| docker-agent | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 70% of input |
 | docker-agent | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 50% of input |
 | dsh | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | 4 turn(s) unlabelled (finding below) ; cache 100% of input |
 | dsh | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway |  |
@@ -6839,6 +7227,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | dsh | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | 4 turn(s) unlabelled (finding below) ; cache 100% of input |
 | dsh | gpt-6.2-astra | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
 | dsh | gpt-6.2-sol | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 100% of input |
+| dsh | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 79% of input |
 | fast-agent | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 54% of input |
 | fast-agent | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 70% of input |
 | fast-agent | claude-haiku-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) |
@@ -6888,12 +7277,15 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | fast-agent | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
+| fast-agent | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 68% of input |
 | fast-agent | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | goose | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | goose | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 62% of input |
 | goose | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 44% of input |
+| goose | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 59% of input |
 | grok | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | grok | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 74% of input |
+| grok | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 68% of input |
 | hermes | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | hermes | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway |  |
@@ -6923,21 +7315,28 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | hermes | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
 | hermes | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
+| hermes | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 80% of input |
 | jcode | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
+| jcode | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
 | kilo | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 69% of input |
 | kilo | gpt-6.2-astra | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
 | kilo | gpt-6.2-sol | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 100% of input |
+| kilo | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 79% of input |
 | kimi | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | kimi | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | kimi | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | kimi | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 50% of input |
 | kimi | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 57% of input |
+| kimi | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 62% of input |
 | mimo | gpt-6.2-astra | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
 | mimo | gpt-6.2-sol | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 100% of input |
+| mimo | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 79% of input |
 | minimax | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | minimax | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 71% of input |
 | minimax | minimax-m3.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 73% of input |
+| minimax | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 68% of input |
 | nanobot | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 71% of input |
+| nanobot | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 68% of input |
 | omp | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 100% of input |
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
@@ -6945,6 +7344,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | omp | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | 1 turn(s) unlabelled (finding below) ; served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 100% of input |
 | omp | gpt-6.2-astra | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 100% of input |
 | omp | gpt-6.2-sol | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 100% of input |
+| omp | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 79% of input |
 | opencode | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 100% of input |
 | opencode | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
 | opencode | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
@@ -6972,11 +7372,14 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | opencode | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-plus (the provider's alias of the same model) |
 | opencode | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
 | opencode | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
+| opencode | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 82% of input |
 | openhands | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 69% of input |
 | openhands | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
 | openhands | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | openhands | gpt-6.1-sol | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 66% of input |
 | openhands | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 66% of input |
+| openhands | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 66% of input |
+| opensquilla | qwen4-max | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | cache 75% of input |
 | pi | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 83% of input |
 | pi | deepseek-v4.1-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
 | pi | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
@@ -7004,6 +7407,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | pi | qwen3.7-plus | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-plus (the provider's alias of the same model) |
 | pi | qwen3.8-27b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
 | pi | qwen3.8-flash | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
+| pi | qwen4-max | pass | pass | pass (gpt-6.2-astra) | pass | pass | Vercel AI Gateway | cache 90% of input |
 | qwen | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | qwen | deepseek-v4.1-flash | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) |
 | qwen | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
@@ -7029,6 +7433,7 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | qwen | qwen3.7-plus | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.7-plus (the provider's alias of the same model) |
 | qwen | qwen3.8-27b | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-27b (the provider's alias of the same model) |
 | qwen | qwen3.8-flash | pass | pass | pass (qwen3.7-max) | pass | pass | Vercel AI Gateway | served as alibaba/qwen3.8-flash (the provider's alias of the same model) |
+| qwen | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 61% of input |
 | vibe | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 71% of input |
 | vibe | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 71% of input |
 | vibe | claude-haiku-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 69% of input |
@@ -7082,10 +7487,12 @@ Not run in this column, 668 pairs the provider serves that the harness did not r
 | vibe | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 14% of input |
 | vibe | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 48% of input |
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 17% of input |
+| vibe | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 55% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 32% of input |
 | zeroclaw | gpt-6.2-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 17% of input |
+| zeroclaw | qwen4-max | pass | pass | pass (gpt-6.2-sol) | pass | pass | Vercel AI Gateway | cache 24% of input |
 
-401 pairs, 1893 of 1911 scenario runs passed; 10 pairs served by another connection or as another model are findings, not counted.
+426 pairs, 2013 of 2031 scenario runs passed; 11 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -7096,6 +7503,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - cline x claude-haiku-5.5: no prompt cache reads over 51624 input tokens (every call paid full price)
 - cline x gpt-6.1-sol: 4 turn(s) report no served model, so rule 2 could not judge them
 - cline x gpt-6.2-sol: 4 turn(s) report no served model, so rule 2 could not judge them
+- cline x qwen4-max: 4 turn(s) report no served model, so rule 2 could not judge them
 - codex x gpt-6.1-sol: 4 turn(s) report no served model, so rule 2 could not judge them
 - dcode x claude-fable-5: no prompt cache reads over 90026 input tokens (every call paid full price)
 - dcode x claude-fable-5-1: no prompt cache reads over 89700 input tokens (every call paid full price)
@@ -7122,7 +7530,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - qwen x claude-haiku-5.5: no prompt cache reads over 569929 input tokens (every call paid full price)
 - qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 1366 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 1435 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7378,6 +7786,7 @@ Not run in this column, 1366 pairs the provider serves that the harness did not 
 - claude-code x qwen3.8-27b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x qwen3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- claude-code x qwen4-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x step-3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -7486,6 +7895,7 @@ Not run in this column, 1366 pairs the provider serves that the harness did not 
 - codex x qwen3.8-27b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x qwen4-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x step-3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x claude-fable-5-2: not run, not run in this column
 - dcode x gpt-5.3-codex: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -8319,6 +8729,73 @@ Not run in this column, 1366 pairs the provider serves that the harness did not 
 - openhands x qwen3.8-flash: not run, not run in this column
 - openhands x qwen3.8-max: not run, not run in this column
 - openhands x step-3.7-flash: not run, not run in this column
+- opensquilla x claude-fable-5: not run, not run in this column
+- opensquilla x claude-fable-5-1: not run, not run in this column
+- opensquilla x claude-fable-5-2: not run, not run in this column
+- opensquilla x claude-haiku-4.5: not run, not run in this column
+- opensquilla x claude-haiku-5.5: not run, not run in this column
+- opensquilla x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x claude-opus-4.8: not run, not run in this column
+- opensquilla x claude-opus-5: not run, not run in this column
+- opensquilla x claude-opus-5.5: not run, not run in this column
+- opensquilla x claude-sonnet-4.6: not run, not run in this column
+- opensquilla x claude-sonnet-5: not run, not run in this column
+- opensquilla x claude-sonnet-5.5: not run, not run in this column
+- opensquilla x deepseek-v4-flash: not run, not run in this column
+- opensquilla x deepseek-v4-pro: not run, not run in this column
+- opensquilla x deepseek-v4.1-flash: not run, not run in this column
+- opensquilla x gemini-3-flash-preview: not run, not run in this column
+- opensquilla x gemini-3.1-flash-lite: not run, not run in this column
+- opensquilla x gemini-3.1-pro-preview: not run, not run in this column
+- opensquilla x gemini-3.5-flash: not run, not run in this column
+- opensquilla x gemini-3.5-flash-lite: not run, not run in this column
+- opensquilla x gemini-3.6-flash: not run, not run in this column
+- opensquilla x gemini-3.7-flash: not run, not run in this column
+- opensquilla x gemini-3.8-flash: not run, not run in this column
+- opensquilla x gemini-4-argon: not run, not run in this column
+- opensquilla x glm-5.3: not run, not run in this column
+- opensquilla x glm-5.3-flash: not run, not run in this column
+- opensquilla x gpt-5.2: not run, not run in this column
+- opensquilla x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- opensquilla x gpt-5.4: not run, not run in this column
+- opensquilla x gpt-5.4-mini: not run, not run in this column
+- opensquilla x gpt-5.5: not run, not run in this column
+- opensquilla x gpt-5.6-luna: not run, not run in this column
+- opensquilla x gpt-5.6-sol: not run, not run in this column
+- opensquilla x gpt-5.6-terra: not run, not run in this column
+- opensquilla x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- opensquilla x gpt-6-luna: not run, not run in this column
+- opensquilla x gpt-6-sol: not run, not run in this column
+- opensquilla x gpt-6.1-sol: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x gpt-6.2-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- opensquilla x gpt-6.2-sol: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x grok-4.3: not run, not run in this column
+- opensquilla x grok-4.5: not run, not run in this column
+- opensquilla x grok-4.6: not run, not run in this column
+- opensquilla x grok-build-0.1: not run, not run in this column
+- opensquilla x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x kimi-k2.7-code: not run, not run in this column
+- opensquilla x kimi-k3: not run, not run in this column
+- opensquilla x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x mistral-medium-3.5: not run, not run in this column
+- opensquilla x muse-glimmer-30b: not run, not run in this column
+- opensquilla x muse-spark-1.1: not run, not run in this column
+- opensquilla x muse-spark-1.2: not run, not run in this column
+- opensquilla x muse-spark-1.3: not run, not run in this column
+- opensquilla x muse-wonder-1.0: not run, not run in this column
+- opensquilla x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opensquilla x qwen3.7-max: not run, not run in this column
+- opensquilla x qwen3.7-plus: not run, not run in this column
+- opensquilla x qwen3.8-27b: not run, not run in this column
+- opensquilla x qwen3.8-flash: not run, not run in this column
+- opensquilla x qwen3.8-max: not run, not run in this column
+- opensquilla x step-3.7-flash: not run, not run in this column
 - pi x claude-fable-5: not run, not run in this column
 - pi x claude-fable-5-1: not run, not run in this column
 - pi x claude-fable-5-2: not run, not run in this column
