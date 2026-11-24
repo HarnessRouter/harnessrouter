@@ -1508,3 +1508,22 @@ final_orchestration_validation:
   rollback: "停止带新编排能力的活动 Run 后回退对应执行器、校验和客户端提交；历史 Run、NodeRun、RunEvent、CommandReceipt 保持只读。"
   remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP conformance]
   next_action: "在认证的 Linux Gateway/Runner 环境补插件物化、原生审批 checkpoint 和同一 session continuation；完成前保持 tool_approvals 不广告。"
+
+linux_runner_conformance_slice:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 563e80a3
+  branch: codex/agent-orchestration
+  scope: "在 Linux Runner 交付镜像中使用当前 worktree 源码验证 Plugin、ACP 和跨平台 Runner 边界。"
+  verification:
+    command: "docker run --rm --entrypoint sh -v <worktree>:/workspace -w /workspace harnessrouter/runner:hexa-p2-final -c 'pip install pytest==8.4.2 && PYTHONPATH=/workspace/runner python -m pytest -q runner/tests/test_uhp_plugins.py runner/tests/test_claude_plugins.py runner/tests/test_acp_turn.py runner/tests/test_approval_policy_boundary.py runner/tests/test_dcode_acp.py runner/tests/test_input_requests.py --tb=short'; exit 0；112 passed in 22.58s。"
+    coverage: "验证 Unix 权限、Plugin materialization、PLUGIN_ROOT/PLUGIN_DATA containment、stdio MCP launcher、Claude Plugin hooks、ACP 原始 permission hook、dcode session load/continuation、input request 和 fail-closed approval policy。"
+    static: "当前 worktree 源码通过 PYTHONPATH 挂载执行；无生产镜像文件写入。"
+  limitations:
+    - "测试使用受控 ACP agent 和 Runner 本地进程，证明 Runner/协议边界，不证明真实 Provider 的模型调用。"
+    - "真实 Gateway 原生副作用前拦截、持久 checkpoint、同一 session 精确 tool approval continuation、UHP tool_approvals capability 发布和多实例故障转移仍未完成。"
+  security_review: "Plugin 文件在 Linux 实际进程中按 root/data containment 运行；ACP handler 的拒绝和异常仍 fail closed；tool_approvals capability 未广告。"
+  rollback: "仅追加验证记录，无运行数据、协议版本或生产配置变更。"
+  remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, real Provider validation]
+  next_action: "在认证的 Gateway/Runner 组合环境接入受信任 native adapter；在四项证据齐全前保持 tool_approvals 不广告。"
