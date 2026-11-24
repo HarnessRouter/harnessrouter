@@ -451,3 +451,36 @@ def test_the_table_cap_still_marks_a_schema_truncated(monkeypatch):
     out = asyncio.run(sql_plane.introspect("postgres", "postgres://u@h/db", max_tables=2))
     assert out["table_count"] == 5 and len(out["tables"]) == 2
     assert out["truncated"] is True
+
+
+@pytest.mark.parametrize(("engine", "dsn", "schema", "table", "quoted"), [
+    ("postgres", "postgres://u@h/db", 'pub"lic', 'we"ird', '"pub""lic"."we""ird"'),
+    ("mysql", "mysql://u@h/db", "db`name", "we`ird", "`db``name`.`we``ird`"),
+    # A name shaped like an injection is one identifier, and the gate reads it as one: on 0.41.26
+    # this one was refused as two statements, and one whose quotes balanced reached the database.
+    ("postgres", "postgres://u@h/db", "public", 'x"; DROP TABLE public.plain; --',
+     '"public"."x""; DROP TABLE public.plain; --"'),
+    # To MySQL a # outside quotes is a comment; inside a quoted name it is text.
+    ("mysql", "mysql://u@h/db", "db", "we`ird #x", "`db`.`we``ird #x`"),
+], ids=["postgres", "mysql", "postgres-injection-shaped", "mysql-hash"])
+def test_introspection_samples_identifiers_containing_quote_characters(
+        monkeypatch, engine, dsn, schema, table, quoted):
+    """Quoted schema and table names reach the driver instead of failing the read-only gate."""
+    import asyncio
+    import sql_plane
+
+    sample_sql = []
+
+    async def fake_driver(dsn, sql, timeout, max_rows):
+        if "information_schema.columns" in sql:
+            return sql_plane._rows_out(
+                ["table_schema", "table_name", "column_name", "data_type", "is_nullable"],
+                [(schema, table, "value", "text", "YES")], max_rows)
+        sample_sql.append(sql)
+        return sql_plane._rows_out(["value"], [("sampled",)], max_rows)
+
+    monkeypatch.setattr(sql_plane, f"_{'pg' if engine == 'postgres' else 'mysql'}_query", fake_driver)
+    out = asyncio.run(sql_plane.introspect(engine, dsn, sample_rows=1))
+
+    assert "sample" in out["tables"][0]
+    assert sample_sql[0].startswith(f"SELECT * FROM {quoted}")
