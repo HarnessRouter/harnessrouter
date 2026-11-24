@@ -8687,6 +8687,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
+        "qwen4-max":          "qwen/qwen4-max",     # 2026-11-16, see the catalog's note
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
         "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
@@ -8827,6 +8828,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
+        "qwen4-max":          "qwen/qwen4-max",
         "kimi-k2.7-code":     "moonshot/kimi-k2.7-code",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
         "minimax-m3":         "minimax/minimax-m3",
@@ -8856,6 +8858,9 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
+    # qwen4-max: 404 model_not_found on qwen, pi and hermes, one real turn each (2026-11-22); OpenRouter and
+    # Vercel served the same three turns as itself
+    "qwen4-max",
     "claude-haiku-5.5",   # not on TokenRouter's /v1/models (2026-10-07): the vendor, OpenRouter and Vercel serve it
     # No Meta id is on TokenRouter's list (2026-09-13).
     "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
@@ -9057,6 +9062,7 @@ _VENDOR_MODELS["qoder"] = {m: m for m in (
 _VERCEL_RESLUG = {
     "qwen3.7-max":        "alibaba/qwen3.7-max",
     "qwen3.8-max":        "alibaba/qwen3.8-max",
+    "qwen4-max":          "alibaba/qwen4-max",
     "qwen3.7-flash":      "alibaba/qwen3.7-flash",
     "qwen3.8-flash":      "alibaba/qwen3.8-flash",
     "qwen3.8-27b":        "alibaba/qwen3.8-27b",
@@ -9133,7 +9139,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     # Moonshot
     "kimi-k3", "kimi-k2.7-code",
     # Alibaba
-    "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
+    "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
     # Zhipu
     "glm-5.3", "glm-5.3-flash",
     # Mistral
@@ -9287,6 +9293,24 @@ _MODEL_CATALOG: dict[str, dict] = {
     # where its predecessor is, gpt-6.2-astra beside gpt-6-astra (the Responses bases,
     # RESPONSES_ONLY_MODELS) and gpt-6.2-sol beside gpt-6.1-sol (every base that offers it, the same
     # channel refusals and exclusions), newest first; no default changed. Real turns prune them.
+    #
+    # qwen4-max (Alibaba, 2026-11-16; Model Studio's model and pricing pages, updated 2026-11-21, and
+    # the aggregators' own /v1/models, read 2026-11-22): the first and so far only model of the Qwen 4
+    # family, closed weights, 1M context, 131,072 output tokens (262,144 thinking), text, image and video
+    # in. Model Studio names no preview, snapshot or -latest alias beside it. openrouter and llmtr name
+    # it `qwen/qwen4-max`, vercel `alibaba/qwen4-max`, and each lists tools for it. TokenRouter answers
+    # 404 model_not_found (one real turn on each of qwen, pi and hermes, 2026-11-22), so it is off
+    # TokenRouter's list (_TOKENROUTER_NO_CHANNEL); OpenRouter and Vercel served the same turns as
+    # itself. llmtr is offered from its published list and was not called (no such connection on the
+    # test instance), as for the gpt-6.2 line. List price, no markup (Model Studio, international, one
+    # tier up to 1M tokens, per 1M tokens): qwen4-max $1.50 in / $4.50 out, cached $0.075, cache write
+    # $1.875 (5 min). Thinking is on by default there (effort high), and thinking tokens bill as output.
+    # MEASURED (2026-11-22, the test instance, the matrix's five scenarios on every base that offers it):
+    # 25 of 25 bases pass on Vercel and 25 of 25 on OpenRouter, each turn served as qwen4-max itself
+    # (cline's turns report no served model, as for every model there). It is offered exactly where
+    # qwen3.8-max is (every base that offers it, newest first in the Alibaba family) and on fast-agent
+    # too, where qwen3.8-max is off for its own measured answer and qwen4-max passed. No default
+    # changed; runner/reasoning.py offers no reasoning levels for it yet.
     # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
     # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
     # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
@@ -9324,7 +9348,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
                           "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
-                          "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
+                          "qwen3.7-max", "qwen4-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash",
@@ -9354,7 +9378,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
-                       "qwen3.7-max", "qwen3.8-max",
+                       "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
@@ -9370,7 +9394,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
-                            "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                            "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
@@ -9409,7 +9433,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                   "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                   "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                   "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
-                  "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
+                  "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
                   "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash",
                   "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # kimi (Kimi Code CLI): the same relay reach as qwen and cline (OpenAI chat/completions through the
@@ -9434,7 +9458,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                  "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9465,7 +9489,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                     "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                     "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                     "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                     "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                     "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                     "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9485,7 +9509,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9508,7 +9532,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                       "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                       "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                       "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                       "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                       "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9535,7 +9559,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          # within the ten-minute limit, twice (0.34.0-rc.7, 2026-10-15): not offered.
                          "muse-glimmer-30b",
                          "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
-                         "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
+                         "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
                          "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
                          "nemotron-3-super"]},
@@ -9550,7 +9574,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # litellm 1.88.1 takes off that one prefix and nothing else).
     "agentzero": {"default": "gpt-6.1-sol", "models": []},
     "qwen": {"default": "qwen3.7-max",
-             "models": ["qwen3.7-max", "qwen3.8-max",
+             "models": ["qwen3.7-max", "qwen4-max", "qwen3.8-max",
                         "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -9577,7 +9601,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
-                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
@@ -9588,7 +9612,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                      "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                      "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
@@ -9661,7 +9685,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                          "gemini-3-flash-preview",
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
-                         "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
+                         "qwen3.7-max", "qwen4-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
                          "glm-5.3", "glm-5.3-flash",
                          "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
@@ -15264,26 +15288,24 @@ async def _ssrf_check(url: str) -> str | None:
     common setup, the operator already has full access to that machine, and blocking it would
     remove a real capability while protecting nobody from anybody.
     """
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+        # urlparse checks a port only when it is read, so it is read here: "host:abc" or "host:99999" is an
+        # address that is not valid, and reading it later raised past every caller as a 500.
+        port = u.port
+    except Exception:  # noqa: BLE001
+        return "invalid url"
     if _pool_is_local():
-        from urllib.parse import urlparse
-        try:
-            u = urlparse(url)
-        except Exception:  # noqa: BLE001
-            return "invalid url"
         if u.scheme not in ("http", "https"):
             return "MCP endpoints must be http or https"
         return None if u.hostname else "url has no host"
 
-    from urllib.parse import urlparse
-    try:
-        u = urlparse(url)
-    except Exception:  # noqa: BLE001
-        return "invalid url"
     if u.scheme != "https":
         return "only https MCP endpoints are allowed"
     if not u.hostname:
         return "url has no host"
-    return await _internal_target(u.hostname, u.port or 443)
+    return await _internal_target(u.hostname, port or 443)
 
 
 # The internal ranges Python's own classifiers do not call internal. Named here rather than folded
@@ -15763,7 +15785,15 @@ def _db_parse(engine: str, conn: str) -> tuple[str, str]:
         raise uhp_error(400, "invalid_connection_string",
                         "That connection string names no database — add /yourdatabase to the end.",
                         "connection_string")
-    host = u.hostname + (f":{u.port}" if u.port else "")
+    try:
+        port = u.port
+        if port == 0:
+            raise ValueError
+    except ValueError as e:
+        raise uhp_error(400, "invalid_connection_string",
+                        "The port must be a number from 1 to 65535.",
+                        "connection_string") from e
+    host = u.hostname + (f":{port}" if port else "")
     return host, db
 
 
@@ -17133,11 +17163,12 @@ async def _provider_url_check(url: str) -> str | None:
     refused = "the finished file was offered from an address this will not fetch"
     try:
         u = urlparse(url)
+        port = u.port   # checked only when read (a port that is not a number, or out of range)
     except Exception:  # noqa: BLE001
         return refused
     if u.scheme not in ("http", "https") or not u.hostname:
         return refused
-    bad = await _internal_target(u.hostname, u.port or (443 if u.scheme == "https" else 80))
+    bad = await _internal_target(u.hostname, port or (443 if u.scheme == "https" else 80))
     if not bad:
         return None
     # The host, in the log, where an operator can act on it — and only the host: a result_url
@@ -19669,8 +19700,14 @@ async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -
         # memories on it must not go dark because someone pasted a wrong key.
         base_url = str(config.get("base_url") or "").strip()
         if base_url:
-            if await _ssrf_check(base_url):
-                raise uhp_error(422, "memory_invalid", "That address can't be used here: it must be https, on a public address.", "config.base_url")
+            why = await _ssrf_check(base_url)
+            if why:
+                # said as what is wrong with it: "must be https, on a public address" was said for every refusal, so an
+                # address with a port that is not a number read as a rule this self-hosted instance does not have
+                said = {"invalid url": "it is not a valid address", "url has no host": "it has no host",
+                        "MCP endpoints must be http or https": "it must be http or https"}.get(
+                            why, "it must be https, on a public address")
+                raise uhp_error(422, "memory_invalid", f"That address can't be used here: {said}.", "config.base_url")
             own = _own_service_address(base_url)
             if own:
                 raise uhp_error(422, "memory_invalid", f"That address can't be used: {own}.", "config.base_url")
@@ -22555,9 +22592,10 @@ def _own_service_address(url: str) -> str:
     """Why this address is this instance's own gateway or runner, which is not a memory service."""
     try:
         u = urllib.parse.urlsplit(url)
+        port = u.port or 0   # checked only when read (a port that is not a number, or out of range)
     except ValueError:
         return "it is not a valid address"
-    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and (u.port or 0) in (3000, 8080, 8081):
+    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and port in (3000, 8080, 8081):
         return "it is this instance itself"
     return ""
 
@@ -24129,6 +24167,22 @@ def _skill_key(name: str) -> str:
     """The runner's skill directory name (its _skill_dir_name), so two skills the gateway sees
     as different cannot land in one folder."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(name or ""))
+def _plugin_json(raw: dict, path: str) -> tuple[object, str]:
+    """(the document, "") or (None, why it does not parse). The why is the parser's reason and where it stopped,
+    so a person can find the mistake (#725), and never the file's text."""
+    try:
+        text = raw.get("content") if raw.get("content") is not None \
+            else base64.b64decode(raw.get("content_b64") or "").decode()
+    except ValueError:   # binascii.Error and UnicodeDecodeError are both ValueErrors
+        return None, f"{path} is not UTF-8 text"
+    try:
+        return json.loads(text), ""
+    except json.JSONDecodeError as e:
+        return None, f"{path} is not valid JSON: {e.msg} at line {e.lineno} column {e.colno}"
+    except (TypeError, ValueError, RecursionError):
+        return None, f"{path} is not valid JSON"
+
+
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
     return uhp_error(422, "plugin_invalid", f"Plugin {name or 'package'}: {reason}", "plugins",
                      {"path": path, "reason": reason})
@@ -24304,11 +24358,9 @@ def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
     raw = by_path.get("plugin.json")
     if raw is None:
         raise _plugin_invalid(sent_name or "", "plugin.json", "no plugin.json at the plugin root")
-    try:
-        manifest = json.loads(raw.get("content") if raw.get("content") is not None
-                              else base64.b64decode(raw.get("content_b64") or "").decode())
-    except Exception:  # noqa: BLE001
-        raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not valid JSON")
+    manifest, why = _plugin_json(raw, "plugin.json")
+    if why:
+        raise _plugin_invalid(sent_name or "", "plugin.json", why)
     if not isinstance(manifest, dict):
         raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not an object")
     if "$schema" not in manifest:
@@ -24355,13 +24407,13 @@ def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
     servers: list[dict] = []
     raw = by_path.get("mcp.json")
     if raw is not None:
-        try:
-            mcp = json.loads(raw.get("content") if raw.get("content") is not None
-                             else base64.b64decode(raw.get("content_b64") or "").decode())
-        except Exception:  # noqa: BLE001
-            mcp = None
+        mcp, why = _plugin_json(raw, "mcp.json")
         entries = mcp.get("mcpServers") if isinstance(mcp, dict) else None
-        if not isinstance(mcp, dict) or set(mcp) != {"$schema", "mcpServers"} or not isinstance(entries, dict):
+        if why:
+            # it said "not an object of exactly $schema and mcpServers", which sent people looking at the keys
+            skipped.append({"path": "mcp.json", "reason": why})
+            entries = {}
+        elif not isinstance(mcp, dict) or set(mcp) != {"$schema", "mcpServers"} or not isinstance(entries, dict):
             skipped.append({"path": "mcp.json", "reason": "not an object of exactly $schema and mcpServers"})
             entries = {}
         elif mcp.get("$schema") != _PLUGIN_MCP_SCHEMA:
@@ -26099,6 +26151,7 @@ async def _cloud_base_refused(base: str) -> str | None:
     from urllib.parse import urlparse
     try:
         u = urlparse(str(base or ""))
+        port = u.port   # checked only when read (a port that is not a number, or out of range)
     except ValueError:
         return "invalid url"
     if not u.hostname:
@@ -26107,7 +26160,7 @@ async def _cloud_base_refused(base: str) -> str | None:
         return None if u.scheme in ("http", "https") else "the address must be http or https"
     if u.scheme != "https":
         return "only https addresses are allowed"
-    return await _internal_target(u.hostname, u.port or 443)
+    return await _internal_target(u.hostname, port or 443)
 
 
 class _CloudKeyRefused(HTTPException):

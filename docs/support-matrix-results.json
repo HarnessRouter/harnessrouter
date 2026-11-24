@@ -227476,5 +227476,4493 @@
    "turns_with_usage": 5
   },
   "deleted": 200
+ },
+ "openrouter|qwen|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "qwen",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:40:09.423Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.31,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Qwen Code \u00b7 qwen4-max \u00b7 Done in 11.3 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6abe217ebfa9473097ad152dae7bd402",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.34,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Qwen Code \u00b7 qwen4-max \u00b7 Done in 7.6 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.09,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Qwen Code \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.66,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. Created hello-qwen.txt +1 \u22120 DONE txt hello-qwen.txt TXT Qwen Code \u00b7 qwen4-max \u00b7 Done in 13.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.79,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Qwen Code \u00b7 qwen4-max \u00b7 Done in 9.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6abe217ebfa9473097ad152dae7bd402\",\"checkpoint_sha\":\"89903974a067038d119d045f038c274d3de77fa5a92c88383ba50252e9b4a20f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 52966,
+   "cache_read": 82688,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|pi|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "pi",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:41:36.344Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.66,
+   "tail": "Reply with exactly: M1-qwen4-max Thought for 1s M1-qwen4-max Pi \u00b7 qwen4-max \u00b7 Done in 13.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess8fae1a76dc1b49e193b0013b2c9c1357",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.31,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Pi \u00b7 qwen4-max \u00b7 Done in 8.8 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.24,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Pi \u00b7 gpt-6.2-astra \u00b7 Done in 5.7 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.54,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. Created hello-pi.txt +1 \u22120 DONE txt hello-pi.txt TXT Pi \u00b7 qwen4-max \u00b7 Done in 11.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.75,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought for 1s M1-qwen4-max Pi \u00b7 qwen4-max \u00b7 Done in 12.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess8fae1a76dc1b49e193b0013b2c9c1357\",\"checkpoint_sha\":\"3dd6dbee57d9ef7bf751a2dfcf608ade0c953b90de7e62bbc2954db20e4ebe19\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 3238,
+   "cache_read": 26880,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|hermes|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "hermes",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:42:58.792Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 15.7,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Hermes \u00b7 qwen4-max \u00b7 Done in 12.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess53a5f3c803c549ad805ec4d12cb7af1e",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 15.95,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Hermes \u00b7 qwen4-max \u00b7 Done in 13.6 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 19.68,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Hermes \u00b7 gpt-6.2-astra \u00b7 Done in 17.8 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.48,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. Created a file, ran a command +1 \u22120 DONE txt hello-hermes.txt TXT Hermes \u00b7 qwen4-max \u00b7 Done in 22.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 19.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Hermes \u00b7 qwen4-max \u00b7 Done in 17.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess53a5f3c803c549ad805ec4d12cb7af1e\",\"checkpoint_sha\":\"46582e16466851b6b6201b7022707da4d1a4cdcd14f2ee6a1599abee2eadbcdb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 5680,
+   "cache_read": 95232,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|dsh|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "dsh",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:44:55.675Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.19,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 15.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessa96b5c866a3346cf816d92f85f539921",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.56,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 8.9 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.31,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra DeepSeek Harness \u00b7 gpt-6.2-astra \u00b7 Done in 7.7 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 58.89,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created a file, ran a command +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 55.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.02,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought for 1s M1-qwen4-max DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 9.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessa96b5c866a3346cf816d92f85f539921\",\"checkpoint_sha\":\"39e75d306ef7fd4c4567d3087ae628f51df7fdb909c67d1c6dabdbe45d680b48\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 12289,
+   "cache_read": 56064,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|opencode|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "opencode",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:47:07.580Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.87,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max OpenCode \u00b7 qwen4-max \u00b7 Done in 14.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessb2c080e5afbe41ab9d5ecb5f4aa17f25",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.47,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max OpenCode \u00b7 qwen4-max \u00b7 Done in 12.1 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra OpenCode \u00b7 gpt-6.2-astra \u00b7 Done in 12.6 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.96,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. Created hello-opencode.txt +1 \u22120 DONE txt hello-opencode.txt TXT OpenCode \u00b7 qwen4-max \u00b7 Done in 17.2 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.63,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max OpenCode \u00b7 qwen4-max \u00b7 Done in 13.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb2c080e5afbe41ab9d5ecb5f4aa17f25\",\"checkpoint_sha\":\"29c74a9eeabb25fbb58945bd9566c3c98c6dd62078496cae62f758abd090553a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 11932,
+   "cache_read": 45056,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|kilo|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "kilo",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:40:10.908Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 30.22,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Kilo Code \u00b7 qwen4-max \u00b7 Done in 25.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess190d36c471ba4b7db1d20bb2ea615f44",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 28.02,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Kilo Code \u00b7 qwen4-max \u00b7 Done in 24.4 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.1,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Kilo Code \u00b7 gpt-6.2-astra \u00b7 Done in 23.1 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.07,
+   "tail": "Create a file named hello-kilo.txt containing exactly the word HELLO, then reply DONE. Created hello-kilo.txt +1 \u22120 DONE txt hello-kilo.txt TXT Kilo Code \u00b7 qwen4-max \u00b7 Done in 28.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-kilo.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kilo.txt"
+   ],
+   "record_files": [
+    "hello-kilo.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Kilo Code \u00b7 qwen4-max \u00b7 Done in 22.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess190d36c471ba4b7db1d20bb2ea615f44\",\"checkpoint_sha\":\"64ea45f079d3a203b8c0f021054c3540a3294819b1d8f29988ee3eaa811358fe\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 17695,
+   "cache_read": 67072,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|omp|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "omp",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:42:51.452Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.31,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Oh My Pi \u00b7 qwen4-max \u00b7 Done in 10.7 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessb07b3c608a4c4f96910ad055f0615c42",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.97,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Oh My Pi \u00b7 qwen4-max \u00b7 Done in 11.0 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.8,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Oh My Pi \u00b7 gpt-6.2-astra \u00b7 Done in 8.0 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.71,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. Created hello-omp.txt +1 \u22120 DONE txt hello-omp.txt TXT Oh My Pi \u00b7 qwen4-max \u00b7 Done in 15.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.77,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought for 1s M1-qwen4-max Oh My Pi \u00b7 qwen4-max \u00b7 Done in 13.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb07b3c608a4c4f96910ad055f0615c42\",\"checkpoint_sha\":\"a97d4709fd402b7bdf831e20f148e180cba37caae4e78dbc9c953dfc80c95c9e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 9037,
+   "cache_read": 99328,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|mimo|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "mimo",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:44:27.179Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.93,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max MiMo Code \u00b7 qwen4-max \u00b7 Done in 17.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess664540c46e554a07b0c8b1e095c8cbf8",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.03,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max MiMo Code \u00b7 qwen4-max \u00b7 Done in 15.4 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.86,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra MiMo Code \u00b7 gpt-6.2-astra \u00b7 Done in 18.3 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.33,
+   "tail": "Create a file named hello-mimo.txt containing exactly the word HELLO, then reply DONE. Created hello-mimo.txt +1 \u22120 DONE txt hello-mimo.txt TXT MiMo Code \u00b7 qwen4-max \u00b7 Done in 24.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-mimo.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-mimo.txt"
+   ],
+   "record_files": [
+    "hello-mimo.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.83,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max MiMo Code \u00b7 qwen4-max \u00b7 Done in 14.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess664540c46e554a07b0c8b1e095c8cbf8\",\"checkpoint_sha\":\"18b8c9b63deb9ada0293a7906eabda3f114bdc0a023b69428f234be0088c57fe\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 24686,
+   "cache_read": 94720,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|goose|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "goose",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:46:28.470Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.49,
+   "tail": "Reply with exactly: M1-qwen4-max Used Todo \u00b7 todo write M1-qwen4-max goose \u00b7 qwen4-max \u00b7 Done in 13.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessdbcbaa46920b4b5c9f4cc8a6843b8b3e",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 35.94,
+   "tail": "Reply with exactly: M2-qwen4-max Note: the MCP server \"memories\" could not be reached, so this reply ran without those tools. Used Todo \u00b7 todo write M2-qwen4-max goose \u00b7 qwen4-max \u00b7 Done in 13.7 s",
+   "answer": "_Note: the MCP server \"memories\" could not be reached, so this reply ran without those tools._\n\nM2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.3,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol Used Todo \u00b7 todo write M3-gpt-6.2-sol goose \u00b7 gpt-6.2-sol \u00b7 Done in 5.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.47,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. Used a tool, created a file +1 \u22120 DONE txt hello-goose.txt TXT goose \u00b7 qwen4-max \u00b7 Done in 12.0 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.58,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Used Todo \u00b7 todo write M1-qwen4-max goose \u00b7 qwen4-max \u00b7 Done in 12.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdbcbaa46920b4b5c9f4cc8a6843b8b3e\",\"checkpoint_sha\":\"87a9dd459f56beb029aa71721e0ee9184799812b18c116c1b235454e6cfdc0c4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 80067,
+   "cache_read": 153654,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|cline|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "cline",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:48:15.757Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.07,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Cline \u00b7 qwen4-max \u00b7 Done in 7.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess67ad879029ab4ec0adcdfce273b2442f",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 12.76,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Cline \u00b7 qwen4-max \u00b7 Done in 9.7 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.08,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Cline \u00b7 gpt-6.2-sol \u00b7 Done in 5.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.36,
+   "tail": "Create a file named hello-cline.txt containing exactly the word HELLO, then reply DONE. Edited a file, used a tool +1 \u22120 DONE txt hello-cline.txt TXT Cline \u00b7 qwen4-max \u00b7 Done in 15.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.17,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Cline \u00b7 qwen4-max \u00b7 Done in 6.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess67ad879029ab4ec0adcdfce273b2442f\",\"checkpoint_sha\":\"cecb7363071c5b6118563932a6d8b691be7f56a1d3ca0b104dad54884fc12ac0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 11544,
+   "cache_read": 47872,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|kimi|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "kimi",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:40:13.948Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.31,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 8.3 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessfbc0d141fd9c452b829fe4cd9cc17efc",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.88,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 10.5 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.56,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Kimi Code CLI \u00b7 gpt-6.2-sol \u00b7 Done in 8.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.5,
+   "tail": "Create a file named hello-kimi.txt containing exactly the word HELLO, then reply DONE. Created hello-kimi.txt +1 \u22120 DONE txt hello-kimi.txt TXT Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 10.7 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-kimi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kimi.txt"
+   ],
+   "record_files": [
+    "hello-kimi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.73,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 8.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessfbc0d141fd9c452b829fe4cd9cc17efc\",\"checkpoint_sha\":\"3dca6aa01bd498c300ef60f0d10e9c444f34b7b6b7204a1673a48905915cd769\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 41270,
+   "cache_read": 102144,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|minimax|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "minimax",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:41:34.745Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.33,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max MiniMax Code \u00b7 qwen4-max \u00b7 Done in 9.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd4f7ff2a532c496dab114de8c6e2bc0c",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.7,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max MiniMax Code \u00b7 qwen4-max \u00b7 Done in 10.3 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.21,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol MiniMax Code \u00b7 gpt-6.2-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 48.74,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. Created a file, read a file +1 \u22120 DONE hello-minimax.txt \u2014 verified, contains exactly HELLO. txt hello-minimax.txt TXT MiniMax Code \u00b7 qwen4-max \u00b7 Done in 27.0 s \u00b7 Remembered 1 thing",
+   "answer": "DONE\n\n[hello-minimax.txt](/data/workspaces/hsessd4f7ff2a532c496dab114de8c6e2bc0c/hello-minimax.txt) \u2014 verified, contains exactly `HELLO`.",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.03,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max MiniMax Code \u00b7 qwen4-max \u00b7 Done in 11.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd4f7ff2a532c496dab114de8c6e2bc0c\",\"checkpoint_sha\":\"573c7353d563a46a01366bc1d6cff6f25d1e47c4cfaae325c32bff34840975d6\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 24396,
+   "cache_read": 61952,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|aider|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "aider",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:43:32.008Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.01,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Aider \u00b7 qwen4-max \u00b7 Done in 18.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess64e607adfd874db3983b9a4316a9f143",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.95,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Aider \u00b7 qwen4-max \u00b7 Done in 11.4 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.8,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Aider \u00b7 gpt-6.2-sol \u00b7 Done in 10.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.24,
+   "tail": "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE. DONE Edited hello-aider.txt txt hello-aider.txt TXT Aider \u00b7 qwen4-max \u00b7 Done in 15.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-aider.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-aider.txt"
+   ],
+   "record_files": [
+    "hello-aider.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.59,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Aider \u00b7 qwen4-max \u00b7 Done in 14.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess64e607adfd874db3983b9a4316a9f143\",\"checkpoint_sha\":\"72e0631af487eccf2266138e90dc4d26ff7b197ad52e4d630fc3a53c32d5ce97\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 11881,
+   "cache_read": 9984,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|openhands|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "openhands",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:45:17.099Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31.09,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max OpenHands \u00b7 qwen4-max \u00b7 Done in 27.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess93f758f87be04bd79dc7caaab8447c35",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.98,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max OpenHands \u00b7 qwen4-max \u00b7 Done in 18.4 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.74,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol OpenHands \u00b7 gpt-6.2-sol \u00b7 Done in 16.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 30.16,
+   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. Ran printf 'HELLO' > hello-openhands.txt && cat hello-openhands.txt DONE txt hello-openhands.txt TXT OpenHands \u00b7 qwen4-max \u00b7 Done in 26.9 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-openhands.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-openhands.txt"
+   ],
+   "record_files": [
+    "hello-openhands.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.24,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max OpenHands \u00b7 qwen4-max \u00b7 Done in 20.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess93f758f87be04bd79dc7caaab8447c35\",\"checkpoint_sha\":\"a9efde6dbb8030c06e650151633a3bc3af54fe87e6890ad9a414c033a5b738bd\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 20993,
+   "cache_read": 45568,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|cheetahclaws|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "cheetahclaws",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:47:41.371Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.27,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max CheetahClaws \u00b7 qwen4-max \u00b7 Done in 8.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessb37fdb927942412987a055af6d9af47c",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.26,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max CheetahClaws \u00b7 qwen4-max \u00b7 Done in 6.1 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.67,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol CheetahClaws \u00b7 gpt-6.2-sol \u00b7 Done in 7.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.76,
+   "tail": "Create a file named hello-cheetahclaws.txt containing exactly the word HELLO, then reply DONE. Created hello-cheetahclaws.txt +1 \u22120 DONE txt hello-cheetahclaws.txt TXT CheetahClaws \u00b7 qwen4-max \u00b7 Done in 12.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "record_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.36,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max CheetahClaws \u00b7 qwen4-max \u00b7 Done in 6.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb37fdb927942412987a055af6d9af47c\",\"checkpoint_sha\":\"c1ffad4bce71896bc2989b2ee1f298d015079b80faf62cf0297203b51fd23831\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 28270,
+   "cache_read": 33536,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|grok|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "grok",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:40:17.549Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.49,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Grok Build \u00b7 qwen4-max \u00b7 Done in 6.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd37bc97e468e411cbbbd96a37c29ffbf",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.3,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Grok Build \u00b7 qwen4-max \u00b7 Done in 5.0 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.79,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Grok Build \u00b7 gpt-6.2-sol \u00b7 Done in 3.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.35,
+   "tail": "Create a file named hello-grok.txt containing exactly the word HELLO, then reply DONE. Created hello-grok.txt +1 \u22120 DONE txt hello-grok.txt TXT Grok Build \u00b7 qwen4-max \u00b7 Done in 8.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-grok.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-grok.txt"
+   ],
+   "record_files": [
+    "hello-grok.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.21,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Grok Build \u00b7 qwen4-max \u00b7 Done in 5.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd37bc97e468e411cbbbd96a37c29ffbf\",\"checkpoint_sha\":\"5602d09643ad5bde6560a5a881d786049bebbfc946cf739501f513a27f613f8c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 13548,
+   "cache_read": 57600,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|agentzero|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "agentzero",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:41:22.019Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.62,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Agent Zero \u00b7 qwen4-max \u00b7 Done in 14.7 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess1af53aef42cd4355b9b345a39072197c",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 22.81,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Agent Zero \u00b7 qwen4-max \u00b7 Done in 19.4 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.78,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Agent Zero \u00b7 gpt-6.2-sol \u00b7 Done in 11.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.38,
+   "tail": "Create a file named hello-agentzero.txt containing exactly the word HELLO, then reply DONE. Edited a file, ran a command DONE txt hello-agentzero.txt TXT Agent Zero \u00b7 qwen4-max \u00b7 Done in 25.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-agentzero.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-agentzero.txt"
+   ],
+   "record_files": [
+    "hello-agentzero.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Agent Zero \u00b7 qwen4-max \u00b7 Done in 13.2 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess1af53aef42cd4355b9b345a39072197c\",\"checkpoint_sha\":\"14d1168afefaec38e2653efe8c1f01eb163af28d42fb9455d2ad36e5714bcd1d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21497,
+   "cache_read": 46592,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|jcode|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "jcode",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:43:18.963Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.23,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max jcode \u00b7 qwen4-max \u00b7 Done in 6.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd7d1180364c743c68c242457d895f88d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.68,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max jcode \u00b7 qwen4-max \u00b7 Done in 8.1 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.1,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol jcode \u00b7 gpt-6.2-sol \u00b7 Done in 3.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.62,
+   "tail": "Create a file named hello-jcode.txt containing exactly the word HELLO, then reply DONE. Created hello-jcode.txt +1 \u22120 DONE txt hello-jcode.txt TXT jcode \u00b7 qwen4-max \u00b7 Done in 8.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jcode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-jcode.txt"
+   ],
+   "record_files": [
+    "hello-jcode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.98,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max jcode \u00b7 qwen4-max \u00b7 Done in 3.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd7d1180364c743c68c242457d895f88d\",\"checkpoint_sha\":\"9989aca415c0b779692792794fd8bce3dbc8accaf90dc73cb20cf1ea59c98420\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 26882,
+   "cache_read": 60300,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|opensquilla|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "opensquilla",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:44:28.453Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 42.12,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max OpenSquilla \u00b7 qwen4-max \u00b7 Done in 36.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessc26f1eecc9ce4794a765388538d32b2a",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.55,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max OpenSquilla \u00b7 qwen4-max \u00b7 Done in 21.3 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "qwen3.8-max",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 26.87,
+   "tail": "Reply with exactly: M3-qwen3.8-max M3-qwen3.8-max OpenSquilla \u00b7 qwen3.8-max \u00b7 Done in 22.7 s",
+   "answer": "M3-qwen3.8-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 36.52,
+   "tail": "Create a file named hello-opensquilla.txt containing exactly the word HELLO, then reply DONE. Created a file, used a tool +1 \u22120 DONE txt hello-opensquilla.txt TXT OpenSquilla \u00b7 qwen4-max \u00b7 Done in 32.9 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-opensquilla.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opensquilla.txt"
+   ],
+   "record_files": [
+    "hello-opensquilla.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.92,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max OpenSquilla \u00b7 qwen4-max \u00b7 Done in 20.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc26f1eecc9ce4794a765388538d32b2a\",\"checkpoint_sha\":\"0df83542a6657f774e01e98f94abfddc896217283a5c8103b266b81ab120f1bf\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "qwen/qwen3.8-max-0902"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "qwen/qwen3.8-max-0902"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 25440,
+   "cache_read": 71168,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|nanobot|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "nanobot",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:47:19.250Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.39,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max nanobot \u00b7 qwen4-max \u00b7 Done in 11.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess4160504f23d641a0870ab9248c5ef783",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.82,
+   "tail": "Reply with exactly: M2-qwen4-max Thought for 1s M2-qwen4-max nanobot \u00b7 qwen4-max \u00b7 Done in 9.3 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 11.63,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol nanobot \u00b7 gpt-6.2-sol \u00b7 Done in 9.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.95,
+   "tail": "Create a file named hello-nanobot.txt containing exactly the word HELLO, then reply DONE. Created hello-nanobot.txt +1 \u22120 DONE txt hello-nanobot.txt TXT nanobot \u00b7 qwen4-max \u00b7 Done in 21.0 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-nanobot.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-nanobot.txt"
+   ],
+   "record_files": [
+    "hello-nanobot.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.46,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought for 1s M1-qwen4-max nanobot \u00b7 qwen4-max \u00b7 Done in 13.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess4160504f23d641a0870ab9248c5ef783\",\"checkpoint_sha\":\"78d12c5ba6aad34707887e8b3bbc9eb45b79a1fe855ca47e7221403d3a9ccb24\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 12316,
+   "cache_read": 44544,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|zeroclaw|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "zeroclaw",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:40:21.067Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.71,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max ZeroClaw \u00b7 qwen4-max \u00b7 Done in 6.2 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessee1ba942c1df463a859a5ef81da379b2",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.52,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max ZeroClaw \u00b7 qwen4-max \u00b7 Done in 8.4 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.03,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol ZeroClaw \u00b7 gpt-6.2-sol \u00b7 Done in 4.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.39,
+   "tail": "Create a file named hello-zeroclaw.txt containing exactly the word HELLO, then reply DONE. Created hello-zeroclaw.txt DONE txt hello-zeroclaw.txt TXT ZeroClaw \u00b7 qwen4-max \u00b7 Done in 9.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-zeroclaw.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-zeroclaw.txt"
+   ],
+   "record_files": [
+    "hello-zeroclaw.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.64,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max ZeroClaw \u00b7 qwen4-max \u00b7 Done in 6.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessee1ba942c1df463a859a5ef81da379b2\",\"checkpoint_sha\":\"e530e88cbbaddc4e414973450005e544ac8bba1ecf32ec83845e2c245ae07cf4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 102675,
+   "cache_read": 32768,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|vibe|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "vibe",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:41:31.732Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.32,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 14.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess2209372fd4ca4ea6b00087fd4fde8c70",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.72,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 13.7 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.61,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Mistral Vibe \u00b7 gpt-6.2-sol \u00b7 Done in 10.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.29,
+   "tail": "Create a file named hello-vibe.txt containing exactly the word HELLO, then reply DONE. Used File system \u00b7 write file DONE txt hello-vibe.txt TXT Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 16.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-vibe.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-vibe.txt"
+   ],
+   "record_files": [
+    "hello-vibe.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.25,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 11.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess2209372fd4ca4ea6b00087fd4fde8c70\",\"checkpoint_sha\":\"d6a9b1873575ba025281bf3a4ec8005963c527b11de8b64557783cb20b0389fb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 27129,
+   "cache_read": 32768,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|docker-agent|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "docker-agent",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:43:13.172Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.3,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Docker Agent \u00b7 qwen4-max \u00b7 Done in 7.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess130880bbe32b4351b840d18b11e69fdd",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.18,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Docker Agent \u00b7 qwen4-max \u00b7 Done in 5.6 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.31,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Docker Agent \u00b7 gpt-6.2-sol \u00b7 Done in 6.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.48,
+   "tail": "Create a file named hello-docker-agent.txt containing exactly the word HELLO, then reply DONE. Ran a command, created a file +1 \u22120 DONE txt hello-docker-agent.txt TXT Docker Agent \u00b7 qwen4-max \u00b7 Done in 14.8 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-docker-agent.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-docker-agent.txt"
+   ],
+   "record_files": [
+    "hello-docker-agent.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.26,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Docker Agent \u00b7 qwen4-max \u00b7 Done in 5.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess130880bbe32b4351b840d18b11e69fdd\",\"checkpoint_sha\":\"c99dccddc26392fff48ca9dfc7006ac652c157c90f7fe8ab1f96e8b0648fce11\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 6144,
+   "cache_read": 30720,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|fast-agent|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "fast-agent",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:44:24.737Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.92,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max fast-agent \u00b7 qwen4-max \u00b7 Done in 20.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess560084d1aa544610895ec33b3f7cc62b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.84,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max fast-agent \u00b7 qwen4-max \u00b7 Done in 14.5 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 19.63,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol fast-agent \u00b7 gpt-6.2-sol \u00b7 Done in 15.3 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.9,
+   "tail": "Create a file named hello-fast-agent.txt containing exactly the word HELLO, then reply DONE. Used Write text file DONE txt hello-fast-agent.txt TXT fast-agent \u00b7 qwen4-max \u00b7 Done in 18.8 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-fast-agent.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-fast-agent.txt"
+   ],
+   "record_files": [
+    "hello-fast-agent.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.5,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max fast-agent \u00b7 qwen4-max \u00b7 Done in 13.3 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess560084d1aa544610895ec33b3f7cc62b\",\"checkpoint_sha\":\"ab4ae7324cf9629a2ae2004ee1adf9f0c47d455c44e7f6c6dc2a2b940df1f2f8\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 8253,
+   "cache_read": 17152,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|dcode|qwen4-max": {
+  "provider": "openrouter",
+  "harness": "dcode",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:46:20.675Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.24,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 15.2 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess8545c90dd40246f28a550e8a94e5a9a8",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.16,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 18.8 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 25,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Deep Agents Code \u00b7 gpt-6.2-sol \u00b7 Done in 19.3 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 26.87,
+   "tail": "Create a file named hello-dcode.txt containing exactly the word HELLO, then reply DONE. Created hello-dcode.txt +1 \u22120 DONE txt hello-dcode.txt TXT Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 24.1 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-dcode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dcode.txt"
+   ],
+   "record_files": [
+    "hello-dcode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.89,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 21.2 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess8545c90dd40246f28a550e8a94e5a9a8\",\"checkpoint_sha\":\"3e6953fbadcc7993a9626f88cf2111ff648fd583916a6e561ff7976f273b276b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "qwen/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 25854,
+   "cache_read": 54528,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|qwen|qwen4-max": {
+  "provider": "vercel",
+  "harness": "qwen",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:30:32.591Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.7,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Qwen Code \u00b7 qwen4-max \u00b7 Done in 9.3 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessc7f240b915214800bceb3f1a07f39753",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.67,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Qwen Code \u00b7 qwen4-max \u00b7 Done in 13.7 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.54,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Qwen Code \u00b7 gpt-6.2-sol \u00b7 Done in 7.0 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.96,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. Created hello-qwen.txt +1 \u22120 DONE txt hello-qwen.txt TXT Qwen Code \u00b7 qwen4-max \u00b7 Done in 13.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.03,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Qwen Code \u00b7 qwen4-max \u00b7 Done in 10.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc7f240b915214800bceb3f1a07f39753\",\"checkpoint_sha\":\"186cbbfddfc9ff0479bfe2f939f919dd2cd2159af30985320aa28b33b85d59cf\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 52599,
+   "cache_read": 82688,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|pi|qwen4-max": {
+  "provider": "vercel",
+  "harness": "pi",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:32:03.602Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.3,
+   "tail": "Reply with exactly: M1-qwen4-max Thought for 1s M1-qwen4-max Pi \u00b7 qwen4-max \u00b7 Done in 20.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessf40cf55448ed479a93c3a76f7cbe790b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.32,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Pi \u00b7 qwen4-max \u00b7 Done in 5.6 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.75,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Pi \u00b7 gpt-6.2-astra \u00b7 Done in 8.0 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.2,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. Created hello-pi.txt +1 \u22120 DONE txt hello-pi.txt TXT Pi \u00b7 qwen4-max \u00b7 Done in 8.7 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.31,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought for 1s M1-qwen4-max Pi \u00b7 qwen4-max \u00b7 Done in 11.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessf40cf55448ed479a93c3a76f7cbe790b\",\"checkpoint_sha\":\"550ac032f41e842605826d04037ec737147ea749c2dc56b719a9e3ef410db398\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 3020,
+   "cache_read": 26624,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|hermes|qwen4-max": {
+  "provider": "vercel",
+  "harness": "hermes",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:33:28.574Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.24,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Hermes \u00b7 qwen4-max \u00b7 Done in 19.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess0a0fdbbf01364ad5899dab23bcd4afb3",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 20.46,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Hermes \u00b7 qwen4-max \u00b7 Done in 16.7 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 15.93,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Hermes \u00b7 gpt-6.2-astra \u00b7 Done in 14.0 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.72,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. Created hello-hermes.txt +1 \u22120 DONE txt hello-hermes.txt TXT Hermes \u00b7 qwen4-max \u00b7 Done in 20.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.57,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Hermes \u00b7 qwen4-max \u00b7 Done in 18.7 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0a0fdbbf01364ad5899dab23bcd4afb3\",\"checkpoint_sha\":\"84a64f404cf280ce668beef00e375c26cc9f3d68128817b9b0867ecd23adecee\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 19965,
+   "cache_read": 78080,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|dsh|qwen4-max": {
+  "provider": "vercel",
+  "harness": "dsh",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:35:29.904Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.44,
+   "tail": "Reply with exactly: M1-qwen4-max Thought for 1s M1-qwen4-max DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 10.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess9195b5f9df4342cd8a89469e2820fbc8",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.46,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 10.9 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.82,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra DeepSeek Harness \u00b7 gpt-6.2-astra \u00b7 Done in 7.1 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.48,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 14.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.64,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought for 2s M1-qwen4-max DeepSeek Harness \u00b7 qwen4-max \u00b7 Done in 11.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess9195b5f9df4342cd8a89469e2820fbc8\",\"checkpoint_sha\":\"8ecca99bb6ac6a1fe11dad067ccebe5f12e7218ffb46e18d6a2a8f79534b502c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 11714,
+   "cache_read": 43520,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|opencode|qwen4-max": {
+  "provider": "vercel",
+  "harness": "opencode",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:37:00.134Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.59,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max OpenCode \u00b7 qwen4-max \u00b7 Done in 15.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessf13e9cb9f1cc4f338bdaa4c3f54afb56",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.95,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max OpenCode \u00b7 qwen4-max \u00b7 Done in 15.8 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.46,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra OpenCode \u00b7 gpt-6.2-astra \u00b7 Done in 10.7 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.24,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. Created a file, ran a command +1 \u22120 DONE txt hello-opencode.txt TXT OpenCode \u00b7 qwen4-max \u00b7 Done in 24.2 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 19.74,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max OpenCode \u00b7 qwen4-max \u00b7 Done in 16.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessf13e9cb9f1cc4f338bdaa4c3f54afb56\",\"checkpoint_sha\":\"11ed22a299ebf7deb8a5a13f9e83a60361e75316447dc7c91ffcc15c8af31036\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 12514,
+   "cache_read": 55808,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|kilo|qwen4-max": {
+  "provider": "vercel",
+  "harness": "kilo",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:30:33.805Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 26.95,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Kilo Code \u00b7 qwen4-max \u00b7 Done in 23.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess9e0800312b8c4818a35428f06d2d9078",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.85,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Kilo Code \u00b7 qwen4-max \u00b7 Done in 21.2 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 23.84,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Kilo Code \u00b7 gpt-6.2-astra \u00b7 Done in 22.1 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 34.69,
+   "tail": "Create a file named hello-kilo.txt containing exactly the word HELLO, then reply DONE. Created hello-kilo.txt +1 \u22120 DONE txt hello-kilo.txt TXT Kilo Code \u00b7 qwen4-max \u00b7 Done in 28.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-kilo.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kilo.txt"
+   ],
+   "record_files": [
+    "hello-kilo.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 30.05,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Kilo Code \u00b7 qwen4-max \u00b7 Done in 26.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess9e0800312b8c4818a35428f06d2d9078\",\"checkpoint_sha\":\"d4915e3b7ef6414e81a4e4fcf0e4fe737b12f6dcf7efa0fd31a83142e0dec1b6\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18088,
+   "cache_read": 66816,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|omp|qwen4-max": {
+  "provider": "vercel",
+  "harness": "omp",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:33:08.784Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.27,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Oh My Pi \u00b7 qwen4-max \u00b7 Done in 12.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessc0848164073a4c168ec4ffd6b5aa0075",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.46,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Oh My Pi \u00b7 qwen4-max \u00b7 Done in 9.0 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.25,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra Oh My Pi \u00b7 gpt-6.2-astra \u00b7 Done in 7.0 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.85,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. Created hello-omp.txt +1 \u22120 DONE txt hello-omp.txt TXT Oh My Pi \u00b7 qwen4-max \u00b7 Done in 15.9 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.93,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Oh My Pi \u00b7 qwen4-max \u00b7 Done in 12.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc0848164073a4c168ec4ffd6b5aa0075\",\"checkpoint_sha\":\"1243f47bba1df9c711c5f67638553ee2fc6d69db11fa52d3f3c4072f247332ca\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 20985,
+   "cache_read": 80640,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|mimo|qwen4-max": {
+  "provider": "vercel",
+  "harness": "mimo",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:34:35.569Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 19.15,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max MiMo Code \u00b7 qwen4-max \u00b7 Done in 16.2 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess30ecf550e5094ccfafd990b04ad3b515",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 19.4,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max MiMo Code \u00b7 qwen4-max \u00b7 Done in 16.3 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-astra",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.36,
+   "tail": "Reply with exactly: M3-gpt-6.2-astra M3-gpt-6.2-astra MiMo Code \u00b7 gpt-6.2-astra \u00b7 Done in 14.5 s",
+   "answer": "M3-gpt-6.2-astra",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.25,
+   "tail": "Create a file named hello-mimo.txt containing exactly the word HELLO, then reply DONE. Created hello-mimo.txt +1 \u22120 DONE txt hello-mimo.txt TXT MiMo Code \u00b7 qwen4-max \u00b7 Done in 19.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-mimo.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-mimo.txt"
+   ],
+   "record_files": [
+    "hello-mimo.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.67,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max MiMo Code \u00b7 qwen4-max \u00b7 Done in 14.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess30ecf550e5094ccfafd990b04ad3b515\",\"checkpoint_sha\":\"12008698f4c6c383b3ee4c588173c47742babf2d564bf8ac566e15c16737828d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-astra"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-astra"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 24569,
+   "cache_read": 94208,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|goose|qwen4-max": {
+  "provider": "vercel",
+  "harness": "goose",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:36:32.038Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.67,
+   "tail": "Reply with exactly: M1-qwen4-max Thought for 1s M1-qwen4-max goose \u00b7 qwen4-max \u00b7 Done in 8.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess49b308c381684d2eb9a510b7a025b3ed",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 32.44,
+   "tail": "Reply with exactly: M2-qwen4-max Note: the MCP server \"memories\" could not be reached, so this reply ran without those tools. Used Todo \u00b7 todo write M2-qwen4-max goose \u00b7 qwen4-max \u00b7 Done in 11.5 s",
+   "answer": "_Note: the MCP server \"memories\" could not be reached, so this reply ran without those tools._\n\nM2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.09,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol Used Todo \u00b7 todo write M3-gpt-6.2-sol goose \u00b7 gpt-6.2-sol \u00b7 Done in 4.5 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.17,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. Used 2 tools, created a file +1 \u22120 DONE txt hello-goose.txt TXT goose \u00b7 qwen4-max \u00b7 Done in 15.9 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.57,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought for 1s M1-qwen4-max goose \u00b7 qwen4-max \u00b7 Done in 6.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess49b308c381684d2eb9a510b7a025b3ed\",\"checkpoint_sha\":\"e6df4c56afc7cdd5ee1ebcce11c91f0a2d5827802177e85b83733e8d42d14077\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 78086,
+   "cache_read": 112680,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|cline|qwen4-max": {
+  "provider": "vercel",
+  "harness": "cline",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:38:11.115Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.84,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Cline \u00b7 qwen4-max \u00b7 Done in 11.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess2faf8f0550c94bf4b08be30e387c6317",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.55,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Cline \u00b7 qwen4-max \u00b7 Done in 11.5 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.8,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Cline \u00b7 gpt-6.2-sol \u00b7 Done in 6.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.61,
+   "tail": "Create a file named hello-cline.txt containing exactly the word HELLO, then reply DONE. Edited a file, used a tool +1 \u22120 DONE txt hello-cline.txt TXT Cline \u00b7 qwen4-max \u00b7 Done in 16.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.26,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Cline \u00b7 qwen4-max \u00b7 Done in 9.7 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess2faf8f0550c94bf4b08be30e387c6317\",\"checkpoint_sha\":\"a69886216e8a83ec15e67de342404c7b4d895453dc8d04c9a1a243591423d609\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 16113,
+   "cache_read": 43264,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|kimi|qwen4-max": {
+  "provider": "vercel",
+  "harness": "kimi",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:30:37.164Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.39,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 11.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd730a576cd53414a8aa6e9ed59a8136f",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.38,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 7.6 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.44,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Kimi Code CLI \u00b7 gpt-6.2-sol \u00b7 Done in 6.8 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.59,
+   "tail": "Create a file named hello-kimi.txt containing exactly the word HELLO, then reply DONE. Created hello-kimi.txt +1 \u22120 DONE txt hello-kimi.txt TXT Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 14.8 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-kimi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kimi.txt"
+   ],
+   "record_files": [
+    "hello-kimi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.27,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Kimi Code CLI \u00b7 qwen4-max \u00b7 Done in 8.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd730a576cd53414a8aa6e9ed59a8136f\",\"checkpoint_sha\":\"89a0b8b1c4b85c58b6ca6ea435096a94fbe484f51917028ed14016df7d7e493d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 55185,
+   "cache_read": 88320,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|minimax|qwen4-max": {
+  "provider": "vercel",
+  "harness": "minimax",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:32:01.469Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.2,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max MiniMax Code \u00b7 qwen4-max \u00b7 Done in 11.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess0fa5c5dd75304be9857ab41e99276303",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.56,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max MiniMax Code \u00b7 qwen4-max \u00b7 Done in 11.0 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.85,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol MiniMax Code \u00b7 gpt-6.2-sol \u00b7 Done in 8.2 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 41.86,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. Created hello-minimax.txt +1 \u22120 DONE \u2014 hello-minimax.txt created with exactly HELLO (5 bytes, verified). txt hello-minimax.txt TXT MiniMax Code \u00b7 qwen4-max \u00b7 Done in 21.9 s \u00b7 Remembered 1 thing",
+   "answer": "DONE \u2014 [hello-minimax.txt](/data/workspaces/hsess0fa5c5dd75304be9857ab41e99276303/hello-minimax.txt) created with exactly `HELLO` (5 bytes, verified).",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.8,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max MiniMax Code \u00b7 qwen4-max \u00b7 Done in 11.3 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0fa5c5dd75304be9857ab41e99276303\",\"checkpoint_sha\":\"f28707b28ca2816be187331a383bf19bc8e2d46090c420769b7f0d9a9b976f91\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 23396,
+   "cache_read": 48896,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|aider|qwen4-max": {
+  "provider": "vercel",
+  "harness": "aider",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:33:54.477Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.71,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Aider \u00b7 qwen4-max \u00b7 Done in 14.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessc0628edd866a40d08173e7d740bc84de",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 16.65,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Aider \u00b7 qwen4-max \u00b7 Done in 12.9 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.77,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Aider \u00b7 gpt-6.2-sol \u00b7 Done in 10.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.08,
+   "tail": "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE. DONE Edited hello-aider.txt txt hello-aider.txt TXT Aider \u00b7 qwen4-max \u00b7 Done in 15.0 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-aider.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-aider.txt"
+   ],
+   "record_files": [
+    "hello-aider.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.09,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Aider \u00b7 qwen4-max \u00b7 Done in 20.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc0628edd866a40d08173e7d740bc84de\",\"checkpoint_sha\":\"0243e9ef073498bad2f31985eeb5e16c0d9bf46a2f34295f9a3d5337c6557431\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 11862,
+   "cache_read": 9984,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|openhands|qwen4-max": {
+  "provider": "vercel",
+  "harness": "openhands",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:35:42.374Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 29.95,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max OpenHands \u00b7 qwen4-max \u00b7 Done in 27.3 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessea2f51d4a6df4c9c8ac9369b062d36e6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.54,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max OpenHands \u00b7 qwen4-max \u00b7 Done in 24.9 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.79,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol OpenHands \u00b7 gpt-6.2-sol \u00b7 Done in 17.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 40,
+   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. Ran printf 'HELLO' > /data/workspaces/hsessea2f51d4a6df4c9c8ac9369b062d36e6/hello-openhands.txt && cat /data/workspaces/hsessea2f51d4a6df4c9c8ac9369b062d36e6/hello-openhands.txt DONE txt hello-openhands.txt TXT OpenHands \u00b7 qwen4-max \u00b7 Done in 35.9 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-openhands.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-openhands.txt"
+   ],
+   "record_files": [
+    "hello-openhands.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.08,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max OpenHands \u00b7 qwen4-max \u00b7 Done in 22.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessea2f51d4a6df4c9c8ac9369b062d36e6\",\"checkpoint_sha\":\"7909034cec9adeeba309460ce6241c5ef90bbe482de7aa964970c7c1d9ece0fb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 22343,
+   "cache_read": 44288,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|cheetahclaws|qwen4-max": {
+  "provider": "vercel",
+  "harness": "cheetahclaws",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:38:24.140Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.28,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max CheetahClaws \u00b7 qwen4-max \u00b7 Done in 11.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess304f81b3e4f94f3ab53178d62560f491",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.47,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max CheetahClaws \u00b7 qwen4-max \u00b7 Done in 7.9 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.16,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol CheetahClaws \u00b7 gpt-6.2-sol \u00b7 Done in 5.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.95,
+   "tail": "Create a file named hello-cheetahclaws.txt containing exactly the word HELLO, then reply DONE. Created hello-cheetahclaws.txt +1 \u22120 DONE txt hello-cheetahclaws.txt TXT CheetahClaws \u00b7 qwen4-max \u00b7 Done in 10.8 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "record_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.18,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max CheetahClaws \u00b7 qwen4-max \u00b7 Done in 8.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess304f81b3e4f94f3ab53178d62560f491\",\"checkpoint_sha\":\"aee412c2a3ced119bd78a46dcea9422e4c2e6c82746d37031dfc3f56b712e3b0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 28108,
+   "cache_read": 33792,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|grok|qwen4-max": {
+  "provider": "vercel",
+  "harness": "grok",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:30:40.879Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.58,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Grok Build \u00b7 qwen4-max \u00b7 Done in 10.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess30f0740b04df40eea6fd2d6a2bec3d4d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.75,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Grok Build \u00b7 qwen4-max \u00b7 Done in 5.4 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.18,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Grok Build \u00b7 gpt-6.2-sol \u00b7 Done in 4.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.43,
+   "tail": "Create a file named hello-grok.txt containing exactly the word HELLO, then reply DONE. Used Run terminal command DONE txt hello-grok.txt TXT Grok Build \u00b7 qwen4-max \u00b7 Done in 11.5 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-grok.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-grok.txt"
+   ],
+   "record_files": [
+    "hello-grok.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.5,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Grok Build \u00b7 qwen4-max \u00b7 Done in 5.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess30f0740b04df40eea6fd2d6a2bec3d4d\",\"checkpoint_sha\":\"ba4256b5e2b5979c124beae20c45f8785c119df70810157f1d36717c73f18856\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 22745,
+   "cache_read": 48384,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|agentzero|qwen4-max": {
+  "provider": "vercel",
+  "harness": "agentzero",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:31:52.612Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.65,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max Agent Zero \u00b7 qwen4-max \u00b7 Done in 18.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess751059a0291d4bdf828950c611025159",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 19.41,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max Agent Zero \u00b7 qwen4-max \u00b7 Done in 16.0 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.17,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Agent Zero \u00b7 gpt-6.2-sol \u00b7 Done in 13.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 30.2,
+   "tail": "Create a file named hello-agentzero.txt containing exactly the word HELLO, then reply DONE. Edited a file, ran a command DONE txt hello-agentzero.txt TXT Agent Zero \u00b7 qwen4-max \u00b7 Done in 25.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-agentzero.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-agentzero.txt"
+   ],
+   "record_files": [
+    "hello-agentzero.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.84,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max Agent Zero \u00b7 qwen4-max \u00b7 Done in 15.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess751059a0291d4bdf828950c611025159\",\"checkpoint_sha\":\"aae1388139c0e77a5904a072551391518bbb3df52bf20276941a9d9229c00c77\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21343,
+   "cache_read": 46592,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|jcode|qwen4-max": {
+  "provider": "vercel",
+  "harness": "jcode",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:33:55.693Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.2,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max jcode \u00b7 qwen4-max \u00b7 Done in 9.1 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessc748ad75448d457c9efd6f48ccdec7f4",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.74,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max jcode \u00b7 qwen4-max \u00b7 Done in 3.9 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.45,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol jcode \u00b7 gpt-6.2-sol \u00b7 Done in 6.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.58,
+   "tail": "Create a file named hello-jcode.txt containing exactly the word HELLO, then reply DONE. Created hello-jcode.txt +1 \u22120 DONE txt hello-jcode.txt TXT jcode \u00b7 qwen4-max \u00b7 Done in 8.9 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-jcode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-jcode.txt"
+   ],
+   "record_files": [
+    "hello-jcode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.32,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max jcode \u00b7 qwen4-max \u00b7 Done in 3.8 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc748ad75448d457c9efd6f48ccdec7f4\",\"checkpoint_sha\":\"dea9bf4a7e0c609d95d783309bbece623dcc10c96c99e378ee6c66bfa49cb1b7\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 226,
+   "cache_read": 60208,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|opensquilla|qwen4-max": {
+  "provider": "vercel",
+  "harness": "opensquilla",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:35:01.243Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 36.39,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max OpenSquilla \u00b7 qwen4-max \u00b7 Done in 33.2 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess00935b56d821415286a0cfbd41086521",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.2,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max OpenSquilla \u00b7 qwen4-max \u00b7 Done in 23.5 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 25.39,
+   "tail": "Reply with exactly: M3-gpt-6-sol M3-gpt-6-sol OpenSquilla \u00b7 gpt-6-sol \u00b7 Done in 20.4 s",
+   "answer": "M3-gpt-6-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 33.41,
+   "tail": "Create a file named hello-opensquilla.txt containing exactly the word HELLO, then reply DONE. Created a file, used a tool +1 \u22120 DONE txt hello-opensquilla.txt TXT OpenSquilla \u00b7 qwen4-max \u00b7 Done in 28.7 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-opensquilla.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opensquilla.txt"
+   ],
+   "record_files": [
+    "hello-opensquilla.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.73,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max OpenSquilla \u00b7 qwen4-max \u00b7 Done in 20.4 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess00935b56d821415286a0cfbd41086521\",\"checkpoint_sha\":\"c700c82f2b69d63e292ce5086113109f6f85f246767c23c223d603ca1302e796\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 20915,
+   "cache_read": 61952,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|nanobot|qwen4-max": {
+  "provider": "vercel",
+  "harness": "nanobot",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:37:43.835Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.94,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max nanobot \u00b7 qwen4-max \u00b7 Done in 14.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd4f4799c017f42a7b4e6a2a3ce19dd82",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.11,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max nanobot \u00b7 qwen4-max \u00b7 Done in 9.1 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.87,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol nanobot \u00b7 gpt-6.2-sol \u00b7 Done in 10.1 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.69,
+   "tail": "Create a file named hello-nanobot.txt containing exactly the word HELLO, then reply DONE. Created hello-nanobot.txt +1 \u22120 DONE txt hello-nanobot.txt TXT nanobot \u00b7 qwen4-max \u00b7 Done in 18.4 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-nanobot.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-nanobot.txt"
+   ],
+   "record_files": [
+    "hello-nanobot.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.31,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max nanobot \u00b7 qwen4-max \u00b7 Done in 10.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd4f4799c017f42a7b4e6a2a3ce19dd82\",\"checkpoint_sha\":\"f9318cd3bb427b98db13dfc0abf1e8e4df98af422745916e2714004647d0a001\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 20383,
+   "cache_read": 44032,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|zeroclaw|qwen4-max": {
+  "provider": "vercel",
+  "harness": "zeroclaw",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:30:43.956Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.12,
+   "tail": "Reply with exactly: M1-qwen4-max Thought M1-qwen4-max ZeroClaw \u00b7 qwen4-max \u00b7 Done in 6.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessacce2736daf9477690f2bfb5696aa465",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.93,
+   "tail": "Reply with exactly: M2-qwen4-max Thought M2-qwen4-max ZeroClaw \u00b7 qwen4-max \u00b7 Done in 8.2 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.1,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol ZeroClaw \u00b7 gpt-6.2-sol \u00b7 Done in 3.9 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.9,
+   "tail": "Create a file named hello-zeroclaw.txt containing exactly the word HELLO, then reply DONE. Created hello-zeroclaw.txt DONE txt hello-zeroclaw.txt TXT ZeroClaw \u00b7 qwen4-max \u00b7 Done in 16.7 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-zeroclaw.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-zeroclaw.txt"
+   ],
+   "record_files": [
+    "hello-zeroclaw.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.3,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-qwen4-max ZeroClaw \u00b7 qwen4-max \u00b7 Done in 6.5 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessacce2736daf9477690f2bfb5696aa465\",\"checkpoint_sha\":\"68b76ad292002323cb2c28a06ffdc2d4e775950800de38deec6e305fb9afa019\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 102353,
+   "cache_read": 33024,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|vibe|qwen4-max": {
+  "provider": "vercel",
+  "harness": "vibe",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:32:03.014Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.28,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 14.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess52e14554ca384402bfdca4425a0717e8",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.54,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 12.0 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.41,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Mistral Vibe \u00b7 gpt-6.2-sol \u00b7 Done in 11.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.54,
+   "tail": "Create a file named hello-vibe.txt containing exactly the word HELLO, then reply DONE. Used File system \u00b7 write file DONE txt hello-vibe.txt TXT Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 16.2 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-vibe.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-vibe.txt"
+   ],
+   "record_files": [
+    "hello-vibe.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.46,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Mistral Vibe \u00b7 qwen4-max \u00b7 Done in 10.9 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess52e14554ca384402bfdca4425a0717e8\",\"checkpoint_sha\":\"2bc9a0dd95eb30693875797a09547e834f99614079b067173eada94e0045717d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 27175,
+   "cache_read": 32768,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|docker-agent|qwen4-max": {
+  "provider": "vercel",
+  "harness": "docker-agent",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:33:40.050Z",
+  "first": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 9.56,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Docker Agent \u00b7 qwen4-max \u00b7 Done in 6.7 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd67b6932aa2c4a579ee7b7f64e8554fd",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.53,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Docker Agent \u00b7 qwen4-max \u00b7 Done in 7.6 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.12,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Docker Agent \u00b7 gpt-6.2-sol \u00b7 Done in 6.4 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.5,
+   "tail": "Create a file named hello-docker-agent.txt containing exactly the word HELLO, then reply DONE. Created hello-docker-agent.txt +1 \u22120 DONE txt hello-docker-agent.txt TXT Docker Agent \u00b7 qwen4-max \u00b7 Done in 11.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-docker-agent.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-docker-agent.txt"
+   ],
+   "record_files": [
+    "hello-docker-agent.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Docker Agent \u00b7 qwen4-max \u00b7 Done in 6.0 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd67b6932aa2c4a579ee7b7f64e8554fd\",\"checkpoint_sha\":\"1137bfa30ca9fc586e59df711d8bdc2cca28da15bef2ea11506f781d5637e467\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 10423,
+   "cache_read": 24320,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|fast-agent|qwen4-max": {
+  "provider": "vercel",
+  "harness": "fast-agent",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:34:48.178Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 23.65,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max fast-agent \u00b7 qwen4-max \u00b7 Done in 20.6 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6ba5768c6f74421283ee452004f0a548",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.08,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max fast-agent \u00b7 qwen4-max \u00b7 Done in 15.5 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.57,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol fast-agent \u00b7 gpt-6.2-sol \u00b7 Done in 14.6 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 26.96,
+   "tail": "Create a file named hello-fast-agent.txt containing exactly the word HELLO, then reply DONE. Used Write text file DONE txt hello-fast-agent.txt TXT fast-agent \u00b7 qwen4-max \u00b7 Done in 22.6 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-fast-agent.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-fast-agent.txt"
+   ],
+   "record_files": [
+    "hello-fast-agent.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.13,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max fast-agent \u00b7 qwen4-max \u00b7 Done in 15.3 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6ba5768c6f74421283ee452004f0a548\",\"checkpoint_sha\":\"7330312fb5dc00d47cbab949cea24fc90f19dcc9d90e6f23c8abc89c93d1b5ce\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 8241,
+   "cache_read": 17152,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|dcode|qwen4-max": {
+  "provider": "vercel",
+  "harness": "dcode",
+  "model": "qwen4-max",
+  "at": "2026-11-22T16:36:49.077Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 26.74,
+   "tail": "Reply with exactly: M1-qwen4-max M1-qwen4-max Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 22.7 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess920f12104669479b99955278ae9c98e6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.61,
+   "tail": "Reply with exactly: M2-qwen4-max M2-qwen4-max Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 17.5 s",
+   "answer": "M2-qwen4-max",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.2-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 20.95,
+   "tail": "Reply with exactly: M3-gpt-6.2-sol M3-gpt-6.2-sol Deep Agents Code \u00b7 gpt-6.2-sol \u00b7 Done in 17.7 s",
+   "answer": "M3-gpt-6.2-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 27.37,
+   "tail": "Create a file named hello-dcode.txt containing exactly the word HELLO, then reply DONE. Created hello-dcode.txt +1 \u22120 DONE txt hello-dcode.txt TXT Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 24.3 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-dcode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dcode.txt"
+   ],
+   "record_files": [
+    "hello-dcode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 24.19,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-qwen4-max Deep Agents Code \u00b7 qwen4-max \u00b7 Done in 21.7 s",
+   "answer": "M1-qwen4-max",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess920f12104669479b99955278ae9c98e6\",\"checkpoint_sha\":\"ca9c8dfe8af41f8a0f320dbc4a287b04ceb3d052afba7b551a4fed53212726db\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "alibaba/qwen4-max",
+   "openai/gpt-6.2-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.2-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 25939,
+   "cache_read": 54528,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
  }
 }
