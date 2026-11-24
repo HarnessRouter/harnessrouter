@@ -39,6 +39,8 @@ CONN = {"provider": "tokenrouter", "_vendor": "tokenrouter"}
     ("no rollout found for thread id 01a06ea9", ""),
     ("Failed to run pre-sampling compact\nReconnecting... 1/5 (429 rate limit)", ""),          # first line only
     ("Client error '401 Unauthorized' for url 'http://127.0.0.1:1/hr-mcp-ab/mcp'", ""),          # the relay (#714)
+    ('Error code: 401 - {"error": "unknown relay token"}', ""),                                  # the provider relay
+    ("401 Unauthorized from http://127.0.0.1:41234/v1/chat/completions: unknown relay token", ""),
     ("hr API error (502): Microsoft Entra did not sign this connection in: AADSTS90055: Too many requests.", ""),
 ])
 def test_each_answer_is_told_apart_and_all_four_still_stop_the_turn(err, kind):
