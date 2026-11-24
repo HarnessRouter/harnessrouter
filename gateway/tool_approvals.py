@@ -51,6 +51,12 @@ class ApprovalJournal:
         return copy.deepcopy({key: doc[key] for key in ('request', 'state', 'receipt', 'continuation_receipt') if key in doc})
 
     @staticmethod
+    def _continuation_view(doc):
+        """Trusted internal idempotency projection; never exposed by public read."""
+        return copy.deepcopy({key: doc[key] for key in ('request', 'state', 'receipt',
+                                                         'continuation', 'continuation_receipt') if key in doc})
+
+    @staticmethod
     def _invalid():
         raise ApprovalError('hexa_approval_invalid', 422)
 
@@ -153,6 +159,10 @@ class ApprovalJournal:
         """Private native-adapter boundary. Never return this through HTTP/UI."""
         return await self._change(scope, command, lambda doc: (
             (copy.deepcopy(doc['request']), doc.get('_sealed_invocation')), None))
+
+    async def continuation_state(self, scope, command):
+        """Read continuation identity for a trusted coordinator only."""
+        return await self._change(scope, command, lambda doc: (self._continuation_view(doc), None))
 
     async def decide(self, scope, command, decision, key):
         fields = {'type', 'approval_id', 'command_id', 'request_hash', 'decision'}

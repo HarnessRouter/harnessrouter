@@ -49,3 +49,9 @@ and its FastAPI dependencies; it is skipped on Windows because the Runner import
 POSIX APIs. The Linux journey uses authenticated Runner HTTP and Gateway ownership
 to approve/deny, then proves the closed session cannot be used again. Neither
 module proves a production Provider factory, Responses/SSE or Hexa UI integration.
+
+`test_native_bridge_http.py` covers the internal pending/resume bridge itself. It
+verifies strict base64 wire validation, internal-key and session routing, exact
+approval binding, approve/deny execution, and idempotent completion continuation.
+The resume response carries only a completion marker; provider-specific graph
+objects never cross the internal HTTP boundary.

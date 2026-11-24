@@ -157,3 +157,12 @@ Windows 验证 registry CAS 与真实 SQLite/HITL 的会话健康、续期、关
 Provider factory。真实工具线程在 asyncio 取消后继续完成的场景验证 unknown pin 和 journal 不被迟到结果覆盖。
 跨进程登记/租约沿用共享 SQLite，不能推断多机器部署。最终测试数量和环境记于 Change `native_session_lifecycle`；
 生产 backend、真实 Provider、Response/SSE、Hexa UI 和部署仍未验收。
+
+## Native approval bridge（2026-11-24）
+
+Windows/Python 3.13 验证严格 pending wire 和既有 Gateway approval journal/gate；Runner HTTP 及真实 LangGraph
+approve/deny 旅程在 Linux `harnessrouter/runner:hexa-p2-final` 交付镜像执行。内部传输使用 FastAPI ASGI、认证
+`x-harness-internal`、SQLite checkpoint/control store 和当前 worktree；Runner 不回传 provider-specific graph
+objects。第一次 capture、批准/拒绝恢复、相同 continuation 幂等及错误 key 均验证。未修改公开 UHP schema/discovery、
+生产 Provider、backend factory 或部署多副本；完整 Responses/SSE 和 Hexa UI 仍为后续范围。证据见 Change
+`native_approval_bridge`。

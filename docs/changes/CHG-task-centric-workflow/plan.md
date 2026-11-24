@@ -383,3 +383,14 @@ exclusive register、独立 heartbeat、精确 token adapter factory、关闭撤
 TDD 覆盖正常 approve/deny、退出后旧 adapter、心跳健康故障、重复管理器、memory/closed saver 与 pin 取消。
 单元/真实 SQLite、原生受控旅程和 Linux FastAPI 组合验证；不改变公开 UHP、已有普通 turn 或审批门禁。
 回退前停止 session，保留撤销登记与 unknown pin；完整 UI/Provider/SSE 验收仍需后续接线，证据记 Change。
+
+## 2026-11-24 内部原生调用桥接
+
+按 AC-49 增加 Runner 进程内可信 session 目录及内部 HTTP router，复用 lease token、session guard 和 adapter 的
+pending/resume，不提供网络注册或可执行工厂。Router 由 server 注入 registry getter、进程实例和既有 internal key
+验证；base64 pending schema 纯标准库模块单独验证。Gateway coordinator 复用 transport、RuntimeOwnership、
+BoundApprovalGate 与 journal 决定，capture/resume 均在有效 lease 下完成；resume 不重试、不接受公开原参数。
+
+先写字节契约和 HTTP 失败测试，再实现 Router/目录；再写 Gateway coordinator 的真实 HTTP/SQLite/HITL 测试。
+Windows 验证纯 schema/目录及 Gateway 组合；Linux 交付镜像验证 server 接线和完整内部旅程。失败开始前零工具，
+start 后不确定保留 unknown；回退保留历史回执和 pin。本切片不注册生产 Provider、不更改公开 UHP 或解除审批门禁。

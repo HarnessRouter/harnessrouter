@@ -1,4 +1,27 @@
 id: CHG-task-centric-workflow
+native_approval_bridge:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 7e22d0bc
+  branch: codex/agent-orchestration
+  status: verified_internal_bridge
+  references: [spec.md#gateway-与-native-session-内部调用桥接, plan.md#2026-11-24-内部原生调用桥接]
+  acceptance_ids: [AC-48, AC-49]
+  reuse_decision: reuse LangGraphNativeSession, RuntimeOwnership, BoundApprovalGate and ApprovalJournal; add no public UHP capability or second plugin format
+  changes:
+    - "新增严格 PendingInvocation base64 wire，拒绝额外字段、非法工具来源、超限字节、非 canonical base64 和 malformed token。"
+    - "Runner 以内部 key、session 路由、registration_id、owner/fence 和 process-local NativeSessionDirectory 提供 pending/resume；resume 不回传 graph/model state。"
+    - "Gateway NativeApprovalCoordinator 在登记 lease 内 capture/密封原始参数与 checkpoint，批准/拒绝恢复同一保存调用；相同完成 continuation 只读 journal，不再次调用 Runner。"
+  verification:
+    red: "wire 11 项首次因 native_approval_http/NativeSessionDirectory 缺失失败；Linux bridge 首次 2 项因 wire decoder NameError，随后因 native result 包含 HumanMessage 的安全回包错误，再因第二次 resume 未读取 continuation 和错误 key 空 body 暴露边界；逐项修正。"
+    unit: "python -X utf8 -m pytest -q runner/tests/test_native_approval_wire.py gateway/tests/test_tool_approvals_journal.py gateway/tests/test_approval_execution.py；wire 11 passed；journal/gate 80 passed。"
+    linux: "harnessrouter/runner:hexa-p2-final，一次性 fresh --system-site-packages venv 安装 runner/native_tests/requirements.txt；PYTHONPATH=/workspace/runner:/workspace/gateway；runner/native_tests/test_native_bridge_http.py；exit 0；2 passed in 2.69s，真实 FastAPI/internal key、NativeSessionDirectory、LangGraph/SQLite、Gateway RuntimeOwnership、BoundApprovalGate/journal approve/deny 和完成 continuation 幂等。"
+    static: "最终 Python py_compile、YAML safe_load 与 git diff --check 通过；无公开 UHP schema/discovery、Provider backend、数据库迁移或新依赖。"
+  security_review: "内部路由先认证再处理合法输入；所有 token/registration/session/fence 严格绑定，pending 字节只经 base64 密封，不进入公开 view；resume 不接受公开参数、prompt、工厂或脚本，native graph result 不序列化回包。失败在 start 前零工具，start 后沿用 unknown。"
+  unit_integration_e2e: "wire 单测、Gateway journal/gate 单测、Linux 真实 Runner HTTP/native HITL 组合；完整 Response/SSE、Hexa UI、真实 Provider 和生产 backend factory 尚未接入。"
+  rollback: "停止相关 native session 后回退 bridge/router/coordinator；保留已有 approval records、unknown receipts 和 execution pins；不打开 tool_approvals。"
+  limitations: [production backend factory and lifecycle caller, Response/SSE continuation, Hexa pending UI, shared multi-machine control store, real Provider, deployed failover, remote CI]
+  next_action: "把内部 coordinator 接入一个受信生产 backend factory 和 Response/SSE incomplete/continuation 事件；完成前继续保持公开 tool_approvals 未广告。"
 native_session_lifecycle:
   date: "2026-11-24"
   owner: Codex

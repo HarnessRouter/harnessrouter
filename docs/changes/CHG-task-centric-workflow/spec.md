@@ -690,6 +690,27 @@ checkpoint 并取得新登记和 fence；unknown pin 仍需显式协调。
 旧 adapter 失效、存储失效后零新工具、registered approve/deny 和取消保留 unknown。Linux Runner HTTP 验证 session 关闭
 后 Gateway 无法取得登记或继续 lease。该内部生命周期尚不构成公开 Response/SSE 或生产 Provider 审批支持。
 
+### Gateway 与 native session 内部调用桥接
+
+Runner 可信 backend 可以在进程内目录中发布已启动的 native session；目录不接收公开 HTTP 注册、工厂名、
+模块路径或回调。目录只接受当前 Runner 实例、同一 registry 与匹配 session 的活跃登记；退出发布上下文后立即不可寻址。
+内部 `POST /internal/native-approvals/pending` 和 `/resume` 强制内部 key、Session 路由和精确 lease token。
+pending 返回固定字段 command/tool/arguments/checkpoint，其中字节仅用严格 base64 编码；仅供 Gateway 密封，
+不得进入公开 Response 或普通日志。resume 只接受原 pending、approve/deny 和 lease token，不接受替换 prompt、
+Runtime 工厂、配置、权限或执行脚本。native adapter 恢复前再次比较当前 checkpoint，重复/变化/失效请求零工具。
+
+Gateway 内部 coordinator 在每次 capture/resume 前通过 RuntimeOwnership 读取登记并持有有效 lease。
+capture 将 Runner 原始字节和可信执行配置构造成 Invocation，再调用既有 BoundApprovalGate 密封。
+resume 先读取密封调用与持久决定，比较当前 pending、执行配置和原生许可，再由 gate 获取单次许可并投递
+精确保存的 pending 与决定。客户端决定不能提供工具参数、checkpoint 或原生许可。内部传输不自动重试 resume；
+丢包、取消或 malformed 回包在 start 后沿用 unknown，保留 Runner pin 或 Gateway unknown receipt，不盲重放。
+HTTP 返回只报告 native 已返回，不传出完整 graph/model state；结果输出仍留待后续 Response 链路读取。
+
+**AC-49 内部原生调用桥接：** 严格输入/输出、base64 大小和身份单元；真实 Runner HTTP、Gateway gate/journal、
+LangGraph/SQLite 组合验证 capture 零工具、approve 一次、deny 零工具、重放不执行、配置/参数/checkpoint/native deny
+拒绝、内部 key/Session/token/失效目录隔离、传输失败 unknown 和零秘密错误回显。此桥接不创建 Provider backend，
+不打开公开 Response/SSE、UHP capability 或 Hexa 策略门禁。
+
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是

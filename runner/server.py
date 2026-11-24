@@ -96,6 +96,7 @@ import roder_backend   # Roder's app-server base: its builder, tool table and st
 from approval_policy import approval_policy_error
 from runtime_lease import (LeaseConflict, LeaseError, LeaseLost, RuntimeLeaseRegistry,
                             RuntimeLeaseToken)
+from native_approval_http import NativeSessionDirectory, NativeApprovalError, decode_pending, encode_pending
 
 app = FastAPI(title="harness-runner")
 
@@ -109,10 +110,24 @@ class RuntimeLeaseBody(BaseModel):
     registration_id: str | None = Field(default=None, min_length=1, max_length=1024)
 
 
+class NativeApprovalPendingBody(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    runtime_id: str = Field(min_length=1, max_length=1024)
+    owner: str = Field(min_length=1, max_length=1024)
+    fence: int = Field(ge=1)
+    registration_id: str = Field(min_length=1, max_length=1024)
+
+
+class NativeApprovalResumeBody(NativeApprovalPendingBody):
+    pending: dict
+    decision: str
+
+
 _runtime_lease_registry: RuntimeLeaseRegistry | None = None
 _runtime_lease_registry_path: str | None = None
 _runtime_lease_registry_lock = threading.Lock()
 _RUNTIME_INSTANCE_ID = 'runner_' + uuid.uuid4().hex
+_native_sessions = NativeSessionDirectory()
 
 
 def _runtime_leases() -> RuntimeLeaseRegistry:
@@ -143,6 +158,25 @@ def _lease_http_error(error: Exception) -> HTTPException:
                                           "message": "The Runtime lease request is invalid."})
     return HTTPException(503, detail={"code": "runtime_lease_unavailable",
                                       "message": "The Runtime lease store is unavailable."})
+
+
+def _native_approval_error(error: Exception) -> HTTPException:
+    if isinstance(error, HTTPException):
+        return error
+    if isinstance(error, (LeaseConflict,)):
+        return HTTPException(409, detail={'code': 'runtime_lease_conflict',
+                                          'message': 'The Runtime owner is already in use.'})
+    if isinstance(error, LeaseLost):
+        return HTTPException(409, detail={'code': 'runtime_lease_lost',
+                                          'message': 'The Runtime owner is no longer authoritative.'})
+    if isinstance(error, NativeApprovalError):
+        code = str(error)
+        status = 409 if code in ('native_session_conflict', 'native_approval_changed') else 422
+        if code == 'native_session_unavailable':
+            status = 503
+        return HTTPException(status, detail={'code': code, 'message': 'The native approval is unavailable.'})
+    return HTTPException(503, detail={'code': 'native_approval_unavailable',
+                                      'message': 'The native approval is unavailable.'})
 
 
 def _lease_json(lease) -> dict:
@@ -17416,6 +17450,54 @@ def inspect_runtime_registration(runtime_id: str, request: Request, identifier: 
         raise
     except Exception as error:
         raise _lease_http_error(error) from None
+
+
+def _native_token(body):
+    return RuntimeLeaseToken(body.runtime_id, body.owner, body.fence, body.registration_id)
+
+
+@app.post('/internal/native-approvals/pending')
+async def native_approval_pending(body: NativeApprovalPendingBody, request: Request,
+                                  identifier: str = ''):
+    _require_runtime_lease_internal(request)
+    try:
+        token = _native_token(body)
+        registration = _runtime_leases().inspect_registration(body.runtime_id)
+        if (registration is None or registration['session_id'] != identifier
+                or registration['instance_id'] != _RUNTIME_INSTANCE_ID
+                or registration['registration_id'] != body.registration_id):
+            raise LeaseLost('runtime registration is no longer authoritative')
+        _runtime_leases().assert_owner(token, now=time.time(),)
+        session = _native_sessions.get(body.runtime_id, identifier)
+        pending = await session.adapter(token).pending()
+        return JSONResponse(encode_pending(pending), headers={'Cache-Control': 'no-store'})
+    except Exception as error:
+        raise _native_approval_error(error) from None
+
+
+@app.post('/internal/native-approvals/resume')
+async def native_approval_resume(body: NativeApprovalResumeBody, request: Request,
+                                 identifier: str = ''):
+    _require_runtime_lease_internal(request)
+    try:
+        if body.decision not in ('approve', 'deny'):
+            raise NativeApprovalError('native_approval_invalid')
+        token = _native_token(body)
+        registration = _runtime_leases().inspect_registration(body.runtime_id)
+        if (registration is None or registration['session_id'] != identifier
+                or registration['instance_id'] != _RUNTIME_INSTANCE_ID
+                or registration['registration_id'] != body.registration_id):
+            raise LeaseLost('runtime registration is no longer authoritative')
+        _runtime_leases().assert_owner(token, now=time.time())
+        pending = decode_pending(body.pending)
+        session = _native_sessions.get(body.runtime_id, identifier)
+        await session.adapter(token).resume(pending, body.decision)
+        # Native graph state can contain provider-specific message objects and
+        # is never part of this internal wire contract. The Gateway reads the
+        # durable approval/continuation receipt separately.
+        return JSONResponse({'status': 'completed'}, headers={'Cache-Control': 'no-store'})
+    except Exception as error:
+        raise _native_approval_error(error) from None
 
 
 @app.get("/backends")
