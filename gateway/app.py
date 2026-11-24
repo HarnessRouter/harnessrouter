@@ -5266,7 +5266,9 @@ def _provider_failure_kind(err: str) -> str:
     first = (err or "").split("\n", 1)[0]
     # A 401 from the runner's own MCP relay (an address under /hr-mcp-) is not the provider refusing the
     # key: OpenHands' follow-ups read "Your vercel key was refused" over the relay's "unknown relay token" (#714).
-    if "/hr-mcp-" in first or not _PROVIDER_REFUSAL_RE.search(first):
+    # The runner's loopback relay for the provider says the same thing when a turn's token is not (or no longer) routed:
+    # '401 {"error": "unknown relay token"}' on a 127.0.0.1 address, which is never the provider and never the key.
+    if "/hr-mcp-" in first or "unknown relay token" in first.lower() or not _PROVIDER_REFUSAL_RE.search(first):
         return ""
     if _PROVIDER_NO_CREDIT_RE.search(first):          # a code or sentence that can only mean no credit
         return "quota"
