@@ -174,3 +174,49 @@ def test_independent_processes_share_registration_but_only_one_owner(tmp_path):
                 process.terminate()
                 process.join(timeout=5)
         result.close()
+
+
+def test_registration_lifecycle_cas_renew_close_and_stale_close(tmp_path):
+    store = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    first = register(store)
+    assert hasattr(store, 'renew_registration'), 'registration lifecycle renewal missing'
+    renewed = store.renew_registration('runtime', first['registration_id'], descriptor(), ttl=30, now=101)
+    assert renewed['registration_id'] == first['registration_id'] and renewed['expires_at'] == 131
+    store.revoke_registration('runtime', first['registration_id'], now=102)
+    with pytest.raises(LeaseLost):
+        store.renew_registration('runtime', first['registration_id'], descriptor(), ttl=30, now=103)
+    second = register(store, now=104)
+    assert second['registration_id'] != first['registration_id']
+    store.revoke_registration('runtime', first['registration_id'], now=105)
+    assert store.inspect_registration('runtime') == second
+
+
+def test_registration_expired_or_changed_never_renews(tmp_path):
+    store = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    first = register(store, ttl=5)
+    assert hasattr(store, 'renew_registration'), 'registration lifecycle renewal missing'
+    for value, now in [(descriptor(instance_id='other'), 101), (descriptor(), 106)]:
+        with pytest.raises(LeaseLost):
+            store.renew_registration('runtime', first['registration_id'], value, ttl=30, now=now)
+    assert store.inspect_registration('runtime') == first
+
+
+def test_registration_revocation_keeps_execution_unknown_and_forbids_reopen(tmp_path):
+    store = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    reg = register(store)
+    token = store.acquire('runtime', 'owner', registration_id=reg['registration_id'], ttl=30, now=101).token
+    store.begin_execution(token, 'operation', now=102)
+    assert hasattr(store, 'revoke_registration'), 'registration lifecycle revocation missing'
+    store.revoke_registration('runtime', reg['registration_id'], now=103)
+    state = store.inspect('runtime')
+    assert state.execution_id == 'operation' and state.execution_state == 'unknown' and state.owner == 'owner'
+    with pytest.raises(LeaseConflict):
+        register(store, now=200)
+
+
+def test_exclusive_session_registration_does_not_share_same_descriptor(tmp_path):
+    store = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    first = register(store)
+    with pytest.raises(LeaseConflict):
+        register(store, exclusive=True, now=101)
+    assert store.inspect_registration('runtime') == first

@@ -1,4 +1,29 @@
 id: CHG-task-centric-workflow
+native_session_lifecycle:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 2dc5e9ae
+  branch: codex/agent-orchestration
+  status: verified_internal_lifecycle
+  references: [spec.md#native-session-登记生命周期, plan.md#2026-11-24-native-session-生命周期]
+  acceptance_ids: [AC-47, AC-48]
+  reuse_decision: extend the existing registration registry and optional LangGraph adapter with a trusted session context; retain published UHP and public approval gates
+  changes:
+    - "registry 新增原 ID/descriptor 的 CAS renew 与匹配 ID revoke，拒绝到期复活；撤销保留登记历史并将执行 pin 标为 unknown。"
+    - "native session 验证真实持久 SQLite 和已安装版本，独占登记、健康心跳和关闭撤销；adapter factory 绑定 session 存活和精确 lease token。"
+    - "健康失败或退出后旧 adapter 失效；工具线程在 asyncio cancel 后仍可能完成，journal 与 pin 继续 unknown，不自动重放。"
+  verification:
+    red: "registry 生命周期目标首次 4 failed，分别缺 renew/revoke/exclusive；native session 目标首次 6 failed，缺生命周期模块。"
+    windows_target: "python -X utf8 -m pytest -q runner/native_tests/test_native_session.py runner/tests/test_runtime_registration.py runner/tests/test_runtime_lease.py runner/tests/test_langgraph_approval_boundary.py --tb=short；exit 0；61 passed in 11.92s。"
+    windows_regression: "python -X utf8 -m pytest -q runner/native_tests/test_native_session.py runner/native_tests/test_langgraph_approval.py runner/tests/test_runtime_registration.py runner/tests/test_runtime_lease.py runner/tests/test_langgraph_approval_boundary.py gateway/tests/test_runtime_ownership.py gateway/tests/test_approval_execution.py gateway/tests/test_denial_continuation.py --tb=short；exit 0；187 passed in 84.48s，含最终退出 finally 修正。之后仅新增两项旧 session/撤销续期回归，native_session 全部再验 12 passed in 7.67s。"
+    linux: "一次性 harnessrouter/runner:hexa-p2-final，fresh --system-site-packages venv 安装固定 runner/native_tests/requirements.txt；PYTHONPATH=/workspace/runner:/workspace/gateway；native_session/native_session_http/langgraph_approval、runtime_registration/runtime_lease/langgraph_approval_boundary/runtime_registration_http/runtime_lease_http；exit 0；113 passed in 47.37s。随后退出清理 finally 修正，最终 native_session/native_session_http 专项 exit 0；14 passed in 16.98s（包含新增两项状态回归）。"
+    boundary: "模型为确定性 ScriptedModel；实际 LangGraph HITL、SQLite checkpointer、Gateway bound gate/journal、Runner FastAPI/internal key 和工具线程均为真实实现。未修改运行中的生产容器或调用真实 Provider。"
+    static: "最终 Python py_compile、YAML safe_load 与 git diff --check 均 exit 0；无公开协议、依赖或生产容器变更。"
+  security_review: "可信 caller 提供 graph/config/catalog，不新增公开登记或任意回调；不保存参数、checkpoint、路径或凭据。登记续期不能重建失效 ID，关闭不清除 pin。无 Provider 调用、Shell 或新增网络目标。"
+  unit_integration_e2e: "纯 registry 单元及 SQLite CAS、真实 HITL/gate 受控旅程、Linux Runner HTTP 组合；完整用户 UI/SSE 审批 E2E 仍待接线。"
+  rollback: "停止 native session 后回退代码，保留撤销登记与 unknown pin；不使用旧执行器绕过登记。无公开协议、依赖或数据库迁移脚本变更。"
+  limitations: [production Runner backend factory and Provider lifecycle, Response/SSE continuation, Hexa pending UI, shared multi-machine control store, deployed failover, remote CI]
+  next_action: "把 session lifecycle 接到受信生产 Runner backend factory 与精确 continuation，再完成 Gateway Response/SSE 和 Hexa 审批状态；tool_approvals 继续未广告。"
 native_runtime_registration_binding:
   date: "2026-11-24"
   owner: Codex

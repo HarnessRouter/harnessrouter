@@ -149,3 +149,11 @@ LangGraph/SQLite 受控恢复。登记使用标准库 SQLite/UUID/JSON，不新�
 HTTP 内部 key、session/instance binding、登记过期/丢失及 unknown pin 分别验证；完整用户审批、真实 Provider、
 生产 adapter 生命周期、多机器共享控制存储和部署故障切换仍未验证。最终数量与命令见 Change
 `native_runtime_registration_binding`；公开 UHP tool_approvals 继续不广告。
+
+## Native session 生命周期（2026-11-24）
+
+Windows 验证 registry CAS 与真实 SQLite/HITL 的会话健康、续期、关闭和取消；Linux Runner 交付镜像同时运行
+内部 key HTTP 与 Gateway ownership 的 approve/deny 旅程。可选模块只读取已安装 Runtime 版本，不新增包依赖或
+Provider factory。真实工具线程在 asyncio 取消后继续完成的场景验证 unknown pin 和 journal 不被迟到结果覆盖。
+跨进程登记/租约沿用共享 SQLite，不能推断多机器部署。最终测试数量和环境记于 Change `native_session_lifecycle`；
+生产 backend、真实 Provider、Response/SSE、Hexa UI 和部署仍未验收。

@@ -671,6 +671,25 @@ checkpoint backend 和完整能力，再把 `registration_id` 加入 acquire/ren
 登记期限和 acquire/renew 的登记 ID；不一致时零 callback。受控原生旅程验证登记失效后零工具执行。本验收不代表已
 注册生产模型 Runtime、Response/SSE、公开 UHP capability 或 Hexa UI；生产接线继续遵循上述门禁。
 
+### Native session 登记生命周期
+
+可信 native session 必须拥有登记的创建、续期和关闭。进入 session 前检查实际持久 SQLite checkpointer、根 thread
+配置和已安装 Runtime 版本，再创建独占登记；相同进程的两个 session 管理器也不能同时认领同一 runtime。
+续期只能 CAS 更新原 registration ID，校验期限、实例和描述符，不能用 register 把已失效登记重新创建。
+session 定时检查持久存储可访问性，健康检查失败、续期失败、取消或退出时停止续期并撤销登记。
+撤销只使原登记过期，不删除审计事实；若存在 execution pin 则同时标为 unknown，不能清除 pin 或释放执行所有权。
+旧 session 的迟到关闭不能撤销新登记。
+
+session 只为完全匹配其 runtime/registration 的有效 lease token 创建 adapter。adapter 每次 checkpoint 读取、
+resume 前后检查 session 仍存活；关闭后的已创建 adapter 不得继续使用。session 不关闭调用方提供的 graph/checkpointer，
+不把任务取消视为 native 线程已停止，也不创建 Provider 或执行新 prompt。进程死亡通过登记 TTL 失效，重建后需重新验证
+checkpoint 并取得新登记和 fence；unknown pin 仍需显式协调。
+
+**AC-48 Native session 生命周期：** registry 单测验证续期/撤销的 CAS、过期不可复活、旧登记不能撤销新登记和
+撤销保留 unknown pin；真实 LangGraph/SQLite 验证进入/心跳/关闭、不可持久与已关闭 checkpointer 拒绝、重复 session 冲突、
+旧 adapter 失效、存储失效后零新工具、registered approve/deny 和取消保留 unknown。Linux Runner HTTP 验证 session 关闭
+后 Gateway 无法取得登记或继续 lease。该内部生命周期尚不构成公开 Response/SSE 或生产 Provider 审批支持。
+
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是

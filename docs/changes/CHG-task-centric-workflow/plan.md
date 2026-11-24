@@ -372,3 +372,14 @@ HTTP 测试覆盖内部鉴权、Session/进程实例绑定和 register 不存在
 Windows 验证 registry/Gateway/native；Linux Runner 交付镜像执行 HTTP、registry 和相关原生组合。完整用户审批 E2E
 仍需后续 Response/SSE 和 Hexa 待批 UI，不能由内部测试替代。回退前停止 native runtime，保留登记和 pin；旧代码
 不能用无登记 lease 绕过已登记会话。结果统一记在 change-record.yaml，不发布新 UHP 版本或能力。
+
+## 2026-11-24 Native session 生命周期
+
+依据 AC-48 复用 registry 和 LangGraphApprovalAdapter，新增可选原生模块中的 async session context。
+先验证 registry renewal/revoke CAS 与 unknown pin，再实现 session：实际 checkpointer 健康检查、已安装版本读取、
+exclusive register、独立 heartbeat、精确 token adapter factory、关闭撤销。adapter 通过内部 guard 绑定 session 存活状态，
+不增加共享 Runner 依赖。注册续期必须使用原登记 CAS，不能调用 register 自动重建；健康失败立即失效。
+
+TDD 覆盖正常 approve/deny、退出后旧 adapter、心跳健康故障、重复管理器、memory/closed saver 与 pin 取消。
+单元/真实 SQLite、原生受控旅程和 Linux FastAPI 组合验证；不改变公开 UHP、已有普通 turn 或审批门禁。
+回退前停止 session，保留撤销登记与 unknown pin；完整 UI/Provider/SSE 验收仍需后续接线，证据记 Change。

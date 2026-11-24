@@ -35,13 +35,14 @@ def _json(value):
 
 class LangGraphApprovalAdapter:
     def __init__(self, graph, config, catalog, *, lease_registry: RuntimeLeaseRegistry | None = None,
-                 lease_token: RuntimeLeaseToken | None = None, clock=time.time):
+                 lease_token: RuntimeLeaseToken | None = None, clock=time.time, session_guard=None):
         self.graph = graph
         self.config = copy.deepcopy(config)
         self.catalog = copy.deepcopy(catalog)
         self.lease_registry = lease_registry
         self.lease_token = lease_token
         self.clock = clock
+        self._session_guard = session_guard
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -55,6 +56,8 @@ class LangGraphApprovalAdapter:
         tests. A registered runtime must always provide both values; without
         them a native checkpoint cannot safely be read or resumed.
         """
+        if self._session_guard is not None:
+            self._session_guard()
         if self.lease_registry is None and self.lease_token is None:
             return
         if not isinstance(self.lease_registry, RuntimeLeaseRegistry) or not isinstance(

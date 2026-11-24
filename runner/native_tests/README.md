@@ -34,3 +34,18 @@ registration, response/SSE continuation, Hexa UI,
 provider support or UHP conformance. `tool_approvals` remains unadvertised and
 workflow approval policies remain blocked. See
 [AC-44](../../docs/changes/CHG-task-centric-workflow/spec.md#langgraph-checkpoint-adapter-的受限验证边界).
+
+`runner/native_session.py` now owns the optional adapter registration lifetime:
+it verifies a persistent SQLite saver, records the installed LangGraph version,
+maintains registration health/expiry, and invalidates retained adapters on exit.
+It does not own or close the caller's graph/saver. Registration heartbeat is
+separate from Gateway's owner lease heartbeat. Lost health or context cancellation
+expires the registration and preserves unknown execution pins; it cannot stop a
+native tool thread that has already started.
+
+`test_native_session.py` covers this context with the real checkpoint/gate/journal.
+`test_native_session_http.py` additionally requires the Linux Runner delivery image
+and its FastAPI dependencies; it is skipped on Windows because the Runner imports
+POSIX APIs. The Linux journey uses authenticated Runner HTTP and Gateway ownership
+to approve/deny, then proves the closed session cannot be used again. Neither
+module proves a production Provider factory, Responses/SSE or Hexa UI integration.

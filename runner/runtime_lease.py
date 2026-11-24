@@ -160,7 +160,7 @@ class RuntimeLeaseRegistry:
             return self._registration(conn.execute('SELECT * FROM runtime_registrations WHERE runtime_id=?',
                                                     (runtime_id,)).fetchone())
 
-    def register(self, runtime_id, descriptor, *, ttl, now):
+    def register(self, runtime_id, descriptor, *, ttl, now, exclusive=False):
         """Trusted adapter-only registration; no HTTP registration endpoint."""
         _name(runtime_id, 'runtime_id')
         _times(ttl, now)
@@ -170,6 +170,8 @@ class RuntimeLeaseRegistry:
             conn.execute('BEGIN IMMEDIATE')
             prior = conn.execute('SELECT * FROM runtime_registrations WHERE runtime_id=?', (runtime_id,)).fetchone()
             same = prior and prior['descriptor'] == serialized and prior['expires_at'] > now
+            if exclusive and prior and prior['expires_at'] > now:
+                raise LeaseConflict('runtime registration is already live')
             lease = self._row(conn.execute('SELECT * FROM runtime_leases WHERE runtime_id=?', (runtime_id,)).fetchone())
             # Do not revive stale registrations under an outstanding owner, or
             # attach capability claims to work already running unregistered.
@@ -183,6 +185,40 @@ class RuntimeLeaseRegistry:
                          (runtime_id, identity, serialized, float(now), float(now) + float(ttl)))
             return self._registration(conn.execute('SELECT * FROM runtime_registrations WHERE runtime_id=?',
                                                     (runtime_id,)).fetchone())
+
+    def renew_registration(self, runtime_id, registration_id, descriptor, *, ttl, now):
+        """Keep only the original live descriptor; never recreate after expiry."""
+        _name(runtime_id, 'runtime_id')
+        _name(registration_id, 'registration_id')
+        _times(ttl, now)
+        serialized = json.dumps(self._descriptor(descriptor), sort_keys=True, separators=(',', ':'))
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            self._assert_registration(conn, runtime_id, registration_id, now)
+            row = conn.execute('SELECT * FROM runtime_registrations WHERE runtime_id=?', (runtime_id,)).fetchone()
+            lease = self._row(conn.execute('SELECT * FROM runtime_leases WHERE runtime_id=?', (runtime_id,)).fetchone())
+            if row['descriptor'] != serialized or (lease and lease.execution_state == 'unknown'):
+                raise LeaseLost('runtime registration is no longer authoritative')
+            conn.execute('UPDATE runtime_registrations SET heartbeat_at=?, expires_at=? '
+                         'WHERE runtime_id=? AND registration_id=?',
+                         (float(now), float(now) + float(ttl), runtime_id, registration_id))
+            return self._registration(conn.execute('SELECT * FROM runtime_registrations WHERE runtime_id=?',
+                                                    (runtime_id,)).fetchone())
+
+    def revoke_registration(self, runtime_id, registration_id, *, now):
+        """Expire matching identity, preserving uncertain execution and history."""
+        _name(runtime_id, 'runtime_id')
+        _name(registration_id, 'registration_id')
+        _clock(now)
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            changed = conn.execute('UPDATE runtime_registrations SET expires_at=MIN(expires_at, ?) '
+                                   'WHERE runtime_id=? AND registration_id=?',
+                                   (float(now), runtime_id, registration_id)).rowcount
+            if changed:
+                conn.execute('UPDATE runtime_leases SET execution_state=? WHERE runtime_id=? '
+                             'AND registration_id=? AND execution_id IS NOT NULL',
+                             ('unknown', runtime_id, registration_id))
 
     @staticmethod
     def _assert_registration(conn, runtime_id, registration_id, now, scope=None):
