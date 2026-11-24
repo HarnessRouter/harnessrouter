@@ -25450,9 +25450,10 @@ def _setup_build_skill_md(files) -> str:
 def _setup_skill_about(sk: dict) -> str:
     """A skill's description, from its SKILL.md's frontmatter when it is inline ('' when it is not)."""
     files = sk.get("files") if isinstance(sk.get("files"), list) else None
-    md = _setup_build_skill_md(files) if files else str(sk.get("content") or "")
-    m = re.search(r"^description:\s*(.+)$", md, re.MULTILINE)
-    return m.group(1).strip().strip("\"'")[:240] if m else ""
+    skill_md = next((f for f in files or [] if isinstance(f, dict)
+                     and str(f.get("path") or "").lower() == "skill.md"), None)
+    md = str((skill_md or {}).get("content") or "") if files else str(sk.get("content") or "")
+    return str(_plugin_frontmatter(md).get("description") or "").strip()[:240]
 
 
 def _setup_build_mcp_id(url: str) -> str:

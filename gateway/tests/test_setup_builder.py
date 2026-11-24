@@ -242,6 +242,25 @@ def mcp_id(url: str) -> str:
 CRM = mcp_id("https://crm.acme.example/mcp")
 
 
+@pytest.mark.parametrize(("skill", "about"), [
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: >-\n  How the shop writes\n  to customers.\n---\n"}]},
+     "How the shop writes to customers."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: |\n  Line one.\n---\n"}]}, "Line one."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  '---\nname: tone\ndescription: "Quoted value" # note\n---\n'}]}, "Quoted value"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\n---\nBody.\ndescription: body only\n"}]}, ""),
+    ({"content": "---\nname: tone\ndescription: Plain content value\n---\n"}, "Plain content value"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\npadding: " + "x" * 1500 + "\ndescription: After padding\n---\n"}]},
+     "After padding"),
+], ids=["folded", "literal", "quoted-comment", "body-only", "plain-content", "long-frontmatter"])
+def test_skill_about_reads_description_from_complete_frontmatter(skill, about):
+    assert gw._setup_skill_about(skill) == about
+
+
 # ── the builder, and what it reads ───────────────────────────────────────────────────────────────
 def test_the_builder_runs_on_the_instances_own_model_reading_this_workspace_only(env):
     r = start(env)
