@@ -1769,6 +1769,11 @@ orchestration_completion_audit:
   references: [spec.md#当前编排边界, spec.md#有界静态子编排, spec.md#受限动态计划, spec.md#动态计划-dag, spec.md#集合项重试与执行清单, plan.md#2026-11-24-嵌套静态子编排调度审计]
   verification:
     sqlite: "cd hexa-api; python -X utf8 -m pytest -q tests/test_task_concurrency.py tests/test_task_workflows.py tests/test_dynamic_dag.py tests/test_fanout_resume.py tests/test_fanout_retry.py tests/test_nested_foreach.py tests/test_subgraph.py tests/test_subgraph_scheduling.py tests/test_tasks_api.py tests/test_run_events.py tests/test_execution_progress.py tests/test_orchestration_safety.py --tb=short; exit 0；306 passed in 448.11s。覆盖静态并发、条件、repeat、串并行 foreach、动态计划/DAG、循环、嵌套 foreach、静态/动态/嵌套子编排、项级重试、终态恢复、分页/事件、回执、租约和安全边界。"
+    client_unit: "cd client; npm.cmd test; exit 0；73 passed。覆盖编辑器草稿、编排校验、运行历史、集合/子编排清单、恢复动作和并发状态。"
+    client_typecheck: "cd client; npm.cmd run typecheck; exit 0。"
+    client_e2e: "cd client; npx.cmd playwright test -c playwright.e2e.config.ts orchestration.spec.ts --project=chromium --workers=1; exit 0；5 passed in 2.9m。覆盖编辑器保存、repeat/foreach 执行、嵌套集合恢复、动态 DAG JSON 计划、静态/嵌套子编排恢复。"
+    client_ui: "cd client; npx.cmd playwright test -c playwright.app.config.ts tests/app-ui/tasks.spec.ts --project=chromium --workers=1; exit 0；27 passed in 2.0m。覆盖任务工作台编排编辑、历史、分页、动态 DAG、子编排和 1440/800/390px 响应式入口。"
+    client_build: "cd client; npm.cmd run build; exit 0；Vite production build completed in 28.47s；保留既有主 chunk 大于 500 kB 的 advisory。"
     postgres: "既有隔离 PostgreSQL 编排回归记录保持有效：动态 DAG、嵌套 foreach、子编排、重试/恢复、事件、回执、租约和 reconciliation 已通过；本轮未改生产实现或数据库 schema。"
     linux_runner: "既有 Linux Runner conformance 记录保持有效：Plugin materialization、PLUGIN_ROOT/PLUGIN_DATA containment、stdio MCP、ACP permission hook、session continuation 和 fail-closed approval policy 112 passed。"
     static: "PowerShell YAML safe_load、Python compile checks 和 git diff --check passed。"
