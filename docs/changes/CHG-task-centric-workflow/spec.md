@@ -628,6 +628,24 @@ approval binding，或恢复同一 session。adapter 内部 asyncio/thread lock 
 缺失时返回 `runtime_lease_lost`/`runtime_lease_required` 且不读取或恢复工具。该验收不证明 Gateway→Runner
 生产注册、Response/SSE、UHP capability、真实 Provider 或多副本部署已经完成。
 
+租约时间检查不能替代执行互斥。native continuation 在读取 checkpoint 前必须原子登记 execution pin，
+同一 Runtime 同时只能存在一个 pin；pin 存在期间，即使 TTL 到期，也不得接管、释放或以相同 owner 再次开始执行。
+在异步读取结束、进入 native resume 前及 native 返回后重新检查 owner/fence/expiry。异常、取消、进程死亡或
+迟到结果保留 pin 并标为 unknown；不得通过 acquire 或 release 清除它。只有明确确认原进程和其子任务停止后，
+后续恢复流程才可协调此状态；本阶段不提供通用清除 pin 的 HTTP 接口。未开始的调用被租约检查拒绝时不运行工具。
+pin 只保留服务端 operation ID 和状态，不保留工具输入、原生 checkpoint 或凭据。
+
+AC-46 另覆盖：有效租约下并发 continuation 只有一个进入；TTL 到期但 native 尚未退出时不能接管；
+读取 checkpoint 期间到期时恢复工具次数为零；native 返回前到期时不能报告成功；异常/取消及独立进程退出留下的
+pin 阻止重放。HTTP 输入拒绝额外字段和布尔 fence/非有限时间；registry 同样拒绝非有限 TTL/clock。
+
+Gateway 的内部 ownership client 通过已配置的 Runner/session-router 连接获取 lease；不得接受客户端传入
+Runner URL 或 owner/fence。owner 为每次协调操作分配的唯一值，同一次 acquire 的传输重试复用该值。
+成功响应必须核对 runtime_id/owner/fence、有限的时间戳和无残留 execution pin。独立 heartbeat 在 TTL 的
+三分之一间隔续租，续租返回的 fence/owner 改变、存储或传输失败均停止 continuation；不得沿用旧的 observe/
+best-effort session lease。callback 结束后仍须核验有效租约才释放；失败/取消不凭空清除 Runner 的 execution pin。
+该 client 作为 trusted adapter 的内部协作边界使用，不开放新公开审批入口，不启用尚未支持的 Runtime。
+
 ## 当前编排边界
 
 本 Change 已完成静态 DAG 编排的第一阶段：无依赖节点可以按 `max_concurrency` 并行，条件分支使用固定比较对象，repeat 是

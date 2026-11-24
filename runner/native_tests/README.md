@@ -19,6 +19,13 @@ needed. Dependencies are separate from the shared Runner installation and ordina
 only one root interrupt/action backed by persistent SQLite. Callers must own the
 Runtime execution lease and supply current trusted policy, tool catalog and native
 permission facts to Gateway's gate. The local adapter lock is not a process lease.
+Bound adapters now also use the durable Runner registry execution pin: takeover
+and release are blocked while native work is active or uncertain, even after TTL
+expiry. Checkpoint-read expiry, post-effect lease loss, concurrent adapter objects,
+cancel/error and the Gateway ownership coordinator's approve/deny journeys are
+covered. The coordinator uses an independent heartbeat; it grants no tool permission.
+Unknown pins need confirmation that the former Runtime and child work stopped
+before future reconciliation; there is no force-clear HTTP endpoint.
 Checkpoint parameter objects are authoritative; original model JSON whitespace is
 not available. The native store must be trusted and inaccessible to untrusted tools.
 

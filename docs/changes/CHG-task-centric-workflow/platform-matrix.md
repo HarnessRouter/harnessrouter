@@ -1,5 +1,15 @@
 # 平台验证矩阵
 
+## 2026-11-24 Runtime ownership 与 execution pin
+
+Windows/Python 3.13：真实 registry/SQLite、跨进程重开、native HITL 和 Gateway journal/gate/HTTP 组合 179 项通过；
+后加 coordinator 错误路径及 approve/deny 组合旅程最终定向 19 项通过。Linux Runner 交付镜像挂载当前源码：
+registry/HTTP/boundary/policy 40 项通过，含真实内部 key 鉴权和 ownership client；fresh venv 固定可选原生依赖，
+native/gate/denial/registry 118 项通过。首次独立进程 join 超时未视为进程结束，延长有界等待并补 finally 清理后复验通过。
+SQLite 仅支持共享同一可靠本地数据库文件的 Runner 进程，不代表跨机器多副本。没有新的 UI、Provider 或公开 UHP 版本。
+生产 Runtime 注册、Response/SSE 用户审批、unknown pin 的停止证明与 reconciliation、真实 Provider 和部署 failover
+仍 not_evaluated；详细命令和后续增补结果统一见 Change `runtime_ownership_pin_and_client`。
+
 | 平台/环境 | 影响与验证 | 命令或入口 | 结果 |
 | --- | --- | --- | --- |
 | Windows 本地开发 | PowerShell、路径、编码、Cookie、SQLite 和静态站点启动；不保存平台特定路径 | `python -m pytest -q hexa-api/tests`；`npm test --prefix client`；`npm run typecheck --prefix client`；`npm run build --prefix client`；`git diff --check` | 72 后端测试、26 客户端测试、类型检查、构建和 diff 检查通过；构建保留大 chunk advisory |

@@ -23,6 +23,8 @@ sys.path.insert(0, str(ROOT / 'runner'))
 sys.path.insert(0, str(ROOT / 'gateway'))
 from approval_execution import BoundApprovalGate, Invocation
 from tool_approvals import ApprovalError, ApprovalJournal, ApprovalScope
+from runtime_lease import RuntimeLeaseRegistry, LeaseConflict
+from runtime_ownership import RuntimeOwnership
 import control_sqlite
 try:
     from langgraph_approval import NativeApprovalError, LangGraphApprovalAdapter
@@ -347,6 +349,190 @@ async def _process_journey(phase, folder, choice):
                           'state': record.get('continuation_receipt', {}).get('state', effect),
                           'side_effect_state': effect,
                           'pending_interrupts': len((await runtime.aget_state(CONFIG)).interrupts)}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('choice', ['approve', 'deny'])
+async def test_bound_adapter_checks_expiry_after_checkpoint_read(tmp_path, choice, monkeypatch):
+    path = tmp_path / 'report.txt'
+    clock = [100.0]
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    token = registry.acquire('native-session', 'owner', ttl=10, now=clock[0]).token
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = LangGraphApprovalAdapter(runtime, CONFIG, {'write_report': TOOL},
+            lease_registry=registry, lease_token=token, clock=lambda: clock[0])
+        pending = await native.pending()
+        read = runtime.aget_state
+
+        async def expire_during_read(*args, **kwargs):
+            result = await read(*args, **kwargs)
+            clock[0] = 111.0
+            return result
+
+        monkeypatch.setattr(runtime, 'aget_state', expire_during_read)
+        with pytest.raises(NativeApprovalError, match='runtime_lease_lost'):
+            await native.resume(pending, choice)
+        assert not path.exists()
+        with pytest.raises(LeaseConflict):
+            registry.acquire('native-session', 'next', ttl=10, now=200)
+
+
+@pytest.mark.asyncio
+async def test_bound_adapter_pins_execution_until_native_returns(tmp_path, monkeypatch):
+    path = tmp_path / 'report.txt'
+    clock = [100.0]
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    token = registry.acquire('native-session', 'owner', ttl=10, now=clock[0]).token
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = LangGraphApprovalAdapter(runtime, CONFIG, {'write_report': TOOL},
+            lease_registry=registry, lease_token=token, clock=lambda: clock[0])
+        pending = await native.pending()
+        invoke = runtime.ainvoke
+
+        async def expire_after_invocation(*args, **kwargs):
+            result = await invoke(*args, **kwargs)
+            clock[0] = 111.0
+            with pytest.raises(LeaseConflict):
+                registry.acquire('native-session', 'next', ttl=30, now=111)
+            return result
+
+        monkeypatch.setattr(runtime, 'ainvoke', expire_after_invocation)
+        with pytest.raises(NativeApprovalError, match='runtime_lease_lost'):
+            await native.resume(pending, 'approve')
+        assert path.read_text().splitlines() == ['private-report-marker']
+        state = registry.inspect('native-session')
+        assert state.execution_id and state.execution_state == 'unknown'
+
+
+@pytest.mark.asyncio
+async def test_bound_adapter_success_clears_pin(tmp_path):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    token = registry.acquire('native-session', 'owner', ttl=10, now=100).token
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        path = tmp_path / 'report.txt'
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = LangGraphApprovalAdapter(runtime, CONFIG, {'write_report': TOOL},
+            lease_registry=registry, lease_token=token, clock=lambda: 101)
+        await native.resume(await native.pending(), 'approve')
+        assert registry.inspect('native-session').execution_id is None
+        registry.release(token, now=102)
+        assert path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['cancel', 'error'])
+async def test_bound_adapter_uncertain_dispatch_remains_pinned(tmp_path, monkeypatch, failure):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    token = registry.acquire('native-session', 'owner', ttl=10, now=100).token
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, tmp_path / 'report.txt')
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = LangGraphApprovalAdapter(runtime, CONFIG, {'write_report': TOOL},
+            lease_registry=registry, lease_token=token, clock=lambda: 101)
+        pending = await native.pending()
+        entered, blocked = asyncio.Event(), asyncio.Event()
+
+        async def interrupted(*args, **kwargs):
+            entered.set()
+            if failure == 'error':
+                raise RuntimeError('controlled failure')
+            await blocked.wait()
+
+        monkeypatch.setattr(runtime, 'ainvoke', interrupted)
+        task = asyncio.create_task(native.resume(pending, 'approve'))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        if failure == 'cancel':
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError if failure == 'cancel' else RuntimeError):
+            await task
+        state = registry.inspect('native-session')
+        assert state.execution_id and state.execution_state == 'unknown'
+        with pytest.raises(LeaseConflict):
+            registry.acquire('native-session', 'next', ttl=10, now=200)
+
+
+@pytest.mark.asyncio
+async def test_two_adapter_objects_share_one_durable_execution_pin(tmp_path, monkeypatch):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    token = registry.acquire('native-session', 'owner', ttl=10, now=100).token
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        path = tmp_path / 'report.txt'
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        adapters = [LangGraphApprovalAdapter(runtime, CONFIG, {'write_report': TOOL},
+            lease_registry=RuntimeLeaseRegistry(registry.path), lease_token=token, clock=lambda: 101)
+            for _ in range(2)]
+        pending = await adapters[0].pending()
+        entered, release = asyncio.Event(), asyncio.Event()
+        invoke = runtime.ainvoke
+
+        async def held(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await invoke(*args, **kwargs)
+
+        monkeypatch.setattr(runtime, 'ainvoke', held)
+        task = asyncio.create_task(adapters[0].resume(pending, 'approve'))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        try:
+            with pytest.raises(NativeApprovalError, match='runtime_lease_lost'):
+                await adapters[1].resume(pending, 'approve')
+        finally:
+            release.set()
+            await task
+        assert path.read_text().splitlines() == ['private-report-marker']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('choice', ['approve', 'deny'])
+async def test_ownership_coordinator_gate_native_journey(tmp_path, choice):
+    """Real native checkpoint + gate + ownership registry; no Provider/Response proof."""
+    from dataclasses import asdict
+    from runtime_lease import RuntimeLeaseToken
+
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    async def transport(path, sid, method='POST', body=None):
+        assert sid == 'native-session'
+        if path.endswith('/acquire'):
+            state = registry.acquire(body['runtime_id'], body['owner'],
+                                     ttl=body['ttl_seconds'], now=time.time())
+        elif path.endswith('/renew'):
+            state = registry.renew(RuntimeLeaseToken(body['runtime_id'], body['owner'], body['fence']),
+                                   ttl=body['ttl_seconds'], now=time.time())
+        else:
+            assert path.endswith('/release')
+            state = registry.release(RuntimeLeaseToken(body['runtime_id'], body['owner'], body['fence']), now=time.time())
+        return asdict(state)
+
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path)
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        pending = await adapter(runtime).pending()
+        call = bound(pending)
+        gate = gate_for(tmp_path / 'control.db')
+        await decide(gate, call, choice)
+
+        async def operation(token):
+            native = LangGraphApprovalAdapter(runtime, CONFIG, {'write_report': TOOL},
+                lease_registry=registry, lease_token=RuntimeLeaseToken(**token))
+            current = await native.pending()
+            resume = gate.execute if choice == 'approve' else gate.resume_denial
+            return await resume(SCOPE, call.command_id, 'owned-resume', bound(current), native_allowed=True,
+                                dispatch=lambda saved: native.resume(current, choice))
+
+        await RuntimeOwnership(transport).run('native-session', 'native-session', operation)
+        assert registry.inspect('native-session').owner is None
+        assert not (await runtime.aget_state(CONFIG)).interrupts
+        if choice == 'approve':
+            assert path.read_text().splitlines() == ['private-report-marker']
+        else:
+            assert not path.exists()
 
 
 if __name__ == '__main__':

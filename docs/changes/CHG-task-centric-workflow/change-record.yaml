@@ -1,4 +1,33 @@
 id: CHG-task-centric-workflow
+runtime_ownership_pin_and_client:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 6afb70d4
+  branch: codex/agent-orchestration
+  status: verified_internal_slice
+  references: [spec.md#可信-runtime-登记与排他租约, plan.md#2026-11-24-可信-runtime-登记与-lease-fencing]
+  acceptance_ids: [AC-46]
+  reuse_decision: extend Runner registry with durable execution pins and reuse configured Gateway Runner transport
+  problem: "此前仅在 await 前检查 owner，checkpoint 读取或 native 执行期间 TTL 到期仍可被接管；HTTP 模型会强转布尔 fence/时间并忽略额外字段。"
+  verification:
+    red: "本轮有效 Red：registry 8 failed/5 passed；真实 LangGraph 到期时序 3 failed/1 passed；Linux HTTP strict-input/pin-state 5 failed/5 passed；Gateway coordinator 12 failed，transport 接线另 1 failed。均对应缺失的目标行为。"
+    windows: "python -X utf8 -m pytest -q gateway/tests/test_runtime_ownership.py gateway/tests/test_tool_approval_http.py gateway/tests/test_approval_execution.py gateway/tests/test_denial_continuation.py runner/tests/test_runtime_lease.py runner/tests/test_langgraph_approval_boundary.py runner/native_tests/test_langgraph_approval.py --tb=short；exit 0；179 passed in 81.06s（之后仅追加四项 coordinator 失败测试和两项组合旅程）。"
+    final_additions: "python -X utf8 -m pytest -q gateway/tests/test_runtime_ownership.py runner/native_tests/test_langgraph_approval.py -k 'runtime_ownership or ownership_coordinator' --tb=short；exit 0；19 passed，包含最终 coordinator 全 17 项和新增真实 native approve/deny 2 项。"
+    linux_http: "Linux Runner 交付镜像挂载当前源码，固定 pytest==8.4.2，runner lease/HTTP/boundary/policy：exit 0；40 passed in 29.42s。覆盖真实 FastAPI/internal key/SQLite，以及 Gateway ownership client 的续租、释放、取消保留 unknown。"
+    linux_native: "Linux Runner fresh venv 安装 runner/native_tests/requirements.txt，registry/boundary/policy/native/approval gate/denial：exit 0；118 passed in 61.63s。此轮不含随后追加两项 coordinator-native journey，专项结果另记。"
+    linux_final_journey: "Linux Runner fresh venv 同一固定 requirements，runner/native_tests/test_langgraph_approval.py -k ownership_coordinator：exit 0；2 passed in 1.96s。真实 HITL/checkpoint/gate/registry approve 与 deny。"
+    static: "最终 Python py_compile、YAML safe_load 和 git diff --check 均 exit 0。"
+    environment_retry: "首次 Linux native 组合 117 passed/1 failed：独立进程 10s join 时仍存活，不作终态或运行时失败推断；join 改为有界 45s 并补 finally terminate 清理，最终相同 suite 118 passed。"
+  changes:
+    - "Registry 增加 execution_id/state，pin 存在时不能接管或释放；晚到完成、异常和取消保留 unknown；旧库事务性增加两列，fence 保留。"
+    - "native adapter 在读取 checkpoint 前 begin pin、恢复前及返回后检查 lease，成功 end；取消不等价于 native 子线程停止。"
+    - "HTTP 严格验证类型、长度、有限时间和额外字段；所有 registry 连接显式关闭，避免文件句柄积累。"
+    - "Gateway 新增 RuntimeOwnership 独立 heartbeat 和受信 transport helper，固定端点、sid 和内部认证；owner 唯一，身份/fence 回包不符或超时安全失败。"
+  security_review: "SQL 参数化；pin 不存参数/凭据/checkpoint，HTTP 校验不回显输入；Runner URL 只来自已有部署配置，禁止 redirect；续租失败不 release uncertain owner。该 helper 尚无生产 Runtime 注册调用者，不放行公开审批策略。"
+  unit_integration_e2e: "单元、真实 SQLite/跨进程、FastAPI 集成、真实 HITL/checkpoint/gate 受控旅程已执行；完整用户审批 E2E 仍 not_evaluated，因 Response/SSE 和 Hexa UI 未接线，不能用受控旅程代替。"
+  rollback: "停止相关 native Runtime 后回退代码；保留 execution pin 列和历史，不能启动不识别 pin 的旧审批执行器。不得手工清 pin 以重放不确定副作用。"
+  limitations: [production native Runtime registration, authenticated Response/SSE continuation, pin reconciliation after confirmed process stop, shared multi-replica backing, real Provider, Hexa pending UI, remote CI]
+  next_action: "接生产 native Runtime 注册与精确 descriptor/continuation 到既有 ownership helper，再推进 Response/SSE。unknown pin 的协调需先证明旧 Runtime 已停止；当前不提供强制 HTTP 清除。保持 tool_approvals 不广告。"
 runtime_lease_registration_slice:
   date: "2026-11-24"
   owner: Codex
@@ -13,7 +42,7 @@ runtime_lease_registration_slice:
     - "新增 Runner 内部 acquire/renew/release/inspect lease 端点；错误只返回稳定脱敏 code，不暴露 checkpoint、参数或凭据。"
     - "LangGraph native adapter 在 pending/resume 前要求有效 RuntimeLease owner/fence；lease 丢失 fail closed。"
   verification:
-    red: "新增 runner/tests/test_runtime_lease.py 先于实现建立 4 项 Red 目标（竞争、接管、重开、旧 owner 失败）；实现后 Windows 4 passed。"
+    red: "更正历史证据：测试先写，但前一轮未在生产实现前实际运行 Red；首次执行已为 4 passed，不能称为已观察的 Red。本轮 pin/client 修复的有效 Red 见 runtime_ownership_pin_and_client。"
     unit: "python -X utf8 -m pytest -q runner/tests/test_runtime_lease.py runner/tests/test_langgraph_approval_boundary.py runner/tests/test_approval_policy_boundary.py --tb=short; exit 0；19 passed。"
     http: "runner/tests/test_runtime_lease_http.py 已写入，当前 Windows 因 Runner 依赖 POSIX pwd 的既有平台边界 skip；Linux Runner 镜像需补跑真实 FastAPI/internal middleware。"
     static: "python -X utf8 -m py_compile runner/runtime_lease.py runner/langgraph_approval.py runner/server.py；通过。"

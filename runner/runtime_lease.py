@@ -9,6 +9,8 @@ tool permission.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+import math
 import os
 import sqlite3
 import threading
@@ -40,6 +42,8 @@ class RuntimeLease:
     fence: int
     heartbeat_at: float | None
     expires_at: float | None
+    execution_id: str | None = None
+    execution_state: str | None = None
 
     @property
     def token(self) -> RuntimeLeaseToken | None:
@@ -52,6 +56,19 @@ def _name(value: str, label: str) -> str:
     if not isinstance(value, str) or not value or len(value) > 1024:
         raise LeaseError(f"invalid {label}")
     return value
+
+
+def _clock(now):
+    if type(now) not in (int, float) or not math.isfinite(now):
+        raise LeaseError('invalid clock')
+
+
+def _times(ttl, now):
+    _clock(now)
+    if type(ttl) not in (int, float) or not math.isfinite(ttl) or not 0 < ttl <= 86400:
+        raise LeaseError('invalid ttl')
+    if not math.isfinite(float(now) + float(ttl)):
+        raise LeaseError('invalid expiry')
 
 
 class RuntimeLeaseRegistry:
@@ -72,15 +89,20 @@ class RuntimeLeaseRegistry:
         os.makedirs(parent, exist_ok=True)
         self._initialize()
 
+    @contextmanager
     def _connect(self):
         conn = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _initialize(self):
         with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS runtime_leases (
                     runtime_id TEXT PRIMARY KEY,
@@ -90,33 +112,37 @@ class RuntimeLeaseRegistry:
                     expires_at REAL
                 )
             """)
+            columns = {row['name'] for row in conn.execute('PRAGMA table_info(runtime_leases)')}
+            if 'execution_id' not in columns:
+                conn.execute('ALTER TABLE runtime_leases ADD COLUMN execution_id TEXT')
+            if 'execution_state' not in columns:
+                conn.execute('ALTER TABLE runtime_leases ADD COLUMN execution_state TEXT')
 
     @staticmethod
     def _row(row) -> RuntimeLease | None:
         if row is None:
             return None
         return RuntimeLease(row["runtime_id"], row["owner"], int(row["fence"]),
-                            row["heartbeat_at"], row["expires_at"])
+                            row["heartbeat_at"], row["expires_at"], row['execution_id'], row['execution_state'])
 
     def inspect(self, runtime_id: str) -> RuntimeLease | None:
         runtime_id = _name(runtime_id, "runtime_id")
         with self._connect() as conn:
             return self._row(conn.execute(
-                "SELECT runtime_id, owner, fence, heartbeat_at, expires_at "
+                "SELECT * "
                 "FROM runtime_leases WHERE runtime_id = ?", (runtime_id,)).fetchone())
 
     def acquire(self, runtime_id: str, owner: str, *, ttl: float, now: float) -> RuntimeLease:
         runtime_id, owner = _name(runtime_id, "runtime_id"), _name(owner, "owner")
-        if type(ttl) not in (int, float) or ttl <= 0 or ttl > 86400:
-            raise LeaseError("invalid ttl")
-        if type(now) not in (int, float):
-            raise LeaseError("invalid clock")
+        _times(ttl, now)
         expires = float(now) + float(ttl)
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM runtime_leases WHERE runtime_id = ?",
                                (runtime_id,)).fetchone()
             current = self._row(row)
+            if current and current.execution_id is not None:
+                raise LeaseConflict('runtime execution requires reconciliation')
             if current and current.owner and current.expires_at is not None and current.expires_at > now:
                 if current.owner == owner:
                     return current
@@ -130,6 +156,8 @@ class RuntimeLeaseRegistry:
             return RuntimeLease(runtime_id, owner, fence, float(now), expires)
 
     def _assert_active(self, conn, token: RuntimeLeaseToken, now: float) -> RuntimeLease:
+        if not isinstance(token, RuntimeLeaseToken):
+            raise LeaseError('invalid token')
         _name(token.runtime_id, "runtime_id")
         _name(token.owner, "owner")
         if type(token.fence) is not int or token.fence < 1:
@@ -143,35 +171,86 @@ class RuntimeLeaseRegistry:
         return current
 
     def assert_owner(self, token: RuntimeLeaseToken, *, now: float) -> RuntimeLease:
-        if type(now) not in (int, float):
-            raise LeaseError("invalid clock")
+        _clock(now)
         with self._connect() as conn:
             return self._assert_active(conn, token, now)
 
     def renew(self, token: RuntimeLeaseToken, *, ttl: float, now: float) -> RuntimeLease:
-        if type(ttl) not in (int, float) or ttl <= 0 or ttl > 86400:
-            raise LeaseError("invalid ttl")
-        if type(now) not in (int, float):
-            raise LeaseError("invalid clock")
+        _times(ttl, now)
         expires = float(now) + float(ttl)
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._assert_active(conn, token, now)
+            current = self._assert_active(conn, token, now)
+            if current.execution_state == 'unknown':
+                raise LeaseLost('runtime execution requires reconciliation')
             conn.execute("UPDATE runtime_leases SET heartbeat_at=?, expires_at=? "
                          "WHERE runtime_id=? AND owner=? AND fence=?",
                          (float(now), expires, token.runtime_id, token.owner, token.fence))
-            return RuntimeLease(token.runtime_id, token.owner, token.fence, float(now), expires)
+            return RuntimeLease(token.runtime_id, token.owner, token.fence, float(now), expires,
+                                current.execution_id, current.execution_state)
 
     def release(self, token: RuntimeLeaseToken, *, now: float) -> RuntimeLease:
-        if type(now) not in (int, float):
-            raise LeaseError("invalid clock")
+        _clock(now)
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             current = self._assert_active(conn, token, now)
+            if current.execution_id is not None:
+                raise LeaseConflict('runtime execution requires reconciliation')
             conn.execute("UPDATE runtime_leases SET owner=NULL, heartbeat_at=NULL, expires_at=NULL "
                          "WHERE runtime_id=? AND owner=? AND fence=?",
                          (token.runtime_id, token.owner, token.fence))
             return RuntimeLease(current.runtime_id, None, current.fence, None, None)
+
+    def begin_execution(self, token: RuntimeLeaseToken, operation: str, *, now: float):
+        _clock(now)
+        _name(operation, 'operation')
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            current = self._assert_active(conn, token, now)
+            if current.execution_id is not None:
+                raise LeaseConflict('runtime execution is pinned')
+            conn.execute('UPDATE runtime_leases SET execution_id=?, execution_state=? WHERE runtime_id=?',
+                         (operation, 'active', token.runtime_id))
+
+    def assert_execution(self, token: RuntimeLeaseToken, operation: str, *, now: float):
+        _clock(now)
+        with self._connect() as conn:
+            current = self._assert_active(conn, token, now)
+            if current.execution_id != operation or current.execution_state != 'active':
+                raise LeaseLost('runtime execution is no longer authoritative')
+            return current
+
+    def mark_execution_unknown(self, token: RuntimeLeaseToken, operation: str):
+        # No expiry check: uncertainty must remain durable after lease loss.
+        if not isinstance(token, RuntimeLeaseToken):
+            raise LeaseError('invalid token')
+        _name(operation, 'operation')
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('UPDATE runtime_leases SET execution_state=? '
+                         'WHERE runtime_id=? AND owner=? AND fence=? AND execution_id=?',
+                         ('unknown', token.runtime_id, token.owner, token.fence, operation))
+
+    def end_execution(self, token: RuntimeLeaseToken, operation: str, *, now: float):
+        _clock(now)
+        error = None
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            try:
+                current = self._assert_active(conn, token, now)
+                if current.execution_id != operation or current.execution_state != 'active':
+                    raise LeaseLost('runtime execution is no longer authoritative')
+            except LeaseLost as exc:
+                # Commit unknown before reporting a late result as lost.
+                conn.execute('UPDATE runtime_leases SET execution_state=? '
+                             'WHERE runtime_id=? AND owner=? AND fence=? AND execution_id=?',
+                             ('unknown', token.runtime_id, token.owner, token.fence, operation))
+                error = exc
+            else:
+                conn.execute('UPDATE runtime_leases SET execution_id=NULL, execution_state=NULL '
+                             'WHERE runtime_id=?', (token.runtime_id,))
+        if error:
+            raise error
 
     def close(self):
         """Compatibility hook; operations do not keep process-bound connections."""

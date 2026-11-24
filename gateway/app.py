@@ -70,6 +70,7 @@ import memory_relay      # memory vendors' servers call the model relay with a s
 import memory_choice     # which memory engine an agent gets, from what it is for
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 from tool_approvals import ApprovalError, ApprovalJournal, ApprovalScope
+from runtime_ownership import RuntimeOwnership, OwnershipError
 import setup_compose         # New setup: the rules every built configuration is held to
 import setup_builder         # New setup: the built-in builder, saving into the person's workspace
 
@@ -2459,6 +2460,28 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
     kw: dict = {"content": content} if content is not None else ({"json": body} if body is not None else {})
     return await _client().request(method, f"{POOL_ENDPOINT}{path}", params=q,
                                    headers=_pool_headers(), **kw)
+
+
+async def _run_owned_native_continuation(sid: str, runtime_id: str, operation):
+    """Internal adapter boundary; never chosen from a public request/metadata.
+
+    This is separate from the legacy best-effort session harvesting lease. The
+    Runner ownership endpoints require an internal key even on a local Runner.
+    No backend is registered or approval capability advertised by this helper.
+    """
+    if not INTERNAL_KEY or not POOL_ENDPOINT:
+        raise OwnershipError('runtime_lease_unavailable')
+
+    async def transport(path, session, method='POST', body=None):
+        headers = {**_pool_headers(), 'X-Harness-Internal': INTERNAL_KEY}
+        result = await _client().request(method, f'{POOL_ENDPOINT}{path}',
+            params={'identifier': session}, headers=headers, json=body,
+            timeout=10, follow_redirects=False)
+        if result.status_code != 200:
+            raise OwnershipError('runtime_lease_unavailable')
+        return result.json()
+
+    return await RuntimeOwnership(transport).run(sid, runtime_id, operation)
 
 
 async def _sandbox_file(sid: str, path: str, cap: int) -> tuple[int, bytes | None, str, int | None]:

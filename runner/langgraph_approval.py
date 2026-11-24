@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 import time
+import uuid
 
 from runtime_lease import LeaseError, LeaseLost, RuntimeLeaseRegistry, RuntimeLeaseToken
 
@@ -47,7 +48,7 @@ class LangGraphApprovalAdapter:
     def _unavailable():
         raise NativeApprovalError('native_approval_unavailable')
 
-    def _assert_runtime_lease(self):
+    def _assert_runtime_lease(self, operation=None):
         """Require the durable owner fence when this adapter is production-bound.
 
         The optional arguments keep the controlled adapter usable for format
@@ -60,8 +61,12 @@ class LangGraphApprovalAdapter:
                 self.lease_token, RuntimeLeaseToken):
             raise NativeApprovalError('runtime_lease_required')
         try:
-            self.lease_registry.assert_owner(self.lease_token, now=self.clock())
-        except (LeaseLost, LeaseError):
+            current = self.lease_registry.assert_owner(self.lease_token, now=self.clock())
+            if operation is not None:
+                self.lease_registry.assert_execution(self.lease_token, operation, now=self.clock())
+            elif current.execution_id is not None:
+                raise LeaseLost('runtime is pinned')
+        except LeaseError:
             raise NativeApprovalError('runtime_lease_lost') from None
 
     def _action(self, snapshot):
@@ -94,9 +99,9 @@ class LangGraphApprovalAdapter:
             self._unavailable()
         return item, action, identity
 
-    async def pending(self):
+    async def pending(self, *, _operation=None):
         """Read the latest durable native checkpoint, never a client-supplied call."""
-        self._assert_runtime_lease()
+        self._assert_runtime_lease(_operation)
         # Optional backend dependencies stay out of the common Runner environment.
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -135,6 +140,7 @@ class LangGraphApprovalAdapter:
             command = 'cmd_lg_' + hashlib.sha256(_json({
                 'thread': position['thread_id'], 'checkpoint': position['checkpoint_id'],
                 'interrupt': item.id})).hexdigest()
+            self._assert_runtime_lease(_operation)
             return PendingInvocation(command, copy.deepcopy(identity), arguments, checkpoint)
         except NativeApprovalError:
             raise
@@ -154,14 +160,32 @@ class LangGraphApprovalAdapter:
             self._unavailable()
         async with self._lock:
             self._assert_runtime_lease()
+            operation = None
             try:
-                current = await self.pending()
-            except NativeApprovalError:
-                raise NativeApprovalError('native_approval_changed') from None
-            if current != pending:
-                raise NativeApprovalError('native_approval_changed')
-            checkpoint = json.loads(pending.checkpoint)
-            config = copy.deepcopy(self.config)
-            config['configurable']['checkpoint_id'] = checkpoint['checkpoint_id']
-            return await self.graph.ainvoke(Command(resume={checkpoint['interrupt_id']: {
-                'decisions': [{'type': 'approve' if decision == 'approve' else 'reject'}]}}), config)
+                if self.lease_registry is not None:
+                    operation = uuid.uuid4().hex
+                    self.lease_registry.begin_execution(self.lease_token, operation, now=self.clock())
+                try:
+                    current = await self.pending(_operation=operation)
+                except NativeApprovalError as exc:
+                    if str(exc).startswith('runtime_lease_'):
+                        raise
+                    raise NativeApprovalError('native_approval_changed') from None
+                if current != pending:
+                    raise NativeApprovalError('native_approval_changed')
+                checkpoint = json.loads(pending.checkpoint)
+                config = copy.deepcopy(self.config)
+                config['configurable']['checkpoint_id'] = checkpoint['checkpoint_id']
+                self._assert_runtime_lease(operation)
+                result = await self.graph.ainvoke(Command(resume={checkpoint['interrupt_id']: {
+                    'decisions': [{'type': 'approve' if decision == 'approve' else 'reject'}]}}), config)
+                self._assert_runtime_lease(operation)
+                if operation is not None:
+                    self.lease_registry.end_execution(self.lease_token, operation, now=self.clock())
+                return result
+            except BaseException as exc:
+                if operation is not None:
+                    self.lease_registry.mark_execution_unknown(self.lease_token, operation)
+                if isinstance(exc, LeaseError):
+                    raise NativeApprovalError('runtime_lease_lost') from None
+                raise

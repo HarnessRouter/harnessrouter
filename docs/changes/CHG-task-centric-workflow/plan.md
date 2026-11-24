@@ -344,3 +344,15 @@ HTTP 隔离/撤销、proposal schema。新字段只加入本地 proposal，不�
 resume 都必须带有效 owner/fence。lease 丢失时停止新副作用；已开始的动作继续沿用 Gateway unknown/
 reconciliation 语义。adapter 的进程内锁不作为跨进程 authority。本切片不注册真实 Provider、不打开
 `tool_approvals` discovery、不接 Response/SSE，也不解除 Hexa 工作流审批策略门禁。
+
+后续先加 execution pin，修复原实现仅在 async await 前检查租约的时序缺口，再推进 Gateway 调用接线。
+pin 使用同一 SQLite 事务写入，存在时禁止 acquire/release；adapter 在 pending 前 begin、resume 前与结果后
+assert，成功 end，异常/cancel 持久化 unknown 并保留 pin。测试以独立进程和真实 SQLite/LangGraph 暂停点
+验证 TTL/并发/崩溃；不把被取消的 asyncio task 等同于工具子线程已经停止。历史 registry 自动兼容增加 pin 列。
+回退前停止 native Runtime，不能用旧版本绕过已有 pin；无通用强制释放入口。
+
+Gateway ownership client 复用内部 sandbox transport 作为依赖，固定 acquire/renew/release 路径和 sid 路由，
+严格校验 lease 回包；用独立 heartbeat task 监护 trusted operation。单元先覆盖 identity/fence 回包篡改、
+获取失败零 operation、renew 失败取消 operation、调用取消和成功释放，再用 Linux Runner 的真实 FastAPI+
+SQLite 验证客户端穿过内部鉴权边界。此步骤不接旧 autonomous turn、不提供 callback HTTP 注册，不放行
+现有审批策略门禁；后续由注册的 native Runtime 调用该内部 client。

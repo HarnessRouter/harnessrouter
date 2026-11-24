@@ -86,7 +86,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 import environments   # the read-only project layer a turn may name (runner/environments.py)
 import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
@@ -101,10 +101,11 @@ app = FastAPI(title="harness-runner")
 
 
 class RuntimeLeaseBody(BaseModel):
-    runtime_id: str
-    owner: str
-    ttl_seconds: float = 30.0
-    fence: int | None = None
+    model_config = ConfigDict(extra='forbid', strict=True)
+    runtime_id: str = Field(min_length=1, max_length=1024)
+    owner: str = Field(min_length=1, max_length=1024)
+    ttl_seconds: float = Field(default=30.0, gt=0, le=86400, allow_inf_nan=False)
+    fence: int | None = Field(default=None, ge=1)
 
 
 _runtime_lease_registry: RuntimeLeaseRegistry | None = None
@@ -145,7 +146,8 @@ def _lease_http_error(error: Exception) -> HTTPException:
 def _lease_json(lease) -> dict:
     return {"runtime_id": lease.runtime_id, "owner": lease.owner,
             "fence": lease.fence, "heartbeat_at": lease.heartbeat_at,
-            "expires_at": lease.expires_at}
+            "expires_at": lease.expires_at, 'execution_id': lease.execution_id,
+            'execution_state': lease.execution_state}
 
 
 def _require_runtime_lease_internal(request: Request) -> None:

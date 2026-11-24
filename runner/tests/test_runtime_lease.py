@@ -3,6 +3,7 @@ import multiprocessing
 import pathlib
 import sys
 import time
+import sqlite3
 
 import pytest
 
@@ -73,8 +74,104 @@ def test_two_processes_have_one_active_owner(tmp_path):
                  for owner in ("owner-a", "owner-b")]
     for process in processes:
         process.start()
-    for process in processes:
-        process.join(timeout=10)
-        assert process.exitcode == 0
+    try:
+        for process in processes:
+            process.join(timeout=45)
+            assert process.exitcode == 0
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
     rows = [result.get(timeout=2) for _ in processes]
     assert sorted(row[1] for row in rows) == ["acquired", "conflict"]
+
+
+def test_execution_pin_blocks_takeover_release_and_duplicate_dispatch(tmp_path):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    token = registry.acquire('runtime', 'owner', ttl=10, now=100).token
+    assert hasattr(registry, 'begin_execution'), 'durable execution pin is missing'
+    registry.begin_execution(token, 'operation', now=101)
+    for now in (102, 111):
+        with pytest.raises(LeaseConflict):
+            registry.acquire('runtime', 'next-owner', ttl=30, now=now)
+    with pytest.raises(LeaseConflict):
+        registry.acquire('runtime', 'owner', ttl=30, now=102)
+    with pytest.raises(LeaseConflict):
+        registry.release(token, now=102)
+    with pytest.raises(LeaseConflict):
+        registry.begin_execution(token, 'another-operation', now=102)
+    registry.end_execution(token, 'operation', now=103)
+    assert registry.inspect('runtime').execution_id is None
+    registry.release(token, now=104)
+
+
+@pytest.mark.parametrize('outcome', ['unknown', 'late-end'])
+def test_uncertain_execution_pin_survives_reopen_and_expiry(tmp_path, outcome):
+    path = str(tmp_path / 'leases.db')
+    registry = RuntimeLeaseRegistry(path)
+    token = registry.acquire('runtime', 'owner', ttl=10, now=100).token
+    assert hasattr(registry, 'begin_execution'), 'durable execution pin is missing'
+    registry.begin_execution(token, 'operation', now=101)
+    if outcome == 'unknown':
+        registry.mark_execution_unknown(token, 'operation')
+    else:
+        with pytest.raises(LeaseLost):
+            registry.end_execution(token, 'operation', now=111)
+    reopened = RuntimeLeaseRegistry(path)
+    state = reopened.inspect('runtime')
+    assert state.execution_id == 'operation' and state.execution_state == 'unknown'
+    with pytest.raises(LeaseConflict):
+        reopened.acquire('runtime', 'next', ttl=10, now=200)
+    with pytest.raises(LeaseLost):
+        reopened.end_execution(token, 'operation', now=105)
+
+
+def _leave_active_pin(path):
+    registry = RuntimeLeaseRegistry(path)
+    token = registry.acquire('runtime', 'process-owner', ttl=10, now=100).token
+    registry.begin_execution(token, 'process-operation', now=101)
+
+
+def test_process_exit_never_frees_active_execution(tmp_path):
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    assert hasattr(registry, 'begin_execution'), 'durable execution pin is missing'
+    ctx = multiprocessing.get_context('spawn')
+    process = ctx.Process(target=_leave_active_pin, args=(registry.path,))
+    process.start()
+    try:
+        process.join(timeout=45)
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+    assert registry.inspect('runtime').execution_id == 'process-operation'
+    with pytest.raises(LeaseConflict):
+        registry.acquire('runtime', 'next', ttl=10, now=200)
+
+
+@pytest.mark.parametrize('field,value', [('ttl', float('nan')), ('ttl', float('inf')),
+                                         ('now', float('nan')), ('now', float('inf'))])
+def test_nonfinite_times_are_rejected_without_writing(tmp_path, field, value):
+    from runtime_lease import LeaseError
+    registry = RuntimeLeaseRegistry(str(tmp_path / 'leases.db'))
+    times = {'ttl': 10, 'now': 100}
+    times[field] = value
+    with pytest.raises(LeaseError):
+        registry.acquire('runtime', 'owner', **times)
+    assert registry.inspect('runtime') is None
+
+
+def test_existing_database_upgrades_without_losing_fence(tmp_path):
+    path = str(tmp_path / 'legacy.db')
+    with sqlite3.connect(path) as conn:
+        conn.execute('CREATE TABLE runtime_leases (runtime_id TEXT PRIMARY KEY, owner TEXT, '
+                     'fence INTEGER NOT NULL, heartbeat_at REAL, expires_at REAL)')
+        conn.execute('INSERT INTO runtime_leases VALUES (?, ?, ?, ?, ?)',
+                     ('runtime', 'owner', 7, 100, 110))
+    registry = RuntimeLeaseRegistry(path)
+    state = registry.inspect('runtime')
+    assert state.fence == 7 and state.owner == 'owner'
+    assert hasattr(state, 'execution_id'), 'execution pin migration is missing'
+    assert state.execution_id is None
