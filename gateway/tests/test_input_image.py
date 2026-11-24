@@ -70,6 +70,54 @@ def test_a_url_or_a_part_that_is_not_a_base64_image_is_refused_by_name(url, word
     assert e.value.status_code == 400 and words in str(e.value.detail)
 
 
+def test_a_payload_that_is_not_base64_is_refused_here_not_skipped_by_the_runner():
+    # The runner skips a file whose bytes do not decode, while the prompt still says it was attached.
+    for bad in ("data:image/png;base64,@@not*base64@@", "data:image/png;base64,iVBORw0KGgo=====x"):
+        with pytest.raises(gw.HTTPException) as e:
+            gw._parse_input(_image(bad))
+        assert e.value.status_code == 400 and "base64 image" in str(e.value.detail)
+
+
+def test_a_payload_wrapped_over_lines_is_the_same_image():
+    wrapped = "data:image/png;base64," + "\n".join(PNG_B64[i:i + 16] for i in range(0, len(PNG_B64), 16))
+    [f] = gw._parse_input(_image(wrapped))[1]
+    assert f["content_b64"] == PNG_B64
+    assert f["filename"] == gw._parse_input(_image())[1][0]["filename"]
+
+
+@pytest.mark.parametrize("name", [5, {"x": 1}, ["a.png"], "", "   "])
+def test_a_filename_that_is_not_a_name_is_no_name(name):
+    [f] = gw._parse_input(_image(filename=name))[1]
+    assert f["filename"].startswith("image-") and f["filename"].endswith(".png")
+    [f] = gw._parse_input([{"role": "user", "content": [{"type": "input_image", "file_id": "file_abc",
+                                                         "filename": name}]}])[1]
+    assert f["filename"] is None                           # the upload's own name is used at resolution
+
+
+def _file(**part) -> list:
+    return [{"role": "user", "content": [{"type": "input_text", "text": "Read this."}, {"type": "input_file", **part}]}]
+
+
+@pytest.mark.parametrize("part,words", [
+    ({"file_data": PNG}, "carries a filename"),                              # it was dropped in silence
+    ({"file_data": PNG, "filename": 7}, "carries a filename"),
+    ({"file_data": "data:text/plain;base64,@@not base64@@", "filename": "a.txt"}, "is base64"),
+    ({"file_data": "data:text/plain,hello", "filename": "a.txt"}, "is base64"),
+    ({"filename": "a.txt"}, "file_data (inline) or file_id"),
+])
+def test_an_input_file_that_cannot_reach_the_agent_is_refused_by_name(part, words):
+    with pytest.raises(gw.HTTPException) as e:
+        gw._parse_input(_file(**part))
+    assert e.value.status_code == 400 and words in str(e.value.detail)
+
+
+def test_an_input_file_reads_as_before():
+    [f] = gw._parse_input(_file(filename="q3.txt", file_data="data:text/plain;base64,aGVsbG8=\n"))[1]
+    assert f == {"filename": "q3.txt", "content_b64": "aGVsbG8=", "file_id": None, "media_type": "text/plain"}
+    [f] = gw._parse_input(_file(file_id="file_abc"))[1]
+    assert f == {"filename": None, "content_b64": None, "file_id": "file_abc", "media_type": None}
+
+
 def test_an_image_part_with_nothing_in_it_is_refused():
     with pytest.raises(gw.HTTPException) as e:
         gw._parse_input([{"role": "user", "content": [{"type": "input_image"}]}])
