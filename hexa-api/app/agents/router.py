@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.db.models import AgentTemplate
 
@@ -44,7 +44,7 @@ def build_agent_router(app, require_session, user_id):
             with app.state.session_factory() as db:
                 rows = db.scalars(select(AgentTemplate).where(AgentTemplate.user_id == user_id(session)).order_by(AgentTemplate.id.desc())).all()
                 return {'templates': [template_json(row) for row in rows]}
-        except OperationalError:
+        except (OperationalError, ProgrammingError):
             raise storage_unavailable() from None
 
     @router.get('/gateway')
@@ -62,7 +62,7 @@ def build_agent_router(app, require_session, user_id):
                 db.add(row)
                 db.commit()
                 return template_json(row)
-        except OperationalError:
+        except (OperationalError, ProgrammingError):
             raise storage_unavailable() from None
 
     @router.put('/{template_id}')
@@ -74,7 +74,7 @@ def build_agent_router(app, require_session, user_id):
                     setattr(row, field, value)
                 db.commit()
                 return template_json(row)
-        except OperationalError:
+        except (OperationalError, ProgrammingError):
             raise storage_unavailable() from None
 
     @router.delete('/{template_id}', status_code=204)
@@ -84,7 +84,7 @@ def build_agent_router(app, require_session, user_id):
                 row = owned(db, template_id, user_id(session))
                 db.delete(row)
                 db.commit()
-        except OperationalError:
+        except (OperationalError, ProgrammingError):
             raise storage_unavailable() from None
         return Response(status_code=204)
 

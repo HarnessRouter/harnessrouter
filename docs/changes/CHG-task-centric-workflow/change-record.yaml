@@ -1372,3 +1372,22 @@ plain_node_retry_binding:
   rollback: "停止新普通 retry 派发后回退 router 绑定复制和测试；无迁移或协议回滚，历史 NodeRun 保留。"
   remaining: [authenticated live Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, deployed multi-replica failover, Linux Runner ACP conformance]
   next_action: "继续保持 tool_approvals 不广告；在具备认证的 Gateway/Runner 环境后补原生审批与真实 Provider 验证，整体目标保持进行中。"
+full_hexa_api_regression:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 9d75929f
+  branch: codex/agent-orchestration
+  reuse_decision: validate the complete existing hexa-api consumer suite after orchestration changes; no production scope expansion
+  scope: full task, workflow, orchestration, HTTP adapter, pagination, permission, lease, receipt and recovery regression
+  acceptance_ids: [AC-1, AC-3, AC-7, AC-8, AC-12, AC-13, AC-15, AC-20, AC-22, AC-23, AC-24, AC-25, AC-26, AC-27, AC-28, AC-32, AC-34, AC-35, AC-36, AC-37, AC-38, AC-39, AC-40, AC-42]
+  verification:
+    sqlite: "python -X utf8 -m pytest -q hexa-api/tests --tb=short; exit 0；386 passed, 5 skipped in 1027.51s。跳过项为未设置 HEXA_TEST_POSTGRES_URL 的 PostgreSQL opt-in tests。"
+    postgresql: "HEXA_TEST_POSTGRES_URL=postgresql+psycopg://postgres@127.0.0.1:55438/postgres python -X utf8 -m pytest -q hexa-api/tests --tb=short; exit 0；391 passed in 1164.68s。测试使用独立 schema。"
+    focused_regression: "SQLite 和 PostgreSQL 的 hexa-api/tests/test_agent_templates.py 均 10 passed；覆盖缺失 agent_templates 表时重启后的存储错误契约。"
+    static: "python -m py_compile hexa-api/app/agents/router.py；YAML safe_load；git diff --check；passed。"
+  security_review: "完整 suite 覆盖任务权限、历史分页、Artifact/HTTP 边界、RunEvent、CommandReceipt、lease/fence、能力快照、派生绑定和重试恢复；没有新增客户端执行配置、权限授予、UHP 字段或 Cloud 入口。"
+  limitations: [authenticated live Gateway/BYOK smoke, native approval interception and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP conformance]
+  rollback: "本记录只增加验证证据，无数据、迁移或运行时回滚。"
+  remaining: [authenticated live Gateway/BYOK smoke, native approval interception and exact continuation, UHP approval capability negotiation, deployed multi-replica failover, Linux Runner ACP conformance]
+  next_action: "继续补充真实 Gateway/Runner 的插件物化、原生副作用前审批和 UHP 能力协商验证；保持 tool_approvals 不广告，整体目标保持进行中。"
