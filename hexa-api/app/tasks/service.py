@@ -1230,7 +1230,7 @@ class TaskExecutor:
         with self.session_factory() as db:
             if lease_fence is not None:
                 run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
-                if (not run or run.status != 'running' or run.paused or run.lease_owner != self.lease_owner
+                if (not run or run.status != 'running' or run.lease_owner != self.lease_owner
                         or run.lease_fence != lease_fence or (lease_lost and lease_lost.is_set())):
                     db.rollback()
                     return
