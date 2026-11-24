@@ -46,6 +46,26 @@ def test_each_answer_is_told_apart_and_all_four_still_stop_the_turn(err, kind):
     assert gw._provider_refused(err) is bool(kind)
 
 
+@pytest.mark.parametrize("err,kind,wait", [
+    # Gemini's per-minute limit says "quota" and names a wait: it passes in 41 seconds, so it is a rate limit.
+    ("429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your "
+     "plan and billing details. Quota exceeded for metric: generate_content_free_tier_requests, limit: 10. "
+     "Please retry in 41.24s.', 'status': 'RESOURCE_EXHAUSTED'}}", "rate_limit", 41.24),
+    ("[API Error: 429 Resource has been exhausted (e.g. check quota).]", "rate_limit", None),
+    # OpenAI's empty account without its code: the plan's quota, no wait named.
+    ("429 You exceeded your current quota, please check your plan and billing details.", "quota", None),
+    # an empty account named by its code or its sentence stays one even when it names a wait
+    ("tokenrouter 403: insufficient_user_quota", "quota", None),
+    ("Error code: 429 - insufficient_quota, retry after 60s", "quota", None),
+    ("429: Your credit balance is too low to access the API", "quota", None),
+])
+def test_a_quota_that_passes_with_a_wait_is_a_rate_limit_and_an_empty_account_is_not(err, kind, wait):
+    assert gw._provider_failure_kind(err) == kind
+    detail = gw._provider_failure_detail(err)
+    assert detail["retryable"] is (kind == "rate_limit")
+    assert detail.get("retry_after_seconds") == wait
+
+
 def test_a_rate_limit_says_the_key_was_not_refused_and_to_wait():
     err = "tokenrouter: 429 Too Many Requests"
     said = gw._refusal_message(CONN, err)
