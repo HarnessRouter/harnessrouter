@@ -1,6 +1,7 @@
 """Unknown Agent outcomes can be reconciled by reading an existing response only."""
 
 import asyncio
+import time
 
 from app.gateway.client import GatewayError
 from tests.test_task_workflows import authenticated, node, wait_run
@@ -96,3 +97,49 @@ def test_reconcile_gateway_read_failure_keeps_unknown(client, app):
     )
     assert response.status_code == 202
     assert response.json()['side_effect_state'] == 'unknown'
+
+
+def test_canceled_unknown_response_can_reconcile_without_reopening_run(client, app):
+    authenticated(client)
+    original = app.state.gateway.create_response
+
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(0.1)
+        return await original(*args, **kwargs)
+
+    app.state.gateway.create_response = slow
+    task = client.post('/api/hexa/tasks', json={'workflow': {'nodes': [node('worker', final_report=True)]}}).json()
+    run_id = client.post(f"/api/hexa/tasks/{task['id']}/runs", headers={'Idempotency-Key': 'cancel-reconcile-start'}).json()['id']
+    node_run_id = None
+    for _ in range(40):
+        snapshot = client.get(f'/api/hexa/runs/{run_id}').json()
+        current = snapshot['nodes'][0]
+        node_run_id = current['id']
+        if current['status'] == 'running' and current['command_receipt']['side_effect_state'] == 'started':
+            break
+        time.sleep(0.01)
+    canceled = client.post(f'/api/hexa/runs/{run_id}/cancel', headers={'Idempotency-Key': 'cancel-reconcile'})
+    assert canceled.status_code == 200
+    for _ in range(40):
+        snapshot = client.get(f'/api/hexa/runs/{run_id}').json()
+        current = next(row for row in snapshot['nodes'] if row['id'] == node_run_id)
+        if current['command_receipt']['response_id']:
+            break
+        time.sleep(0.01)
+    response_id = current['command_receipt']['response_id']
+    assert response_id
+
+    async def read_response(value):
+        assert value == response_id
+        return {'id': value, 'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'cancelled run observed'}]}]}
+
+    app.state.gateway.get_response = read_response
+    reconciled = client.post(
+        f'/api/hexa/runs/{run_id}/nodes/{node_run_id}/reconcile',
+        headers={'Idempotency-Key': 'cancel-reconcile-read'},
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()['side_effect_state'] == 'completed'
+    final = client.get(f'/api/hexa/runs/{run_id}').json()
+    assert final['status'] == 'canceled'
+    assert next(row for row in final['nodes'] if row['id'] == node_run_id)['status'] == 'succeeded'

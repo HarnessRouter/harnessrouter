@@ -1467,3 +1467,22 @@ client_reconciliation_surface:
   rollback: "回退客户端类型、reconcile action、显示入口和对应测试；后端回执与历史 Run 不变。"
   remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
   next_action: "继续验证真实 Gateway/Runner 的 response 读取与 native approval 边界；保持 tool_approvals 不广告。"
+
+cancel_reconciliation_regression:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 89fc75bf
+  branch: codex/agent-orchestration
+  references: [spec.md#CommandReceipt回执, spec.md#AC-35-CommandReceipt回执, spec.md#AC-37-显式reconciliation]
+  reuse_decision: retain canceled Run state while projecting a terminal Gateway response onto the canceled NodeRun receipt
+  scope: prove explicit reconciliation remains available after cancellation without reopening scheduling
+  acceptance_ids: [AC-8, AC-34, AC-35, AC-37]
+  verification:
+    targeted: "python -X utf8 -m pytest -q hexa-api/tests/test_reconciliation.py hexa-api/tests/test_task_workflows.py::test_cancel_fences_late_results_and_locks_active_workflow --tb=short; exit 0；5 passed in 7.70s。"
+    static: "python -m py_compile hexa-api/tests/test_reconciliation.py；git diff --check；passed。"
+  security_review: "取消撤销 Run fence；reconciliation 只读取已持久化 response_id，不发起新的 Agent 调用。Terminal response 可更新 NodeRun/receipt 事实，但不能恢复 Run 调度或改变权限快照。"
+  limitations: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
+  rollback: "回退新增竞态回归测试和对应 Change 记录，不改变生产数据。"
+  remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
+  next_action: "继续验证真实 Gateway/Runner 的 response read 与 native approval 边界；保持 tool_approvals 不广告。"
