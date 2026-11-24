@@ -779,6 +779,10 @@ def test_cancel_fences_late_results_and_locks_active_workflow(client, app):
     result = client.get(f'/api/hexa/runs/{run_id}').json()
     assert result['status'] == 'canceled'
     assert all(row['status'] == 'canceled' and row['output'] is None for row in result['nodes'])
+    receipt = result['nodes'][0]['command_receipt']
+    assert receipt['side_effect_state'] == 'unknown'
+    assert receipt['reconciliation_required'] is True
+    assert receipt['error_code'] == 'interrupted_unknown_outcome'
 
 
 def test_rerun_adoption_stales_only_actual_consumers(client):

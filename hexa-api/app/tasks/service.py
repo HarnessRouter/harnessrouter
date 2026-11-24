@@ -500,10 +500,14 @@ def reconcile_receipt(db, run, row, receipt, response, *, encoded, redact_values
         receipt.side_effect_state = 'completed'
         receipt.reconciliation_required = False
         receipt.error_code = None
-        run.status = 'running'
-        task = db.get(Task, run.task_id)
-        if task:
-            task.status = 'running'
+        # A canceled Run remains canceled while reconciliation records the already
+        # observed Gateway outcome. Only an executor-recovered failed Run may be
+        # reopened for continuation.
+        if run.status != 'canceled':
+            run.status = 'running'
+            task = db.get(Task, run.task_id)
+            if task:
+                task.status = 'running'
         append_run_event(db, run.id, 'node.reconciled', node_run_id=row.id,
                          data={'node_id': row.node_id, 'status': status})
     else:
@@ -1226,7 +1230,8 @@ class TaskExecutor:
         with self.session_factory() as db:
             if lease_fence is not None:
                 run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
-                if not run or run.lease_owner != self.lease_owner or run.lease_fence != lease_fence or (lease_lost and lease_lost.is_set()):
+                if (not run or run.status != 'running' or run.paused or run.lease_owner != self.lease_owner
+                        or run.lease_fence != lease_fence or (lease_lost and lease_lost.is_set())):
                     db.rollback()
                     return
             current_run = db.get(Run, run_id)
@@ -1299,7 +1304,23 @@ class TaskExecutor:
         with self.session_factory() as db:
             run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
             row = db.get(NodeRun, attempt_id)
-            if run is None or row is None or run.status != 'running' or row.status != 'running':
+            if run is None or row is None:
+                return
+            if run.status == 'canceled' or row.status == 'canceled':
+                # Cancellation can race the Gateway return. Preserve the response identity
+                # and unknown side-effect fact even though the NodeRun cannot be completed.
+                receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
+                if receipt and receipt.side_effect_state in ('not_started', 'started', 'unknown'):
+                    receipt.side_effect_state = 'unknown'
+                    receipt.reconciliation_required = True
+                    receipt.error_code = 'interrupted_unknown_outcome'
+                    response_identity = ((result or {}).get('response_id') if isinstance(result, dict) else None) or exception_response_id
+                    if response_identity:
+                        receipt.response_id = str(response_identity)
+                        row.response_id = str(response_identity)
+                db.commit()
+                return
+            if run.status != 'running' or row.status != 'running':
                 return
             if lease_fence is not None and (lease_lost and lease_lost.is_set() or run.lease_owner != self.lease_owner or run.lease_fence != lease_fence):
                 db.rollback()

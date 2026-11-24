@@ -294,8 +294,26 @@ def build_router(app, require_session, user_id):
                     append_run_event(db, run.id, 'run.canceled')
                     for row in all_node_runs(db, run_id):
                         if row.status not in ('succeeded', 'failed', 'skipped', 'canceled'):
-                            row.error_code = 'interrupted_unknown_outcome' if row.status == 'running' else None
+                            if row.status == 'running':
+                                row.error_code = 'interrupted_unknown_outcome'
+                                receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
+                                if receipt and receipt.side_effect_state in ('not_started', 'started'):
+                                    receipt.side_effect_state = 'unknown'
+                                    receipt.reconciliation_required = True
+                                    receipt.error_code = 'interrupted_unknown_outcome'
+                                    receipt.response_id = row.response_id or receipt.response_id
+                                    append_run_event(db, run.id, 'node.unknown', node_run_id=row.id,
+                                                     data={'node_id': row.node_id, 'error_code': row.error_code,
+                                                           'reason': 'run_canceled'})
+                            else:
+                                row.error_code = None
                             row.status = 'canceled'
+                    # Revoke the current executor's fence. An in-flight Gateway call may still
+                    # finish, but it can no longer commit a result into this canceled Run.
+                    run.lease_fence = (run.lease_fence or 0) + 1
+                    run.lease_owner = None
+                    run.lease_heartbeat_at = None
+                    run.lease_expires_at = None
                 else:
                     raise TaskError('invalid_transition', '运行操作无效。', 422)
                 result = {'id': run.id, 'status': run.status, 'paused': run.paused}

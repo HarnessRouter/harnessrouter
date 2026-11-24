@@ -1421,3 +1421,25 @@ workspace_restoration_boundary:
   rollback: "回退客户端壳层门禁与恢复控制器，无数据迁移或历史改写。"
   remaining: [authenticated real Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP capability negotiation, deployment and Linux Runner conformance]
   next_action: "继续审计完整编排目标与真实运行时门禁；工具审批未完成前不广告 tool_approvals，目标保持 active。"
+
+cancel_unknown_receipt_boundary:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: aa0514c4
+  branch: codex/agent-orchestration
+  references: [spec.md#运行时状态与事实记录, spec.md#AC-35-CommandReceipt回执, spec.md#AC-37-显式reconciliation]
+  reuse_decision: extend the existing cancel route, Run fence and CommandReceipt; no migration, UHP field, plugin format or permission grant
+  scope: preserve unknown side-effect facts when cancellation races an in-flight Gateway call
+  acceptance_ids: [AC-8, AC-34, AC-35, AC-36, AC-37]
+  changes:
+    - "取消活动 running NodeRun 时将已有 not_started/started CommandReceipt 收敛为 unknown，并设置 reconciliation_required=true；未开始节点不创建伪造回执。"
+    - "取消撤销 Run lease fence；迟到 Gateway 返回只补写 response_id/unknown 回执，不能写入输出或重新打开 canceled Run。"
+  verification:
+    targeted: "python -X utf8 -m pytest -q hexa-api/tests/test_task_workflows.py::test_cancel_fences_late_results_and_locks_active_workflow hexa-api/tests/test_reconciliation.py hexa-api/tests/test_run_leases.py --tb=short; exit 0；12 passed in 11.98s。"
+    static: "python -m py_compile hexa-api/app/tasks/router.py hexa-api/app/tasks/service.py hexa-api/tests/test_task_workflows.py；YAML safe_load；git diff --check；passed。"
+  security_review: "取消不会把已开始调用伪装成零副作用；fence 和状态双重检查阻止迟到结果覆盖取消 Run，回执仍不含原始工具参数、凭据或授权头。"
+  limitations: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
+  rollback: "回退取消路径的回执收敛与 fence 撤销；历史 Run 无迁移。"
+  remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
+  next_action: "继续验证真实 Gateway/Runner 的响应取消竞态和原生审批；工具审批未完成前保持 tool_approvals 不广告。"

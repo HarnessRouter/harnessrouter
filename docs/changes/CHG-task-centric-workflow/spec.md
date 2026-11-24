@@ -121,7 +121,7 @@ Task → WorkflowRevision
 
 并发上限是工作流执行配置，随 WorkflowRevision 和 Run 的 workflow 快照固定。旧工作流和历史 Run 未携带该字段时按 50 解释，不补写历史定义。不改变 `deps`（调度依赖）和 `inputRefs`（实际消费结果）的关系。
 
-首批实现保留当前批次调度：按已保存节点顺序选择最多 `max_concurrency` 个可执行 Agent 节点，同时调用 Gateway，等待本批全部完成后重新计算依赖。没有选中的节点保持 `idle`，不提前标记 running、占用启动时间或发起 Gateway 请求；已确认的显式人工节点不占 Agent 调用名额。运行取消或暂停后不派发下一批；失败节点的必需下游不执行，不因上限而将人工门控或容量等待误判为 Run 结束。
+首批实现保留当前批次调度：按已保存节点顺序选择最多 `max_concurrency` 个可执行 Agent 节点，同时调用 Gateway，等待本批全部完成后重新计算依赖。没有选中的节点保持 `idle`，不提前标记 running、占用启动时间或发起 Gateway 请求；已确认的显式人工节点不占 Agent 调用名额。运行取消或暂停后不派发下一批；失败节点的必需下游不执行，不因上限而将人工门控或容量等待误判为 Run 结束。取消与正在执行的 Gateway 调用竞态时，已进入 `running` 且存在 CommandReceipt 的节点必须保留 `unknown`、`reconciliation_required=true` 和 `interrupted_unknown_outcome`；尚未进入执行的节点可以直接标记 `canceled`，不得伪造回执。取消同时撤销当前 Run lease fence，迟到的 Gateway 结果只能补写已知 `response_id` 和未知回执，不能把已取消 Run 恢复为运行或写入输出。
 
 本上限只约束单 Run 的节点派发，不表示全局限流、Runtime/MCP 工具并发限制或 Workspace 写入隔离。后续分别实施工作区隔离、恢复收据、结构化条件分支、有界 foreach/repeat；当前仍拒绝 DAG 回边，不允许运行中修改 WorkflowRevision。
 
