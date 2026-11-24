@@ -5347,6 +5347,11 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     # connection carries the runner's wiring (`provider`, e.g. "tokenrouter" for any OpenAI-format
     # custom endpoint on some bases) and keeps the vendor in `_vendor`.
     provider = str((conn or {}).get("_vendor") or (conn or {}).get("provider") or "your provider")
+    # A custom endpoint has no vendor's name to give, and "add credit with custom" names nobody: it is called by the
+    # name the person gave the connection.
+    if provider == "custom":
+        cname = str((conn or {}).get("name") or "")
+        provider = (cname.split(":", 1)[1] if cname.startswith("integration:") else cname).strip() or "custom endpoint"
     what = "connection" if str((conn or {}).get("auth") or "").strip().lower() == "entra" else "key"
     said = err or "the provider returned an error"
     kind = _provider_failure_kind(err)

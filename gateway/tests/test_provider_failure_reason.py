@@ -95,6 +95,18 @@ def test_an_empty_account_and_a_refused_model_say_what_to_do():
         assert "was refused:" not in said
 
 
+def test_a_custom_endpoint_is_called_by_the_connections_name():
+    """Read back on the 0.41.26 candidate: a custom connection said "custom rate-limited this task" and "add credit
+    with custom"."""
+    custom = {"name": "integration:My DeepSeek", "_vendor": "custom", "provider": "tokenrouter"}
+    said = gw._refusal_message(custom, "429: Rate limit reached. Please try again in 2s.")
+    assert said.startswith("My DeepSeek rate-limited this task (too many requests for now; your key was not refused).")
+    said = gw._refusal_message(custom, "Error code: 429 - insufficient_quota")
+    assert said.startswith("Your My DeepSeek account has no quota or credit left for this key; add credit with My DeepSeek")
+    assert gw._refusal_message({"_vendor": "custom"}, "401 invalid api key").startswith("Your custom endpoint key was refused")
+    assert gw._refusal_message({**CONN, "name": "integration:My TR"}, "401 invalid api key").startswith("Your tokenrouter key was refused")
+
+
 def test_a_refused_key_reads_as_before_and_an_entra_connection_is_never_a_key():
     assert gw._refusal_message(CONN, "OpenAI API error (401): invalid api key") == \
         "Your tokenrouter key was refused: OpenAI API error (401): invalid api key"
