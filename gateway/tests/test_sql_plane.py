@@ -456,7 +456,13 @@ def test_the_table_cap_still_marks_a_schema_truncated(monkeypatch):
 @pytest.mark.parametrize(("engine", "dsn", "schema", "table", "quoted"), [
     ("postgres", "postgres://u@h/db", 'pub"lic', 'we"ird', '"pub""lic"."we""ird"'),
     ("mysql", "mysql://u@h/db", "db`name", "we`ird", "`db``name`.`we``ird`"),
-])
+    # A name shaped like an injection is one identifier, and the gate reads it as one: on 0.41.26
+    # this one was refused as two statements, and one whose quotes balanced reached the database.
+    ("postgres", "postgres://u@h/db", "public", 'x"; DROP TABLE public.plain; --',
+     '"public"."x""; DROP TABLE public.plain; --"'),
+    # To MySQL a # outside quotes is a comment; inside a quoted name it is text.
+    ("mysql", "mysql://u@h/db", "db", "we`ird #x", "`db`.`we``ird #x`"),
+], ids=["postgres", "mysql", "postgres-injection-shaped", "mysql-hash"])
 def test_introspection_samples_identifiers_containing_quote_characters(
         monkeypatch, engine, dsn, schema, table, quoted):
     """Quoted schema and table names reach the driver instead of failing the read-only gate."""
