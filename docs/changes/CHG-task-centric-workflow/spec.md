@@ -549,7 +549,7 @@ control store create 中写入，任何失败不能暴露半条待批记录。�
 
 恢复必须读取密封保存的 Invocation，再由 adapter 提供当前执行配置重新生成 binding，校验原生许可。只有完全相同的配置和
 checkpoint 可取得日志的单次 start 许可，派发使用保存的原参数/checkpoint，不接受客户端替换参数。拒绝、到期、撤销、配置
-变化、checkpoint 丢失、存储失败或 unknown 结果均不得调用 adapter。adapter 抛出异常或任务取消后副作用不确定，记录 unknown；
+变化、checkpoint 丢失、存储失败或 unknown 结果均不得派发获批工具。拒绝只能通过下述独立 denial continuation 投递，不能使用批准路径。adapter 抛出异常或任务取消后副作用不确定，记录 unknown；
 不能把网络超时等同于确定未执行。成功仅表示 adapter 已返回原生结果，结果仍由 Runtime 自己保存；本 gate 不提供通用原生
 检查点，也不赋予任何现有 Runtime coverage，不增加 HTTP 恢复、SSE、模型生成路径或能力广告。
 
@@ -572,7 +572,22 @@ adapter 固定 thread/namespace/checkpoint/interrupt 身份、保存状态的完
 在独立重开的 Runtime 中仍恢复同一次工具调用；与 Gateway sealed gate/journal 组合验证待批零工具调用、批准并发只执行一次、
 deny/expiry/void/native deny 零执行、checkpoint/配置变化拒绝、start 后异常为 unknown 且不重放。测试模型为确定性受控模型，
 工具写临时文件；该证据不代表真实 Provider、现有 dcode ACP 的生产接线、Gateway Response/SSE、Hexa 审批 UI 或 UHP 发布。
-本切片中 durable deny 阻止恢复；把拒绝事实继续交回 Agent 的生产链路仍须另实现和验收。
+拒绝通过独立的 durable denial continuation 交回 Runtime；生产 Response/SSE 链路仍须另实现和验收。
+
+### 持久化拒绝决定的精确恢复
+
+受信任 adapter 可用 bound gate 的 `resume_denial` 投递已经保存的 deny，恢复参数只能来自密封 Invocation；
+仍需当前 binding、Runtime 排他执行权、未到期、未撤销和原生 continuation 可用。批准不能走拒绝路径，拒绝不能走工具 start 路径。
+journal 在投递前原子记录单次开始，使用独立 `continuation_receipt` 表示拒绝投递的 `started/completed/unknown`；
+原工具 receipt 始终是 `decision=deny, side_effect_state=not_started, reconciliation_required=false`。
+continuation 的 unknown 表示 Runtime 是否已收到拒绝或执行了后续规划无法确认，不能宣称原工具执行，也不得重发决定。
+恢复/撤销在拒绝投递开始后保留 unknown；投递开始前到期或撤销阻止调用 Runtime。取消和异常同样收敛 unknown。
+普通读回可返回独立 continuation receipt，不返回 checkpoint 或参数。决定 POST 的幂等 receipt 保持原值。
+
+**AC-45 拒绝继续：** Gateway journal/gate 验证跨实例并发单次投递、状态单调、同 key 决定重放、错误决定路径、
+expiry/void/native deny/changed binding 零投递、存储失败零派发、异常/取消/恢复为 continuation unknown 且不重发。
+真实 HITL/SQLite 原生旅程用独立 OS 进程捕获、拒绝、重放；工具文件从始至终不存在，原 interrupt 被 reject 消费，
+拒绝投递状态 completed 和工具 not_started 同时成立。本验收不证明 UHP Response/SSE、生产 Runner lease、真实 Provider 或 Hexa UI。
 
 ## 当前编排边界
 

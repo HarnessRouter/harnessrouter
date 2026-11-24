@@ -203,6 +203,37 @@ async def test_native_reject_continues_without_running_the_tool(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_durable_denial_does_not_authorize_a_followup_tool_request(tmp_path):
+    class ReaskModel(ScriptedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls += 1
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content='', tool_calls=[{
+                'name': 'write_report', 'args': {'text': 'private-report-marker'},
+                'id': f'new-call-{self.calls}', 'type': 'tool_call'}]))])
+
+    path = tmp_path / 'report.txt'
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
+        runtime = graph(saver, path, ReaskModel())
+        await runtime.ainvoke({'messages': [('user', 'write')]}, CONFIG)
+        native = adapter(runtime)
+        pending = await native.pending()
+        call = bound(pending)
+        gate = gate_for(tmp_path / 'control.db')
+        await decide(gate, call, 'deny')
+        await gate.resume_denial(SCOPE, call.command_id, 'deny-resume', call, native_allowed=True,
+                                 dispatch=lambda saved: native.resume(pending, 'deny'))
+        again = await native.pending()
+        assert again.command_id != pending.command_id
+        assert again.checkpoint != pending.checkpoint
+        assert not path.exists()
+        assert (await gate.journal.read(SCOPE, call.command_id))['continuation_receipt']['state'] == 'completed'
+        with pytest.raises(ApprovalError, match='hexa_approval_not_found'):
+            await gate.execute(SCOPE, again.command_id, 'forged-resume', bound(again), native_allowed=True,
+                               dispatch=lambda saved: native.resume(again, 'approve'))
+        assert not path.exists()
+
+
+@pytest.mark.asyncio
 async def test_native_error_after_effect_is_unknown_and_gateway_never_replays(tmp_path):
     path = tmp_path / 'report.txt'
     async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'runtime.db')) as saver:
@@ -260,9 +291,10 @@ async def test_concurrent_native_adapter_resume_revalidates_after_first_completi
         assert path.read_text().splitlines() == ['private-report-marker']
 
 
-def test_separate_process_restarts_resume_saved_native_checkpoint(tmp_path):
+@pytest.mark.parametrize('choice', ['approve', 'deny'])
+def test_separate_process_restarts_resume_saved_native_checkpoint(tmp_path, choice):
     def process(phase):
-        result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(__file__).resolve()), phase, str(tmp_path)],
+        result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(__file__).resolve()), phase, str(tmp_path), choice],
                                 capture_output=True, text=True, timeout=45,
                                 env={**os.environ, 'LANGSMITH_TRACING': 'false', 'LANGCHAIN_TRACING_V2': 'false'})
         assert result.returncode == 0, result.stderr
@@ -272,12 +304,17 @@ def test_separate_process_restarts_resume_saved_native_checkpoint(tmp_path):
     assert first['state'] == 'pending' and not (tmp_path / 'report.txt').exists()
     second = process('resume')
     assert second['request_hash'] == first['request_hash'] and second['state'] == 'completed'
+    assert second['side_effect_state'] == ('completed' if choice == 'approve' else 'not_started')
+    assert second['pending_interrupts'] == 0
     third = process('replay')
     assert third['request_hash'] == first['request_hash'] and third['state'] == 'completed'
-    assert (tmp_path / 'report.txt').read_text().splitlines() == ['private-report-marker']
+    if choice == 'approve':
+        assert (tmp_path / 'report.txt').read_text().splitlines() == ['private-report-marker']
+    else:
+        assert not (tmp_path / 'report.txt').exists()
 
 
-async def _process_journey(phase, folder):
+async def _process_journey(phase, folder, choice):
     """Separate OS processes share only two SQLite stores; no serialized fake state."""
     async with AsyncSqliteSaver.from_conn_string(str(folder / 'runtime.db')) as saver:
         runtime = graph(saver, folder / 'report.txt')
@@ -293,19 +330,24 @@ async def _process_journey(phase, folder):
             call = await gate.load(SCOPE, command)
             record = await gate.journal.read(SCOPE, command)
             if phase == 'resume':
-                await decide(gate, call, record=record)
+                await decide(gate, call, choice, record=record)
                 pending = await native.pending()
-                await gate.execute(SCOPE, command, 'process-resume', bound(pending), native_allowed=True,
-                                   dispatch=lambda saved: native.resume(pending, 'approve'))
+                resume = gate.execute if choice == 'approve' else gate.resume_denial
+                await resume(SCOPE, command, 'process-resume', bound(pending), native_allowed=True,
+                             dispatch=lambda saved: native.resume(pending, choice))
             else:
                 async def forbidden(saved):
                     raise AssertionError('completed command was replayed')
-                assert await gate.execute(SCOPE, command, 'process-resume', call, native_allowed=True,
-                                          dispatch=forbidden) is None
+                resume = gate.execute if choice == 'approve' else gate.resume_denial
+                assert await resume(SCOPE, command, 'process-resume', call, native_allowed=True,
+                                    dispatch=forbidden) is None
             record = await gate.journal.read(SCOPE, command)
+        effect = record.get('receipt', {}).get('side_effect_state', record['state'])
         print(json.dumps({'request_hash': record['request']['request_hash'],
-                          'state': record.get('receipt', {}).get('side_effect_state', record['state'])}))
+                          'state': record.get('continuation_receipt', {}).get('state', effect),
+                          'side_effect_state': effect,
+                          'pending_interrupts': len((await runtime.aget_state(CONFIG)).interrupts)}))
 
 
 if __name__ == '__main__':
-    asyncio.run(_process_journey(sys.argv[1], Path(sys.argv[2])))
+    asyncio.run(_process_journey(sys.argv[1], Path(sys.argv[2]), sys.argv[3]))

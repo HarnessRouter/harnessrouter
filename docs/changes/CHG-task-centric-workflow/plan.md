@@ -316,3 +316,13 @@ RunEvent、Lease 和全任务 API 回归。真实 PostgreSQL、Linux/Runner、Pr
 并从已保存 checkpoint 批准后写临时文件的受控旅程。Windows 和 Linux 分别执行，测试依赖单独固定版本，
 不把 LangGraph 安装到现有所有 Runner 的公共依赖。生产 Runtime 的进程锁/lease、可信登记、durable deny continuation、
 Response/SSE、UHP/Hexa 能力门禁继续保留；不得以本切片解除门禁。回退仅删除内部未注册 adapter 及测试，审批历史不变。
+
+## 2026-11-24 持久化拒绝继续
+
+依据 AC-45，先用 Gateway journal/gate 的失败测试暴露 deny 无法恢复及重放缺口，再加入独立 continuation receipt、
+CAS 开始许可、完成/恢复和 gate 的 resume_denial。工具 receipt 不因投递拒绝而变为 started，决定 POST 不执行 Runtime。
+保持 reserve 的单 continuation 身份；投递过程的异常和取消必须 shield recover，失败不得通过重试重新进入原生图。
+以独立进程真实 LangGraph/SQLite reject 旅程覆盖恢复和工具零执行，Windows/Linux 分别验证；随后重跑批准 gate、
+HTTP 隔离/撤销、proposal schema。新字段只加入本地 proposal，不改已发布 UHP 版本或 discovery。生产可信注册、
+排他 Runtime lease、Response/SSE 和 Hexa 待批接线仍继续实施。回退前停止相关 Runtime，保留历史 continuation receipt，
+不能用旧实现重放带 started/unknown 的拒绝决定。

@@ -102,6 +102,14 @@ cross-process Runtime lease, dcode ACP, Response/SSE continuation, durable
 denial continuation, real Provider, UHP capability publication and deployment
 remain not_evaluated; `tool_approvals` is still not advertised.
 
+## 2026-11-24 拒绝继续
+
+Windows Gateway denial/journal/gate/HTTP/proposal schema 158 项通过；Linux Runner 镜像内 fresh venv
+只安装固定 native test requirements 和 `jsonschema==4.25.1`，native/boundary/policy、denial/journal/gate/schema
+140 项通过。独立 OS 进程以 argv 调用 Python，恢复共享 SQLite checkpoint/journal；deny 不创建工具文件，
+投递 unknown 与工具 not_started 分开。原生模型为受控 ScriptedModel，不代表真实 Provider 或生产 dcode ACP；
+Linux HTTP 未在本次组合执行。生产 Runner lease/注册、Response/SSE、Hexa UI、部署与远端 CI 仍未验证；UHP 能力广告未打开。
+
 ## 2026-11-24 Run capability binding
 
 Windows/Python 3.13 的 Gateway Harness 摘要、Hexa API Gateway SSE、能力快照和 NodeRun 传播测试通过；摘要只覆盖安全能力身份，

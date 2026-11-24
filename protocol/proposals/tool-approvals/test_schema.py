@@ -53,5 +53,17 @@ def test_decision_and_unknown_receipt_require_explicit_reconciliation():
     with pytest.raises(ValidationError):
         validate(invalid, 'Receipt')
     invalid.update(decision='deny', side_effect_state='started')
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         validate(invalid, 'Receipt')
+
+
+def test_denial_continuation_unknown_is_separate_from_tool_effects():
+    value = {'decision': 'deny', 'state': 'unknown', 'reconciliation_required': True}
+    validate(value, 'ContinuationReceipt')
+    for changes in ({'reconciliation_required': False}, {'decision': 'approve'}, {'state': 'not_started'}):
+        with pytest.raises(ValidationError):
+            validate({**value, **changes}, 'ContinuationReceipt')
+    completed = {**value, 'state': 'completed', 'reconciliation_required': False}
+    validate(completed, 'ContinuationReceipt')
+    with pytest.raises(ValidationError):
+        validate({**completed, 'reconciliation_required': True}, 'ContinuationReceipt')

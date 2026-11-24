@@ -1,20 +1,39 @@
 id: CHG-task-centric-workflow
+durable_denial_continuation:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 6752c218
+  branch: codex/agent-orchestration
+  status: verified_controlled_slice
+  references: [spec.md#持久化拒绝决定的精确恢复, plan.md#2026-11-24-持久化拒绝继续]
+  acceptance_ids: [AC-45]
+  reuse_decision: extend existing Gateway journal and bound gate; separate denial delivery from tool effects
+  verification:
+    red: "python -X utf8 -m pytest -q gateway/tests/test_denial_continuation.py --tb=short; exit 1；16 failed，全部因 resume_denial 不存在。目标 schema 测试亦先因 ContinuationReceipt 未定义失败。"
+    unit_integration: "最终 Windows 拒绝专项 20 passed；Gateway denial/journal/bound gate/HTTP 和 proposal schema 组合 158 passed（exit 0，27.05s）。覆盖真实 SQLite CAS、多线程撤销竞争、配置/作用域变化、expiry、native deny、开始/完成存储失败、异常/取消/重开恢复及 HTTP receipt 读回。"
+    native_journey: "Windows native/boundary/policy 加 denial 回归 51 passed（追加两项 journal 测试前）；最终 Linux fresh venv 使用 runner/native_tests/requirements.txt 加 jsonschema==4.25.1，native/boundary/policy、denial/journal/gate/schema 140 passed（exit 0，20.49s）。真实 HITL/SQLite 的 approve/deny 独立三进程捕获、继续、重放；deny 零工具文件，followup tool 重新 interrupt。模型仍为确定性受控模型。"
+    environment_failure: "首次 fresh Linux 扩展运行 132 passed / 1 failed：未安装测试用 jsonschema；扩展命令显式加固定版本后 140 passed。不是生产失败或有效行为 Red。"
+    static: "Python py_compile、YAML/JSON 解析和 git diff --check 通过。"
+  security_review: "拒绝投递只能恢复已密封调用并使用 reject；CAS 先保存单次投递开始，工具 receipt 始终 deny/not_started。独立 continuation unknown 阻止盲重放，迟到 finish 不覆盖 unknown；决定 POST 保持原始 receipt 且零 Runtime 派发。新字段限本地 proposal，未打开 UHP discovery 或 Hexa 策略门禁。"
+  limitations: [production Runner lease and registration, authenticated Response/SSE continuation, real Provider, Hexa pending/decision UI, deployed failover and remote CI]
+  remaining: [production Runner lease and registration, Response/SSE, UHP and Hexa integration, live Provider]
+  next_action: "以具备 native checkpoint 的生产 Runtime 接入可信 Runner 注册和排他 owner，再推进 Response/SSE continuation；生产 conformance 前保持 tool_approvals 未广告。"
 langgraph_native_checkpoint_slice:
   date: "2026-11-24"
   owner: Codex
   baseline: 8e110b34
   branch: codex/agent-orchestration
-  status: in_progress
+  status: verified_controlled_slice
   references: [spec.md#langgraph-checkpoint-adapter-的受限验证边界, plan.md#2026-11-24-langgraph-原生-checkpoint-受控切片]
   acceptance_ids: [AC-44]
   reuse_decision: extend internal Runner checkpoint boundary and reuse Gateway sealed invocation gate; no public Runtime registration
   verification:
-    red: "新增 native suite 首次因 runner/langgraph_approval.py 不存在而收集失败；修复模型签名后仍因 adapter 未实现失败，分别证明目标测试和覆盖边界先于实现。"
+    red: "首次模型夹具签名错误不计 Red；修复后 15 项因 adapter 未实现失败（exit 1），确认目标行为未实现。"
     windows: "python -X utf8 -m pytest -q runner/native_tests/test_langgraph_approval.py runner/tests/test_langgraph_approval_boundary.py runner/tests/test_approval_policy_boundary.py --tb=short; exit 0；31 passed。Gateway durable approval 回归另行 136 passed。"
-    linux: "runner 镜像安装 runner/native_tests/requirements.txt 后，pytest -p no:cacheprovider native suite、boundary、ACP、dcode 和 policy；exit 0；31 passed。完整 Gateway approval/journal/schema 回归 136 passed。"
+    linux: "runner 镜像安装 runner/native_tests/requirements.txt 后，native suite、boundary 和 policy；exit 0；31 passed。早期 native/ACP/dcode/policy 扩展运行 90 passed / 1 failed，失败为基线 environment_snapshots.py 的 starlette 未显式固定版本。Gateway 136 passed 证据来自 Windows，不代表 Linux Gateway。"
     static: "python -m py_compile runner/langgraph_approval.py runner/native_tests/test_langgraph_approval.py runner/tests/test_langgraph_approval_boundary.py；git diff --check；passed。"
   security_review: "adapter 只接受持久化 SQLite 根图单 interrupt/单 action，tool 身份来自可信 catalog；拒绝内存、批量、子图、free-form、allow-only review 和异常 task。恢复重新读取 checkpoint 并只提交原 interrupt；参数不经客户端替换。跨进程唯一 start 仍由 Gateway gate，adapter 自身锁不作 lease。"
-  remaining: [adapter implementation and controlled native tests, production Runtime lease and registration, durable deny continuation, Response/SSE, UHP and Hexa integration, live Provider]
+  remaining: [production Runtime lease and registration, Response/SSE, UHP and Hexa integration, live Provider]
 workflow_approval_policy_boundary:
   date: "2026-11-24"
   owner: Codex

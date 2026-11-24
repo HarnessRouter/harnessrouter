@@ -94,6 +94,26 @@ def test_http_read_decide_replay_and_reopened_store_never_dispatch(pending, monk
     assert asyncio.run(gw._resp_get(scope.response))['status'] == 'incomplete'
 
 
+def test_denial_delivery_receipt_readback_keeps_tool_not_started(pending):
+    api, scope, value, _, _ = pending
+    accepted = post(api, scope, value, decision(value, decision='deny'))
+    assert accepted.status_code == 200
+    async def deliver():
+        journal = await ApprovalJournal.configured_control_store()
+        await journal.reserve(scope, value['command_id'], 'denial-resume', value['request_hash'])
+        assert await journal.start_denial(scope, value['command_id'], 'denial-resume', value['request_hash'], native_allowed=True)
+        await journal.finish_denial(scope, value['command_id'], 'denial-resume')
+    asyncio.run(deliver())
+    response = api.get(path(scope, value))
+    assert response.status_code == 200 and response.headers['Cache-Control'] == 'no-store'
+    record = response.json()
+    assert record['receipt'] == accepted.json()
+    assert record['receipt']['side_effect_state'] == 'not_started'
+    assert record['continuation_receipt'] == {'decision': 'deny', 'state': 'completed', 'reconciliation_required': False}
+    assert post(api, scope, value, decision(value, decision='deny')).json() == accepted.json()
+    assert '_sealed_invocation' not in response.text
+
+
 @pytest.mark.parametrize('change', ['member', 'org', 'missing_member', 'workspace', 'calibration', 'deleted_session',
                                      'legacy_owner', 'session_mismatch', 'wrong_mapping', 'unknown_approval'])
 def test_other_principals_scopes_or_mapping_cannot_read_or_decide(pending, change):

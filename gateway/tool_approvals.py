@@ -48,7 +48,7 @@ class ApprovalJournal:
 
     @staticmethod
     def _view(doc):
-        return copy.deepcopy({key: doc[key] for key in ('request', 'state', 'receipt') if key in doc})
+        return copy.deepcopy({key: doc[key] for key in ('request', 'state', 'receipt', 'continuation_receipt') if key in doc})
 
     @staticmethod
     def _invalid():
@@ -86,6 +86,9 @@ class ApprovalJournal:
         # Once execution may have started, expiry cannot pretend it did not run.
         if (doc['state'] in ('pending', 'approved') and self.clock() >= doc['request']['expires_at']
                 and doc.get('receipt', {}).get('side_effect_state', 'not_started') == 'not_started'):
+            doc['state'] = 'expired'
+        if (doc['state'] == 'denied' and self.clock() >= doc['request']['expires_at']
+                and 'continuation_receipt' not in doc):
             doc['state'] = 'expired'
 
     @staticmethod
@@ -246,8 +249,46 @@ class ApprovalJournal:
             return self._view(doc), None
         return await self._change(scope, command, mutate)
 
+    async def start_denial(self, scope, command, continuation, binding, *, native_allowed):
+        """Consume one denial-delivery permit; never a tool execution permit."""
+        self._continuation(continuation, binding)
+        if type(native_allowed) is not bool:
+            self._invalid()
+
+        def mutate(doc):
+            error = self._check_binding(doc, binding)
+            if error:
+                return None, error
+            if doc['state'] != 'denied' or doc.get('continuation') != continuation:
+                return None, ApprovalError('hexa_approval_not_pending')
+            if not native_allowed:
+                doc['state'] = 'voided'
+                self._mark_unknown(doc, only_started=True)
+                return None, ApprovalError('hexa_approval_changed')
+            if 'continuation_receipt' in doc:
+                return False, None
+            doc['continuation_receipt'] = {'decision': 'deny', 'state': 'started', 'reconciliation_required': False}
+            return True, None
+        return await self._change(scope, command, mutate)
+
+    async def finish_denial(self, scope, command, continuation):
+        def mutate(doc):
+            if doc['state'] != 'denied' or doc.get('continuation') != continuation:
+                return None, ApprovalError('hexa_approval_not_pending')
+            receipt = doc.get('continuation_receipt', {})
+            if receipt.get('state') == 'completed':
+                return self._view(doc), None
+            if receipt.get('state') != 'started':
+                return None, ApprovalError('hexa_approval_conflict')
+            receipt['state'] = 'completed'
+            return self._view(doc), None
+        return await self._change(scope, command, mutate)
+
     @staticmethod
     def _mark_unknown(doc, *, only_started=False):
+        continuation_receipt = doc.get('continuation_receipt')
+        if continuation_receipt and continuation_receipt.get('state') == 'started':
+            continuation_receipt.update(state='unknown', reconciliation_required=True)
         receipt = doc.get('receipt')
         if (receipt and receipt['decision'] == 'approve' and
                 (receipt['side_effect_state'] == 'started' or

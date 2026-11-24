@@ -187,3 +187,24 @@ class BoundApprovalGate:
             # side effect. Never translate it into a retryable failed invocation.
             await asyncio.shield(self.journal.recover(scope, command))
             raise
+
+    async def resume_denial(self, scope, command, continuation, current, *, native_allowed, dispatch):
+        """Deliver the saved denial once, without granting a tool start permit.
+
+        The trusted adapter must resume with rejection and enforce fresh approval
+        for any subsequent tool. Delivery can advance the graph/model, so a lost
+        delivery result is uncertain even though this tool remains not_started.
+        """
+        saved = await self.load(scope, command)
+        current_binding = self.binding(scope, copy.deepcopy(current))
+        await self.journal.reserve(scope, command, continuation, current_binding)
+        if not await self.journal.start_denial(scope, command, continuation, current_binding,
+                                               native_allowed=native_allowed):
+            return None
+        try:
+            result = await dispatch(saved)
+            await self.journal.finish_denial(scope, command, continuation)
+            return result
+        except BaseException:
+            await asyncio.shield(self.journal.recover(scope, command))
+            raise

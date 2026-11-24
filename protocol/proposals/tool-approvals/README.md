@@ -38,6 +38,17 @@ Durable states: `pending → approved|denied|expired|voided`; approved may progr
 
 Receipt `side_effect_state`: `not_started`, `started`, `completed`, `failed`, `unknown`. A crash after reservation or start MUST NOT auto-replay a possibly executed side effect. Set `reconciliation_required: true` for unknown outcomes; inspect native receipt/checkpoint first. An approved decision is not proof that the tool ran. Recovery of pending approvals must survive API/Gateway restart without changing IDs or hashes; a runtime that cannot restore the exact call cannot advertise coverage. No promise of exactly-once external effects is made.
 
+Denial delivery has a separate optional `continuation_receipt` in the addressed record: `decision: deny`,
+`state: started|completed|unknown`, and `reconciliation_required` true only for unknown. Delivering a denial
+does not start its tool: the tool receipt remains `deny/not_started` with `reconciliation_required: false`.
+Before native rejection is delivered, the server MUST persist a single start permit for the exact reserved
+continuation and recheck binding, expiry, revocation and native continuation availability. A denied request
+that expires before delivery is not resumable. Once delivery starts, expiry cannot erase that fact.
+Concurrent or replayed delivery MUST NOT resume the graph twice. Crash, cancellation or ambiguous delivery
+failure becomes continuation unknown, never permission to repeat the rejection or approve its tool.
+The decision POST still returns only the original immutable decision receipt and dispatches nothing.
+Any subsequent tool call proposed after rejection requires its own interception and approval.
+
 ## Compatibility and alternatives
 
 Keep existing `input_required/input_response`, statuses, tools, plugin format and version header semantics. New opt-in capability, item types, endpoints and vendor-prefixed errors are additive under [VERSIONING](../../VERSIONING.md). Use a dated publication only when released; do not call this UHP v1.1. Do not advertise it in Gateway until implementation and live conformance pass together per [GOVERNANCE](../../GOVERNANCE.md).
@@ -70,6 +81,8 @@ An unregistered internal LangGraph adapter now exercises actual HITL interrupts 
 with the sealed gate in a [controlled native suite](../../../runner/native_tests/README.md). A scripted model proposes
 one tool, a real tool writes a temporary file, and separate processes capture, resume and replay the same stored
 decision. It covers single root interrupts only; it does not integrate dcode ACP, authenticate a Runner, provide
-an execution lease, continue a durable denial, produce Response/SSE or advertise any capability. Checkpoint argument
+an execution lease, produce Response/SSE or advertise any capability. The internal bound gate now durably
+delivers rejection once using its independent continuation receipt; native tests cover separate-process
+deny/replay and interception of a followup tool proposal. Checkpoint argument
 objects are authoritative for this adapter; it makes no claim to preserve original model JSON text. Production
 coverage, provider verification and A-01–A-09 remain open.
