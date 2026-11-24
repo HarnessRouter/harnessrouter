@@ -24100,6 +24100,22 @@ def _skill_key(name: str) -> str:
     """The runner's skill directory name (its _skill_dir_name), so two skills the gateway sees
     as different cannot land in one folder."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(name or ""))
+def _plugin_json(raw: dict, path: str) -> tuple[object, str]:
+    """(the document, "") or (None, why it does not parse). The why is the parser's reason and where it stopped,
+    so a person can find the mistake (#725), and never the file's text."""
+    try:
+        text = raw.get("content") if raw.get("content") is not None \
+            else base64.b64decode(raw.get("content_b64") or "").decode()
+    except ValueError:   # binascii.Error and UnicodeDecodeError are both ValueErrors
+        return None, f"{path} is not UTF-8 text"
+    try:
+        return json.loads(text), ""
+    except json.JSONDecodeError as e:
+        return None, f"{path} is not valid JSON: {e.msg} at line {e.lineno} column {e.colno}"
+    except (TypeError, ValueError, RecursionError):
+        return None, f"{path} is not valid JSON"
+
+
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
     return uhp_error(422, "plugin_invalid", f"Plugin {name or 'package'}: {reason}", "plugins",
                      {"path": path, "reason": reason})
@@ -24275,11 +24291,9 @@ def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
     raw = by_path.get("plugin.json")
     if raw is None:
         raise _plugin_invalid(sent_name or "", "plugin.json", "no plugin.json at the plugin root")
-    try:
-        manifest = json.loads(raw.get("content") if raw.get("content") is not None
-                              else base64.b64decode(raw.get("content_b64") or "").decode())
-    except Exception:  # noqa: BLE001
-        raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not valid JSON")
+    manifest, why = _plugin_json(raw, "plugin.json")
+    if why:
+        raise _plugin_invalid(sent_name or "", "plugin.json", why)
     if not isinstance(manifest, dict):
         raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not an object")
     if "$schema" not in manifest:
@@ -24326,13 +24340,13 @@ def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
     servers: list[dict] = []
     raw = by_path.get("mcp.json")
     if raw is not None:
-        try:
-            mcp = json.loads(raw.get("content") if raw.get("content") is not None
-                             else base64.b64decode(raw.get("content_b64") or "").decode())
-        except Exception:  # noqa: BLE001
-            mcp = None
+        mcp, why = _plugin_json(raw, "mcp.json")
         entries = mcp.get("mcpServers") if isinstance(mcp, dict) else None
-        if not isinstance(mcp, dict) or set(mcp) != {"$schema", "mcpServers"} or not isinstance(entries, dict):
+        if why:
+            # it said "not an object of exactly $schema and mcpServers", which sent people looking at the keys
+            skipped.append({"path": "mcp.json", "reason": why})
+            entries = {}
+        elif not isinstance(mcp, dict) or set(mcp) != {"$schema", "mcpServers"} or not isinstance(entries, dict):
             skipped.append({"path": "mcp.json", "reason": "not an object of exactly $schema and mcpServers"})
             entries = {}
         elif mcp.get("$schema") != _PLUGIN_MCP_SCHEMA:
