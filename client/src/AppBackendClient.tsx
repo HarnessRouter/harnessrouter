@@ -15,6 +15,7 @@ import { SuperAgentCoordinator } from './SuperAgentCoordinator';
 import { WorkspaceMenu } from './WorkspaceMenu';
 import { CopyReplyButton, MarkdownMessage } from './MarkdownMessage';
 import { formatElapsed } from './reply-details';
+import { createWorkspaceRestorer, type WorkspaceRestoration } from './workspace-restoration';
 import type { AppMessageExecution } from './app-api';
 import { AppApiError, appSession, appLogout, appListAgents, appListAgentModels, appListConversations, appCreateConversation, appGetConversation, appConversationStatus, appSendMessage, appListWorkspaces, type AppAgent, type AppConversation, type AppMessage } from './app-api';
 
@@ -111,6 +112,15 @@ export function AppBackendClient() {
   const [labelsDraft, setLabelsDraft] = useState(railLabels);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<number | null>(null);
+  const [workspaceRestoration, setWorkspaceRestoration] = useState<WorkspaceRestoration>({ status: 'loading' });
+  const workspaceRestorer = useRef<ReturnType<typeof createWorkspaceRestorer> | null>(null);
+  if (!workspaceRestorer.current) workspaceRestorer.current = createWorkspaceRestorer(appListWorkspaces, state => {
+    if (state.status === 'ready') {
+      setWorkspaces(state.value.workspaces); setWorkspaceId(state.value.selected_id);
+    }
+    setWorkspaceRestoration(state);
+  });
+  const workspaceReady = Boolean(username) && workspaceRestoration.status === 'ready';
   const [files, setFiles] = useState<AppFile[]>([]);
   const [attachments, setAttachments] = useState<AppFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -147,16 +157,18 @@ export function AppBackendClient() {
     } finally { if (serial === historyGeneration.current) setHistoryLoading(false); }
   };
   const loadCatalog = async () => {
-    await Promise.all([loadAgents(), loadHistory(), appListWorkspaces().then(spaces => {
-      setWorkspaces(spaces.workspaces); setWorkspaceId(spaces.selected_id);
-    })]);
+    const [, , restored] = await Promise.all([loadAgents(), loadHistory(), workspaceRestorer.current!.load()]);
+    if (!restored) throw new AppApiError('工作空间读取失败。', 503);
   };
   useEffect(() => {
     let alive = true;
     void appSession().then(session => { if (alive) setUsername(session.username); }).catch(() => { if (alive) setLoginOpen(true); }).finally(() => { if (alive) setChecking(false); });
     return () => { alive = false; generation.current++; };
   }, []);
-  useEffect(() => { if (username) { setGatewayState('checking'); void loadCatalog().catch(cause => setError(errorText(cause))); } }, [username]);
+  useEffect(() => {
+    if (username) { setGatewayState('checking'); void loadCatalog().catch(cause => setError(errorText(cause))); }
+    return () => { workspaceRestorer.current!.invalidate(); };
+  }, [username]);
   useEffect(() => {
     if (agentDetailId && !agents.some(row => row.id === agentDetailId)) setAgentDetailId(null);
   }, [agents, agentDetailId]);
@@ -165,6 +177,7 @@ export function AppBackendClient() {
     return onAppSessionExpired(() => {
       generation.current++; catalogGeneration.current++; historyGeneration.current++;
       pending.current = null;
+      workspaceRestorer.current!.invalidate(); setWorkspaceRestoration({ status: 'loading' });
       setUsername(''); setAgents([]); setAgentDetailId(null); setConversations([]); setWorkspaces([]); setWorkspaceId(null);
       setMessages([]); setFiles([]); setAttachments([]); setAgentId(''); setModel(''); setModels([]);
       setBusy(false); setExecutingId(null); setResponseId(null); setLiveText(''); setLoading(false);
@@ -292,7 +305,7 @@ export function AppBackendClient() {
     } finally { if (serial === generation.current) setBusy(false); }
   };
   const logout = async () => {
-    try { await appLogout(); generation.current++; catalogGeneration.current++; historyGeneration.current++; setUsername(''); setMessages([]); setFiles([]); setAttachments([]); setSelected(null); setAgents([]); setAgentDetailId(null); setConversations([]); setHistoryError(''); setHistoryLoading(false); setDraft(''); setLoginOpen(true); sessionStorage.removeItem('hexa.app.recent'); }
+    try { await appLogout(); generation.current++; catalogGeneration.current++; historyGeneration.current++; workspaceRestorer.current!.invalidate(); setWorkspaceRestoration({ status: 'loading' }); setWorkspaces([]); setWorkspaceId(null); setUsername(''); setMessages([]); setFiles([]); setAttachments([]); setSelected(null); setAgents([]); setAgentDetailId(null); setConversations([]); setHistoryError(''); setHistoryLoading(false); setDraft(''); setLoginOpen(true); sessionStorage.removeItem('hexa.app.recent'); }
     catch (cause) { setError(errorText(cause)); }
   };
   const chooseFiles = async (list: FileList | null) => {
@@ -347,9 +360,9 @@ export function AppBackendClient() {
   }, [inspectorOpen]);
   const updateContextWidth = (value: number) => setContextWidth(Math.round(Math.max(CONTEXT_MIN, Math.min(contextMax, value))));
   return <ConfigProvider theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm, ...antdTheme(dark) }}><div className={`app hexa-backend-app${dark ? ' dark' : ''}`}>
-    <NavigationRail active={active} onSelect={setActive} labels={railLabels} dark={dark} onTheme={() => setDark(value => !value)} onSettings={() => { setLabelsDraft(railLabels); setSettingsOpen(true); }} workspace={<WorkspaceMenu workspaces={workspaces} currentId={workspaceId} onReload={loadCatalog} onSelected={id => { setWorkspaceId(id); newChat(); }} />} user={<UserMenu user={username ? { username, displayName: username, signedInAt: 0 } : null} workspaceName={workspaces.find(row => row.id === workspaceId)?.name || 'Hexa 工作空间'} dark={dark} onRequestLogin={() => setLoginOpen(true)} onUserChange={user => { if (!user) void logout(); }} />} />
-    <aside className="sidebar"><header><b>{CLIENT_MODULES.find(item => item.id === active)?.label}</b><small>{workspaces.find(row => row.id === workspaceId)?.name || 'Hexa 工作空间'}</small></header>{active === 'chat' && <Button block icon={<PlusOutlined />} disabled={busy} onClick={() => newChat()}>新建对话</Button>}{active === 'tasks' && <Button block icon={<PlusOutlined />} onClick={() => { setTaskSection('mine'); setTaskCreateRequest(value => value + 1); }}>新建任务</Button>}<div className="side-list"><small>{active === 'chat' ? '对话历史' : active === 'tasks' ? '任务工作区' : active === 'coordinator' ? '协调工作区' : '全部智能体'}</small>{active === 'chat' && <>{historyLoading && <p role="status">正在加载历史…</p>}{historyError && <div role="alert">{historyError}<button onClick={() => void loadHistory()}>重试</button></div>}{!historyLoading && !historyError && !conversations.length && <p>暂无历史对话</p>}</>}{active === 'chat' && conversations.map(row => <button key={row.id} aria-label={row.title} disabled={busy} className={selected === row.id ? 'selected' : ''} onClick={() => setSelected(row.id)}>{row.title}{row.status === 'unknown' && <small> · 待恢复</small>}</button>)}{active === 'tasks' && <nav aria-label="任务菜单"><button className={taskSection === 'mine' ? 'selected' : ''} onClick={() => setTaskSection('mine')}><span>我的任务</span><small>{taskCounts.tasks}</small></button><button className={taskSection === 'templates' ? 'selected' : ''} onClick={() => setTaskSection('templates')}><span>模板管理</span><small>{taskCounts.templates}</small></button><span className="side-list-divider" aria-hidden="true" /><button className={taskSection === 'runs' ? 'selected' : ''} onClick={() => setTaskSection('runs')}><span>运行记录</span><small>{taskCounts.runs}</small></button></nav>}{active === 'coordinator' && <p className="sidebar-note">协调 Agent 只负责分发与监控。</p>}{active === 'agents' && agents.map(row => <button key={row.id} disabled={busy} className={agentDetailId === row.id ? 'selected' : ''} aria-current={agentDetailId === row.id ? 'true' : undefined} onClick={() => setAgentDetailId(row.id)}>{row.name}</button>)}</div><small className="app-user">{checking ? '检查登录状态…' : ''}</small></aside>
-    <main className="main">{username && (coordinatorVisited || active === 'coordinator') && <SuperAgentCoordinator key={`coordinator-${username}-${workspaceId}`} visible={active === 'coordinator'} agents={agents} workspaceId={workspaceId} onOpenTasks={(mode = 'mine') => { setActive('tasks'); setTaskSection(mode); }} />}{active === 'tasks' && <AppTasks section={taskSection} selectedRunId={selectedRunId} onSectionChange={setTaskSection} onRunChange={setSelectedRunId} key={`${username}-${workspaceId}`} workspaceId={workspaceId} agents={agents} createRequest={taskCreateRequest} onCountsChange={setTaskCounts} />}{active === 'agents' ? <AppAgentsPanel key={username} agents={agents} selectedAgentId={agentDetailId} onSelectAgent={setAgentDetailId} reload={loadAgents} onChat={newChat} /> : active === 'chat' && <section className={`page chat-page${inspectorOpen ? ' is-context-open' : ''}`} aria-label="对话工作台">
+    <NavigationRail active={active} onSelect={setActive} labels={railLabels} dark={dark} onTheme={() => setDark(value => !value)} onSettings={() => { setLabelsDraft(railLabels); setSettingsOpen(true); }} workspace={<WorkspaceMenu workspaces={workspaces} currentId={workspaceId} onReload={loadCatalog} onSelected={id => { workspaceRestorer.current!.invalidate(); setWorkspaceId(id); setWorkspaceRestoration({ status: 'ready', value: { workspaces, selected_id: id } }); newChat(); }} />} user={<UserMenu user={username ? { username, displayName: username, signedInAt: 0 } : null} workspaceName={workspaces.find(row => row.id === workspaceId)?.name || 'Hexa 工作空间'} dark={dark} onRequestLogin={() => setLoginOpen(true)} onUserChange={user => { if (!user) void logout(); }} />} />
+    <aside className="sidebar"><header><b>{CLIENT_MODULES.find(item => item.id === active)?.label}</b><small>{workspaces.find(row => row.id === workspaceId)?.name || 'Hexa 工作空间'}</small></header>{active === 'chat' && <Button block icon={<PlusOutlined />} disabled={busy} onClick={() => newChat()}>新建对话</Button>}{active === 'tasks' && <Button block disabled={!workspaceReady} icon={<PlusOutlined />} onClick={() => { setTaskSection('mine'); setTaskCreateRequest(value => value + 1); }}>新建任务</Button>}<div className="side-list"><small>{active === 'chat' ? '对话历史' : active === 'tasks' ? '任务工作区' : active === 'coordinator' ? '协调工作区' : '全部智能体'}</small>{active === 'chat' && <>{historyLoading && <p role="status">正在加载历史…</p>}{historyError && <div role="alert">{historyError}<button onClick={() => void loadHistory()}>重试</button></div>}{!historyLoading && !historyError && !conversations.length && <p>暂无历史对话</p>}</>}{active === 'chat' && conversations.map(row => <button key={row.id} aria-label={row.title} disabled={busy} className={selected === row.id ? 'selected' : ''} onClick={() => setSelected(row.id)}>{row.title}{row.status === 'unknown' && <small> · 待恢复</small>}</button>)}{active === 'tasks' && <nav aria-label="任务菜单"><button className={taskSection === 'mine' ? 'selected' : ''} onClick={() => setTaskSection('mine')}><span>我的任务</span><small>{taskCounts.tasks}</small></button><button className={taskSection === 'templates' ? 'selected' : ''} onClick={() => setTaskSection('templates')}><span>模板管理</span><small>{taskCounts.templates}</small></button><span className="side-list-divider" aria-hidden="true" /><button className={taskSection === 'runs' ? 'selected' : ''} onClick={() => setTaskSection('runs')}><span>运行记录</span><small>{taskCounts.runs}</small></button></nav>}{active === 'coordinator' && <p className="sidebar-note">协调 Agent 只负责分发与监控。</p>}{active === 'agents' && agents.map(row => <button key={row.id} disabled={busy} className={agentDetailId === row.id ? 'selected' : ''} aria-current={agentDetailId === row.id ? 'true' : undefined} onClick={() => setAgentDetailId(row.id)}>{row.name}</button>)}</div><small className="app-user">{checking ? '检查登录状态…' : ''}</small></aside>
+    <main className="main">{(active === 'tasks' || active === 'coordinator') && !workspaceReady && <section className="page" aria-label="工作区恢复">{workspaceRestoration.status === 'error' ? <div role="alert" className="error-banner">{errorText(workspaceRestoration.cause)}<Button onClick={() => void workspaceRestorer.current!.load()}>重试工作区</Button></div> : <p role="status">{username ? '正在恢复工作区…' : '请先登录后恢复工作区。'}</p>}</section>}{workspaceReady && (coordinatorVisited || active === 'coordinator') && <SuperAgentCoordinator key={`coordinator-${username}-${workspaceId}`} visible={active === 'coordinator'} agents={agents} workspaceId={workspaceId} onOpenTasks={(mode = 'mine') => { setActive('tasks'); setTaskSection(mode); }} />}{active === 'tasks' && workspaceReady && <AppTasks section={taskSection} selectedRunId={selectedRunId} onSectionChange={setTaskSection} onRunChange={setSelectedRunId} key={`${username}-${workspaceId}`} workspaceId={workspaceId} agents={agents} createRequest={taskCreateRequest} onCountsChange={setTaskCounts} />}{active === 'agents' ? <AppAgentsPanel key={username} agents={agents} selectedAgentId={agentDetailId} onSelectAgent={setAgentDetailId} reload={loadAgents} onChat={newChat} /> : active === 'chat' && <section className={`page chat-page${inspectorOpen ? ' is-context-open' : ''}`} aria-label="对话工作台">
       <div ref={chatWorkspaceRef} className={`chat-workspace${inspectorOpen ? ' is-context-open' : ''}`} style={{ '--chat-context-width': `${contextWidth}px` } as CSSProperties}>
         <section className="chat-main" aria-label="会话内容">
           <header className="chat-main-head"><small>当前对话</small><h1>{conversations.find(row => row.id === selected)?.title || '新对话'}</h1><Tag color={gatewayState === 'connected' ? 'green' : gatewayState === 'unavailable' || gatewayState === 'unauthorized' ? 'red' : 'blue'}>{username ? gatewayLabel : '未登录'}</Tag><button className="chat-context-reveal" type="button" aria-label="展开上下文" onClick={() => setInspectorOpen(true)}>上下文</button></header>

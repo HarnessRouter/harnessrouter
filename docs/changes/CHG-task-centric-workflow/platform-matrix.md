@@ -99,3 +99,7 @@ Windows/Python 3.13 的 Gateway Harness 摘要、Hexa API Gateway SSE、能力�
 ## 2026-11-24 Runner 审批策略 fail-closed 接线
 
 Windows/Python 3.13 的无平台依赖 Runner 策略单测 3 项通过，覆盖审批对象、显式 `null` 和字段缺失；`runner/server.py` 入口语法检查通过，并在状态检查/后端选择前拒绝显式审批策略。Windows 无法导入 Runner 完整服务（既有 POSIX `pwd` 依赖），因此真实 `/turn` HTTP 入口未在本机执行。Linux Runner、真实 ACP Agent、Gateway native checkpoint、Response/SSE continuation、PostgreSQL 和部署仍为 `not_evaluated`。该切片没有新增 UHP capability，`tool_approvals` 继续保持未广告。
+
+## 工作区恢复边界（2026-11-24）
+
+客户端使用标准 Promise、请求代次与 React 状态，无 OS API、Shell、路径或权限分支。Windows Chromium/Edge 在 1440x900 / 390x900 验证加载、失败重试、深链详情、明确 null 和辅助目录故障；真实本地 HTTP API/SQLite 的工作区隔离、模板版本和协调器旅程通过。Linux/macOS 浏览器未单独运行，不以 Windows 结果替代；本次未改后端、迁移或 Runner，复用已有后端证据。具体命令、数量与截图哈希见 Change `workspace_restoration_boundary`。

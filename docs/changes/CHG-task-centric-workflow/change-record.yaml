@@ -1391,3 +1391,33 @@ full_hexa_api_regression:
   rollback: "本记录只增加验证证据，无数据、迁移或运行时回滚。"
   remaining: [authenticated live Gateway/BYOK smoke, native approval interception and exact continuation, UHP approval capability negotiation, deployed multi-replica failover, Linux Runner ACP conformance]
   next_action: "继续补充真实 Gateway/Runner 的插件物化、原生副作用前审批和 UHP 能力协商验证；保持 tool_approvals 不广告，整体目标保持进行中。"
+workspace_restoration_boundary:
+  owner: Codex
+  baseline: 81c28597
+  branch: codex/agent-orchestration
+  status: verified_slice
+  reuse_decision: extend authenticated shell workspace loading; reuse task and coordinator workbenches and existing API
+  acceptance_ids: [AC-1, AC-7, AC-12, AC-14]
+  scope: distinguish unknown workspace from restored null before task reads and writes; preserve deep links and reject stale restoration
+  evidence: "Chromium complete E2E: 27 passed / 1 failed; template-version journey displayed workspace mismatch after reload. Isolated rerun passed. Causality of this intermittent failure remains unproven; controlled delayed restoration tests will verify the independently identified startup boundary."
+  changes:
+    - "独立 loading/ready/error 区分未恢复与明确 selected_id=null；任务/协调器在认证和恢复成功后才挂载。"
+    - "失败原位重试；请求代次屏蔽迟到结果，会话失效、退出、手动切换工作区时使旧请求失效；菜单调用方仍能感知恢复失败。"
+  verification:
+    red: "受控延迟/503 的浏览器测试先 2 failed / 1 passed，证明未恢复就读取任务且协调器没有恢复错误入口；单元有效 Red 为旧成功/失败覆盖新选择。首次缺模块错误不计有效 Red。"
+    unit: "cd client; npm.cmd test; exit 0; 70 passed。新增 2 项涵盖状态、null、错误、重叠请求及会话失效。"
+    integration: "当前 worktree 独立 4187 端口运行 .artifacts/workspace-restore.config.ts；tasks.spec.ts 原有 Chromium/Edge 共 52 项通过。新增 workspace-restoration.spec.ts 最终 8 passed in 55.5s，覆盖 1440/390、零提前读取/写入、失败重试和辅助目录故障。首次窄屏断言误要求隐藏侧栏按钮 disabled，按既有响应式契约改为不存在后通过。"
+    e2e: "npx.cmd playwright test -c playwright.e2e.config.ts --project=chromium --workers=1; 28 passed in 9.5m。最终返回值兼容修正后按 workspaces isolate|workspace settings|template versions|coordinator dispatches 重跑，4 passed in 1.5m。使用真实本地 FastAPI/SQLite/Cookie/HTTP GatewayClient，Gateway 为受控 HTTP 服务，不证明真实 Provider。"
+    static: "npm.cmd run typecheck; npm.cmd run build; exit 0，最后构建 18.81s；主 chunk 964.96 KB 的既有 advisory 保留。YAML safe_load 与 git diff --check passed。"
+    visual: "Windows Chromium/Edge；1440x900 / 390x900，加载、错误重试与恢复后详情无页面溢出，移动抽屉等待可见并禁用截图动画后实际查看。截图保存于已忽略 client/.artifacts/orchestration/workspace-*.png。"
+    screenshot_sha256:
+      loading_1440: 923D06930BA2848ACAE064B06107A4DF158E27567629140FE03FD63BB0783028
+      loading_390: 6D20BE4D7DFAED4F477DEB8DE63870D4B2DE049301755FDCB5C4CF643E79C405
+      error_390: 804AA3AEB6B89DC436C0B98192202D09253644A2B1EAABF0A19CD85C581852DB
+      ready_1440: 623A39C97E8BF5457B50AD4C0C31EC1AF04DC12CB5A6819BFC01EC63BD236418
+      ready_390: 7E6399F1F90C500DD3881A5DBB711F78DCBBB8350C43F343DC76A6193B33ADC9
+  security_review: "复用 HttpOnly Cookie 与服务端权限，不改 API 或授权规则；错误经过既有 safeAppError，旧请求不改变当前工作区，不新增凭据存储或外部端点。"
+  limitations: [original intermittent template failure causality not proven, real Gateway/BYOK and native approval conformance, deployed failover, Linux Runner ACP]
+  rollback: "回退客户端壳层门禁与恢复控制器，无数据迁移或历史改写。"
+  remaining: [authenticated real Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP capability negotiation, deployment and Linux Runner conformance]
+  next_action: "继续审计完整编排目标与真实运行时门禁；工具审批未完成前不广告 tool_approvals，目标保持 active。"
