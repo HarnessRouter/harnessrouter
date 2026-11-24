@@ -1329,3 +1329,22 @@ postgres_all_derived_binding_verification:
   rollback: "Revert the binding changes and stop newly configured derived-node Runs; no migration rollback is required, historical records remain readable."
   remaining: [real Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, deployed failover and Linux Runner ACP conformance]
   next_action: "Continue with live Gateway plugin materialization and native Runner checkpoint verification when authenticated runtime coverage is available; do not advertise tool_approvals before conformance."
+execution_binding_dispatch_audit:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: 0329664d
+  branch: codex/agent-orchestration
+  reuse_decision: tighten the existing binding requirement in the common dispatch path; no schema, UHP, plugin or database change
+  scope: honor persisted execution_binding for loop/repeat and any derived NodeRun instead of regenerating it
+  acceptance_ids: [AC-20, AC-22, AC-23, AC-28, AC-32, AC-40, AC-42]
+  verification:
+    targeted: "python -X utf8 -m pytest -q hexa-api/tests/test_task_workflows.py -k \"bounded_cross_node_loop or bounded_loop_reexpands_foreach_body_each_iteration or bounded_repeat_appends_attempts\" hexa-api/tests/test_fanout_retry.py -k \"retry_preserves_successful_items_and_appends_only_failed_calls\" --tb=short; exit 0；4 passed in 8.33s。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_subgraph.py hexa-api/tests/test_dynamic_dag.py hexa-api/tests/test_nested_foreach.py hexa-api/tests/test_fanout_retry.py hexa-api/tests/test_fanout_resume.py hexa-api/tests/test_task_concurrency.py hexa-api/tests/test_run_events.py hexa-api/tests/test_command_receipts.py hexa-api/tests/test_run_leases.py hexa-api/tests/test_reconciliation.py hexa-api/tests/test_task_workflows.py --tb=short; exit 0；253 passed in 278.51s。"
+    static: "python -m py_compile hexa-api/app/tasks/service.py；YAML safe_load；git diff --check；passed。"
+  security_review: "A persisted execution_binding now makes any NodeRun with a binding, including ordinary loop/repeat retries, a required-binding dispatch. A changed or missing binding fails before Gateway create_response; no current Harness re-resolution can widen a Run's capability or permission identity."
+  live_gateway_audit: "GET http://127.0.0.1:3000/v1/uhp returned HTTP 307 to the Gateway login page in the current unauthenticated shell. No authenticated live plugin/provider/Runner conformance claim is made; existing gateway and runner fixture suites remain controlled evidence only."
+  limitations: [authenticated live Gateway/BYOK smoke, native approval interception and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP conformance]
+  rollback: "Revert this dispatch-path check and stop newly configured Runs; no data or migration rollback is needed."
+  remaining: [authenticated live Gateway/BYOK smoke, native approval interception and durable continuation, UHP approval capability negotiation, deployed multi-replica failover, Linux Runner ACP conformance]
+  next_action: "Obtain an authenticated live Gateway/Runner test route for plugin and native approval conformance; until then keep tool_approvals unadvertised and the goal active."

@@ -1036,8 +1036,8 @@ class TaskExecutor:
                         from app.tasks.execution_binding import execution_binding
                         dynamic_binding_required = unit_kind in {
                             'subgraph_node', 'foreach_item', 'dynamic_item', 'foreach_nested_item',
-                        }
-                        binding = state.get('execution_binding') if dynamic_binding_required else None
+                        } or isinstance(state.get('execution_binding'), dict)
+                        binding = state.get('execution_binding')
                         if not isinstance(binding, dict) and not dynamic_binding_required:
                             binding = execution_binding(snapshot, item.get('agent_id'), item.get('model'))
                         context['execution_binding'] = binding
