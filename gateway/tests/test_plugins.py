@@ -185,6 +185,21 @@ def test_an_invalid_component_is_skipped_and_recorded(api):
     assert all(s["reason"] for s in pl["skipped"])
 
 
+@pytest.mark.parametrize(("frontmatter", "description"), [
+    # As the console writes it (JSON.stringify): the # is text and the escapes are decoded.
+    ('description: "Formats issues like #123 and says \\"done\\""', 'Formats issues like #123 and says "done"'),
+    # Nothing after the colon, the value on the indented lines: YAML's plain multi-line form.
+    ("description:\n  Reads the shop's tickets\n  and sorts them.", "Reads the shop's tickets and sorts them."),
+    ("description: >-\n  Folded\n  text.", "Folded text."),
+    ("description: 'It''s quoted' # a comment", "It's quoted"),
+], ids=["console-json", "plain-on-next-lines", "folded", "single-quoted"])
+def test_a_skill_description_is_read_as_yaml_reads_it(api, frontmatter, description):
+    skill = [{"path": "skills/shop-skill/SKILL.md", "content": f"---\nname: shop-skill\n{frontmatter}\n---\nBody\n"}]
+    h = _create(api, plugins=[{"files": _package(manifest=MANIFEST, skill=False, extra=skill)}])
+    (pl,) = h["plugins"]
+    assert pl["skipped"] == [] and pl["skills"] == [{"name": "shop-skill", "description": description}]
+
+
 def test_a_component_collision_with_the_harness_is_refused(api):
     direct = [{"name": "remote", "url": "https://direct.example.invalid/mcp", "transport": "http"}]
     r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code", "mcp_servers": direct,
