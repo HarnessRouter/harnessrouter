@@ -1443,3 +1443,27 @@ cancel_unknown_receipt_boundary:
   rollback: "回退取消路径的回执收敛与 fence 撤销；历史 Run 无迁移。"
   remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
   next_action: "继续验证真实 Gateway/Runner 的响应取消竞态和原生审批；工具审批未完成前保持 tool_approvals 不广告。"
+
+client_reconciliation_surface:
+  date: "2026-11-24"
+  owner: Codex
+  status: verified_slice
+  baseline: bfe27791
+  branch: codex/agent-orchestration
+  references: [spec.md#CommandReceipt回执, spec.md#AC-35-CommandReceipt回执, spec.md#AC-37-显式reconciliation]
+  reuse_decision: expose the existing explicit reconciliation API in the run inspector; no new Gateway/UHP approval capability
+  scope: make unknown NodeRun receipts actionable without automatic replay
+  acceptance_ids: [AC-8, AC-35, AC-37]
+  changes:
+    - "客户端为 unknown/reconciliation_required NodeRun 显示待确认状态和不会自动重试的说明。"
+    - "仅在 response_id 存在时提供检查 Gateway 结果按钮，调用既有 reconcile API 并使用独立幂等键；不创建新 Run、不发起 create_response。"
+  verification:
+    unit: "cd client; npm.cmd test; exit 0；71 passed。"
+    typecheck: "cd client; npm.cmd run typecheck; exit 0。"
+    browser: "cd client; npx.cmd playwright test -c playwright.app.config.ts tests/app-ui/tasks.spec.ts --project=chromium --workers=1 -g \"unknown node result\"；1 passed in 21.2s。"
+    static: "YAML safe_load 与 git diff --check；passed。"
+  security_review: "UI 不接受模型或用户提供的 response_id/参数；服务端继续验证 receipt、回执状态、response_id、任务权限和幂等键。未知结果仍不会自动重试，工具审批 capability 继续不广告。"
+  limitations: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
+  rollback: "回退客户端类型、reconcile action、显示入口和对应测试；后端回执与历史 Run 不变。"
+  remaining: [authenticated live Gateway/BYOK, native pre-side-effect approval and exact continuation, UHP approval capability negotiation, deployed failover, Linux Runner ACP]
+  next_action: "继续验证真实 Gateway/Runner 的 response 读取与 native approval 边界；保持 tool_approvals 不广告。"

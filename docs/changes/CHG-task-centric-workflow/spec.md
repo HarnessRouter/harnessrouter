@@ -339,6 +339,8 @@ serial 按已保存计划顺序挑选一个就绪节点；parallel 挑选所有�
 丢失时写 `unknown` 并置 `reconciliation_required=true`。`unknown` 回执不能被重试逻辑自动重新派发；只有用户显式创建新 Run 或
 未来已实现且精确绑定的 reconciliation 流程才能继续。节点调试和 Run 节点摘要可以读取回执摘要，但不得扩大秘密字段。
 
+客户端对带 `unknown` 且 `reconciliation_required=true` 的 NodeRun 显示“执行结果待确认”，明确说明不会自动重试；只有回执存在 `response_id` 时显示显式“检查 Gateway 结果”操作。该操作只调用现有 reconciliation API，携带独立幂等键，成功或仍在执行都刷新同一 Run 的回执状态，不创建新 Run、不调用 `create_response`，也不把普通 `input_required` 当作工具审批。
+
 Hexa 提供显式的 `POST /runs/{run_id}/nodes/{attempt_id}/reconcile`。该接口只读取回执已有的 `response_id`，不调用新的 Agent
 请求；Gateway 返回仍在执行或读取失败时保持 `unknown`，返回已确认的 terminal response 后才一次性投影 NodeRun、CommandReceipt
 和 RunEvent。请求必须带幂等键，重复请求只返回已保存回执，不重复查询或执行；没有 response ID、回执已收敛或作用域不符时拒绝。

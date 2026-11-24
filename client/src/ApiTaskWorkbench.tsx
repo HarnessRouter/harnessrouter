@@ -5,7 +5,7 @@ import {
   AppApiError, appCreateTask, appGetTask, appListTasksPage, appListRuns, appGetRun, appSaveTaskInput,
   appSaveTaskWorkflow, appStartTaskRun, appControlRun, appContinueRun, appWatchTaskRun,
   appListTemplates, appGetTemplate, appSaveTemplate, appSaveTaskAsTemplate, appTaskState,
-  appDebugNode, appRetryNode, appSkipNode, appAdoptNode, appArtifactBlob, appListTaskArtifacts, appListRunArtifacts, appListNodeArtifacts,
+  appDebugNode, appRetryNode, appReconcileNode, appSkipNode, appAdoptNode, appArtifactBlob, appListTaskArtifacts, appListRunArtifacts, appListNodeArtifacts,
   type AppAgent, type AppTask, type AppRun, type AppTemplate, type AppTaskNode, type AppArtifact,
 } from './app-api';
 import { RunItemHistory } from './RunItemHistory';
@@ -565,6 +565,7 @@ function RunSnapshot({ run, onAction }: { run: AppRun; onAction: (action: () => 
     {error && <p role="alert">{error}</p>}
     {tab === 'debug' && debugFailed && <Button loading={debugLoading} onClick={() => setDebugRetry(value => value + 1)}>重试加载调试</Button>}
     {tab === 'debug' && <><h4>节点调试</h4>{debug ? <><p>尝试 {debug.attempt} · {nodeLabels[debug.status] || debug.status}</p><h4>输入</h4><pre>{JSON.stringify(debug.input, null, 2)}</pre><h4>输出</h4><pre>{JSON.stringify(debug.output, null, 2)}</pre><PagedArtifacts key={`node-${debug.id}`} kind="node" id={debug.id} /><h4>错误</h4><p>{debug.error_code || '无'}</p><details><summary>执行环境与尝试历史</summary><pre>{JSON.stringify(debug.environment, null, 2)}</pre><pre>{JSON.stringify(debug.attempts, null, 2)}</pre>{debug.attempts_pagination?.has_more && <Button loading={debugLoading} onClick={() => void loadMoreDebugAttempts()}>加载更多尝试</Button>}</details></> : <p>暂无调试记录</p>}{itemHistoryPanel}</>}
+    {attempt?.command_receipt?.side_effect_state === 'unknown' && <section className="run-unknown-receipt" aria-label="未知执行结果"><strong>执行结果待确认</strong><p>Gateway 已接受或可能已执行此调用，Hexa 不会自动重试。</p>{attempt.command_receipt.reconciliation_required && attempt.command_receipt.response_id && <Button disabled={busy} onClick={() => void action(() => appReconcileNode(run.id, attempt.id, crypto.randomUUID()))}>检查 Gateway 结果</Button>}</section>}
     <div className="task-api-actions">{attempt?.status === 'succeeded' && <Button disabled={busy} onClick={() => void action(() => appAdoptNode(run.task_id, selected, attempt.id))}>采用为当前结果</Button>}
       {attempt && ['failed', 'canceled'].includes(attempt.status) && <Button disabled={busy} onClick={() => void action(() => activeRun(run) ? appRetryNode(run.id, selected) : appStartTaskRun(run.task_id, crypto.randomUUID(), { kind: 'rerun', target_node: selected }))}>{activeRun(run) ? '重试节点' : '新建重跑 Run'}</Button>}
       {activeRun(run) && selectedNode?.allow_skip && attempt && ['idle', 'failed', 'canceled'].includes(attempt.status) && <Button disabled={busy} onClick={() => void action(() => appSkipNode(run.id, selected))}>跳过节点</Button>}

@@ -28,6 +28,23 @@ test('task table, filters, counts and details use API rows, including failed and
   await expect(detail).toBeVisible();
 });
 
+test('unknown node result exposes explicit Gateway reconciliation without retrying', async ({ page }) => {
+  const fixture = await taskFixture(page);
+  const run = fixture.runs.find(row => row.id === 20)!;
+  run.nodes[0].command_receipt = {
+    id: 901, node_run_id: run.nodes[0].id, command_id: 'command-901', request_hash: 'a'.repeat(64),
+    side_effect_state: 'unknown', reconciliation_required: true, response_id: 'response-901',
+  };
+  await page.goto('/runs/20');
+  await page.getByRole('button', { name: '打开流程图' }).click();
+  await page.getByRole('button', { name: '资料收集 节点' }).click();
+  const properties = page.getByRole('complementary', { name: '运行属性' });
+  await expect(properties.getByRole('region', { name: '未知执行结果' })).toContainText('不会自动重试');
+  await properties.getByRole('button', { name: '检查 Gateway 结果' }).click();
+  await expect.poll(() => fixture.writes.find(row => row.path === '/api/hexa/runs/20/nodes/201/reconcile')?.body).toEqual({});
+  await expect(properties.getByRole('region', { name: '未知执行结果' })).toBeVisible();
+});
+
 test('task detail shows latest run outputs and opens the flow without switching to run history', async ({ page }) => {
   await taskFixture(page); await enter(page);
   await page.getByRole('row', { name: /安全事件调查/ }).click();

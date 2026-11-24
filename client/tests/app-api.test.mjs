@@ -256,3 +256,20 @@ test('item history requests a fixed anchor and retains server pagination', async
   assert.equal(seen[0].init.credentials, 'include');
   assert.equal(seen[0].init.method || 'GET', 'GET');
 });
+
+test('reconciliation posts only the node attempt and preserves idempotency', async () => {
+  const api = await import('../src/app-api.ts');
+  let seen;
+  const restore = withFetch(async (input, init) => {
+    seen = { input, init };
+    return Response.json({ id: 4, node_run_id: 19, command_id: 'command-19', request_hash: 'a'.repeat(64), side_effect_state: 'unknown', reconciliation_required: true, response_id: 'response-19' }, { status: 202 });
+  });
+  try {
+    const result = await api.appReconcileNode(7, 19, 'reconcile-key');
+    assert.equal(result.node_run_id, 19);
+  } finally { restore(); }
+  assert.equal(seen.input, '/api/hexa/runs/7/nodes/19/reconcile');
+  assert.equal(seen.init.method, 'POST');
+  assert.equal(seen.init.headers.get('idempotency-key'), 'reconcile-key');
+  assert.equal(seen.init.credentials, 'include');
+});
