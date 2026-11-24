@@ -4485,6 +4485,16 @@ def _capability_skill_summary(skill: dict) -> dict:
     result = {"name": str(skill.get("name") or skill.get("id") or "")}
     if isinstance(skill.get("description"), str):
         result["description"] = skill["description"]
+    if isinstance(skill.get("blob"), str) and skill["blob"]:
+        result["blob"] = skill["blob"]
+    elif isinstance(skill.get("files"), list):
+        # The files themselves never enter the Harness digest. A canonical digest still makes
+        # an inline skill edit invalidate an existing Run without exposing its body.
+        result["files_digest"] = hashlib.sha256(
+            json.dumps(skill["files"], ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":")).encode("utf-8")).hexdigest()
+    elif isinstance(skill.get("content"), str) and skill["content"]:
+        result["content_digest"] = hashlib.sha256(skill["content"].encode("utf-8")).hexdigest()
     return result
 
 

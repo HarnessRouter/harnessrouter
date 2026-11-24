@@ -1,6 +1,7 @@
 """A turn addressed to a harness runs on that harness or not at all."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -52,3 +53,14 @@ def test_capability_binding_rejects_bad_or_changed_digest_and_accepts_current_on
     with pytest.raises(Exception) as changed:
         gw._validate_capability_binding({'capability_digest': 'b' * 64}, harness)
     assert 'hexa_capability_changed' in str(getattr(changed.value, 'detail', changed.value))
+
+
+def test_direct_skill_content_changes_the_digest_without_exposing_the_body():
+    first = {'base': 'claude-code', 'mcp_servers': '[]', 'disabled_tools': '[]',
+             'skills': json.dumps([{'name': 'guide', 'files': [{'path': 'SKILL.md', 'content': 'one'}]}]),
+             'plugins': '[]'}
+    second = {**first, 'skills': json.dumps([{'name': 'guide', 'files': [{'path': 'SKILL.md', 'content': 'two'}]}])}
+    one = gw._harness_capability_digest(first)
+    two = gw._harness_capability_digest(second)
+    assert one != two
+    assert 'one' not in one and 'two' not in two
