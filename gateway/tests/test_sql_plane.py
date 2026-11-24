@@ -106,6 +106,29 @@ def test_existing_limit_is_respected():
     assert not added and out.count("LIMIT") == 1
 
 
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM t LIMIT 5 --top five",
+    "SELECT * FROM t ORDER BY x FETCH FIRST 3 ROWS ONLY --x",
+    "SELECT * FROM t\nLIMIT 5\n--note",
+])
+def test_postgres_word_comments_after_a_limit_do_not_add_another_limit(monkeypatch, sql):
+    """Postgres reads `--word` as a comment, MySQL only `-- word`. The row cap read the statement as
+    MySQL does, so it missed the statement's own limit and appended a second LIMIT after the
+    comment, which Postgres refuses: the query never ran."""
+    import asyncio
+    import sql_plane
+
+    received = []
+
+    async def fake(dsn, statement, timeout, max_rows):
+        received.append(statement)
+        return {"columns": [], "rows": [], "row_count": 0, "truncated": False}
+
+    monkeypatch.setattr(sql_plane, "_pg_query", fake)
+    asyncio.run(sql_plane.run_query("postgres", "", sql, max_rows=10))
+    assert received == [sql]
+
+
 def test_limit_with_offset_is_respected():
     out, added = with_limit("SELECT * FROM t LIMIT 10 OFFSET 20", 500)
     assert not added
