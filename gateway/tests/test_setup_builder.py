@@ -256,7 +256,25 @@ CRM = mcp_id("https://crm.acme.example/mcp")
     ({"files": [{"path": "SKILL.md", "content":
                   "---\nname: tone\npadding: " + "x" * 1500 + "\ndescription: After padding\n---\n"}]},
      "After padding"),
-], ids=["folded", "literal", "quoted-comment", "body-only", "plain-content", "long-frontmatter"])
+    # The console writes a description with JSON.stringify: escapes, and a ` #` that is text.
+    ({"files": [{"path": "SKILL.md", "content":
+                  '---\nname: tone\ndescription: "Formats issues like #123 and says \\"done\\""\n---\n'}]},
+     'Formats issues like #123 and says "done"'),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: 'It''s the shop voice' # note\n---\n"}]}, "It's the shop voice"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: Writes replies # how\n  in the shop's voice.\n---\n"}]},
+     "Writes replies in the shop's voice."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription:\n  Writes replies\n\n  in the shop's voice.\n---\n"}]},
+     "Writes replies in the shop's voice."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  '---\nname: tone\ndescription: "Runs over\n  two lines"\n---\n'}]}, "Runs over two lines"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "\ufeff---\r\nname: tone\r\ndescription: Windows line ends\r\n---\r\nBody\r\n"}]},
+     "Windows line ends"),
+], ids=["folded", "literal", "quoted-comment", "body-only", "plain-content", "long-frontmatter",
+        "console-json", "single-quoted", "plain-continued", "plain-on-next-lines", "quoted-two-lines", "bom-crlf"])
 def test_skill_about_reads_description_from_complete_frontmatter(skill, about):
     assert gw._setup_skill_about(skill) == about
 
