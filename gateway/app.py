@@ -8096,11 +8096,13 @@ def _decode_input_file(p: dict) -> tuple[str | None, str | None, str | None, str
         if not fname:
             raise uhp_error(400, "invalid_input", "An input_file sent inline (file_data) carries a filename: "
                                                   "the name the agent finds it under.", "input")
-        b64 = _b64_or_none(b64)
-        if b64 is None:
+        payload = "".join(b64.split())
+        # A zero-byte file is a file (the console sends one for an empty attachment) and is kept as before; only
+        # a payload that is there and does not decode is refused.
+        if payload and _b64_or_none(payload) is None:
             raise uhp_error(400, "invalid_input", "An input_file's file_data is base64, as a data URL "
                                                   "(data:application/pdf;base64,...) or on its own.", "input")
-        return fname, b64, media, None
+        return fname, payload, media, None
     if p.get("file_id"):
         return fname, None, None, p["file_id"]
     raise uhp_error(400, "invalid_input", "An input_file carries file_data (inline) or file_id.", "input")

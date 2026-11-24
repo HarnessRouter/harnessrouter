@@ -111,6 +111,12 @@ def test_an_input_file_that_cannot_reach_the_agent_is_refused_by_name(part, word
     assert e.value.status_code == 400 and words in str(e.value.detail)
 
 
+def test_an_empty_input_file_is_kept_as_before_not_refused():
+    # the console sends "data:<type>;base64," for a zero-byte attachment; a 400 would fail the whole turn
+    [f] = gw._parse_input(_file(filename="empty.txt", file_data="data:text/plain;base64,"))[1]
+    assert f["filename"] == "empty.txt" and f["content_b64"] == ""
+
+
 def test_an_input_file_reads_as_before():
     [f] = gw._parse_input(_file(filename="q3.txt", file_data="data:text/plain;base64,aGVsbG8=\n"))[1]
     assert f == {"filename": "q3.txt", "content_b64": "aGVsbG8=", "file_id": None, "media_type": "text/plain"}
