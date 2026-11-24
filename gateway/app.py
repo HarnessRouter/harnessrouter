@@ -19633,8 +19633,14 @@ async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -
         # memories on it must not go dark because someone pasted a wrong key.
         base_url = str(config.get("base_url") or "").strip()
         if base_url:
-            if await _ssrf_check(base_url):
-                raise uhp_error(422, "memory_invalid", "That address can't be used here: it must be https, on a public address.", "config.base_url")
+            why = await _ssrf_check(base_url)
+            if why:
+                # said as what is wrong with it: "must be https, on a public address" was said for every refusal, so an
+                # address with a port that is not a number read as a rule this self-hosted instance does not have
+                said = {"invalid url": "it is not a valid address", "url has no host": "it has no host",
+                        "MCP endpoints must be http or https": "it must be http or https"}.get(
+                            why, "it must be https, on a public address")
+                raise uhp_error(422, "memory_invalid", f"That address can't be used here: {said}.", "config.base_url")
             own = _own_service_address(base_url)
             if own:
                 raise uhp_error(422, "memory_invalid", f"That address can't be used: {own}.", "config.base_url")

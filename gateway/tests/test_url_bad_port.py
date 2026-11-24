@@ -49,3 +49,17 @@ def test_a_good_port_still_reads_as_before(monkeypatch):
     assert asyncio.run(gw._cloud_base_refused("http://10.0.0.5:3000")) is None
     assert gw._own_service_address("http://localhost:8080") == "it is this instance itself"
     assert gw._own_service_address("http://localhost:8000") == ""
+
+
+@pytest.mark.parametrize("port", ["abc", "99999"])
+def test_saving_a_memory_engine_at_an_address_with_a_bad_port_says_it_is_not_valid(port, local):
+    """It was a 500 on a self-hosted instance (the port read in _own_service_address), and once refused it read
+    "it must be https, on a public address": a rule a self-hosted instance does not have."""
+    from fastapi.testclient import TestClient
+    headers = {"x-harness-internal": "test-internal-key", "x-harness-org": "portorg",
+               "x-harness-member": "tester@example.com"}
+    with TestClient(gw.app) as c:
+        r = c.put("/v1/plugs/reme", headers=headers,
+                  json={"config": {"base_url": f"https://reme.example.com:{port}"}, "secrets": {"api_key": "k"}})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "memory_invalid"
+    assert r.json()["error"]["message"] == "That address can't be used here: it is not a valid address."
