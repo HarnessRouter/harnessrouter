@@ -394,3 +394,14 @@ BoundApprovalGate 与 journal 决定，capture/resume 均在有效 lease 下完�
 先写字节契约和 HTTP 失败测试，再实现 Router/目录；再写 Gateway coordinator 的真实 HTTP/SQLite/HITL 测试。
 Windows 验证纯 schema/目录及 Gateway 组合；Linux 交付镜像验证 server 接线和完整内部旅程。失败开始前零工具，
 start 后不确定保留 unknown；回退保留历史回执和 pin。本切片不注册生产 Provider、不更改公开 UHP 或解除审批门禁。
+
+## 2026-11-24 Hexa 审批等待状态投影
+
+在 GatewayClient 解析 `tool_approval_required` 的安全请求摘要，在任务领域增加独立的 `waiting_approval` 状态，
+并让 TaskExecutor 持久化 NodeRun/Run 状态、response ID、未开始的 CommandReceipt 和 RunEvent。事件流在该状态下继续
+保持可读；普通人工 `continue` 不得恢复审批等待。该步骤只建立状态和观察边界，不执行决定、不调用 native resume，
+也不解除工作流审批策略的 preflight 门禁。
+
+先覆盖 Gateway SSE 提取、状态转换和真实 TaskExecutor 结果写回，再运行任务、并发、审批策略和事件回归。后续步骤仍是
+受信生产 backend factory、审批决定/精确 continuation、Response/SSE 续接、客户端 Attention/审批卡，以及全部完成后
+才发布新的 UHP 日期版本和 capability discovery。

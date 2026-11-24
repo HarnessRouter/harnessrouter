@@ -250,7 +250,7 @@ def build_router(app, require_session, user_id):
                     previous = text
                 else:
                     yield ': heartbeat\n\n'
-                if snapshot['status'] not in ('pending', 'running') or snapshot['paused']:
+                if snapshot['status'] not in ('pending', 'running', 'waiting_approval') or snapshot['paused']:
                     return
                 await asyncio.sleep(0.3)
         return StreamingResponse(snapshots(), media_type='text/event-stream', headers={'X-Accel-Buffering': 'no'})

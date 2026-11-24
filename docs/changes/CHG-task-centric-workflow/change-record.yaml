@@ -1,4 +1,27 @@
 id: CHG-task-centric-workflow
+approval_waiting_projection:
+  date: "2026-11-24"
+  owner: Codex
+  baseline: 83745081
+  branch: codex/agent-orchestration
+  status: verified_state_projection
+  references: [spec.md#状态契约, plan.md#2026-11-24-hexa-审批等待状态投影]
+  acceptance_ids: [AC-50]
+  reuse_decision: reuse GatewayClient SSE parsing, existing Run/NodeRun/CommandReceipt/RunEvent persistence and active-run locking; do not open UHP capability or native continuation
+  changes:
+    - "GatewayClient 识别 tool_approval_required incomplete response，保留 response_id 和安全审批摘要。"
+    - "RunStatus、TaskExecutor 和任务事件加入 waiting_approval；审批等待保持 not_started，不进入 failed 或 unknown。"
+    - "事件流和活动运行锁识别 waiting_approval；人工 continue 不可绕过审批。"
+  verification:
+    red: "Gateway SSE 提取和 TaskExecutor 状态投影测试先失败，分别缺少 approval 字段和 waiting_approval 状态；实现后转 Green。"
+    unit: "python -X utf8 -m pytest -q hexa-api/tests/test_task_domain.py hexa-api/tests/test_gateway_sse.py hexa-api/tests/test_task_concurrency.py；40 passed。"
+    regression: "python -X utf8 -m pytest -q hexa-api/tests/test_task_approval_policy.py hexa-api/tests/test_task_workflows.py hexa-api/tests/test_run_events.py hexa-api/tests/test_tasks_api.py；163 passed。"
+    static: "Python compile、YAML safe_load 和 git diff --check 在提交前执行。"
+  security_review: "只保存 Gateway 已提供的安全审批摘要和 response ID；不保存原始工具参数、checkpoint、凭据或 native state。等待状态保持 receipt not_started；当前策略 preflight 仍 fail closed。"
+  unit_integration_e2e: "GatewayClient SSE 单测和真实 TaskExecutor 数据库组合测试已覆盖；生产 Gateway/Runner、Response/SSE continuation、客户端审批 UI 和 UHP conformance 未完成。"
+  rollback: "回退状态投影代码和测试即可；现有 waiting_human、unknown receipt、公开 UHP discovery 和策略门禁不受影响。"
+  limitations: [production backend factory, approval decision/resume, provider conformance, client approval card, UHP publication]
+  next_action: "接入受信生产 backend factory 和审批决定 continuation；完成前不打开 tool_approvals。"
 native_approval_bridge:
   date: "2026-11-24"
   owner: Codex

@@ -42,6 +42,11 @@ def test_run_transition_requires_waiting_human_decision():
     assert transition_run(RunStatus.PENDING, "start") is RunStatus.RUNNING
     assert transition_run(RunStatus.RUNNING, "wait_human") is RunStatus.WAITING_HUMAN
     assert transition_run(RunStatus.WAITING_HUMAN, "continue") is RunStatus.RUNNING
+    assert transition_run(RunStatus.RUNNING, "wait_approval") is RunStatus.WAITING_APPROVAL
+    assert transition_run(RunStatus.WAITING_APPROVAL, "continue_approval") is RunStatus.RUNNING
+
+    with pytest.raises(InvalidTransition):
+        transition_run(RunStatus.WAITING_APPROVAL, "continue")
 
     with pytest.raises(InvalidTransition):
         transition_run(RunStatus.COMPLETED, "continue")
@@ -51,6 +56,7 @@ def test_task_status_is_derived_from_active_run_and_final_report():
     assert derive_task_status([], final_report_succeeded=False) is TaskStatus.DRAFT
     assert derive_task_status([RunStatus.RUNNING], final_report_succeeded=False) is TaskStatus.RUNNING
     assert derive_task_status([RunStatus.WAITING_HUMAN], final_report_succeeded=False) is TaskStatus.WAITING
+    assert derive_task_status([RunStatus.WAITING_APPROVAL], final_report_succeeded=False) is TaskStatus.WAITING
     assert derive_task_status([RunStatus.COMPLETED], final_report_succeeded=True) is TaskStatus.COMPLETED
     assert derive_task_status([RunStatus.FAILED], final_report_succeeded=False) is TaskStatus.FAILED
 

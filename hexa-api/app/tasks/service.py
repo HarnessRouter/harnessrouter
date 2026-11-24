@@ -16,7 +16,7 @@ from app.tasks.domain import NodeSpec, WorkflowSpec, redact, validate_workflow
 from app.tasks.fanout import node_record_usage
 
 
-ACTIVE = ('pending', 'running', 'waiting_human')
+ACTIVE = ('pending', 'running', 'waiting_human', 'waiting_approval')
 
 
 def is_human_node(item):
@@ -722,7 +722,8 @@ async def prepare_run(db, task, body, key, gateway, secrets):
     if not definition['nodes']:
         raise TaskError('invalid_workflow', '请先添加 Agent 节点。', 422)
     active = db.scalar(select(Run).where(Run.task_id == task.id, Run.status.in_(ACTIVE)))
-    if active and not ((active.status == 'waiting_human' or active.paused) and active.workflow_revision != task.current_revision):
+    if active and not ((active.status in ('waiting_human', 'waiting_approval') or active.paused)
+                       and active.workflow_revision != task.current_revision):
         raise TaskError('active_run_exists', '任务已有正在运行的 Run。')
     from app.tasks.resume import validate_resume, seed_resume
     resume = validate_resume(db, task, revision, definition, body, latest_nodes=latest_nodes, error=TaskError)
@@ -1357,7 +1358,12 @@ class TaskExecutor:
                 on_progress=progress, on_execution=execution)
             if result.get('execution'):
                 await execution(result['execution'])
-            if result.get('status') != 'completed':
+            if (result.get('status') == 'incomplete'
+                    and isinstance(result.get('approval'), dict)
+                    and result['approval'].get('id')
+                    and result['approval'].get('command_id')):
+                error = 'tool_approval_required'
+            elif result.get('status') != 'completed':
                 error = 'agent_incomplete'
             if len(encoded(result).encode()) > 1024 * 1024:
                 error = 'storage_limit_exceeded'
@@ -1414,13 +1420,16 @@ class TaskExecutor:
                 db.add(artifact)
                 db.flush()
                 artifacts.append({'id': artifact.id, 'filename': artifact.filename, 'media_type': artifact.media_type, 'bytes': artifact.bytes})
-            row.status = 'failed' if error else 'succeeded'
+            waiting_approval = error == 'tool_approval_required'
+            row.status = 'waiting_approval' if waiting_approval else ('failed' if error else 'succeeded')
             row.error_code = error
             if isinstance(result, dict) and result.get('response_id'):
                 row.response_id = str(result['response_id'])
             elif exception_response_id:
                 row.response_id = str(exception_response_id)
-            if error:
+            if waiting_approval:
+                row.output_json = encoded({'approval': redact(result.get('approval'), self.secrets)})
+            elif error:
                 row.output_json = None
             else:
                 safe_result = dict(redact(result, self.secrets)) if isinstance(result, dict) else {'value': redact(result, self.secrets)}
@@ -1431,10 +1440,16 @@ class TaskExecutor:
             row.finished_at = datetime.now(timezone.utc)
             receipt = db.scalar(select(CommandReceipt).where(CommandReceipt.node_run_id == row.id))
             if receipt:
-                receipt.side_effect_state = 'unknown' if uncertain else ('failed' if error else 'completed')
+                receipt.side_effect_state = 'unknown' if uncertain else ('not_started' if waiting_approval else ('failed' if error else 'completed'))
                 receipt.reconciliation_required = uncertain
                 receipt.response_id = row.response_id
                 receipt.error_code = error
-            append_run_event(db, run.id, 'node.unknown' if uncertain else ('node.failed' if error else 'node.succeeded'), node_run_id=row.id,
+            event_type = ('node.unknown' if uncertain else 'node.approval_required' if waiting_approval
+                          else 'node.failed' if error else 'node.succeeded')
+            append_run_event(db, run.id, event_type, node_run_id=row.id,
                              data={'node_id': row.node_id, **({'error_code': error} if error else {})})
+            if waiting_approval:
+                run.status = 'waiting_approval'
+                task.status = 'waiting'
+                append_run_event(db, run.id, 'run.waiting_approval', data={'node_id': row.node_id})
             db.commit()

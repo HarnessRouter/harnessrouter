@@ -166,3 +166,10 @@ approve/deny 旅程在 Linux `harnessrouter/runner:hexa-p2-final` 交付镜像�
 objects。第一次 capture、批准/拒绝恢复、相同 continuation 幂等及错误 key 均验证。未修改公开 UHP schema/discovery、
 生产 Provider、backend factory 或部署多副本；完整 Responses/SSE 和 Hexa UI 仍为后续范围。证据见 Change
 `native_approval_bridge`。
+
+## Hexa approval waiting projection（2026-11-24）
+
+Windows/Python 3.13 运行 GatewayClient SSE、任务状态域和 TaskExecutor 回归；Gateway 返回审批等待时，
+Hexa 保存安全审批摘要、response ID、`waiting_approval` 状态与 `not_started` receipt，并持续提供 Run 事件流。
+旧的工作流审批策略启动门禁、公开 UHP capability 和 native continuation 仍保持关闭。Linux Runner bridge 证据见
+`native_approval_bridge`；生产 backend factory、真实 Provider、审批决定续接和客户端 UI 尚未验收。

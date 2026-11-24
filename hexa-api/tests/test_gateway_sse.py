@@ -36,6 +36,30 @@ async def test_terminal_only_replay_keeps_output_and_cancellation(monkeypatch, s
 
 
 @pytest.mark.anyio
+async def test_gateway_sse_preserves_safe_tool_approval_wait(monkeypatch):
+    import json
+    original = httpx.AsyncClient
+    event = {'type': 'response.incomplete', 'response': {
+        'id': 'resp-approval', 'status': 'incomplete',
+        'incomplete_details': {'reason': 'tool_approval_required'},
+        'output': [{'id': 'approval_1', 'type': 'tool_approval_request', 'status': 'completed',
+                    'command_id': 'command_1', 'request_hash': 'a' * 64,
+                    'tool': {'name': 'write_report', 'origin': 'runtime'},
+                    'preview': 'Write report', 'expires_at': 1900000000}],
+    }}
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        200, headers={'content-type': 'text/event-stream'},
+        content=f'data: {json.dumps(event)}\n\n'.encode()))
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(transport=transport, **kwargs))
+    result = await GatewayClient('http://gateway.test', 'test-key').create_response('hi', None, 'approval')
+    assert result['status'] == 'incomplete'
+    assert result['approval']['id'] == 'approval_1'
+    assert result['approval']['command_id'] == 'command_1'
+    assert 'request_hash' in result['approval']
+    assert 'write_report' in json.dumps(result['approval'])
+
+
+@pytest.mark.anyio
 async def test_truncated_stream_retains_id_for_status_recovery(monkeypatch):
     from app.gateway.client import GatewayError
     original = httpx.AsyncClient

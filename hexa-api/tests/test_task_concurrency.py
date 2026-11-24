@@ -4,7 +4,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db.models import NodeRun, Run, Task
+from app.db.models import CommandReceipt, NodeRun, Run, RunEvent, Task
 from app.tasks.service import TaskError, TaskExecutor, encoded, latest_nodes, workflow_from_json
 
 
@@ -65,6 +65,17 @@ class ControlledGateway:
             event.set()
 
 
+class ApprovalWaitingGateway(ControlledGateway):
+    async def create_response(self, text, previous, key, **kwargs):
+        context = json.loads(text)
+        self.calls.append((context['prompt'], context))
+        return {'response_id': 'approval-response', 'status': 'incomplete',
+                'text': '需要审批', 'approval': {
+                    'id': 'approval_1', 'command_id': 'command_1',
+                    'request_hash': 'a' * 64, 'tool': {'name': 'write_report', 'origin': 'runtime'},
+                    'preview': 'Write report', 'expires_at': 1900000000}}
+
+
 def seed_run(app, workflow):
     with app.state.session_factory() as db:
         task = Task(user_id=1, title='bounded DAG')
@@ -87,6 +98,28 @@ def started_app(app):
 
 async def started_batch(gateway, count):
     return [await asyncio.wait_for(gateway.started.get(), 3) for _ in range(count)]
+
+
+@pytest.mark.anyio
+async def test_tool_approval_wait_is_durable_and_does_not_fail_run(started_app):
+    workflow = {'nodes': [{'id': 'work', 'agent_id': 'agent-1', 'model': 'gpt-6.1', 'prompt': 'work'}]}
+    run_id = seed_run(started_app, workflow)
+    gateway = ApprovalWaitingGateway()
+    executor = TaskExecutor(started_app.state.session_factory, gateway)
+    await executor.execute(run_id)
+    with started_app.state.session_factory() as db:
+        run = db.get(Run, run_id)
+        row = latest_nodes(db, run_id)['work']
+        receipt = db.query(CommandReceipt).filter_by(node_run_id=row.id).one()
+        events = db.query(RunEvent).filter_by(run_id=run_id).all()
+        assert run.status == 'waiting_approval'
+        assert row.status == 'waiting_approval'
+        assert row.error_code == 'tool_approval_required'
+        assert row.response_id == 'approval-response'
+        assert receipt.side_effect_state == 'not_started'
+        assert receipt.reconciliation_required is False
+        assert any(event.event_type == 'node.approval_required' for event in events)
+        assert any(event.event_type == 'run.waiting_approval' for event in events)
 
 
 @pytest.mark.anyio

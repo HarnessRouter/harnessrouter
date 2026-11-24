@@ -14,6 +14,7 @@ class RunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_HUMAN = "waiting_human"
+    WAITING_APPROVAL = "waiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
@@ -110,7 +111,9 @@ def transition_run(status: RunStatus, action: str) -> RunStatus:
     transitions = {
         (RunStatus.PENDING, "start"): RunStatus.RUNNING,
         (RunStatus.RUNNING, "wait_human"): RunStatus.WAITING_HUMAN,
+        (RunStatus.RUNNING, "wait_approval"): RunStatus.WAITING_APPROVAL,
         (RunStatus.WAITING_HUMAN, "continue"): RunStatus.RUNNING,
+        (RunStatus.WAITING_APPROVAL, "continue_approval"): RunStatus.RUNNING,
         (RunStatus.RUNNING, "complete"): RunStatus.COMPLETED,
         (RunStatus.RUNNING, "fail"): RunStatus.FAILED,
         (RunStatus.PENDING, "cancel"): RunStatus.CANCELED,
@@ -126,7 +129,7 @@ def transition_run(status: RunStatus, action: str) -> RunStatus:
 def derive_task_status(run_statuses: Sequence[RunStatus], *, final_report_succeeded: bool) -> TaskStatus:
     if any(status is RunStatus.RUNNING or status is RunStatus.PENDING for status in run_statuses):
         return TaskStatus.RUNNING
-    if any(status is RunStatus.WAITING_HUMAN for status in run_statuses):
+    if any(status in {RunStatus.WAITING_HUMAN, RunStatus.WAITING_APPROVAL} for status in run_statuses):
         return TaskStatus.WAITING
     if final_report_succeeded:
         return TaskStatus.COMPLETED

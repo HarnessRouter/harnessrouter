@@ -227,6 +227,7 @@ class GatewayClient:
                     response_id = ""
                     text_parts: list[str] = []
                     final_status = ""
+                    approval = None
                     files = {}
                     async for line in response.aiter_lines():
                         if not line.startswith("data:"):
@@ -243,6 +244,17 @@ class GatewayClient:
                         nested = event.get("response")
                         before_execution = execution.snapshot()
                         execution.consume(event)
+                        candidate = nested if isinstance(nested, dict) else event
+                        details = candidate.get('incomplete_details') if isinstance(candidate, dict) else None
+                        if (isinstance(details, dict) and details.get('reason') == 'tool_approval_required'
+                                and isinstance(candidate.get('output'), list)):
+                            for item in candidate['output']:
+                                if isinstance(item, dict) and item.get('type') == 'tool_approval_request':
+                                    approval = {
+                                        key: item[key] for key in ('id', 'command_id', 'request_hash', 'tool', 'preview', 'expires_at')
+                                        if key in item
+                                    }
+                                    break
                         if on_execution and execution.snapshot() != before_execution:
                             await on_execution(execution.snapshot())
                         for citation in citations(event):
@@ -263,7 +275,10 @@ class GatewayClient:
                     if not response_id or not final_status:
                         raise GatewayError("Gateway 响应在完成前中断。", uncertain=True, response_id=response_id or None)
                     details = execution.snapshot()
-                    return {"response_id": response_id, "text": "".join(text_parts), "status": final_status, **({'files': list(files.values())} if files else {}), **({'execution': details} if details['reasoning'] or details['steps'] else {})}
+                    return {"response_id": response_id, "text": "".join(text_parts), "status": final_status,
+                            **({'approval': approval} if approval else {}),
+                            **({'files': list(files.values())} if files else {}),
+                            **({'execution': details} if details['reasoning'] or details['steps'] else {})}
         except GatewayError:
             raise
         except httpx.HTTPError as exc:

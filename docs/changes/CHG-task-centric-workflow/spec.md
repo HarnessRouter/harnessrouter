@@ -305,11 +305,15 @@ serial 按已保存计划顺序挑选一个就绪节点；parallel 挑选所有�
 
 ### Run 状态
 
-`pending`、`running`、`waiting_human`、`completed`、`failed`、`canceled`。
+`pending`、`running`、`waiting_human`、`waiting_approval`、`completed`、`failed`、`canceled`。
 
 - `pending` → `running`：通过启动预检后开始调度。
 - `running` → `waiting_human`：到达人工门控，等待用户决定。
 - `waiting_human` → `running`：用户提交合法决定，继续同一个 Run。
+- `running` → `waiting_approval`：Gateway 返回已持久化的精确工具审批请求；工具尚未开始，Run 保留原
+  `response_id` 和安全审批摘要，等待审批专用续接。
+- `waiting_approval` → `running`：仅由匹配的审批决定和精确 continuation 恢复；人工节点的普通 `continue`
+  不得绕过审批或把它当作 `waiting_human`。
 - `running` → `completed`：所有必需节点成功或按策略跳过。
 - `running` / `waiting_human` → `canceled`：用户取消，未完成节点标记为 `canceled`。
 - `running` → `failed`：出现无法继续的失败。
@@ -321,7 +325,7 @@ serial 按已保存计划顺序挑选一个就绪节点；parallel 挑选所有�
 每个 Run 维护追加式 `RunEvent` 事实流。事件与对应的 Run/NodeRun 状态写入同一事务，不能更新或删除既有事件；事件数据只保存
 脱敏的身份、状态、错误码、尝试、轮次和控制原因，不保存凭据、授权头、原始工具参数或 Gateway secret。最小事件类型包括：
 `run.created`、`node.dispatched`、`node.succeeded`、`node.failed`、`node.unknown`、`run.paused`、`run.continued`、
-`run.canceled`、`run.recovered_unknown`、`run.completed` 和 `run.failed`。重复的 HTTP 命令只能追加一次事实，幂等重放只读回原命令
+`run.canceled`、`run.waiting_approval`、`node.approval_required`、`run.recovered_unknown`、`run.completed` 和 `run.failed`。重复的 HTTP 命令只能追加一次事实，幂等重放只读回原命令
 结果。
 
 事件 ID 在同一 Run 内严格递增，历史 Run 和 NodeRun 不因恢复、重试或当前结果采用而覆盖。事件查询必须先做任务权限检查，再按
@@ -509,6 +513,13 @@ owner 的兼容放行规则。映射或日志缺失、主体不符返回统一 4
 工作流及静态 Agent 节点可保存 `tool_approval_policy: {"require": ["external_write"]}`。`require` 必须是非空、无重复的风险名称数组，范围使用上文工具风险分类；只接受 `require`，拒绝 null、空对象、未知字段、永久授权及凭据。静态子编排节点遵循相同规则；人工节点不能声明工具策略。工作流策略是所有 Agent 节点的下限，节点策略只能增加需要审批的风险；模型生成的动态项不能声明或修改该策略。
 
 策略属于 WorkflowRevision/TemplateVersion 的执行定义，保存为模板、从模板创建任务、编辑器往返保存和另存新版本必须保留，不得静默删去。编辑器的审批配置只做原样保留，暂不新增授权控件；API 继续承担严格校验。当前 Hexa 尚无待批 NodeRun 状态、审批决定和精确 continuation 的完整接线，因此含任一有效策略的工作流启动必须返回 `422 configuration_unavailable`，在创建 Run/NodeRun/事件及调用 Gateway 前拒绝；即使远端 discovery 声称支持，也不能放行。旧的无策略工作流保持兼容。调度已有持久化 Run 时仍执行同一门禁，避免绕过创建接口或重启恢复后自动派发；已有 started/unknown 回执保持 unknown 与 reconciliation_required。
+
+Hexa 已预置 Gateway 审批等待的状态投影：当一个已具备受信 native coordinator 的 Gateway 返回
+`incomplete_details.reason=tool_approval_required` 并提供安全的审批请求摘要时，GatewayClient 返回 `approval`，
+TaskExecutor 将对应 NodeRun/Run 写为 `waiting_approval`，保留 `response_id`，写入 `node.approval_required` 和
+`run.waiting_approval`，并保持 CommandReceipt 为 `not_started`。该投影不执行决定、不调用 Runner resume，也不改变
+当前工作流策略启动门禁；真正的 `waiting_approval` → `running` 续接必须在生产 backend factory、Response/SSE
+continuation、审批决定和权限范围检查全部接通后另行开放。
 
 **AC-43 工作流审批策略不被忽略：** 校验正常策略和非法值；任务保存、模板导出/导入和新版本保留策略。顶层、节点和两层静态子编排的审批需求均在 Run 创建前拒绝，零 Gateway 调用且没有新 Run/NodeRun；远端 capability 为 true 也不绕过本地门禁。已持久化、待派发的带策略 Run 收敛为配置不可用且零 Gateway 调用。该门禁不构造审批记录、不声称支持 durable approval；以后打开门禁必须同时满足 A-01 至 A-09 和 Hexa 待批/继续接线。
 
