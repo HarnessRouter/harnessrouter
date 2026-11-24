@@ -1621,6 +1621,17 @@ def _codex_mcp_toml(servers: list[dict]) -> str:
     return "\n" + "\n".join(blocks) + "\n"
 
 
+_FRONTMATTER_MAX = 65536     # what a SKILL.md frontmatter reader reads: a name and a description are short
+
+
+def _frontmatter_uncomment(v: str) -> str:
+    """v without a YAML comment, which starts at a `#` at the start or after whitespace. One linear
+    search: `(^|\\s+)#.*$` backtracked over a run of spaces with no `#` (20K spaces took 1.7 s and
+    200K minutes), and a plugin's SKILL.md reaches this reader in the gateway every org shares."""
+    m = re.search(r"(?:^|\s)#", v)
+    return (v[:m.start()] if m else v).rstrip()
+
+
 def _frontmatter_close(s: str, q: str) -> int:
     """Where the quoted value that opens s ends (-1: never). As the gateway's reader of the same name."""
     i = 1
@@ -1649,10 +1660,10 @@ def _frontmatter_value(v: str, more: list[str]) -> str:
             return json.loads('"' + body + '"')
         except ValueError:
             return re.sub(r"\\(.)", r"\1", body)
-    head = re.sub(r"(^|\s+)#.*$", "", v)
+    head = _frontmatter_uncomment(v)
     if re.fullmatch(r"[>|][1-9+-]{0,2}", head):
         return " ".join(lines)
-    rest = (re.sub(r"(^|\s+)#.*$", "", x) for x in lines)
+    rest = (_frontmatter_uncomment(x) for x in lines)
     return " ".join(p for p in (head, *rest) if p)
 
 
@@ -1663,7 +1674,7 @@ def _frontmatter(text: str) -> tuple[dict, str]:
     console writes descriptions that way), a single-quoted one ('' is a quote), a `>` or `|` block,
     each as one line. A one-line `description:` regex read `>-` as what a folded skill does."""
     t = (text or "").lstrip("\ufeff")
-    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", t, flags=re.S)
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", t[:_FRONTMATTER_MAX], flags=re.S)
     if not m:
         return {}, t
     entries: list[tuple[str, str, list[str]]] = []
