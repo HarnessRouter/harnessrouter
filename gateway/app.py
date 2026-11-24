@@ -5233,12 +5233,16 @@ _PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect 
 # ("too many requests" alone is not on it: Entra's own throttling answers a 502 with "AADSTS90055: Too many
 # requests.", which is the sign-in failing, not the provider turning the key down, and moves on as before.)
 # Of the provider's answers that match above, three are not the key being refused, and saying they were sends people
-# to check a key that works. Out of quota or credit comes first, since OpenAI's insufficient_quota is itself a 429;
-# then a rate limit, which passes if the person waits; then the provider taking the key and refusing this model for
-# it (the same key works on another model).
-_PROVIDER_NO_QUOTA_RE = re.compile(r"insufficient_quota|exceeded your current quota|\bquota\b|out of credits?|"
-                                   r"credit balance is too low|insufficient (?:credits?|balance|funds)", re.I)
-_PROVIDER_RATE_LIMIT_RE = re.compile(r"\b429\b|rate[ _-]?limit|too many requests|throttl", re.I)
+# to check a key that works: an account with no quota or credit left, a rate limit (it passes if the person waits),
+# and the provider taking the key and refusing this model for it (the same key works on another model). The word
+# "quota" alone does not tell the first two apart: OpenAI's empty account is a 429 insufficient_quota, while Gemini's
+# per-minute limit is a 429 RESOURCE_EXHAUSTED that says "You exceeded your current quota ... Please retry in 41s"
+# and passes in 41 seconds. So the signals are read strongest first (_provider_failure_kind).
+_PROVIDER_NO_CREDIT_RE = re.compile(r"insufficient_(?:\w+_)?quota|out of credits?|credit balance is too low|"
+                                    r"insufficient (?:credits?|balance|funds)", re.I)
+_PROVIDER_PLAN_QUOTA_RE = re.compile(r"exceeded your (?:current )?quota|check your plan and billing", re.I)
+_PROVIDER_NO_QUOTA_RE = re.compile(r"\bquota\b", re.I)
+_PROVIDER_RATE_LIMIT_RE = re.compile(r"\b429\b|rate[ _-]?limit|too many requests|throttl|resource[ _]exhausted", re.I)
 _PROVIDER_MODEL_REFUSED_RE = re.compile(r"model_not_found|model_not_allowed|model_access_denied|"
                                         r"(?:no|not have|lacks?) access to (?:the )?model|"
                                         r"not (?:allowed|permitted|authori[sz]ed|entitled) to (?:use|access) (?:this |the )?model|"
@@ -5264,10 +5268,16 @@ def _provider_failure_kind(err: str) -> str:
     # key: OpenHands' follow-ups read "Your vercel key was refused" over the relay's "unknown relay token" (#714).
     if "/hr-mcp-" in first or not _PROVIDER_REFUSAL_RE.search(first):
         return ""
-    if _PROVIDER_NO_QUOTA_RE.search(first):
+    if _PROVIDER_NO_CREDIT_RE.search(first):          # a code or sentence that can only mean no credit
+        return "quota"
+    if _PROVIDER_RETRY_AFTER_RE.search(first):        # a provider names a wait only when waiting helps
+        return "rate_limit"
+    if _PROVIDER_PLAN_QUOTA_RE.search(first):         # the plan's quota, with no wait named
         return "quota"
     if _PROVIDER_RATE_LIMIT_RE.search(first):
         return "rate_limit"
+    if _PROVIDER_NO_QUOTA_RE.search(first):
+        return "quota"
     if _PROVIDER_MODEL_REFUSED_RE.search(first):
         return "model"
     return "refused"
