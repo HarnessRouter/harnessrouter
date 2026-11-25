@@ -2176,8 +2176,8 @@ starlette==1.10.0 \
     # via
     #   mcp
     #   sse-starlette
-systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz \
-    --hash=sha256:efaa6d7bb687a87dbaa285dd59aae858761e31edaf11718dda039523aa06ad9a
+systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/releases/download/v0.4.0/systemone_harness-0.4.0-py3-none-any.whl \
+    --hash=sha256:640654fc8db144c23846832b0618205f12bbdecebeb983a445041c3f71f5ab8b
     # via -r docker/locks/systemone.in
 tenacity==9.1.4 \
     --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55 \

@@ -110,7 +110,7 @@ jobs:
       # boto3 at the version the image ships for Hermes (docker/locks/hermes.in): an unpinned install took botocore
       # 1.44.0 the day it came out (2026-11-10), which refuses a bearer token on a plain-http endpoint, and the relay
       # test then failed on a library the image doesn't carry
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "boto3==1.43.126" "botocore==1.43.126" "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "boto3==1.43.126" "botocore==1.43.126" "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/releases/download/v0.4.0/systemone_harness-0.4.0-py3-none-any.whl" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
       # The tests that hold the runner's work in a session's tree to the session's own identity, and the ones
       # that sample every session process's environment, need root on Linux and skip anywhere else, so the
