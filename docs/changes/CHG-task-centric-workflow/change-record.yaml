@@ -1782,3 +1782,29 @@ orchestration_completion_audit:
   limitations: [authenticated live Gateway/BYOK/Provider smoke, native pre-side-effect approval and exact continuation, UHP tool_approvals capability publication, deployed multi-replica failover]
   remaining: [production native approval continuation, UHP approval capability negotiation, authenticated live Gateway/BYOK/Provider smoke, deployed multi-replica failover]
   next_action: "编排进入交付评审；后续优先接入受信生产 Runner backend factory、Gateway Response/SSE continuation 和 UHP tool_approvals conformance，完成前保持该能力未广告。"
+
+upstream_draft_pr_delivery:
+  date: "2026-11-24"
+  owner: Codex
+  status: draft_integration_blocked
+  verified_head: aeb49329e53a3a7f77145802b52dc581ec5ba946
+  branch: codex/agent-orchestration
+  target: HarnessRouter/harnessrouter:main
+  target_commit: 17a3ef23327bf62f2cffd93d9969bb905a6d1420
+  fork: ARTNINE/harnessrouter
+  pull_request: https://github.com/HarnessRouter/harnessrouter/pull/744
+  scope: "用户授权推送并创建上游 PR；普通 Git 推送保留提交历史，未合并、未部署。"
+  verification:
+    remote_head: "GitHub ref 与 PR head 均回读为 aeb49329e53a3a7f77145802b52dc581ec5ba946。"
+    pull_request: "OPEN、draft=true、base=main、mergeable=CONFLICTING、mergeStateStatus=DIRTY、reviewDecision=REVIEW_REQUIRED。"
+    integration: "最新 origin/main 与 HEAD 的左右独立提交为 55/73；git merge-tree --write-tree --name-only origin/main HEAD 返回冲突，涉及 27 个文件，包含 gateway/app.py、docker/entrypoint.sh 和旧 ui。命令未修改工作树。"
+    scope_audit: "PR 共 558 个文件、65966 行新增、5366 行删除，包含先前 Hexa 基线改造；不是仅编排的独立上游补丁。"
+    remote_checks: "Vercel status=FAILURE，描述为 Deployment has failed；Preview Comments 成功。GitHub Actions 按 head SHA 回读无运行记录，测试 CI 为 not_evaluated，不能推断通过；Vercel 构建根因尚无日志证据。"
+    local_tests: "本轮只追加交付记录，沿用 orchestration_completion_audit 对不变生产代码的单元、集成、E2E 和平台证据；不重复执行行为测试。"
+  policy_review: "CONTRIBUTING.md 要求重大改动先由维护者确认方向，协议变更另走 UEP。尚无维护者方向批准证据；本 PR 保持草稿，tool_approvals 仍未发布。"
+  remaining:
+    - "确认上游是否接受 Hexa 产品分叉范围，必要时拆分为聚焦的上游补丁。"
+    - "保留 Hexa Cloud 删除契约，解决 27 个文件冲突，再验证最新目标分支的临时合并结果。"
+    - "获取 Vercel 失败日志并运行远端必需 CI；满足维护者评审和上游贡献流程。"
+    - "生产工具审批、真实 Provider 冒烟和部署故障转移继续沿用原有未完成边界。"
+  next_action: "保持草稿且不合并；先收敛上游接受范围，再集成最新 main、重验并等待评审。"
