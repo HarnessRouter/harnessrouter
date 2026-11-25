@@ -3347,7 +3347,7 @@ orchestration_completion_audit:
 upstream_draft_pr_delivery:
   date: '2026-11-24'
   owner: Codex
-  status: merged_locally_pending_remote_push
+  status: remote_pushed_mergeable_blocked
   verified_head: aeb49329e53a3a7f77145802b52dc581ec5ba946
   branch: codex/agent-orchestration
   target: HarnessRouter/harnessrouter:main
@@ -3356,8 +3356,8 @@ upstream_draft_pr_delivery:
   pull_request: https://github.com/HarnessRouter/harnessrouter/pull/744
   scope: 用户授权推送并创建上游 PR；普通 Git 推送保留提交历史，未合并、未部署。
   verification:
-    remote_head: 此前 PR head aeb49329；合并提交尚未推送。
-    pull_request: 'PR #744 保持 draft/open；此前回读为 base main、mergeable dirty。合并后需重新回读。'
+    remote_head: GitHub PR head 回读为 36a80cc9e8d1a2b23a3a02f9e241bc7e3aa16fcb；本地工作树干净。
+    pull_request: 'PR #744 OPEN、draft=true、base=main@17a3ef23、mergeable=true、mergeable_state=blocked；冲突已清除。'
     integration: 官方 main 17a3ef23 已本地合入；27 个冲突已解决。保留 Hexa Cloud 删除契约、中文控制台入口和编排/审批
       fail-closed 行为；接纳上游 resume、模型兼容、插件和 Runner 凭据隔离改动。
     gateway_targeted: Python 3.12 Linux 容器：361 passed（gateway/tests 全量），含 Plugin、resume、hydrate、If-Match、Hexa
@@ -3369,13 +3369,15 @@ upstream_draft_pr_delivery:
     client: client 单测 73 passed，typecheck/build 通过；编排 Chromium E2E 5 passed。
     console: ui 受影响回归 315 passed，type-check 通过。
     hexa_api: 编排与运行时回归仍按既有 Change 证据；本轮未改 hexa-api 生产逻辑。
-    remote_checks: 合并后的远端 CI/Vercel 尚未回读，not_evaluated。
+    remote_checks: tests 与 oss-scanner environment 均 action_required 且没有 jobs，说明 fork
+      工作流等待仓库侧授权；Vercel 失败评论明确为 requested branch or commit reference not found in
+      the GitHub repository，属于 fork/项目配置阻塞，没有应用构建日志。
   policy_review: CONTRIBUTING.md 要求重大改动先由维护者确认方向，协议变更另走 UEP。尚无维护者方向批准证据；本 PR 保持草稿，tool_approvals
     仍未发布。
   remaining:
-  - 提交本地 merge 结果并回读 PR head/base/mergeable 状态。
-  - 等待远端 CI；若 Vercel 或测试失败，按最终 head 修复并重验。
-  - 保持 PR draft，直到上游接受 Hexa 产品范围并完成维护者评审；不直接合并。
+  - 由上游维护者授权 fork 工作流或在官方仓库运行必需 CI。
+  - 修复/配置 Vercel 项目对 ARTNINE fork 分支的可见性，或由维护者忽略该非必需预览检查。
+  - 保持 PR draft，等待上游确认 Hexa 产品范围和维护者评审；不直接合并。
   - 生产工具审批、真实 Provider 冒烟和部署多实例故障转移继续沿用原有未完成边界。
-  next_action: 提交解决冲突的合并提交并推送；回读远端检查后再决定是否请求评审。
-  integration_head: pending
+  next_action: 等待上游侧授权和范围评审；收到可执行反馈后再修复最终 head，不在当前权限下绕过检查。
+  integration_head: 36a80cc9e8d1a2b23a3a02f9e241bc7e3aa16fcb
