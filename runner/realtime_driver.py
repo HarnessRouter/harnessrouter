@@ -94,9 +94,10 @@ def mint_secret(mint_url: str, token: str, model: str, *, ttl_s: int = SECRET_TT
 def server_entries(mcp_servers: list | None) -> tuple[list[dict], list[dict]]:
     """The harness's MCP servers as the Realtime Harness takes them, and the ones it cannot reach.
 
-    -> (entries with a url, [{"name": …}] for each stdio server). A bearer in `auth` becomes the
-    Authorization header, as the other drivers read it. A name is made one the realtime APIs can
-    put in a tool's name."""
+    -> (entries with a url, [{"name": …}] for each stdio server). The headers are the runner's own
+    rule (server.py _mcp_headers, which is what a turn's job already carries): a bearer in `auth`
+    as Authorization, then the declared headers, which win on a clash. A name is made one the
+    realtime APIs can put in a tool's name."""
     usable, dropped = [], []
     for i, s in enumerate(mcp_servers or []):
         if not isinstance(s, dict):
@@ -107,10 +108,11 @@ def server_entries(mcp_servers: list | None) -> tuple[list[dict], list[dict]]:
             if s.get("command"):
                 dropped.append({"name": name})
             continue
-        headers = {str(k): str(v) for k, v in (s.get("headers") or {}).items() if k and v is not None}
+        headers: dict[str, str] = {}
         auth = s.get("auth")
         if auth:
             headers["Authorization"] = auth if str(auth).lower().startswith("bearer ") else f"Bearer {auth}"
+        headers.update({str(k): str(v) for k, v in (s.get("headers") or {}).items() if k and v is not None})
         usable.append({"name": name, "url": url, "headers": headers,
                        "transport": "sse" if str(s.get("transport") or "").lower() == "sse" else "http",
                        "enabled": s.get("enabled", True) is not False,
