@@ -119,6 +119,21 @@ jobs:
       # skip, so this step can never quietly go back to skipping; -p no:cacheprovider leaves no root-owned
       # cache in the checkout.
       - run: sudo -E env "PATH=$PATH" HR_REQUIRE_ROOT_TESTS=1 python -m pytest runner/tests/test_root_writes_stay_in_the_session.py runner/tests/test_session_spawn_env.py -q -rs -p no:cacheprovider
+      # The realtime base's driver runs on the Realtime Harness, whose MCP SDK is a major version ahead of the
+      # runner's, so its tests skip in the steps above. They run here on a venv built from the base's own lock
+      # the way docker/entrypoint.sh builds it (install_locked_venv): hashes required, no dependency resolved,
+      # wheels only but for the two distributions the lock has to build, with setuptools from build.lock.txt.
+      # So this step also proves the lock installs. The import comes first because the tests skip without the
+      # package, and a venv that failed to hold it would otherwise read as a green step.
+      - name: The realtime driver's tests, on the venv its lock builds
+        run: |
+          python -m venv "$RUNNER_TEMP/realtime-venv"
+          rt="$RUNNER_TEMP/realtime-venv/bin"
+          "$rt/pip" install -q --disable-pip-version-check --require-hashes --no-deps --only-binary=:all: -r docker/locks/build.lock.txt
+          "$rt/pip" install -q --disable-pip-version-check --require-hashes --no-deps --only-binary=:all: --no-binary=realtime-harness,docopt --no-build-isolation -r docker/locks/realtime.lock.txt
+          "$rt/python" -c "import realtime_harness, mcp, pipecat"
+          "$rt/pip" install -q --disable-pip-version-check pytest pytest-asyncio
+          "$rt/python" -m pytest runner/tests/test_realtime_driver.py -q -rs -p no:cacheprovider
 
   integration:
     runs-on: ubuntu-latest
