@@ -19,6 +19,7 @@ PINNED = {
     "aider": "AIDER_REQS", "qoder": "QODER_REQS", "cheetahclaws": "CHEETAHCLAWS_REQS",
     "systemone": "SYSTEMONE_REQS", "openhands": "OPENHANDS_REQS", "opensquilla": "OPENSQUILLA_REQS",
     "nanobot": "NANOBOT_REQS", "dsh": "DSH_REQS", "hermes": "HERMES_REQS",
+    "realtime": "REALTIME_REQS",
 }
 LOCKED = sorted(p.name[: -len(".lock.txt")] for p in LOCKS.glob("*.lock.txt"))
 REQ = re.compile(r"^(\S+?)(?:==(\S+)| @ (\S+))(.*?)(?: \\)?$")
@@ -131,9 +132,11 @@ def test_no_lock_names_another_index_or_an_unnamed_url():
     """A lock line is a distribution and its hashes, nothing else: an --index-url, --extra-index-url,
     --find-links or --trusted-host in a lock would move where pip fetches from, under the same hashes'
     authority. A direct URL is allowed only for the two distributions that have no PyPI release here:
-    opensquilla's and systemone's release wheels, both on github.com and both hashed."""
+    opensquilla's and systemone's release wheels, and realtime's commit archive, all on github.com and
+    all hashed."""
     named = {"opensquilla": "https://github.com/TokenRhythm/opensquilla/releases/download/",
-             "systemone-harness": "https://github.com/HarnessRouter/SystemOneHarness/releases/download/"}
+             "systemone-harness": "https://github.com/HarnessRouter/SystemOneHarness/releases/download/",
+             "realtime-harness": "https://github.com/HarnessRouter/RealtimeHarness/archive/"}
     for path in sorted(LOCKS.glob("*.lock.txt")):
         for line in path.read_text().splitlines():
             s = line.strip()
