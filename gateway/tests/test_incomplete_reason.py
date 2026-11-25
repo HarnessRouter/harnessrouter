@@ -144,7 +144,7 @@ def test_a_turn_the_runner_lost_to_a_restart_fails_saying_it_was_interrupted(mon
     assert writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "interrupted"}
     assert stored["status"] == "failed" and not stored.get("incomplete_details")
     assert stored["error"] == {"type": "harness_error", "code": "harness_error",
-                               "message": A._INTERRUPTED_MESSAGE, "detail": {"reason": "interrupted"}}
+                               "message": A._INTERRUPTED_MESSAGE, "detail": {"reason": "interrupted", "workspace": "kept", "effects_may_repeat": True}}   # a volume that outlives the restart (Tasks §3.3)
 
 
 def test_a_turn_with_no_runner_turn_on_record_fails_saying_it_was_interrupted(monkeypatch):
@@ -205,7 +205,7 @@ def test_a_turn_the_gateway_drains_under_fails_saying_it_was_interrupted(monkeyp
     assert [e for e in emitted if e["type"] == "error"][0]["code"] == "harness_error"
     assert persisted[0][0] == "failed"
     assert persisted[0][1]["incomplete_details"] is None
-    assert persisted[0][1]["error"]["detail"] == {"reason": "interrupted"}
+    assert persisted[0][1]["error"]["detail"] == {"reason": "interrupted", "workspace": "kept", "effects_may_repeat": True}
     assert persisted[0][1]["error"]["type"] == "harness_error"
 
 
@@ -290,7 +290,7 @@ def test_the_reason_is_written_only_onto_the_turn_it_was_proved_for(monkeypatch)
     assert old["status"] == "failed" and ((old.get("error") or {}).get("detail") or {}).get("reason") != "interrupted"
     cur = asyncio.run(A._reconcile_response("resp_2", {"id": "resp_2", "status": "running",
                                                        "_session_id": "hsess1", "output": []}))
-    assert cur["status"] == "failed" and cur["error"]["detail"] == {"reason": "interrupted"}
+    assert cur["status"] == "failed" and cur["error"]["detail"] == {"reason": "interrupted", "workspace": "kept", "effects_may_repeat": True}
 
 
 def test_a_restart_never_reports_incomplete(monkeypatch):

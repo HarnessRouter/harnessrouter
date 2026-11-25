@@ -38,6 +38,12 @@ Mem0 and Hindsight share one Postgres (pgvector), which `up.sh` gives a generate
 
 **Models.** The engines read and search with two models, `MEMORY_MODEL` and `EMBEDDING_MODEL` in `.env` (`gpt-4o-mini` and `text-embedding-3-small` unless changed; those are what the conformance suite ran with). They call them through HarnessRouter's model relay with a credential `up.sh` gets for each engine (`MEM0_MODEL_KEY` and the like), so the call goes out on the model keys your instance already has. A credential reaches only the relay, only for its engine's two models, and HarnessRouter can withdraw it; `up.sh` then makes a new one. To use a key of your own instead, put it in `OPENAI_API_KEY` with `MEMORY_BASE_URL` set to where it works. On an instance shared by several organizations, every organization's memory work (extraction and embeddings) runs on the operator's own model keys, through the memory relay; organizations' own connections are never used for it.
 
+**Rebuild Graphiti after upgrading.** A Graphiti server built before this release deletes a record when the record is revised or forgotten after Graphiti has read it. Run `./up.sh` again to rebuild the server; the data in its volume stays. Until you do, HarnessRouter forgets Graphiti's old copy of a revised or forgotten record instead of deleting it, so the record is kept, but Graphiti may still recall what that copy said.
+
+**Graphiti changes wait for its reading.** Graphiti reads what a memory is given in the background. Revising, forgetting or erasing a record, deleting a memory, and writing a fact that closes an older value or contradicts another record all wait for that reading to finish, for up to 120 seconds (set `HR_GRAPHITI_SETTLE_S` for a server that reads more slowly). If it is still reading then, nothing is changed and the request answers `503`, so ask again. A Graphiti server built before 0.40.0 can't say whether it is still reading, so these are refused with a `503` until you rebuild it with `./up.sh`.
+
+When a fact is written but the older value it closes, or the record it contradicts, can't be changed yet, the write still answers `200`, and `owed` lists those records. They are changed at the memory's next change.
+
 **Files.** `.env` (mode 600) holds every secret here; keep it, because the database keeps the password it was first given. The data is in Docker volumes named after the stack: `harnessrouter-memories_postgres`, `_graphiti`, `_reme`, `_mem0-history` and `_hindsight-cache`. Back those up, with `.env`.
 
 ## Running them by hand
@@ -69,6 +75,36 @@ A schema is only worth having where something reads it. So what you can set foll
 **Hindsight reads labels.** They classify a fact and not a thing, and a search can be scoped to one. It applies them only to what it extracts from a conversation. A record you state is kept word for word, with no extraction.
 
 **Mem0 and ReMe read none.** Mem0 keeps free text, and in ReMe the folders, frontmatter and links are the structure. Setting a schema on either is refused, because it would look like it was doing something.
+
+## What deleting leaves behind
+
+Deleting a memory removes it from HarnessRouter and from its engine's store, so nothing recalls or shows it again. Two of the engines also keep copies of their own that deleting doesn't reach yet; a coming release clears them with the memory. Until then, this is where they are and how to clear them. The commands use the container names `up.sh` gives (they start with `harnessrouter-memories`, or with your `HR_MEMORIES_NAME`).
+
+| Engine | What stays after a memory is deleted | Where |
+|---|---|---|
+| Mem0 | A history log of every fact it added, changed or deleted, with the words; the last ten messages of each memory's conversations; the names and topics it linked to the facts | `history.db` on the `mem0-history` volume; the `memories_entities` table in Postgres |
+| ReMe | The conversation each record was drawn from; a request that failed is written to its log, conversation included | `session/dialog/` on the `reme` volume; the container's log |
+| Graphiti | Nothing: the memory's file goes, with its log | |
+| Hindsight | Nothing: the memory's documents, facts, entities and model requests go | |
+
+Mem0's history of deleted facts, the messages it keeps for its next extraction, and the names of memories that hold no facts any more:
+
+```sh
+docker exec harnessrouter-memories-mem0-1 python -c "import sqlite3; c = sqlite3.connect('/app/history/history.db'); h = c.execute(\"DELETE FROM history WHERE memory_id IN (SELECT memory_id FROM history WHERE event = 'DELETE')\").rowcount; m = c.execute('DELETE FROM messages').rowcount; c.commit(); c.execute('VACUUM'); print(h, 'history rows and', m, 'messages removed')"
+docker exec -u postgres harnessrouter-memories-postgres-1 psql -d postgres -c "DELETE FROM memories_entities e WHERE NOT EXISTS (SELECT 1 FROM memories m WHERE m.payload->>'user_id' = e.payload->>'user_id')" -c "VACUUM"
+```
+
+The history of facts that still exist stays, since a record's earlier versions are read from it. The next extraction of each memory starts without its earlier messages.
+
+ReMe's conversations of memories that no longer exist:
+
+```sh
+docker exec harnessrouter-memories-reme-1 sh -c 'cd /data && for f in session/dialog/*.jsonl; do [ -e "$f" ] || continue; m=$(basename "$f" | cut -d_ -f1-2); [ -d "digest/$m" ] || rm -f "$f"; done'
+```
+
+ReMe's log goes when its container is recreated: `./up.sh --down`, then `./up.sh`.
+
+Erasing one record, rather than deleting the memory, can leave its words in what it was drawn from (a Graphiti conversation, a Hindsight document); the console says so when it does. Postgres takes deleted rows out of its files at its next vacuum. Copies in your backups, and what was sent to your model provider, are outside all of this. The Mem0 Platform keeps a deleted memory's history on its side, under Mem0's terms.
 
 ## Worth knowing
 

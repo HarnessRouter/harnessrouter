@@ -246,9 +246,25 @@ _INTERRUPTED_MESSAGE = ("This task stopped before it finished because the servic
 _CAP_MESSAGE = "This task did not finish within its time limit. Start a new turn to continue."
 
 
-def _interrupted_error() -> dict:
+def _interrupted_error(workspace: str | None = None) -> dict:
+    """The error of a turn this server cut short. With `workspace` (kept, checkpoint or lost) it also
+    says, in fields a client can act on, what the interruption left behind and that the step running
+    when it came may run again: a checkpoint cannot tell whether a tool's outside effect happened, so
+    it is always true here (Tasks §3.3). Without it, as a record from before carried it, only the reason."""
+    detail: dict = {"reason": "interrupted"}
+    if workspace:
+        detail.update({"workspace": workspace, "effects_may_repeat": True})
     return {"type": "harness_error", "code": "harness_error", "message": _INTERRUPTED_MESSAGE,
-            "detail": {"reason": "interrupted"}}
+            "detail": detail}
+
+
+def _interrupted_workspace(v: dict) -> str:
+    """What a cut turn left of its working directory, from the session's record `v`: `kept` where the
+    directory is a volume that outlives a restart (#530), and where it is a checkpoint tarball (the vg
+    backing) `checkpoint` when one was saved (a step's, #634, or a turn's end) and `lost` when none ever was."""
+    if BACKING.mode != "vg":
+        return "kept"
+    return "checkpoint" if str((v or {}).get("ws_sha") or "") else "lost"
 
 
 def _cap_error() -> dict:
@@ -280,7 +296,11 @@ async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
         except Exception:  # noqa: BLE001
             pass
         return
-    err = _interrupted_error()
+    v: dict = {}
+    if getattr(tr, "sid", None):
+        with contextlib.suppress(Exception):
+            v = await _vertex_get(tr.sid) or {}
+    err = _interrupted_error(_interrupted_workspace(v))
     try:
         for ev in tr.fail(err["message"], err):
             await emit(ev)
@@ -3219,10 +3239,15 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         # checkpoint (sha marker kept by the runner), skip the blob download and the full
         # wipe+untar — the dominant cost of every follow-up turn on a big workspace.
         want_sha = str(v.get("ws_sha") or "")
-        if want_sha and not force:
+        if not force:
+            # A session that never saved a checkpoint is asked about its fresh start (#712): its first
+            # turn, cut by a restart before the end-of-turn checkpoint, left files and the CLI's
+            # conversation in a workspace the restart kept (its error says `kept`), and restoring
+            # "nothing" over them wiped both. A new session has no such workspace, so the probe misses
+            # and the empty restore below starts it as before.
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
-                                    params={**params, "probe": want_sha})
+                                    params={**params, "probe": want_sha or "fresh"})
                 pj = pr.json() if pr.headers.get("content-type", "").startswith("application/json") else {}
                 if pr.status_code < 400 and pj.get("skipped"):
                     rec["hydrated"] = True
@@ -4196,7 +4221,8 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     rec["status"] = settled
     if settled == "failed" and vs == "failed" and proven:
         # the sweep proved why (a restart lost the turn, or the hard cap) and wrote it on the session
-        rec["error"] = _interrupted_error() if v["end_reason"] == "interrupted" else _cap_error()
+        rec["error"] = (_interrupted_error(_interrupted_workspace(v)) if v["end_reason"] == "interrupted"
+                        else _cap_error())
     elif settled == "failed" and capped and not rec.get("error"):
         rec["error"] = _cap_error()                # the reconciler's own hard cap: never a bare failed
     try:
@@ -4450,12 +4476,123 @@ def _vault_key(auth) -> str:
 
 
 _MCP_SECRET_PREFIX = "harness-mcp-"
+# A whole stored reference, as PUT /v1/mcp-secrets returns it. Only a value stored on the harness itself is read as
+# one: text a task's $headers put in is the caller's own, a literal, never a reference (_mcp_stored_ref).
+_MCP_REF_RE = re.compile(r"^vault:(harness-mcp-[a-z0-9-]+)$")
 
 
-async def _resolve_mcp_auth(org: str, auth: str) -> str:
+# ── Where a stored secret may go ──────────────────────────────────────────────────────────────
+# A stored MCP secret is bound to what it was saved for: the server it was stored for ("host:<host>:<port>") or the
+# environment ("env"), and the workspaces whose harnesses may name it. Every workspace of an organization shares one
+# secret store, and the runner writes a resolved token into the session's own .harness/mcp.json, so a binding by
+# address alone would not keep a token in its workspace: a key held to another workspace could name it at the right
+# address and read its own session. The binding sits beside the key under harness-mcpbind-, which nothing that
+# stores, resolves or deletes a secret by name can reach (each of those takes harness-mcp- only).
+_MCP_BIND_PREFIX = "harness-mcpbind-"
+USE_ENV = "env"
+# What a binding holds for a secret no naming may take: a harness names it at no address a binding can name. It is
+# stored again with its url (or for the environment) before it goes anywhere.
+USE_HELD = "held"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+_MCP_HOST_OK_RE = re.compile(r"[a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?|[0-9a-f:.]+")
+
+
+def _mcp_sha8(key: str) -> str:
+    return hashlib.sha256(str(key).encode()).hexdigest()[:8]
+
+
+def _mcp_stored_ref(value) -> str:
+    """The key a value stored on a harness references, or "" when it is not a whole stored reference."""
+    m = _MCP_REF_RE.match(value) if isinstance(value, str) else None
+    return m.group(1) if m else ""
+
+
+def _mcp_use_of_url(url) -> str:
+    """The use a server's address gives a stored secret: "host:<host>:<port>", read from the PARSED address the way
+    the connection is really made (httpx's host, lowercased, its trailing dot dropped; the port the connection goes
+    to). "" for anything that isn't a whole http(s) address with a fixed host, and "" matches no binding."""
+    raw = str(url or "").strip()
+    # Parsers disagree on these: a backslash, user information, whitespace and control characters. Python reads
+    # "https://Y\\@X/" as host X; a WHATWG parser (most MCP clients) reads host Y. So none binds anything, and the
+    # address the binding names is the one every client dials.
+    if not raw or "\\" in raw or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in raw):
+        return ""
+    try:
+        u = urllib.parse.urlsplit(raw)
+        if "@" in u.netloc:
+            return ""
+        scheme = u.scheme.lower()
+        split_host = (u.hostname or "").rstrip(".")
+        split_port = u.port
+        x = httpx.URL(raw)
+        host = x.raw_host.decode("ascii").lower().rstrip(".")
+        port = x.port
+    except (ValueError, UnicodeError, httpx.InvalidURL):
+        return ""
+    default = _DEFAULT_PORTS.get(scheme)
+    if not default or not host or split_port == 0 or "$" in host or x.scheme.lower() != scheme:
+        return ""
+    # urlsplit and httpx must read one host, in the form httpx dials it (IDNA 2008); when they disagree, nothing binds
+    try:
+        import idna
+        agreed = split_host.lower() if split_host.isascii() else idna.encode(split_host.lower()).decode("ascii")
+    except Exception:  # noqa: BLE001 -- idna.IDNAError and UnicodeError alike
+        return ""
+    if agreed != host or (split_port or default) != (port or default) or ("" in host.split(".") and ":" not in host):
+        return ""
+    if not _MCP_HOST_OK_RE.fullmatch(host):
+        return ""          # a name no resolver would look up: never one a binding names
+    return f"host:{host}:{port or default}"
+
+
+def _mcp_ws(org: str, ws) -> str:
+    """One name for a workspace in a binding: the Default Workspace has three spellings."""
+    ws = str(ws or "")
+    return "default" if ws in ("", "default", _WORKSPACE_DEFAULT_ID, f"{org or ''}__hr_default") else ws
+
+
+def _mcp_bind_key(key: str) -> str:
+    return _MCP_BIND_PREFIX + key[len(_MCP_SECRET_PREFIX):]
+
+
+async def _mcp_binding_get(tenant: str, key: str) -> dict | None:
+    """{"uses": set, "workspaces": set} for a stored key; None when it has none. A binding that can't be read as one
+    binds the key to nothing: it never reads as "no binding"."""
+    raw = await _vault_get(tenant, _mcp_bind_key(key))
+    if raw is None:
+        return None
+    try:
+        doc = json.loads(raw)
+    except (TypeError, ValueError):
+        doc = None
+    doc = doc if isinstance(doc, dict) else {}
+    pick = lambda k: {u for u in (doc.get(k) or []) if isinstance(u, str) and u}  # noqa: E731
+    return {"uses": pick("uses"), "workspaces": pick("workspaces")}
+
+
+async def _mcp_binding_add(tenant: str, key: str, *, uses=(), workspaces=()) -> dict:
+    """Add to a key's binding (a union; nothing is taken away here) and answer what it holds."""
+    have = await _mcp_binding_get(tenant, key)
+    cur = have or {"uses": set(), "workspaces": set()}
+    want = {"uses": cur["uses"] | {u for u in uses if u}, "workspaces": cur["workspaces"] | {w for w in workspaces if w}}
+    if have is None or want != have:
+        await _vault_put(tenant, _mcp_bind_key(key),
+                         json.dumps({"uses": sorted(want["uses"]), "workspaces": sorted(want["workspaces"])}))
+    return want
+
+
+async def _mcp_binding_delete(tenant: str, key: str) -> None:
+    with contextlib.suppress(Exception):
+        await _vault_delete(tenant, _mcp_bind_key(key))
+
+
+async def _resolve_mcp_auth(org: str, auth: str, *, use: str, ws, any_ws: bool = False) -> str:
     """Resolve an MCP server auth value or an environment value. 'vault:<key>' is the secret the
     org stored through PUT /v1/mcp-secrets (the key that call returned, under harness-mcp-),
-    read from the org's OWN vault tenant and nowhere else. Anything else is the literal.
+    read from the org's OWN vault tenant and nowhere else, and only for what it is bound to: `use`
+    (the server's _mcp_use_of_url, or USE_ENV) and `ws`, the workspace of the harness it goes to
+    (`any_ws`: a connection test by a caller that reaches the whole organization, never a turn).
+    Anything else is the literal.
 
     Two doors are shut here on purpose. The platform pool is never consulted: a reference is
     written by a customer and resolved into that customer's sandbox, and until 2026-09-22 the
@@ -4468,6 +4605,14 @@ async def _resolve_mcp_auth(org: str, auth: str) -> str:
         tenant = _org_tenant(org)
         if not tenant or not key.startswith(_MCP_SECRET_PREFIX) or key.startswith(_HOSTED_SECRET_PREFIX):
             print(f"[mcp] refusing to resolve {key[:40]!r} for {org}: not an MCP secret of this org", flush=True)
+            return ""
+        bound = await _mcp_binding_get(tenant, key)
+        why = ("not bound" if bound is None else "not stored for this use" if (not use or use not in bound["uses"])
+               else "not stored for this workspace" if not any_ws and _mcp_ws(org, ws) not in bound["workspaces"]
+               else "")
+        if why:
+            kind = use if str(use).startswith("host:") else (use or "-")
+            print(f"[mcp] stored secret {_mcp_sha8(key)} not resolved for {kind}: {why}", flush=True)
             return ""
         return await _vault_get(tenant, key) or ""
     return auth or ""
@@ -4651,10 +4796,14 @@ async def _harness_env(hv: dict | None, org: str, hdr_vals: dict[str, str]) -> t
     an empty string, so a shell test for the variable says what happened."""
     out: dict[str, str] = {}
     secret: list[str] = []
+    ws = (hv or {}).get("workspace")
     for name, ref in _parse_env((hv or {}).get("env")).items():
-        val = _sub_headers(ref, hdr_vals) if "$headers." in ref else ref
-        if isinstance(val, str) and val.startswith("vault:"):
-            val = await _resolve_mcp_auth(org, val)
+        # Only the value stored on the harness is a reference; what a request's $headers put in is the
+        # caller's own text, a literal, and is never resolved (one pass, stored value first).
+        if isinstance(ref, str) and ref.startswith("vault:"):
+            val = await _resolve_mcp_auth(org, ref, use=USE_ENV, ws=ws)
+        else:
+            val = _sub_headers(ref, hdr_vals) if "$headers." in ref else ref
         if not val:
             continue
         out[name] = str(val)
@@ -4748,17 +4897,27 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             continue
         entry = {"name": s.get("name") or s.get("id") or "mcp", "url": _url,
                  "transport": s.get("transport") or "http"}
-        # $headers refs resolve BEFORE vault: an auth of "$headers.X-App-JWT" is the caller's
-        # per-request token, not a vault key. Values are injected here, gateway-side, so the
-        # runner only ever receives fully-resolved literals (same contract as vault refs).
-        raw_auth = _sub_headers(str(s.get("auth") or ""), _hvals)
-        token = await _resolve_mcp_auth(org, raw_auth)
+        # One pass, the STORED value first: a stored reference resolves for the address this turn
+        # really connects to (the url after substitution, the same string handed to the runner) and
+        # for this harness's workspace. A $headers value ("$headers.X-App-JWT") is the caller's
+        # per-request text, substituted as a literal and never resolved, so a request can't name a
+        # stored key. Values are injected here, gateway-side: the runner receives literals only.
+        use = _mcp_use_of_url(_url)
+        ws = v.get("workspace")
+
+        async def _value(stored) -> str:
+            stored = str(stored or "")
+            if stored.startswith("vault:"):
+                return await _resolve_mcp_auth(org, stored, use=use, ws=ws)
+            return _sub_headers(stored, _hvals)
+
+        token = await _value(s.get("auth"))
         if token:
             entry["auth"] = token
         if isinstance(s.get("headers"), dict):
             entry["headers"] = {}
             for k, vv in s["headers"].items():     # a value kept in the store is resolved the way auth is
-                val = await _resolve_mcp_auth(org, _sub_headers(str(vv), _hvals))
+                val = await _value(vv)
                 if val:
                     entry["headers"][k] = val
         mcp_out.append(entry)
@@ -4949,6 +5108,86 @@ _RELAY_OURS_PREFIX = ("x-harness-", "x-hr-")
 _RELAY_OURS = frozenset({"x-internal-key", "cookie", "proxy-authorization", "forwarded", "x-forwarded-for",
                          "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port", "x-real-ip",
                          "cf-connecting-ip", "true-client-ip", "x-client-ip"})
+
+
+# Header names a setup can never pass to its tools. A setup declares header NAMES (additional_headers); a task
+# request's values for them reach its MCP servers and its environment through $headers.<name>. A task request carries
+# the caller's own credential (Authorization) and the console's calls carry ours (x-harness-*), so none of those may be
+# declared or referenced: refused when a setup is written (422, _harness_header_names_refuse), and never read at a turn
+# (create_response), so a setup written before is covered too. Matched case-insensitively. A vendor's key names
+# (x-api-key, api-key, x-goog-api-key) stay a setup's own to use.
+_HDR_DENY = frozenset({"authorization", *(h.lower() for h in _RELAY_OURS)})
+_HDR_DENY_PREFIX = _RELAY_OURS_PREFIX
+
+
+def _header_denied(name) -> bool:
+    n = str(name or "").strip().lower()
+    return bool(n) and (n in _HDR_DENY or n.startswith(_HDR_DENY_PREFIX))
+
+
+def _header_denied_said(names) -> str:
+    """The words for a header a setup can't pass to its tools: which, and what to do instead."""
+    names = sorted({str(n) for n in names}, key=str.lower)
+    one = len(names) == 1
+    return (f"The header{'' if one else 's'} {', '.join(repr(n) for n in names)} can't be passed to tools. Use a header "
+            f"name of your own instead, such as X-My-Token, in the setup's Headers and in the tool that reads it.")
+
+
+def _denied_header_refs(value) -> set[str]:
+    """Every $headers.<name> reference to a denied name in a value: a string, or the strings anywhere in a list or dict."""
+    out: set[str] = set()
+
+    def walk(x) -> None:
+        if isinstance(x, str):
+            out.update(n for n in _HDR_REF.findall(x) if _header_denied(n))
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+    walk(value)
+    return out
+
+
+def _harness_header_names_refuse(body) -> None:
+    """422 for a setup that declares a denied header (_header_denied) or references one ($headers.<name>) in an MCP
+    server or its environment, naming the header."""
+    declared = [str(h).strip() for h in (getattr(body, "additional_headers", None) or []) if isinstance(h, str) and str(h).strip()]
+    for param, names in (("additional_headers", {h for h in declared if _header_denied(h)}),
+                         ("mcp_servers", _denied_header_refs(getattr(body, "mcp_servers", None))),
+                         ("env", _denied_header_refs(getattr(body, "env", None)))):
+        if names:
+            print(f"[headers] refused a setup write naming {len(names)} header(s) it can't pass to tools in {param}: "
+                  f"{','.join(sorted(n.lower() for n in names))}", flush=True)
+            raise uhp_error(422, "header_not_allowed", _header_denied_said(names), param)
+
+
+# A declared header whose VALUE is ours refuses the task, whatever the header is called: a setup could otherwise ask
+# people to paste their own key or console session into a header of its own (X-Auth), or catch an app that sends its
+# key twice. Ours: the credential this request authenticated with (its bearer, raw or with "Bearer "), this instance's
+# internal key, any API key of ours (sk-hr-...), and a console session (v1.<expiry>.<signature>). A credential shorter
+# than 16 characters is never matched, so a short value can't refuse every task.
+_HDR_OUR_KEY_RE = re.compile(r"sk-hr-[A-Za-z0-9_-]{8,}")
+_HDR_OUR_SESSION_RE = re.compile(r"(?<![0-9A-Za-z])v1\.\d{12,14}\.[0-9a-f]{64}(?![0-9a-f])")
+
+
+def _header_value_ours(value, request: Request) -> str:
+    """Why a declared header's value is ours ("" when it isn't): never the value itself."""
+    v = str(value or "")
+    if not v:
+        return ""
+    held = []
+    auth = str(request.headers.get("authorization") or "").strip()
+    held.append(auth[7:].strip() if auth.lower().startswith("bearer ") else auth)
+    held += [str(request.headers.get("x-harness-internal") or ""), INTERNAL_KEY]
+    if any(len(c) >= 16 and c in v for c in held):
+        return "the request's own credential"
+    if _HDR_OUR_KEY_RE.search(v):
+        return "an API key"
+    if _HDR_OUR_SESSION_RE.search(v):
+        return "a console session"
+    return ""
 
 
 # The headers a provider reads a key from. The caller's are never forwarded (_BROKER_HOP), and the
@@ -5501,15 +5740,90 @@ def _with_provider_base(conn: dict | None) -> dict | None:
 
 
 _PROVIDER_REFUSAL_RE = re.compile(r"\b(401|403|429)\b|unauthori[sz]ed|incorrect api key|invalid_api_key|invalid api key|"
-                                  r"insufficient_quota|rate limit|quota|forbidden", re.IGNORECASE)
+                                  r"insufficient_quota|rate[ _-]?limit|quota|forbidden", re.IGNORECASE)
+# ("too many requests" alone is not on it: Entra's own throttling answers a 502 with "AADSTS90055: Too many
+# requests.", which is the sign-in failing, not the provider turning the key down, and moves on as before.)
+# Of the provider's answers that match above, three are not the key being refused, and saying they were sends people
+# to check a key that works: an account with no quota or credit left, a rate limit (it passes if the person waits),
+# and the provider taking the key and refusing this model for it (the same key works on another model). The word
+# "quota" alone does not tell the first two apart: OpenAI's empty account is a 429 insufficient_quota, while Gemini's
+# per-minute limit is a 429 RESOURCE_EXHAUSTED that says "You exceeded your current quota ... Please retry in 41s"
+# and passes in 41 seconds. So the signals are read strongest first (_provider_failure_kind).
+_PROVIDER_NO_CREDIT_RE = re.compile(r"insufficient_(?:\w+_)?quota|out of credits?|credit balance is too low|"
+                                    r"insufficient (?:credits?|balance|funds)", re.I)
+_PROVIDER_PLAN_QUOTA_RE = re.compile(r"exceeded your (?:current )?quota|check your plan and billing", re.I)
+_PROVIDER_NO_QUOTA_RE = re.compile(r"\bquota\b", re.I)
+_PROVIDER_RATE_LIMIT_RE = re.compile(r"\b429\b|rate[ _-]?limit|too many requests|throttl|resource[ _]exhausted", re.I)
+_PROVIDER_MODEL_REFUSED_RE = re.compile(r"model_not_found|model_not_allowed|model_access_denied|"
+                                        r"(?:no|not have|lacks?) access to (?:the )?model|"
+                                        r"not (?:allowed|permitted|authori[sz]ed|entitled) to (?:use|access) (?:this |the )?model|"
+                                        r"model\W{0,3}[\w./:-]{0,80}\W{0,3}(?:is not available|not available to|is not allowed|"
+                                        r"not enabled|access denied|permission denied|does not exist or you do not have access)", re.I)
+# "retry after 20s", "Retry-After: 20", "try again in 1.5s", "please retry in 20 seconds", "try again in 120ms"
+_PROVIDER_RETRY_AFTER_RE = re.compile(r"(?:retry[ _-]?after|(?:try again|retry) in)\W{0,3}(\d+(?:\.\d+)?)\s*"
+                                      r"(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)?\b", re.I)
+# What each one is called in a failed response's error.detail.reason, and whether running the task again can succeed.
+_PROVIDER_FAILURE_REASONS = {"refused": ("provider_key_refused", False), "model": ("provider_model_refused", False),
+                             "quota": ("provider_quota_exhausted", False), "rate_limit": ("provider_rate_limited", True)}
+
+
+def _provider_failure_kind(err: str) -> str:
+    """What the provider's answer on the org's own connection was: "refused" (it would not take the key),
+    "model" (it took the key and refused this model for it), "quota" (the account behind it has no quota or
+    credit), "rate_limit" (too many requests for now), or "" (not the provider turning the request down).
+    Judged on the first line only: that is the line the runner chose as the provider's answer, and a
+    diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex compaction
+    failure or a bad request into "your key was refused"."""
+    first = (err or "").split("\n", 1)[0]
+    # A 401 from the runner's own MCP relay (an address under /hr-mcp-) is not the provider refusing the
+    # key: OpenHands' follow-ups read "Your vercel key was refused" over the relay's "unknown relay token" (#714).
+    # The runner's loopback relay for the provider says the same thing when a turn's token is not (or no longer) routed:
+    # '401 {"error": "unknown relay token"}' on a 127.0.0.1 address, which is never the provider and never the key.
+    if "/hr-mcp-" in first or "unknown relay token" in first.lower() or not _PROVIDER_REFUSAL_RE.search(first):
+        return ""
+    if _PROVIDER_NO_CREDIT_RE.search(first):          # a code or sentence that can only mean no credit
+        return "quota"
+    if _PROVIDER_RETRY_AFTER_RE.search(first):        # a provider names a wait only when waiting helps
+        return "rate_limit"
+    if _PROVIDER_PLAN_QUOTA_RE.search(first):         # the plan's quota, with no wait named
+        return "quota"
+    if _PROVIDER_RATE_LIMIT_RE.search(first):
+        return "rate_limit"
+    if _PROVIDER_NO_QUOTA_RE.search(first):
+        return "quota"
+    if _PROVIDER_MODEL_REFUSED_RE.search(first):
+        return "model"
+    return "refused"
 
 
 def _provider_refused(err: str) -> bool:
-    """Whether a failure on the org's own connection is the provider refusing the key. Judged on
-    the first line only: that is the line the runner chose as the provider's answer, and a
-    diagnostic further down (a retry, a JSON body, an earlier label) must not turn a Codex
-    compaction failure or a bad request into "your key was refused"."""
-    return bool(_PROVIDER_REFUSAL_RE.search((err or "").split("\n", 1)[0]))
+    """Whether the provider turned the org's own connection down (any of _provider_failure_kind's four). The turn
+    stops there rather than move on to another connection, as it always has; only what it says differs by kind."""
+    return bool(_provider_failure_kind(err))
+
+
+def _provider_retry_after(err: str) -> float | None:
+    """The wait, in seconds, the provider's first line asks for, when it names one."""
+    m = _PROVIDER_RETRY_AFTER_RE.search((err or "").split("\n", 1)[0])
+    if not m:
+        return None
+    n, unit = float(m.group(1)), (m.group(2) or "s").lower()
+    return n / 1000 if unit.startswith("ms") or unit.startswith("milli") else n * 60 if unit.startswith("m") else n
+
+
+def _provider_failure_detail(err: str) -> dict:
+    """The error.detail fields that say why the provider turned the turn down and whether a retry can succeed,
+    so a client with automatic retries stops on a refused key or an empty account instead of matching words
+    in the message. Empty when the provider's line is not one of the four. None of the provider's text."""
+    kind = _provider_failure_kind(err)
+    if not kind:
+        return {}
+    reason, retryable = _PROVIDER_FAILURE_REASONS[kind]
+    out: dict = {"reason": reason, "retryable": retryable}
+    wait = _provider_retry_after(err) if kind == "rate_limit" else None
+    if wait is not None:
+        out["retry_after_seconds"] = wait
+    return out
 
 
 # A Responses provider refusing a replayed history: OpenAI's encrypted reasoning items are opened
@@ -5544,8 +5858,26 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     # connection carries the runner's wiring (`provider`, e.g. "tokenrouter" for any OpenAI-format
     # custom endpoint on some bases) and keeps the vendor in `_vendor`.
     provider = str((conn or {}).get("_vendor") or (conn or {}).get("provider") or "your provider")
+    # A custom endpoint has no vendor's name to give, and "add credit with custom" names nobody: it is called by the
+    # name the person gave the connection.
+    if provider == "custom":
+        cname = str((conn or {}).get("name") or "")
+        provider = (cname.split(":", 1)[1] if cname.startswith("integration:") else cname).strip() or "custom endpoint"
     what = "connection" if str((conn or {}).get("auth") or "").strip().lower() == "entra" else "key"
-    return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
+    said = err or "the provider returned an error"
+    kind = _provider_failure_kind(err)
+    if kind == "rate_limit":
+        wait = _provider_retry_after(err)
+        when = (f"It asked to wait {wait:g} s before trying again." if wait is not None and wait < 120
+                else f"It asked to wait {wait / 60:.0f} min before trying again." if wait is not None
+                else "Wait a minute and try again.")
+        return f"{provider} rate-limited this task (too many requests for now; your {what} was not refused). {when} {said}"
+    if kind == "quota":
+        return f"Your {provider} account has no quota or credit left for this {what}; add credit with {provider}, then try again: {said}"
+    if kind == "model":
+        return (f"{provider} refused this model for your {what} (the {what} itself was accepted). Choose another model, "
+                f"or enable this one for your account with {provider}: {said}")
+    return f"Your {provider} {what} was refused: {said}"
 
 
 def _failure_detail(rec: dict) -> dict:
@@ -5560,6 +5892,8 @@ def _failure_detail(rec: dict) -> dict:
     tool = str((rec.get("error_detail") or {}).get("tool") or "")
     if tool:
         detail["tool"] = tool
+    # why the provider turned the org's own connection down, and whether a retry can succeed
+    detail.update(rec.get("provider_failure") or {})
     return detail
 
 
@@ -6054,6 +6388,11 @@ UHP_CAPABILITIES = {
     # response's committed files and transcript (_branch_source, _branch_prepare). Optional at every
     # class (VERSIONING: within a version only optional things are added), so it is a capability.
     "session_branching": True,
+    # Tasks §3.3: a `resume` item in `input`, chained on a response this server itself cut short
+    # (a restart, a shutdown drain), continues the session and tells the harness it was cut off
+    # (_split_resume, _resume_prompt). A continuation like any other, so every base has it; the
+    # base's own resume applies where it has one.
+    "resume": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 # The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
@@ -6074,6 +6413,7 @@ _UHP_STATUS_TYPE = {
     404: ("invalid_request_error", "not_found"),
     409: ("invalid_request_error", "conflict"),
     410: ("invalid_request_error", "gone"),
+    412: ("invalid_request_error", "precondition_failed"),
     413: ("invalid_request_error", "file_too_large"),
     422: ("invalid_request_error", "unprocessable"),
     429: ("rate_limit_error", "rate_limited"),
@@ -7646,6 +7986,7 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "key_hint": "AIza…",
     },
     "llmtr": {
+        # claude-fable-5-2 is left out until a real call answers on LLMTR, for the reason Bedrock's says
         "label": "LLMTR",
         "base_url": "https://llmtr.com/v1",
         "fields": [],
@@ -8736,19 +9077,83 @@ class _RespTranslator:
 
 
 # ── input parsing (string | array of items with input_text/input_file/input_image) ──────
+def _given_filename(p: dict) -> str | None:
+    """The name a part gives its file, or None: a value that is not a name (a number, an object, blank) is no name,
+    rather than something the turn later joins into its prompt as if it were one."""
+    name = p.get("filename")
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def _b64_or_none(b64: str) -> str | None:
+    """The base64 payload with any line breaks taken out, or None when it does not decode. The runner writes what
+    decodes and skips what does not, while the prompt still says the file is there, so a payload that is not
+    base64 is refused at the parse, where the caller is told, not dropped in the runner."""
+    b64 = "".join(b64.split())
+    try:
+        return b64 if b64 and base64.b64decode(b64, validate=True) else None
+    except ValueError:
+        return None
+
+
 def _decode_input_file(p: dict) -> tuple[str | None, str | None, str | None, str | None]:
     """→ (filename, base64, media_type, file_id). base64/file_id are mutually exclusive sources."""
-    fname = p.get("filename")
+    fname = _given_filename(p)
     fd = p.get("file_data")
     if isinstance(fd, str) and fd:
         media, b64 = "application/octet-stream", fd
         if fd.startswith("data:"):
             head, _, b64 = fd.partition(",")
             media = head[5:].split(";")[0] or media
-        return fname, b64, media, None
+        # An inline file used to be dropped in silence when it had no name or its bytes did not decode: the
+        # request answered 200 and the agent never saw it, as an input_image was.
+        if not fname:
+            raise uhp_error(400, "invalid_input", "An input_file sent inline (file_data) carries a filename: "
+                                                  "the name the agent finds it under.", "input")
+        payload = "".join(b64.split())
+        # A zero-byte file is a file (the console sends one for an empty attachment) and is kept as before; only
+        # a payload that is there and does not decode is refused.
+        if payload and _b64_or_none(payload) is None:
+            raise uhp_error(400, "invalid_input", "An input_file's file_data is base64, as a data URL "
+                                                  "(data:application/pdf;base64,...) or on its own.", "input")
+        return fname, payload, media, None
     if p.get("file_id"):
         return fname, None, None, p["file_id"]
-    return fname, None, None, None
+    raise uhp_error(400, "invalid_input", "An input_file carries file_data (inline) or file_id.", "input")
+
+
+# An input_image reaches the agent the way an input_file does: as a file in its working directory. It used to be
+# kept in the turn's record and nowhere else, so the agent never saw it, the request still answered 200 with
+# ignored_fields [], and the agent said no image was attached. Tasks §2 says an image comes inline or by file_id;
+# a URL is not fetched (the server would be reaching an address the caller picked), and a part that can't be read
+# is refused by name.
+_INPUT_IMAGE_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/gif": "gif",
+                    "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
+
+
+def _decode_input_image(p: dict) -> tuple[str | None, str | None, str | None, str | None]:
+    """→ (filename, base64, media_type, file_id), as _decode_input_file. Inline: a data URL, as a string or
+    as {"url": ...} (the Chat Completions spelling), named from its bytes so the same image under two turns
+    is one file. By file_id: the name comes from the upload's sidecar unless the part names one."""
+    url = p.get("image_url")
+    if isinstance(url, dict):
+        url = url.get("url")
+    given = _given_filename(p)
+    if isinstance(url, str) and url:
+        if not url.startswith("data:"):
+            raise uhp_error(400, "invalid_input", "An input_image is sent inline as a data URL (data:image/png;base64,...) "
+                                                  "or by file_id from POST /v1/files; an image URL is not fetched.", "input")
+        head, _, b64 = url.partition(",")
+        media = head[5:].split(";")[0].lower()
+        ext = _INPUT_IMAGE_EXT.get(media)
+        b64 = _b64_or_none(b64) or ""
+        if not ext or ";base64" not in head or not b64:
+            raise uhp_error(400, "invalid_input", "An input_image's data URL is a base64 image "
+                                                  f"({', '.join(sorted(set(_INPUT_IMAGE_EXT.values())))}).", "input")
+        name = given or f"image-{hashlib.sha256(b64.encode()).hexdigest()[:12]}.{ext}"
+        return name, b64, media, None
+    if p.get("file_id"):
+        return given, None, None, p["file_id"]
+    raise uhp_error(400, "invalid_input", "An input_image carries image_url (a data URL) or file_id.", "input")
 
 
 def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
@@ -8783,7 +9188,10 @@ def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
                     files.append({"filename": fname, "content_b64": b64, "file_id": file_id, "media_type": media})
                 parts.append({"type": "input_file", "filename": fname, "file_id": file_id})
             elif pt == "input_image":
-                parts.append({"type": "input_image", "image_url": p.get("image_url"), "file_id": p.get("file_id")})
+                fname, b64, media, file_id = _decode_input_image(p)
+                files.append({"filename": fname, "content_b64": b64, "file_id": file_id, "media_type": media})
+                # the record keeps the name, as an input_file's does, not the bytes
+                parts.append({"type": "input_image", "filename": fname, "file_id": file_id})
         items_norm.append({"role": role, "content": parts})
     return "\n\n".join(t for t in texts if t).strip(), files, items_norm
 
@@ -8895,6 +9303,114 @@ def _answer_prompt(acc: dict, secret_env: str | None) -> str:
     if acc.get("kind") in ("choice", "confirm"):
         answer = json.dumps(_import_text(answer), ensure_ascii=False)
     return f'Answer to your question {q}: {answer}'
+
+
+# ── resuming a turn the server cut short (Tasks §3.3, capability resume) ───────────────────────
+def _split_resume(inp) -> dict | None:
+    """The one `resume` item a request may carry. It stands alone in `input`: another item beside
+    it, a second resume, a note that is not text, or an input_response too is a malformed body (400),
+    and a server without the capability refuses the item rather than read it as an empty task."""
+    if not isinstance(inp, list):
+        return None
+    found = [it for it in inp if isinstance(it, dict) and it.get("type") == "resume"]
+    if not found:
+        return None
+    if not UHP_CAPABILITIES.get("resume"):
+        raise uhp_error(400, "invalid_input", "This server does not support resume.", "input")
+    if len(found) > 1 or len(inp) > 1:
+        raise uhp_error(400, "invalid_input", "A resume is the only item of its request.", "input")
+    note = found[0].get("note")
+    if note is not None and not isinstance(note, str):
+        raise uhp_error(400, "invalid_input", "A resume's note is text.", "input.note")
+    return found[0]
+
+
+def _is_interrupted(rec: dict | None) -> bool:
+    """Whether this stored response is one the server itself cut short: `failed`, its error's reason
+    `interrupted` (a budget stop, a hard cap or a failure of the task's own is none of them)."""
+    if not isinstance(rec, dict) or str(rec.get("status") or "") != "failed":
+        return False
+    err = rec.get("error")
+    detail = err.get("detail") if isinstance(err, dict) else None
+    return isinstance(detail, dict) and detail.get("reason") == "interrupted"
+
+
+_RESUME_WORKSPACE = {
+    "kept": "Your working files are as you left them.",
+    "checkpoint": "Your working files are back at the last saved step; what you did after it is gone.",
+    "lost": "Your working files did not survive; you have this conversation only.",
+}
+
+
+_RESUME_REQUEST_MAX = 4000      # characters of the cut turn's request repeated in a resume's instruction
+
+
+def _interrupted_request(rec: dict) -> str:
+    """The words of the request the cut turn was running, from its own record (`_input`, the way a
+    branch reads its history). A harness whose conversation did not survive needs them to know what it
+    was doing: a session's first turn cut before its CLI kept any of it (seen live: the runner could not
+    restore the session and said so), or a `lost` workspace, which takes the CLI's conversation with it."""
+    parts: list[str] = []
+    for item in rec.get("_input") or []:
+        content = item.get("content") if isinstance(item, dict) else None
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            parts.extend(str(p.get("text") or "") for p in content
+                         if isinstance(p, dict) and p.get("type") == "input_text")
+    text = "\n".join(x for x in parts if x.strip()).strip()
+    return text if len(text) <= _RESUME_REQUEST_MAX else text[:_RESUME_REQUEST_MAX].rstrip() + " …"
+
+
+def _resume_prompt(rec: dict, note: str | None) -> str:
+    """The server's own instruction for a resumed turn, for a base that has no native resume to say
+    it for it: that the last turn was cut off, what survived, that the step that was running may run
+    again, and the request it was running, since the conversation may not have survived with it. The
+    person's note follows as theirs."""
+    detail = ((rec.get("error") or {}).get("detail") or {}) if isinstance(rec.get("error"), dict) else {}
+    lines = ["Your previous turn was cut off before it finished, because the service running it restarted.",
+             _RESUME_WORKSPACE.get(str(detail.get("workspace") or ""), "")]
+    if detail.get("effects_may_repeat", True):
+        lines.append("The step you were on may run again, so check what it already did before you "
+                     "repeat anything with an outside effect.")
+    lines.append("Carry on from where you stopped.")
+    text = " ".join(x for x in lines if x)
+    request = _interrupted_request(rec)
+    if request:
+        text += f'\n\nThe request you were working on was: "{request}"'
+    return f'{text}\n\nThe person says: "{note}"' if note else text
+
+
+_RESUME_CLAIMED: dict[str, float] = {}      # response id -> when this process claimed its resume
+_RESUME_CLAIMED_MAX = 4096
+
+
+async def _resume_claim(org: str, prev_id: str) -> bool:
+    """Claim the resume of `prev_id`, once: the first caller gets True and any other False (→ 409
+    resume_not_pending). Within this process the check and the set are one step with no await between
+    them, so two resumes that arrive together cannot both pass; across replicas the control store's
+    compare-and-swap decides it (resp_claim_resume), and a store that cannot decide refuses the resume
+    (503) rather than run the turn twice."""
+    if prev_id in _RESUME_CLAIMED:
+        return False
+    _RESUME_CLAIMED[prev_id] = time.time()
+    while len(_RESUME_CLAIMED) > _RESUME_CLAIMED_MAX:
+        _RESUME_CLAIMED.pop(next(iter(_RESUME_CLAIMED)), None)
+    if control_store.enabled():
+        try:
+            return await control_store.resp_claim_resume(org, prev_id, _INPUT_REQUEST_TTL_S)
+        except Exception as e:  # noqa: BLE001
+            _RESUME_CLAIMED.pop(prev_id, None)
+            raise HTTPException(503, "resume store unavailable; retry") from e
+    return True
+
+
+async def _resume_release(org: str, prev_id: str) -> None:
+    """Give the claim back when the turn it was for never ran, so the client's retry can resume."""
+    _RESUME_CLAIMED.pop(prev_id, None)
+    if control_store.enabled():
+        with contextlib.suppress(Exception):
+            await control_store.resp_claim_resume(org, prev_id, _INPUT_REQUEST_TTL_S, release=True)
 
 
 # ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
@@ -9058,7 +9574,7 @@ _ANTHROPIC_CLAUDE = {
     "opus-5": "claude-opus-5", "sonnet-5": "claude-sonnet-5",
     "opus-5.5": "claude-opus-5-5", "sonnet-5.5": "claude-sonnet-5-5", "haiku-5.5": "claude-haiku-5-5",
     "haiku-4.5": "claude-haiku-4-5-20251001", "fable-5": "claude-fable-5",
-    "fable-5.1": "claude-fable-5-1",
+    "fable-5.1": "claude-fable-5-1", "fable-5.2": "claude-fable-5-2",
 }
 
 
@@ -9080,6 +9596,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-opus-5.5":   "claude-opus-5-5",
         "claude-opus-5":     "claude-opus-5",
         "claude-fable-5":    "claude-fable-5",
+        "claude-fable-5-2":   "claude-fable-5-2",
         "claude-fable-5-1":   "claude-fable-5-1",
         "claude-opus-4.8":   "claude-opus-4-8",
         "claude-sonnet-5.5": "claude-sonnet-5-5",
@@ -9090,6 +9607,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-haiku-4.5":  "claude-haiku-4-5-20251001",
     },
     "bedrock": {
+        # claude-fable-5-2 is left out until a real call answers on Bedrock: none could be made on 2026-11-10 (no
+        # Bedrock connection on the test instance or the hosted platform), and an id nobody called is not offered
         "claude-opus-5.5":   "us.anthropic.claude-opus-5-5",
         "claude-opus-5":     "us.anthropic.claude-opus-5",
         "claude-fable-5":    "us.anthropic.claude-fable-5",
@@ -9103,6 +9622,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-haiku-4.5":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     },
     "openai": {
+        "gpt-6.2-astra": "gpt-6.2-astra",
+        "gpt-6.2-sol":   "gpt-6.2-sol",
         "gpt-6-astra":   "gpt-6-astra",
         "gpt-6.1-sol":     "gpt-6.1-sol",
         "gpt-6-sol":     "gpt-6-sol",
@@ -9117,6 +9638,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex": "gpt-5.3-codex",
     },
     "azure-foundry": {
+        "gpt-6.2-astra": "gpt-6.2-astra",
+        "gpt-6.2-sol":   "gpt-6.2-sol",
         "gpt-6-astra":   "gpt-6-astra",
         "gpt-6.1-sol":     "gpt-6.1-sol",
         "gpt-6-sol":     "gpt-6-sol",
@@ -9131,6 +9654,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.3-codex": "gpt-5.3-codex",
     },
     "openrouter": {
+        "gpt-6.2-astra":      "openai/gpt-6.2-astra",
+        "gpt-6.2-sol":        "openai/gpt-6.2-sol",
         "gpt-6-astra":        "openai/gpt-6-astra",
         "gpt-6.1-sol":          "openai/gpt-6.1-sol",
         "gpt-6-sol":          "openai/gpt-6-sol",
@@ -9146,6 +9671,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-opus-5.5":    "anthropic/claude-opus-5.5",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
+        "claude-fable-5-2":    "anthropic/claude-fable-5.2",
         "claude-fable-5-1":    "anthropic/claude-fable-5.1",
         "claude-opus-4.8":    "anthropic/claude-opus-4.8",
         "claude-sonnet-5.5":  "anthropic/claude-sonnet-5.5",
@@ -9174,6 +9700,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
+        "qwen4-max":          "qwen/qwen4-max",     # 2026-11-16, see the catalog's note
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
         "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
@@ -9278,6 +9805,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
     # and reachable through openrouter, tokenrouter and vercel. Left alone here rather than
     # worked around in one vendor's table.
     "llmtr": {
+        "gpt-6.2-astra":      "openai/gpt-6.2-astra",
+        "gpt-6.2-sol":        "openai/gpt-6.2-sol",
         "gpt-6-astra":        "openai/gpt-6-astra",
         "gpt-6.1-sol":          "openai/gpt-6.1-sol",
         "gpt-6-sol":          "openai/gpt-6-sol",
@@ -9312,6 +9841,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "glm-5.3-flash":      "z-ai/glm-5.3-flash",
         "qwen3.7-max":        "qwen/qwen3.7-max",
         "qwen3.8-max":        "qwen/qwen3.8-max",
+        "qwen4-max":          "qwen/qwen4-max",
         "kimi-k2.7-code":     "moonshot/kimi-k2.7-code",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
         "minimax-m3":         "minimax/minimax-m3",
@@ -9341,6 +9871,9 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
+    # qwen4-max: 404 model_not_found on qwen, pi and hermes, one real turn each (2026-11-22); OpenRouter and
+    # Vercel served the same three turns as itself
+    "qwen4-max",
     "claude-haiku-5.5",   # not on TokenRouter's /v1/models (2026-10-07): the vendor, OpenRouter and Vercel serve it
     # No Meta id is on TokenRouter's list (2026-09-13).
     "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
@@ -9388,7 +9921,10 @@ _OPENROUTER_RESLUG = {
 # confirmed it, and answer since. A user whose own OpenRouter account has not confirmed sees the
 # same 403 on send. (llama-4-scout is not in the catalog at all: OpenRouter has no endpoint for it
 # and on Vercel seven of eight harnesses failed its artifact or recall scenario twice.)
-_OPENROUTER_NO_CHANNEL: set[str] = set()
+# 2026-11-20: OpenRouter's /v1/models no longer lists x-ai/grok-build-0.1 (its Grok ids are
+# grok-4.7, 4.6, 4.5, 4.3, 4.20 and 4.20-multi-agent); xAI itself and Vercel (spacexai/) still
+# serve it, so it stays in the catalog and only comes off OpenRouter's table.
+_OPENROUTER_NO_CHANNEL = {"grok-build-0.1"}
 _VENDOR_MODELS["openrouter"] = {c: _OPENROUTER_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                                 if c not in _OPENROUTER_NO_CHANNEL}
 # System One models. TypeSafe's Jev is a decision model (typed answers with probabilities, no text)
@@ -9437,6 +9973,7 @@ _VENDOR_MODELS["qoder"] = {m: m for m in (
 _VERCEL_RESLUG = {
     "qwen3.7-max":        "alibaba/qwen3.7-max",
     "qwen3.8-max":        "alibaba/qwen3.8-max",
+    "qwen4-max":          "alibaba/qwen4-max",
     "qwen3.7-flash":      "alibaba/qwen3.7-flash",
     "qwen3.8-flash":      "alibaba/qwen3.8-flash",
     "qwen3.8-27b":        "alibaba/qwen3.8-27b",
@@ -9494,10 +10031,10 @@ _VENDOR_MODELS["google"] = {m: m for m in ("gemini-4-argon", "gemini-3.8-flash",
 # order it was written. Add a new model to its family here, not at the end of a catalog.
 _MODEL_ORDER: tuple[str, ...] = (
     # OpenAI
-    "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-    "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
+    "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
     # Anthropic
-    "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
+    "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
     "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
     # Google
     "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
@@ -9513,7 +10050,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     # Moonshot
     "kimi-k3", "kimi-k2.7-code",
     # Alibaba
-    "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
+    "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash",
     # Zhipu
     "glm-5.3", "glm-5.3-flash",
     # Mistral
@@ -9654,6 +10191,37 @@ _MODEL_CATALOG: dict[str, dict] = {
     # of twelve); aider (no function tools) and goose run it on every connection. As with the gpt-5.6 line on
     # qwen and cline, a row measured working on a path stays listed and the comment names the
     # channel; no base refused it on every connection. Not RESPONSES_ONLY: aider runs it.
+    #
+    # gpt-6.2-astra and gpt-6.2-sol (both released 2026-11-17: OpenAI's pricing page, Vercel's
+    # changelog and OpenRouter's model pages, read the same day): astra is the line's most capable
+    # model, for hard projects; sol is the everyday one. openai and azure-foundry name them
+    # `gpt-6.2-astra` and `gpt-6.2-sol`, openrouter, tokenrouter, vercel and llmtr `openai/<id>`; the
+    # -fast variants are not offered. List prices, no markup (OpenAI's pricing page, read 2026-11-17,
+    # Standard; per 1M tokens, 30-minute cache write): gpt-6.2-astra $8 in / $40 out, cached $0.40,
+    # cache write $10, and above 272k prompt tokens $16 / $60, cached $0.80, cache write $20;
+    # gpt-6.2-sol $2 in / $10 out, cached $0.10, cache write $2.50, and above 272k prompt tokens
+    # $4 / $15, cached $0.20, cache write $5, as gpt-6.1-sol. NOT YET MEASURED: each is a candidate placed exactly
+    # where its predecessor is, gpt-6.2-astra beside gpt-6-astra (the Responses bases,
+    # RESPONSES_ONLY_MODELS) and gpt-6.2-sol beside gpt-6.1-sol (every base that offers it, the same
+    # channel refusals and exclusions), newest first; no default changed. Real turns prune them.
+    #
+    # qwen4-max (Alibaba, 2026-11-16; Model Studio's model and pricing pages, updated 2026-11-21, and
+    # the aggregators' own /v1/models, read 2026-11-22): the first and so far only model of the Qwen 4
+    # family, closed weights, 1M context, 131,072 output tokens (262,144 thinking), text, image and video
+    # in. Model Studio names no preview, snapshot or -latest alias beside it. openrouter and llmtr name
+    # it `qwen/qwen4-max`, vercel `alibaba/qwen4-max`, and each lists tools for it. TokenRouter answers
+    # 404 model_not_found (one real turn on each of qwen, pi and hermes, 2026-11-22), so it is off
+    # TokenRouter's list (_TOKENROUTER_NO_CHANNEL); OpenRouter and Vercel served the same turns as
+    # itself. llmtr is offered from its published list and was not called (no such connection on the
+    # test instance), as for the gpt-6.2 line. List price, no markup (Model Studio, international, one
+    # tier up to 1M tokens, per 1M tokens): qwen4-max $1.50 in / $4.50 out, cached $0.075, cache write
+    # $1.875 (5 min). Thinking is on by default there (effort high), and thinking tokens bill as output.
+    # MEASURED (2026-11-22, the test instance, the matrix's five scenarios on every base that offers it):
+    # 25 of 25 bases pass on Vercel and 25 of 25 on OpenRouter, each turn served as qwen4-max itself
+    # (cline's turns report no served model, as for every model there). It is offered exactly where
+    # qwen3.8-max is (every base that offers it, newest first in the Alibaba family) and on fast-agent
+    # too, where qwen3.8-max is off for its own measured answer and qwen4-max passed. No default
+    # changed; runner/reasoning.py offers no reasoning levels for it yet.
     # gpt-6-sol and gpt-6-luna (2026-09-27: OpenAI's pricing page, Azure's catalog at model version
     # 2026-09-22 and deployed on our resource that day, openrouter, tokenrouter, vercel and llmtr as
     # `openai/<id>`, all read the same day; no provider lists a gpt-6-terra) are the line's sol and
@@ -9665,7 +10233,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # $0.20; luna $0.10 / $0.50, cached $0.01; astra $10 / $50, cached $1; all doubled above
     # 272k prompt tokens as the gpt-5.x line is.
     "codex":  {"default": "gpt-6.1-sol",
-               "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
                           # OpenAI's most capable agentic coding model, there is no 5.6-codex).
@@ -9674,7 +10242,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # Anthropic's models overview and AWS's own model card), so it routes directly instead of
     # falling through to the unmapped default it used at launch.
     "claude": {"default": "claude-sonnet-5.5",
-               "models": ["claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
+               "models": ["claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5"]},
     # hermes (NousResearch hermes-agent) is multi-family — it runs any frontier model through
     # the matching provider connection (family-aware chain selection in _resp_execute). Friendly
@@ -9682,16 +10250,16 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
     "hermes": {"default": "gpt-6.1-sol",
-               "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+               "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
-                          "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
+                          "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
                           "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
-                          "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
+                          "qwen3.7-max", "qwen4-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash",
@@ -9716,12 +10284,12 @@ _MODEL_CATALOG: dict[str, dict] = {
     # and the frontier set was probed per-model through the dsh driver (2026-08-20).
     "dsh": {"default": "deepseek-v4-pro",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash",
-                       "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                       "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
+                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
-                       "qwen3.7-max", "qwen3.8-max",
+                       "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
@@ -9732,12 +10300,12 @@ _MODEL_CATALOG: dict[str, dict] = {
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
     "opencode": {"default": "gpt-6.1-sol",
-                 "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+                 "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                            "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
+                            "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                             "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
-                            "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                            "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
@@ -9767,8 +10335,8 @@ _MODEL_CATALOG: dict[str, dict] = {
     # was never asked for), while every other base held the conversation. Re-measure before adding it.
     "aider": {"default": "gpt-6.1-sol",
               "models": [
-                  "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                  "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                   "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                   "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                   "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
@@ -9776,7 +10344,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                   "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                   "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                   "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
-                  "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
+                  "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
                   "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash",
                   "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super"]},
     # kimi (Kimi Code CLI): the same relay reach as qwen and cline (OpenAI chat/completions through the
@@ -9793,15 +10361,15 @@ _MODEL_CATALOG: dict[str, dict] = {
     # a stub), so the gemini resolveModel class of silent substitution is absent.
     "kimi": {"default": "kimi-k3",
              "models": [
-                 "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-                 "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                 "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                  "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9824,15 +10392,15 @@ _MODEL_CATALOG: dict[str, dict] = {
     "minimax": {"default": "minimax-m3",
                 "models": [
                     "minimax-m3.1-flash", "minimax-m3",
-                    "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-                    "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                    "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                    "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                     "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                     "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                     "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                     "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                    "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                     "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                     "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                     "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9845,14 +10413,14 @@ _MODEL_CATALOG: dict[str, dict] = {
     "grok": {"default": "grok-4.6",
              "models": [
                  "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
-                 "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-                 "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                 "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                 "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                 "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                  "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                  "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9867,15 +10435,15 @@ _MODEL_CATALOG: dict[str, dict] = {
     # and was refused; the gpt-6 tokenrouter column found it (runner/server.py, _build_openhands).
     "openhands": {"default": "gpt-5.4",
                   "models": [
-                      "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-                      "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
+                      "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                      "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                       "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                       "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                       "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                       "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                       "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
-                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
+                      "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max",
                       "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
                       "glm-5.3-flash", "mistral-medium-3.5", "step-3.7-flash", "hunyuan-4-preview",
                       "nemotron-3.5-lightning", "nemotron-3-super"]},
@@ -9886,8 +10454,8 @@ _MODEL_CATALOG: dict[str, dict] = {
     # (the runner sends `custom/<id>`, and providers.py strips the prefix before the request).
     "cheetahclaws": {"default": "gpt-5.4",
                      "models": [
-                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
-                         "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
+                         "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+                         "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
                          "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
                          "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
@@ -9902,7 +10470,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          # within the ten-minute limit, twice (0.34.0-rc.7, 2026-10-15): not offered.
                          "muse-glimmer-30b",
                          "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
-                         "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
+                         "kimi-k3", "kimi-k2.7-code", "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
                          "step-3.7-flash", "hunyuan-4-preview", "nemotron-3.5-lightning",
                          "nemotron-3-super"]},
@@ -9917,10 +10485,10 @@ _MODEL_CATALOG: dict[str, dict] = {
     # litellm 1.88.1 takes off that one prefix and nothing else).
     "agentzero": {"default": "gpt-6.1-sol", "models": []},
     "qwen": {"default": "qwen3.7-max",
-             "models": ["qwen3.7-max", "qwen3.8-max",
-                        "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+             "models": ["qwen3.7-max", "qwen4-max", "qwen3.8-max",
+                        "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
-                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
+                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
@@ -9940,22 +10508,22 @@ _MODEL_CATALOG: dict[str, dict] = {
     # see every agent turn fail, not an edge case. Same trap class as _TOKENROUTER_NO_CHANNEL:
     # the CHANNEL decides, not the model.
     "cline": {"default": "gpt-5.4",
-              "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+              "models": ["gpt-5.4", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
-                         "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
+                         "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
-                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                         "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     "pi": {"default": "gpt-6.1-sol",
-           "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+           "models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
-                      "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
+                      "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
-                      "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
+                      "kimi-k2.7-code", "qwen3.7-max", "qwen4-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
@@ -10020,15 +10588,15 @@ _MODEL_CATALOG: dict[str, dict] = {
               # 2026-09-12; the aggregators forward that answer unchanged, so every column showed it (0 of 8
               # artifact/recall checks). The other Claude ids continue such a history. The Responses-only
               # ids stay out: goose is chat-only.
-              "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+              "models": ["gpt-5.4", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
-                         "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
+                         "claude-fable-5", "claude-fable-5-2", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                          "gemini-3-flash-preview",
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
-                         "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
+                         "qwen3.7-max", "qwen4-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
                          "glm-5.3", "glm-5.3-flash",
                          "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
@@ -10089,7 +10657,7 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # chat-completions-only channel is what would fail here. MEASURED (2026-10-19, the Vercel
 # connection through the runner's own relay, five scenarios): claude-haiku-5.5 and gemini-3-flash,
 # each asked for and each served as itself over /v1/responses, across a mid-session switch its
-# session had pinned. The two Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6-astra) are
+# session had pinned. The Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6.2-astra, gpt-6-astra) are
 # NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
            "vibe", "docker-agent", "fast-agent", "dcode"):
@@ -10102,7 +10670,7 @@ for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
 _MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
 # Bases still qualifying their wider catalog. Each offers only the models measured on it so far, and
 # its default was chosen for that start rather than measured across every provider column, so the
-# catalog-wide rules for a measured base (gpt-6.1-sol leads the gpt-6 family wherever it is offered,
+# catalog-wide rules for a measured base (gpt-6.1-sol leads the measured gpt-6 family wherever it is offered,
 # and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
 # place that exception is written; a base leaves the set when its live column is in.
 _STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
@@ -10157,7 +10725,7 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "kilo": frozenset({"llama-3.3-70b"}),
     "minimax": frozenset({"gpt-5.6-terra", "gemini-3.5-flash-lite"}),
     "grok": frozenset({"deepseek-v4-pro"}),
-    "agentzero": frozenset({"claude-fable-5", "claude-fable-5-1"}),
+    "agentzero": frozenset({"claude-fable-5", "claude-fable-5-2", "claude-fable-5-1"}),
     # The four bases of 0.33.0 offer only what they were MEASURED to run reliably: every model of
     # each base through the five console scenarios twice (0.33.0-batch3.3 and batch3.7, seven
     # connections), the family tour, and per model the skill, the four MCP tool transports, the
@@ -10201,7 +10769,9 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview",
                         "nemotron-3-super", "llama-3.3-70b", "muse-glimmer-30b", "muse-spark-1.1"}),
     "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview",
-                              "nemotron-3-super", "gpt-6.1-sol"}),
+                              "nemotron-3-super", "gpt-6.1-sol",
+                              # as gpt-6.1-sol; the 6.2 line's own measurement follows
+                              "gpt-6.2-sol"}),
     "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super",
                           "gpt-5.6-luna"}),
     "qoder": frozenset({"qfmodel", "efficient", "kmodel", "qmodel_latest"}),
@@ -10328,7 +10898,8 @@ for _b, _e in _MODEL_CATALOG.items():
 # 2026-09-05/07), and the harnesses that speak chat/completions and nothing else. A limitation, not
 # an omission: the support matrix lists these pairs as not run for that reason, and the chat-only
 # test forbids listing such an id for such a harness.
-RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
+# gpt-6.2-astra: as gpt-6-astra; the 6.2 line's own measurement follows.
+RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6.2-astra", "gpt-6-astra"})
 # kimi speaks chat/completions only: the runner defines its model with provider type `openai`
 # through the relay (Kimi Code CLI has an openai_responses type too, but it is not the one the runner
 # sets), so a Responses-API-only id would be a picker row that fails on send.
@@ -10406,7 +10977,9 @@ _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROP
 # sorts first. When nothing on the instance serves one, hermes keeps its default (the main
 # model), which is today's behaviour and the honest answer: we cannot route to a model that no
 # integration here can reach.
-_VISION_CAPABLE = ("claude-haiku-5.5", "claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
+# gpt-6.2-sol: as gpt-6.1-sol; the 6.2 line's own measurement follows. (gpt-6.2-astra is not here,
+# as gpt-6-astra is not.)
+_VISION_CAPABLE = ("claude-haiku-5.5", "claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.2-sol", "gpt-6.1-sol",
                    "gpt-5.4", "claude-sonnet-4.6", "claude-opus-5.5", "claude-opus-5", "gpt-5.5")
 
 
@@ -10450,8 +11023,10 @@ async def _vision_auth(sid: str, backend: str) -> dict | None:
 # neither offers a row that fails on send. Keyed by the provider in both vocabularies (the
 # integrations' and the runner-native names a chain connection may carry).
 _CHAT_PASSTHROUGH = ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure")
+# gpt-6.2-sol rides every pair below as gpt-6.1-sol; the 6.2 line's own measurement follows.
+_SOL_PASSTHROUGH_REFUSED = frozenset({"gpt-6.1-sol", "gpt-6.2-sol"})
 _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
-    (p, b): frozenset({"gpt-6.1-sol"}) for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
+    (p, b): _SOL_PASSTHROUGH_REFUSED for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
 # The older chat-completions bases, the same refusal, measured the same way (2026-10-25, one tool turn
 # each, 0.37.0-rc.13): kimi, qwen and cline fail on My TokenRouter, OpenAI and Azure OpenAI; openhands
 # and cheetahclaws on My TokenRouter (openhands reaches OpenAI and Azure through litellm's Responses
@@ -10459,9 +11034,13 @@ _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
 # beside the catalog recorded on 2026-10-02 and left listed.
 for _p in ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure"):
     for _b in ("kimi", "qwen", "cline"):
-        _CHANNEL_REFUSES[(_p, _b)] = _CHANNEL_REFUSES.get((_p, _b), frozenset()) | {"gpt-6.1-sol"}
+        _CHANNEL_REFUSES[(_p, _b)] = _CHANNEL_REFUSES.get((_p, _b), frozenset()) | _SOL_PASSTHROUGH_REFUSED
 for _b in ("openhands", "cheetahclaws"):
-    _CHANNEL_REFUSES[("tokenrouter", _b)] = _CHANNEL_REFUSES.get(("tokenrouter", _b), frozenset()) | {"gpt-6.1-sol"}
+    _CHANNEL_REFUSES[("tokenrouter", _b)] = _CHANNEL_REFUSES.get(("tokenrouter", _b), frozenset()) | _SOL_PASSTHROUGH_REFUSED
+# TokenRouter's route for claude-fable-5-1 declines docker-agent's first turn before a word is written
+# (finish_reason content_filter, 3 of 3, 2026-10-25), while on the same route vibe passes with it and
+# docker-agent passes with claude-fable-5, claude-opus-5.5 and claude-sonnet-5.5, and docker-agent
+# passes with it on OpenRouter and Vercel. The route decides, so the route does not offer it.
 _CHANNEL_REFUSES[("tokenrouter", "docker-agent")] |= {"claude-fable-5-1"}
 # dcode drives the Responses API (deepagents' built-in profile sets use_responses_api for every openai:*
 # model), and TokenRouter's /v1/responses does not reach every family it serves on chat completions:
@@ -10472,7 +11051,7 @@ _CHANNEL_REFUSES[("tokenrouter", "docker-agent")] |= {"claude-fable-5-1"}
 # history carries tool calls ("data did not match any variant of untagged enum ResponseInput", three
 # of three), where glm-5.3 and qwen3.8-max took the same history.
 _CHANNEL_REFUSES[("tokenrouter", "dcode")] = frozenset({"glm-5.3-flash",
-    "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5",
+    "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5",
     "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"})
 # Roder uses the same Responses routes; these are channel refusals, not Roder measurements.
@@ -11425,7 +12004,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         trace_ctx: dict | None = None,
                         extra_env: dict | None = None,
                         extra_secret: list[str] | None = None,
-                        task_memory: str = "", task_person: dict | None = None) -> tuple[str, list[dict], dict]:
+                        task_memory: str = "", task_person: dict | None = None, speaker: str = "") -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -11916,6 +12495,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             # so the rule is the refusal itself, not which store the key came from. Other failures
             # (a transient error, a timeout) still move on to the next connection.
             rec["error_message"] = _refusal_message(conn, _last_err)
+            rec["provider_failure"] = _provider_failure_detail(_last_err)
             status = "failed"
             rec["status"] = "failed"
             await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "last_connection": name})
@@ -11970,7 +12550,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # Not awaited: the turn isn't complete until this returns, and some vendors extract with a model
         # before they answer. Measured on real turns: 5.5 s on Graphiti and 7.2 s on ReMe after the last words.
         _t = asyncio.create_task(_memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator),
-                                                   resp_id=translator.resp_id))
+                                                   resp_id=translator.resp_id, speaker=speaker))
         _inflight.add(_t)
         _t.add_done_callback(_inflight.discard)
     elif harness_id and "memories" in rec:
@@ -12433,7 +13013,7 @@ async def retention_restore(body: RetentionRestoreBody) -> dict:
             # (_hosted_scrub_removed): a memory kept for it and out of its reach would not be its memory back
             org = str(v.get("org") or "")
             try:
-                if await memory_plane.granted(org, _agent(iid)):
+                if await memory_plane.granted(org, _agent(iid), v.get("workspace")):
                     await _memories_on_grant(org, _agent(iid))
             except Exception as e:  # noqa: BLE001 - the agent is back; its tools are given again at its next grant
                 print(f"[memories] {iid}: restored without its memory tools: {type(e).__name__}", flush=True)
@@ -12760,7 +13340,18 @@ async def create_response(body: CreateResponseBody, request: Request):
         if body.branch is not True:
             raise uhp_error(400, 'invalid_input', 'branch is true or false.', 'branch')
         if not body.previous_response_id:
-            raise uhp_error(400, 'invalid_input', 'A branch starts from the response named in previous_response_id.', 'branch')
+            raise uhp_error(400, "invalid_input", "A branch starts from the response named in "
+                                                  "previous_response_id.", "branch")
+    # A resume (Tasks §3.3) is judged by its shape alone, here, before anything is read: a malformed
+    # one, or one with a branch, is a 400 whatever the response it names. Whether that response is
+    # interrupted is decided below, once the session is known.
+    resume_item = _split_resume(body.input)
+    if resume_item is not None and not body.previous_response_id:
+        raise uhp_error(400, "invalid_input", "A resume carries on the response named in "
+                                              "previous_response_id.", "previous_response_id")
+    if resume_item is not None and body.branch is True:
+        raise uhp_error(400, "invalid_input", "A branch does not resume the original response. Send "
+                                              "the resume without branch.", "branch")
     # Never ignore an opt-in authorization policy, forward it to a server that
     # may ignore it, or replay unrelated work under a privileged-looking key.
     approval_inputs = body.input if isinstance(body.input, list) else [body.input]
@@ -12889,6 +13480,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     task_memory = await _task_memory_for_turn(org, harness_id, body)
     # Who it is for, when its agent keeps each person's memory apart (memory_plane.end_user_node).
     task_person = await _task_person(org, harness_id, hv, body, principal)
+    # who is speaking, as the memory names them: never "user" (Richard 11-10)
+    speaker = _task_speaker(task_person, body, principal)
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -12973,10 +13566,24 @@ async def create_response(body: CreateResponseBody, request: Request):
             return []
     hdr_vals: dict[str, str] = {}
     declared = [h.strip() for h in _hv_arr("additional_headers") if isinstance(h, str) and h.strip()]
+    _denied = sorted({h.lower() for h in declared if _header_denied(h)})
     for _hn in declared:
+        if _header_denied(_hn):
+            continue                  # never read: a setup written before the write refused it (_header_denied)
         _v = request.headers.get(_hn)
         if _v is not None:
             hdr_vals[_hn.lower()] = _v
+    if _denied:
+        print(f"[headers] WARNING setup={_mcp_sha8(harness_id)} declares header(s) it can't pass to tools, not read: "
+              f"{','.join(_denied)}", flush=True)
+    for _hn, _v in hdr_vals.items():
+        _why = _header_value_ours(_v, request)
+        if _why:
+            print(f"[headers] WARNING setup={_mcp_sha8(harness_id)} header {_hn} carries {_why}; the task is refused",
+                  flush=True)
+            raise uhp_error(400, "header_not_allowed",
+                            f"The header '{_hn}' can't be passed to tools: it carries your own sign-in or API key. "
+                            f"Send the tool's own key in it instead.", "additional_headers")
     # The caller's W3C trace context (#473): read once here, carried to the runner with the turn.
     # `baggage` is never read — only these two headers may leave the box.
     trace_ctx = _trace_context(request.headers.get("traceparent"), request.headers.get("tracestate"))
@@ -12984,6 +13591,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # request didn't supply that header, the tool call would fail opaquely (bad auth at the MCP).
     # Reject up-front instead, naming exactly what's missing and where it's needed.
     missing: list[str] = []
+    refused: set[str] = set()   # a reference to a header no setup can pass to its tools (_header_denied)
     # Through the one reader, so this scan sees exactly the servers the turn will get.
     for _s in _mcp_list(hv):
         if str(_s.get("enabled")) in ("False", "false", "0"):
@@ -12991,8 +13599,15 @@ async def create_response(body: CreateResponseBody, request: Request):
         _blob = " ".join([str(_s.get("url") or ""), str(_s.get("auth") or ""),
                           " ".join(str(x) for x in (_s.get("headers") or {}).values())])
         for _ref in _HDR_REF.findall(_blob):
-            if _ref.lower() not in hdr_vals:
+            if _header_denied(_ref):
+                refused.add(_ref)
+            elif _ref.lower() not in hdr_vals:
                 missing.append(f"'{_ref}' (needed by MCP server '{_s.get('name') or _s.get('id') or 'mcp'}')")
+    refused |= _denied_header_refs(list(_parse_env((hv or {}).get("env")).values()))
+    if refused:
+        print(f"[headers] WARNING setup={_mcp_sha8(harness_id)} references header(s) it can't pass to tools: "
+              f"{','.join(sorted(r.lower() for r in refused))}; the task is refused", flush=True)
+        raise uhp_error(400, "header_not_allowed", _header_denied_said(refused), "additional_headers")
     if missing:
         raise HTTPException(400, "missing required header(s): " + ", ".join(sorted(set(missing)))
                             + ". This harness declares Additional Headers that its tools reference — "
@@ -13005,7 +13620,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     history: list[dict] = []
     # An answer to the previous response's question (Tasks §3.2) is taken out before the rest of
     # the input is read as a message; it is checked once the session it answers in is resolved.
-    answer, live_input = _split_input_response(body.input)
+    answer, live_input = _split_input_response([] if resume_item is not None else body.input)
     if answer is not None and not body.previous_response_id:
         raise uhp_error(400, "invalid_input", "An input_response answers the response named in "
                                               "previous_response_id.", "previous_response_id")
@@ -13035,7 +13650,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 for f in files_in if f.get("content_b64") and f.get("filename")]
     if body.instructions:
         prompt = f"{body.instructions}\n\n---\n\n{prompt}"
-    if not prompt and not files_in and answer is None:
+    if not prompt and not files_in and answer is None and resume_item is None:
         raise HTTPException(400, "empty input")
     if files_in:
         names = ", ".join(f["filename"] for f in files_in)
@@ -13061,17 +13676,40 @@ async def create_response(body: CreateResponseBody, request: Request):
     extra_secret: list[str] = []
     voided: list[str] = []
     claimed: tuple[str, dict] | None = None
+    resume_claim: str | None = None         # the response whose resume this turn claimed (§3.3)
     # A later task passes the question over however it names the session (§3.2), so what a task
     # chains on is the session's newest response when it names no response of its own.
     _newest = ""
-    if answer is not None or (not body.previous_response_id and str(meta.get("session_id") or "").strip()):
+    if (answer is not None or resume_item is not None
+            or (not body.previous_response_id and str(meta.get("session_id") or "").strip())):
         with contextlib.suppress(Exception):
             _newest = str((await _session_turns_data(sid)).get("last_response_id") or "")
     _chained = None if branching else body.previous_response_id or _newest
     if _chained:
         _prev = await _resp_get(_chained)
         _pend = (_prev or {}).get("_pending_input") if isinstance(_prev, dict) else None
-        if answer is not None:
+        if resume_item is not None:
+            # Tasks §3.3: single-use and explicit. A response the server did not cut short is not
+            # resumable, and one a later task already resumed or passed over is not either (the
+            # session's newest response is no longer it). Read first as the sweep would leave it, so
+            # a turn cut by a restart that no read has settled yet still reads interrupted.
+            if (isinstance(_prev, dict) and str(_prev.get("status") or "") in _TURN_LIVE):
+                with contextlib.suppress(Exception):
+                    _prev = await _reconcile_response(_chained, _prev) or _prev
+            if not _is_interrupted(_prev):
+                raise uhp_error(409, "resume_not_pending", "That response was not interrupted, so there "
+                                "is nothing to resume.", "previous_response_id",
+                                {"previous_response_id": body.previous_response_id, "state": "not_interrupted"})
+            if _newest and _newest != body.previous_response_id:
+                raise uhp_error(409, "resume_not_pending", "A later task already resumed or passed that "
+                                "response over.", "previous_response_id",
+                                {"previous_response_id": body.previous_response_id, "state": "passed_over"})
+            note = (resume_item.get("note") or "").strip() or None
+            line = _resume_prompt(_prev, note)
+            prompt = line
+            user_text = "Resume the interrupted turn." + (f" {note}" if note else "")
+            input_items = [{"type": "resume", **({"note": note} if note else {})}]
+        elif answer is not None:
             if _newest and _newest != body.previous_response_id:
                 # a later task already ran: the question it passed over is no longer pending
                 raise uhp_error(409, "input_not_pending", "A later task passed that input request over.",
@@ -13115,6 +13753,21 @@ async def create_response(body: CreateResponseBody, request: Request):
             if str(existing.get("req_hash") or "") not in ("", idem_rhash or ""):
                 raise HTTPException(409, "Idempotency-Key reused with a different request payload")
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
+    if resume_item is not None:
+        # The resume is claimed here, once: after the idempotency reservation, so a retry that carries
+        # the same key replays the first result instead of meeting its own claim, and before anything
+        # starts, so two resumes that arrive together cannot both run (Tasks §3.3, single-use).
+        try:
+            if not await _resume_claim(org, str(body.previous_response_id)):
+                raise uhp_error(409, "resume_not_pending", "That response was already resumed.",
+                                "previous_response_id",
+                                {"previous_response_id": body.previous_response_id, "state": "resumed"})
+        except BaseException:
+            if idem_key and idem_sha_v is not None:
+                with contextlib.suppress(Exception):
+                    await control_store.idem_release(org, idem_sha_v, resp_id)
+            raise
+        resume_claim = str(body.previous_response_id)
     if branching:
         try:
             # The same capacity gates as a turn, without publishing a heartbeat-only session.
@@ -13232,6 +13885,8 @@ async def create_response(body: CreateResponseBody, request: Request):
             # is not refused as already answered.
             with contextlib.suppress(Exception):
                 await _input_request_settle(org, claimed[0], claimed[1], "pending")
+        if resume_claim is not None:
+            await _resume_release(org, resume_claim)      # nothing ran: the retry may resume it
         raise
     # Past this point we are committed to executing; the turn will persist a terminal record even
     # on failure, so the reservation must stand (releasing would permit a double run).
@@ -13257,7 +13912,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
                         trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
-                        task_person=task_person)
+                        task_person=task_person, speaker=speaker)
                     end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
@@ -13313,7 +13968,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
                             trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
-                        task_person=task_person)
+                        task_person=task_person, speaker=speaker)
                         end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
@@ -13375,7 +14030,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
                 trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory,
-                        task_person=task_person)
+                        task_person=task_person, speaker=speaker)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
@@ -15692,26 +16347,24 @@ async def _ssrf_check(url: str) -> str | None:
     common setup, the operator already has full access to that machine, and blocking it would
     remove a real capability while protecting nobody from anybody.
     """
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+        # urlparse checks a port only when it is read, so it is read here: "host:abc" or "host:99999" is an
+        # address that is not valid, and reading it later raised past every caller as a 500.
+        port = u.port
+    except Exception:  # noqa: BLE001
+        return "invalid url"
     if _pool_is_local():
-        from urllib.parse import urlparse
-        try:
-            u = urlparse(url)
-        except Exception:  # noqa: BLE001
-            return "invalid url"
         if u.scheme not in ("http", "https"):
             return "MCP endpoints must be http or https"
         return None if u.hostname else "url has no host"
 
-    from urllib.parse import urlparse
-    try:
-        u = urlparse(url)
-    except Exception:  # noqa: BLE001
-        return "invalid url"
     if u.scheme != "https":
         return "only https MCP endpoints are allowed"
     if not u.hostname:
         return "url has no host"
-    return await _internal_target(u.hostname, u.port or 443)
+    return await _internal_target(u.hostname, port or 443)
 
 
 # The internal ranges Python's own classifiers do not call internal. Named here rather than folded
@@ -15944,6 +16597,10 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
 
 class McpSecretBody(BaseModel):
     token: str
+    # What the secret is for: the address of the server it is stored for, and/or the environment. A store that
+    # names neither keeps the uses it had, and a secret with none is bound where a harness first names it.
+    url: str | None = None
+    env: bool = False
 
 
 class McpTestBody(BaseModel):
@@ -15951,58 +16608,141 @@ class McpTestBody(BaseModel):
     auth: str | None = None   # literal bearer OR vault:<ref> (left blank → no auth)
 
 
-async def _mcp_secret_store(org: str, ref: str, token: str) -> dict:
+def _mcp_caller_ws(request: Request, p: dict) -> tuple[str, bool]:
+    """(the workspace a secret route acts in, whether the caller is held to it). A key held to a workspace acts in its
+    own, whatever header it sends; any other caller reaches the whole organization and names the workspace it is in."""
+    scoped = _key_scope(p)
+    return (scoped, True) if scoped else (str(request.headers.get("x-harness-workspace") or "default"), False)
+
+
+def _mcp_secret_key(ref: str) -> str:
+    # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
+    safe = re.sub(r"[^a-z0-9]+", "-", str(ref).lower()).strip("-") or "mcp"
+    return f"{_MCP_SECRET_PREFIX}{safe}"
+
+
+def _mcp_not_stored() -> HTTPException:
+    """The one answer for a stored secret a caller can't reach, the same as for one that doesn't exist."""
+    return uhp_error(404, "not_found", "There is no stored secret by that name in this workspace.", "ref")
+
+
+async def _mcp_secret_store(org: str, ref: str, token: str, *, ws, scoped: bool = False,
+                            uses: set[str] | None = None) -> dict:
     """Store a secret under a stable ref in the org's own vault tenant, so a harness config
     carries only 'vault:<key>' and the live token never lands in the graph. The org's tenant
     and nothing else: a dotted org id used to fall to the shared pool, where every org's
-    reference could read every other org's secret."""
+    reference could read every other org's secret.
+
+    It is bound as it is stored, to the workspace `ws` alone and, when `uses` names any, to those uses
+    alone: a stored value is new, so where an old one went no longer follows (a name another workspace
+    took first never carries its value there). A caller held to a workspace never writes over a secret
+    bound elsewhere."""
     tenant = _org_tenant(org)
     if not tenant:
         raise HTTPException(400, "no org to store the secret for")
-    # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
-    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
-    key = f"{_MCP_SECRET_PREFIX}{safe}"
+    key = _mcp_secret_key(ref)
+    w = _mcp_ws(org, ws)
+    bound = await _mcp_binding_get(tenant, key)
+    if scoped and (bound is None or w not in bound["workspaces"]) and (
+            bound is not None or await _vault_get(tenant, key) is not None):
+        raise _mcp_not_stored()
     await _vault_put_credential(tenant, key, token, "token")
-    return {"ref": f"vault:{key}", "tenant": tenant}
+    named = {u for u in (uses or ()) if u}
+    have = bound or {"uses": set(), "workspaces": set()}
+    await _vault_put(tenant, _mcp_bind_key(key), json.dumps({
+        "uses": sorted(named or have["uses"]), "workspaces": [w]}))
+    if not (named or have["uses"]):
+        print(f"[mcp] stored secret {_mcp_sha8(key)} was stored with no url and no env: the first harness to name it "
+              f"in its workspace binds it there. Store it with its server's url, or env, instead.", flush=True)
+    # the workspaces it went to before and no longer does, counted, so a person who rotated it from one workspace
+    # hears that the others' harnesses stop getting it
+    return {"ref": f"vault:{key}", "tenant": tenant, "other_workspaces_dropped": len(have["workspaces"] - {w})}
+
+
+def _mcp_store_uses(body: McpSecretBody) -> set[str]:
+    """The uses a store call names. An address that isn't a whole http(s) address with a fixed host is refused: a
+    secret can't be bound to a host that is filled in per task."""
+    uses: set[str] = set()
+    if body.url:
+        use = _mcp_use_of_url(body.url)
+        if not use:
+            raise uhp_error(422, "invalid_secret_use",
+                            "A stored secret is bound to the server it is for, so its address must be a fixed "
+                            "http(s) address.", "url")
+        uses.add(use)
+    if body.env:
+        uses.add(USE_ENV)
+    return uses
 
 
 @app.put("/v1/orgs/{org}/mcp-secrets/{ref}")
 async def put_mcp_secret(org: str, ref: str, body: McpSecretBody, request: Request) -> dict:
-    await _owned_org(request, org)
     """Store an MCP server bearer token in the vault under a stable ref, so the harness config
     stores only 'vault:<ref>' and the live token never lands in the graph. Stored in the org's
     own vault tenant when valid, else the global pool (dotted org ids aren't valid vault tenants)."""
-    return await _mcp_secret_store(org, ref, body.token)
+    p = await _owned_org(request, org)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_store(org, ref, body.token, ws=ws, scoped=scoped, uses=_mcp_store_uses(body))
 
 
 @app.delete("/v1/orgs/{org}/mcp-secrets/{ref}")
 async def delete_mcp_secret(org: str, ref: str, request: Request) -> dict:
-    await _owned_org(request, org)
-    return await _mcp_secret_delete(org, ref)
+    p = await _owned_org(request, org)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_delete(org, ref, ws=ws, scoped=scoped)
 
 
-async def _mcp_secret_delete(org: str, ref: str) -> dict:
+async def _mcp_secret_delete(org: str, ref: str, *, ws, scoped: bool = False) -> dict:
     """Remove a stored MCP server token, at once and for good: a credential is not kept after its
     delete (Richard's rule, 2026-10-08), and before this the only way to be rid of one was to
-    overwrite it. A harness that still names the reference runs without it."""
+    overwrite it. A harness that still names the reference runs without it. A caller held to a
+    workspace removes only a secret bound to it."""
     tenant = _org_tenant(org)
     if not tenant:
         raise HTTPException(400, "no org to remove the secret for")
-    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
-    key = f"{_MCP_SECRET_PREFIX}{safe}"
+    key = _mcp_secret_key(ref)
+    if scoped:
+        bound = await _mcp_binding_get(tenant, key)
+        if bound is None or _mcp_ws(org, ws) not in bound["workspaces"]:
+            raise _mcp_not_stored()
     await BACKING.secrets.delete(tenant, key)
+    await _mcp_binding_delete(tenant, key)
     return {"ref": f"vault:{key}", "deleted": True}
+
+
+def _mcp_redact(obj, token: str):
+    """`obj` with every appearance of `token` taken out: a server that echoes the request back never hands a stored
+    token to whoever asked for the test."""
+    if not token:
+        return obj
+    if isinstance(obj, str):
+        return obj.replace(token, "[redacted]")
+    if isinstance(obj, list):
+        return [_mcp_redact(x, token) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _mcp_redact(v, token) for k, v in obj.items()}
+    return obj
+
+
+async def _mcp_test(org: str, body: McpTestBody, request: Request, p: dict) -> dict:
+    """Probe an MCP server (initialize + tools/list) so the config UI can validate a server and
+    show its tools before saving. A vault:<ref> auth resolves server-side, only for the address
+    being tested and only where the caller reaches the secret; the answer never carries it."""
+    if not body.url:
+        raise HTTPException(400, "url required")
+    ws, scoped = _mcp_caller_ws(request, p)
+    auth = str(body.auth or "")
+    token = auth
+    if auth.startswith("vault:"):
+        # a caller that reaches the whole organization may test a secret wherever it is bound
+        token = await _resolve_mcp_auth(org, auth, use=_mcp_use_of_url(body.url), ws=ws, any_ws=not scoped)
+    return _mcp_redact(await _mcp_list_tools(body.url, token), token)
 
 
 @app.post("/v1/orgs/{org}/mcp-test")
 async def test_mcp(org: str, body: McpTestBody, request: Request) -> dict:
-    await _owned_org(request, org)
-    """Probe an MCP server (initialize + tools/list) so the config UI can validate a server and
-    show its tools before saving. Resolves a vault:<ref> auth to the live token server-side."""
-    if not body.url:
-        raise HTTPException(400, "url required")
-    token = await _resolve_mcp_auth(org, str(body.auth or ""))
-    return await _mcp_list_tools(body.url, token)
+    p = await _owned_org(request, org)
+    return await _mcp_test(org, body, request, p)
 
 
 # ── PUBLIC mcp-secret + mcp-test (Bearer sk-hr-... key; org resolved from the key) ─────
@@ -16010,23 +16750,22 @@ async def test_mcp(org: str, body: McpTestBody, request: Request) -> dict:
 # harness config — so the live token never lands in the graph and never sits in plaintext config.
 @app.put("/v1/mcp-secrets/{ref}")
 async def put_mcp_secret_public(ref: str, body: McpSecretBody, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    return await _mcp_secret_store(org, ref, body.token)
+    org, p = await _pub_org_principal(request)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_store(org, ref, body.token, ws=ws, scoped=scoped, uses=_mcp_store_uses(body))
 
 
 @app.delete("/v1/mcp-secrets/{ref}")
 async def delete_mcp_secret_public(ref: str, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    return await _mcp_secret_delete(org, ref)
+    org, p = await _pub_org_principal(request)
+    ws, scoped = _mcp_caller_ws(request, p)
+    return await _mcp_secret_delete(org, ref, ws=ws, scoped=scoped)
 
 
 @app.post("/v1/mcp-test")
 async def test_mcp_public(body: McpTestBody, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    if not body.url:
-        raise HTTPException(400, "url required")
-    token = await _resolve_mcp_auth(org, str(body.auth or ""))
-    return await _mcp_list_tools(body.url, token)
+    org, p = await _pub_org_principal(request)
+    return await _mcp_test(org, body, request, p)
 
 
 # ── The database, an ordinary MCP server ──────────────────────────────────────────────────────
@@ -16105,7 +16844,15 @@ def _db_parse(engine: str, conn: str) -> tuple[str, str]:
         raise uhp_error(400, "invalid_connection_string",
                         "That connection string names no database — add /yourdatabase to the end.",
                         "connection_string")
-    host = u.hostname + (f":{u.port}" if u.port else "")
+    try:
+        port = u.port
+        if port == 0:
+            raise ValueError
+    except ValueError as e:
+        raise uhp_error(400, "invalid_connection_string",
+                        "The port must be a number from 1 to 65535.",
+                        "connection_string") from e
+    host = u.hostname + (f":{port}" if port else "")
     return host, db
 
 
@@ -16323,7 +17070,7 @@ async def _mcp_migrate(org: str, hid: str, v: dict | None) -> dict | None:
     # A token written on a harness before its record stopped holding them goes to the secret store
     # here, the same once-and-in-place as below. A harness nothing reads keeps it until something does.
     listed = _mcp_list(v)
-    sealed = await _mcp_seal_literals(org, listed)
+    sealed = await _mcp_seal_literals(org, listed, ws=v.get("workspace"))
     if sealed != listed:
         await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(sealed)})
         v = {**v, "mcp_servers": json.dumps(sealed)}
@@ -17475,11 +18222,12 @@ async def _provider_url_check(url: str) -> str | None:
     refused = "the finished file was offered from an address this will not fetch"
     try:
         u = urlparse(url)
+        port = u.port   # checked only when read (a port that is not a number, or out of range)
     except Exception:  # noqa: BLE001
         return refused
     if u.scheme not in ("http", "https") or not u.hostname:
         return refused
-    bad = await _internal_target(u.hostname, u.port or (443 if u.scheme == "https" else 80))
+    bad = await _internal_target(u.hostname, port or (443 if u.scheme == "https" else 80))
     if not bad:
         return None
     # The host, in the log, where an operator can act on it — and only the host: a result_url
@@ -20011,8 +20759,14 @@ async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -
         # memories on it must not go dark because someone pasted a wrong key.
         base_url = str(config.get("base_url") or "").strip()
         if base_url:
-            if await _ssrf_check(base_url):
-                raise uhp_error(422, "memory_invalid", "That address can't be used here: it must be https, on a public address.", "config.base_url")
+            why = await _ssrf_check(base_url)
+            if why:
+                # said as what is wrong with it: "must be https, on a public address" was said for every refusal, so an
+                # address with a port that is not a number read as a rule this self-hosted instance does not have
+                said = {"invalid url": "it is not a valid address", "url has no host": "it has no host",
+                        "MCP endpoints must be http or https": "it must be http or https"}.get(
+                            why, "it must be https, on a public address")
+                raise uhp_error(422, "memory_invalid", f"That address can't be used here: {said}.", "config.base_url")
             own = _own_service_address(base_url)
             if own:
                 raise uhp_error(422, "memory_invalid", f"That address can't be used: {own}.", "config.base_url")
@@ -21365,6 +22119,8 @@ def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
 # harnesses.md §4.3):
 #   hard        — the CLI enforces it (claude: a permissions.deny rule takes these exact names).
 #   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
+# A base whose switch reaches some of its tools and not others is "instruction", with the ones it
+# does withhold named in `hard_tools` (_tool_enforcement): each tool is labelled for what happens to it.
 _BASE_CATALOG: dict[str, dict] = {
     "codex": {
         "label": "Codex", "backend": "codex", "status": "ready",
@@ -21407,8 +22163,13 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("web_extract", "Web Extract")],
         # "instruction": hermes switches toolsets, not tools. Terminal is withheld (its toolset holds
         # only it and the process tool that serves it), and the four file tools are withheld when all
-        # four are off, but one file tool alone can only be asked (_hermes_toolsets_off).
+        # four are off, but one file tool alone can only be asked (_hermes_toolsets_off). So terminal
+        # is labelled hard (`hard_tools`): Settings never says "This agent can't switch it off" of a
+        # tool the agent is not offered once it is off. Web search can still arrive through the
+        # browser toolset, so it stays asked. gateway/tests/test_hermes_tool_labels.py holds the list
+        # to the runner's table.
         "tool_enforcement": "instruction",
+        "hard_tools": ("terminal",),
     },
     "pi": {
         "label": "Pi", "backend": "pi", "status": "ready",
@@ -21446,10 +22207,15 @@ _BASE_CATALOG: dict[str, dict] = {
         # The sdk profile's model-facing tools, read off the request header of a 0.1.2rc1 turn
         # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). The switch is
         # the profile's rows: a tool whose row registers nothing else is withheld (bash,
-        # str_replace_editor, web_fetch, todo_write, skill, subagent, subagent_fork, workflow;
-        # dsh_driver._rows_off), glob and grep only together, and read, write and edit never, since
-        # their row also holds read_image. So the base stays "instruction": the request covers what
-        # the rows cannot.
+        # str_replace_editor, todo_write, skill, subagent, subagent_fork, workflow;
+        # dsh_driver.TOOL_ROWS and _rows_off), and so is web_fetch, by its row's own `fetch` switch
+        # (dsh_driver._compose_patch). Those are `hard_tools`: the bases document labels each of
+        # them hard, so Settings never says "This agent can't switch it off" of a tool the agent is
+        # not offered once it is off.
+        # glob and grep share a row and are withheld only together, read, write and edit never,
+        # since their row also holds read_image: one of them alone is only asked, so the base stays
+        # "instruction" and they keep that label. gateway/tests/test_dsh_tool_labels.py holds the
+        # list to the driver's rows.
         # web_search is not offered: dsh's stock provider calls DeepSeek's own API with the relay's placeholder
         # key (401 every time, and off the turn's connection), so the driver turns that row off.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
@@ -21459,6 +22225,8 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("subagent", "Subagent"), ("subagent_fork", "Subagent (fork)"),
                   ("workflow", "Workflow")],
         "tool_enforcement": "instruction",
+        "hard_tools": ("bash", "str_replace_editor", "todo_write", "skill", "subagent", "subagent_fork",
+                       "workflow", "web_fetch"),
     },
     "goose": {
         "label": "goose", "backend": "goose", "status": "ready",
@@ -22081,6 +22849,13 @@ _BASE_CATALOG: dict[str, dict] = {
     },
 }
 
+
+def _tool_enforcement(b: dict, tool: str) -> str:
+    """How far switching off one of a base's tools goes: "hard" for a tool its runtime withholds
+    (`hard_tools`, on a base that withholds only some), else the base's own word."""
+    return "hard" if tool in b.get("hard_tools", ()) else b["tool_enforcement"]
+
+
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
 # `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
 _SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
@@ -22252,7 +23027,7 @@ class HarnessBody(BaseModel):
 # What a harness comes back with (_harness_out) that is not written through these fields, plus the
 # protocol's `object` (Harnesses §2), so a harness read from any UHP server can be sent back.
 _HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt", "memories",
-                                "memory_reason"})
+                                "memory_reason", "capabilityDigest"})
 
 
 def _harness_field_names() -> frozenset:
@@ -22299,7 +23074,7 @@ def _stored_tools_current(backend: str, names) -> list:
     return out
 
 
-def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
+def _harness_out(v: dict, grants: dict[tuple[str, str], int] | None = None) -> dict:
     """VG vertex (snake_case, JSON-string lists) -> the frontend CustomHarness shape (camelCase)."""
     def _parse(s):
         try:
@@ -22345,7 +23120,8 @@ def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created,
             # how many memories its agent holds, from its grants (memory_plane.grant_counts), where a read asked:
             # its record doesn't say, and a list can't ask once per row
-            **({"memories": {"count": grants.get(_agent(str(v.get("id") or "")), 0)}} if grants is not None else {}),
+            **({"memories": {"count": grants.get((_agent(str(v.get("id") or "")), memory_plane.place(v.get("workspace"))), 0)}}
+               if grants is not None else {}),
             # where it came from (HarnessBody.source), when whatever made it said; a harness made
             # without one has no key, so "said nothing" and "said this" never read alike
             **({"source": str(v["source"])} if v.get("source") else {}),
@@ -22401,7 +23177,60 @@ def _harness_source_prop(body: HarnessBody) -> dict:
     return {"source": src} if src else {}
 
 
+# ── a harness's version (Harnesses §5.2) ─────────────────────────────────────────────────────────
+# PUT /v1/harnesses/{hid} replaces the whole configuration, so a caller that builds its body from a
+# read (an app applying the copy it keeps in its repo, an upgrade step) overwrote whatever changed
+# in between: a person's edit in the console, another step's plugin. A read answers the harness's
+# version as an ETag and an update may send it back as If-Match; one that no longer matches is
+# refused 412 and nothing is written. Without If-Match an update replaces as it always has.
+#
+# The version is a digest of what an update replaces (_harness_props' fields), as stored. So it
+# moves with every write of one of them, whichever route made it (a kit's launch, a plugin publish,
+# the plugins binding, the memories entry), and stays put for a write of anything an update leaves
+# alone (the kit flag, the workspace, the live site, delete times), which a caller's read of the
+# configuration is not stale about. Nothing is stored for it, so a harness made before it existed
+# has one at once. A change written and then undone reads as the version it was: a caller that read
+# it has not missed anything.
+#
+# The check and the write are two operations on the store, not one: a write that lands in the
+# milliseconds between them can still be overwritten. What it stops is the stale read, which is
+# seconds to days old.
+_HARNESS_VERSIONED = ("name", "base", "base_label", "default_model", "system_prompt", "mcp_servers", "skills",
+                      "plugins", "disabled_tools", "additional_headers", "env", "calibrates", "environment",
+                      "max_step", "timeout_seconds", "reasoning_effort")
+_HARNESS_CHANGED = "This harness changed since you read it. Read it again and retry."
+
+
+def _harness_version(v: dict) -> str:
+    """The version of a stored harness: what an update replaces, digested."""
+    seen = json.dumps({k: (v or {}).get(k) for k in _HARNESS_VERSIONED}, sort_keys=True, default=str,
+                      separators=(",", ":"))
+    return hashlib.sha256(seen.encode()).hexdigest()[:32]
+
+
+def _harness_etag(response: Response | None, v: dict) -> None:
+    """Put the harness's version on an answer, as a strong ETag. FastAPI gives a route its Response;
+    a route function called directly may be given none."""
+    if response is not None:
+        response.headers["ETag"] = f'"{_harness_version(v)}"'
+
+
+def _harness_if_match(request: Request, v: dict) -> None:
+    """Refuse an update whose If-Match no longer names this harness's version (412, nothing written).
+    No If-Match: nothing to check. "*" matches any harness that exists, and this one does. A tag sent
+    back weak (W/"...") is compared by its value: a proxy that compresses an answer may weaken the
+    ETag it passes on, and the caller then holds only that form."""
+    raw = request.headers.get("if-match")
+    if raw is None:
+        return
+    tags = [t.strip().removeprefix("W/").strip('"') for t in raw.split(",") if t.strip()]
+    if "*" in tags or _harness_version(v) in tags:
+        return
+    raise uhp_error(412, "precondition_failed", _HARNESS_CHANGED, "If-Match")
+
+
 def _harness_props(body: HarnessBody) -> dict:
+    _harness_header_names_refuse(body)   # every write builds its record here: never one naming a header it can't pass
     base = _require_supported_base(body.base)   # refuse at create, not at the first task
     return {"name": body.name, "base": base, "base_label": body.base_label or base,
             "default_model": body.default_model or "", "system_prompt": body.system_prompt or "",
@@ -22458,30 +23287,201 @@ def _mcp_is_literal(value) -> bool:
     return isinstance(value, str) and bool(value) and not value.startswith("vault:") and "$headers." not in value
 
 
-async def _mcp_seal_literals(org: str, servers: list[dict]) -> list[dict]:
+async def _mcp_seal_literals(org: str, servers: list[dict], *, ws=None) -> list[dict]:
     """A token or header value written on a harness goes to the secret store, and the record keeps
     only the reference, the shape the console already writes. A harness record is a row in a
     database, in the clear, and #624's promise is about every stored credential. A store that can't
-    encrypt is left as it was: there is nowhere better to put the value."""
+    encrypt is left as it was: there is nowhere better to put the value. Each is bound to its
+    server's address and the harness's workspace `ws`. A server whose host is filled in per task
+    keeps its literals as they are: a stored secret can't be bound to a host the caller picks."""
     if getattr(BACKING.secrets, "encrypts", True) is False or not _org_tenant(org):
         return servers
     out: list[dict] = []
     for s in servers:
         e = dict(s) if isinstance(s, dict) else s
-        if isinstance(e, dict):
+        use = _mcp_use_of_url(e.get("url")) if isinstance(e, dict) else ""
+        if isinstance(e, dict) and use:
             if _mcp_is_literal(e.get("auth")):
-                e["auth"] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", e["auth"]))["ref"]
+                e["auth"] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", e["auth"],
+                                                     ws=ws, uses={use}))["ref"]
             if isinstance(e.get("headers"), dict):
                 hdrs = dict(e["headers"])
                 for k, v in hdrs.items():
                     if _mcp_is_literal(v):
-                        hdrs[k] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", v))["ref"]
+                        hdrs[k] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", v,
+                                                           ws=ws, uses={use}))["ref"]
                 e["headers"] = hdrs
         out.append(e)
     return out
 
 
-async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None) -> list[dict]:
+def _mcp_secret_refused(code: str, msg: str, param: str) -> HTTPException:
+    return uhp_error(422, code, msg, param)
+
+
+async def _mcp_refs_check(org: str, p: dict | None, ws, servers: list | None, env: dict | None) -> dict:
+    """Check every stored secret a harness write names, its servers and its variables together, and
+    answer what binding them adds (_mcp_refs_apply), before anything of the write is stored: a server's
+    auth and headers at that server's address, a variable in the environment. For a harness in `ws`:
+    - a secret not bound to `ws` is refused to a caller held to a workspace, in the words used for one
+      that doesn't exist; a caller that reaches the whole organization adds `ws` to it;
+    - a secret bound to no use yet is bound to this one (its first naming); one bound to other uses
+      is refused here, so it is stored again for this address rather than carried to a new one."""
+    named: list[tuple[str, str, str]] = []      # (key, use, param)
+    for s in servers or []:
+        if not isinstance(s, dict):
+            continue
+        use = _mcp_use_of_url(s.get("url"))
+        hdrs = s.get("headers") if isinstance(s.get("headers"), dict) else {}
+        for v in [s.get("auth"), *hdrs.values()]:
+            k = _mcp_stored_ref(v)
+            if k:
+                named.append((k, use, "mcp_servers"))
+    for v in (env or {}).values() if isinstance(env, dict) else ():
+        k = _mcp_stored_ref(v)
+        if k:
+            named.append((k, USE_ENV, "env"))
+    tenant = _org_tenant(org)
+    if not named or not tenant:
+        return {}
+    scoped = bool(_key_scope(p or {}))
+    w = _mcp_ws(org, ws)
+    adds: dict[str, tuple[set, set]] = {}
+    for key, use, param in named:
+        bound = await _mcp_binding_get(tenant, key)
+        if bound is None and await _vault_get(tenant, key) is None:
+            if scoped:
+                raise _mcp_secret_refused("invalid_secret_ref",
+                                          "There is no stored secret by that name in this workspace.", param)
+            continue                                 # names nothing: resolves nothing, as before
+        cur = bound or {"uses": set(), "workspaces": set()}
+        uses, wss = adds.setdefault(key, (set(), set()))
+        if w not in cur["workspaces"]:
+            if scoped:
+                raise _mcp_secret_refused("invalid_secret_ref",
+                                          "There is no stored secret by that name in this workspace.", param)
+            wss.add(w)
+        if not use:
+            raise _mcp_secret_refused("invalid_secret_use",
+                                      "A stored secret goes only to a server with a fixed http(s) address.", param)
+        if use in cur["uses"]:
+            continue
+        if cur["uses"] or (uses and use not in uses):
+            raise _mcp_secret_refused(
+                "secret_other_use",
+                "This stored secret was stored for another server or for the environment. Store it again "
+                "for this one to use it here.", param)
+        uses.add(use)
+    return adds
+
+
+async def _mcp_refs_apply(org: str, adds: dict) -> None:
+    """Write what _mcp_refs_check said binding the write's names adds."""
+    tenant = _org_tenant(org)
+    for key, (uses, wss) in (adds or {}).items():
+        if tenant and (uses or wss):
+            await _mcp_binding_add(tenant, key, uses=uses, workspaces=wss)
+
+
+# ── Binding the stored secrets that harnesses already name (each start) ─────────────────────────
+# A secret stored before bindings existed has none, and an unbound secret resolves nothing. So at each start, every
+# secret a harness names is bound to what names it now: each server address and the environment it is named in, and
+# each naming harness's workspace. That keeps every install working as it was the moment before the upgrade, and it
+# never widens a binding that exists. A secret named in more than one place is reported at every start, its places
+# by name (an address is not a secret), until it is stored again for one; HR_MCP_BIND_STRICT=1 holds such a secret
+# instead of binding it, so it resolves nothing until then.
+_MCP_BIND_STRICT = os.environ.get("HR_MCP_BIND_STRICT", "").strip().lower() in ("1", "true", "yes", "on")
+_mcp_bind_task: "asyncio.Task | None" = None
+
+
+def _mcp_places(uses) -> str:
+    return ", ".join(sorted(u[len("host:"):] if u.startswith("host:") else "the environment" for u in uses))
+
+
+async def _mcp_bind_existing() -> dict:
+    """Bind every stored secret a harness names and that has no binding. A failed read of the harnesses raises
+    before anything is written (the caller tries again)."""
+    rows = await BACKING.graph.find_strict("Harness")
+    named: dict[tuple[str, str], tuple[set, set]] = {}
+    for v in rows:
+        org = str(v.get("org") or "")
+        if not org:
+            continue
+        ws = _mcp_ws(org, v.get("workspace"))
+        found: list[tuple[str, str]] = []
+        for s in _mcp_list(v):
+            use = _mcp_use_of_url(s.get("url"))
+            hdrs = s.get("headers") if isinstance(s.get("headers"), dict) else {}
+            found += [(k, use) for k in map(_mcp_stored_ref, [s.get("auth"), *hdrs.values()]) if k]
+        found += [(k, USE_ENV) for k in map(_mcp_stored_ref, _parse_env(v.get("env")).values()) if k]
+        for k, use in found:
+            uses, wss = named.setdefault((org, k), (set(), set()))
+            if use:
+                uses.add(use)
+            wss.add(ws)
+    bound = held = 0
+    wide: list[tuple[str, set, bool]] = []
+    for (org, key), (uses, wss) in sorted(named.items()):
+        tenant = _org_tenant(org)
+        if not tenant:
+            continue
+        have = await _mcp_binding_get(tenant, key)
+        if have is not None:
+            if len(have["uses"]) > 1:
+                wide.append((key, have["uses"], False))
+            continue
+        if await _vault_get(tenant, key) is None:
+            continue                                         # names nothing stored
+        if len(uses) > 1 and _MCP_BIND_STRICT:
+            wide.append((key, uses, True))
+            held += 1
+            continue
+        if len(uses) > 1:
+            wide.append((key, uses, False))
+        if not uses:
+            # named only at an address no binding can name: held, never left for a first naming to aim
+            uses = {USE_HELD}
+            print(f"[mcp] stored secret {_mcp_sha8(key)} is named only at an address that is filled in per task or "
+                  f"that parsers read differently, so it goes nowhere: store it again with its server's url.", flush=True)
+        await _vault_put(tenant, _mcp_bind_key(key), json.dumps({"uses": sorted(uses), "workspaces": sorted(wss)}))
+        bound += 1
+    for key, uses, is_held in wide:
+        print(f"[mcp] WARNING stored secret {_mcp_sha8(key)} is named for more than one place: {_mcp_places(uses)}. "
+              f"Store it again for the one server it is for (PUT /v1/mcp-secrets/<ref> with that server's url)"
+              + (", and store a separate secret for each other place. Held by HR_MCP_BIND_STRICT: it resolves "
+                 "nothing until then." if is_held else ", and store a separate secret for each other place."),
+              flush=True)
+    print(f"[mcp] stored-secret bindings: {bound} bound now, {len(wide)} named for more than one place, "
+          f"{held} held", flush=True)
+    return {"bound": bound, "wide": len(wide), "held": held}
+
+
+@app.on_event("startup")
+async def _mcp_bind_on_start() -> None:
+    """Bind before serving. When the harnesses can't be read, nothing is written, an unbound secret resolves nothing,
+    and the binding is tried again every minute in the background until it is done."""
+    global _mcp_bind_task
+
+    async def again() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await _mcp_bind_existing()
+                return
+            except Exception as e:  # noqa: BLE001
+                print(f"[mcp] stored-secret bindings not written yet ({type(e).__name__}); trying again in 60 s",
+                      flush=True)
+
+    try:
+        await asyncio.wait_for(_mcp_bind_existing(), timeout=120)
+    except Exception as e:  # noqa: BLE001
+        print(f"[mcp] stored-secret bindings not written ({type(e).__name__}): a secret with no binding resolves "
+              f"nothing until they are; trying again in 60 s", flush=True)
+        _mcp_bind_task = asyncio.create_task(again())
+
+
+async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None, *,
+                              p: dict | None = None, ws=None, env: dict | None = None) -> list[dict]:
     """What a write of a harness's servers stores. `cur` is the harness as it stands; a new one has none.
 
     The rule that a server the caller didn't send is gone has one exception, and it isn't a kept-if-omitted
@@ -22496,7 +23496,13 @@ async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None 
             raise uhp_error(400, "invalid_mcp_server",
                             f"'{s.get('name')}' is the name this agent's memories go by. Give this server another name.",
                             "mcp_servers")
-    return await _mcp_seal_literals(org, _mcp_servers_prepare(sent + kept))
+    prepared = _mcp_servers_prepare(sent + kept)
+    # every stored secret the write names, its servers and its variables (`env`, when the write sets them) together,
+    # is checked before anything is stored: a refusal leaves no binding and no sealed value behind
+    adds = await _mcp_refs_check(org, p, ws, prepared, env)
+    sealed = await _mcp_seal_literals(org, prepared, ws=ws)
+    await _mcp_refs_apply(org, adds)
+    return sealed
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -22590,25 +23596,33 @@ async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
     agents (a key held to a workspace sees that workspace's). A person's memory below an agent's (memory_plane's
     end_user_node) is used by whoever uses the agent's memory: its own grant is that person's, never an agent's, and
     it read "Not used yet" while its agent wrote to it. One read each of the grants, the harnesses and the memories."""
-    agents = {str(r["id"]): str(r.get("name") or "") for r in await _vg_list_by_org("Harness", org)
+    agents = {str(r["id"]): (str(r.get("name") or ""), memory_plane.place(r.get("workspace")))
+              for r in await _vg_list_by_org("Harness", org)
               if r.get("id") and str(r.get("deleted")) not in ("1", "true", "True") and _scope_keeps(caller, r.get("workspace"))}
+    grants = await BACKING.graph.find("MemoryGrant", {"org": org})
+    if not grants:
+        return {}
+    memories = [m for m in await BACKING.graph.find("Memory", {"org": org})
+                if m.get("id") and str(m.get("deleted") or "0") != "1"]
+    places = {str(m["id"]): memory_plane.place_of(m) for m in memories}
     out: dict[str, list[dict]] = {}
-    for g in await BACKING.graph.find("MemoryGrant", {"org": org}):
-        principal = str(g.get("principal") or "")
+    for g in grants:
+        principal, mid = str(g.get("principal") or ""), str(g.get("memory_id") or "")
         if not principal.startswith("member:") or str(g.get("deleted") or "0") == "1" or principal[7:] not in agents:
             continue
-        if not json.loads(g.get("privileges") or "[]"):
+        hid = principal[7:]
+        # an agent uses only its own workspace's memories: a grant on another's gives it nothing (memory_plane.acting_in)
+        if not json.loads(g.get("privileges") or "[]") or places.get(mid) != agents[hid][1]:
             continue
-        hid, rows = principal[7:], out.setdefault(str(g.get("memory_id") or ""), [])
+        rows = out.setdefault(mid, [])
         if all(x["harness_id"] != hid for x in rows):
-            rows.append({"harness_id": hid, "name": agents[hid]})
+            rows.append({"harness_id": hid, "name": agents[hid][0]})
     for rows in out.values():
         rows.sort(key=lambda x: (x["name"].casefold(), x["harness_id"]))
-    if out:
-        for m in await BACKING.graph.find("Memory", {"org": org}):
-            above = str(m.get("end_user_of") or "")
-            if above in out and str(m.get("deleted") or "0") != "1" and m.get("id"):
-                out.setdefault(str(m["id"]), list(out[above]))
+    for m in memories if out else []:
+        above = str(m.get("end_user_of") or "")
+        if above in out:
+            out.setdefault(str(m["id"]), list(out[above]))
     return out
 
 
@@ -22640,9 +23654,10 @@ def _own_service_address(url: str) -> str:
     """Why this address is this instance's own gateway or runner, which is not a memory service."""
     try:
         u = urllib.parse.urlsplit(url)
+        port = u.port or 0   # checked only when read (a port that is not a number, or out of range)
     except ValueError:
         return "it is not a valid address"
-    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and (u.port or 0) in (3000, 8080, 8081):
+    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and port in (3000, 8080, 8081):
         return "it is this instance itself"
     return ""
 
@@ -22681,6 +23696,20 @@ async def _memory_credentials(org: str, workspace: str, provider: str) -> dict |
 
 
 memory_plane.CREDENTIALS = _memory_credentials
+
+
+async def _memory_place_of(org: str, principal: str) -> str | None:
+    """The workspace a member acts in, when it acts in one only: an agent, in its harness's. None for a person, who acts
+    in whichever workspace they open (memory_plane.PLACE_OF)."""
+    if not principal.startswith("member:"):
+        return None
+    hv = await _harness_vertex(principal.split(":", 1)[1])
+    if not hv or str(hv.get("org") or "") != org:
+        return None
+    return memory_plane.place(hv.get("workspace"))
+
+
+memory_plane.PLACE_OF = _memory_place_of
 
 # What a memory never keeps: a credential. media_plane.scrub removes every key this process sends or sealed
 # (exactly) and the shapes of everyone's (sk-, Bearer, AKIA, AIza, a URL's userinfo and signature); a memory
@@ -22738,6 +23767,12 @@ def _agent(hid: str) -> str:
     return f"member:{hid}"
 
 
+def _agent_pr(hid: str, hv: dict | None) -> list[str]:
+    """The agent as an access check asks: itself, acting in its harness's workspace, the only one whose memories it
+    reaches (memory_plane.acting_in)."""
+    return [_agent(hid), memory_plane.acting_in((hv or {}).get("workspace"))]
+
+
 async def _memories_settings(hid: str, org: str, hv: dict | None) -> dict | None:
     """The harness's memory settings (where its agent writes by default, whether its turns are
     recorded), or None when it has no memories server or the server is switched off."""
@@ -22760,14 +23795,14 @@ async def _harness_memories(hid: str, org: str, hv: dict | None, sid: str = "") 
     rec = await _memories_settings(hid, org, hv)
     if rec is None:
         return []
-    who = _agent(hid)
+    who = _agent_pr(hid, hv)
 
     async def held(mid: str) -> list[str]:
         m = await memory_plane._load(org, mid) if mid else None
-        return await memory_plane.effective(org, m, [who]) if m else []
+        return await memory_plane.effective(org, m, who) if m else []
 
     entries = [{"memory_id": str(m["id"]), "access": "write" if "write" in privs else "read", "default": False}
-               for m, privs in await memory_plane.granted(org, who)]
+               for m, privs in await memory_plane.granted(org, _agent(hid), (hv or {}).get("workspace"))]
     default = str(rec.get("default_memory_id") or "")
     sv = ((await _vertex_get(sid)) or {}) if sid else {}
     if sv.get("memory_off"):
@@ -22799,8 +23834,9 @@ async def _task_memory_for_turn(org: str, hid: str, body) -> str:
     mid = str((getattr(body, "metadata", None) or {}).get("memory") or "").strip()
     if not mid:
         return ""
-    m = await memory_plane._load(org, mid) if hid and _memories_go_with(await _harness_vertex(hid), org) else None
-    if not m or "read" not in await memory_plane.effective(org, m, [_agent(hid)]):
+    hv = await _harness_vertex(hid) if hid else None
+    m = await memory_plane._load(org, mid) if hid and _memories_go_with(hv, org) else None
+    if not m or "read" not in await memory_plane.effective(org, m, _agent_pr(hid, hv)):
         raise uhp_error(404, "memory_not_found", "No memory with that id.", "metadata.memory")
     return mid
 
@@ -22854,15 +23890,15 @@ async def _memories_on_grant(org: str, principal: str) -> None:
 
 
 async def _harness_memories_out(hid: str, org: str, v: dict) -> dict:
-    who = _agent(hid)
+    who, pr = _agent(hid), _agent_pr(hid, v)
     default = str(v.get("memory_default") or "")
     if default:                      # a default the agent may no longer write is no default: said, not kept up
         m = await memory_plane._load(org, default)
-        if not m or "write" not in await memory_plane.effective(org, m, [who]):
+        if not m or "write" not in await memory_plane.effective(org, m, pr):
             default = ""
     rec = {"observe": str(v.get("memory_observe") or "1") != "0"}
-    data = [{**memory_plane._brief(await memory_plane.out(org, m, [who], privs)), "privileges": privs,
-             "default": str(m["id"]) == default} for m, privs in await memory_plane.granted(org, who)]
+    data = [{**memory_plane._brief(await memory_plane.out(org, m, pr, privs)), "privileges": privs,
+             "default": str(m["id"]) == default} for m, privs in await memory_plane.granted(org, who, v.get("workspace"))]
     return {"object": "harness.memories", "principal": who, "default_memory_id": default or None,
             "observe": rec.get("observe", True) is not False, "data": data}
 
@@ -23006,7 +24042,7 @@ async def _memory_ask_check(org: str, ws: str, ask: tuple[str, str], p: dict) ->
             raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
                             f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
     if kind == "id":
-        who = memory_routes.principals_of(p)
+        who = memory_plane.placed(memory_routes.principals_of(p), ws)      # a memory of the agent's own workspace
         m = await memory_plane._load(org, value)
         privs = await memory_plane.effective(org, m, who) if m else []
         if not privs:
@@ -23032,8 +24068,9 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
     """Give the agent the memory asked for (_memory_ask), and keep on the harness what it got and why."""
     v = await _vertex_get(hid) or {"id": hid}
     kind, value = ask
-    ws = ws or _memory_ws_of(p)
-    who, member = memory_routes.principals_of(p), str(p.get("member") or "")
+    # the agent's memory is in the agent's own workspace, whichever the caller has open: it reaches no other's
+    ws = memory_plane.place(v.get("workspace")) if v.get("org") else (ws or _memory_ws_of(p))
+    who, member = memory_plane.placed(memory_routes.principals_of(p), ws), str(p.get("member") or "")
     current = _json_obj(v.get("memory_info"))
     made: dict | None = None            # a memory made here, for this agent
     words = await _memory_agent_words(org, hid, v, hint or str(v.get("memory_hint") or ""))
@@ -23147,7 +24184,7 @@ async def set_harness_memory(hid: str, request: Request) -> dict:
     org = p.get("org", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
-    await _harness_for_route(hid, p)
+    hv = await _harness_for_route(hid, p)
     try:
         body = await request.json()
     except ValueError:
@@ -23157,7 +24194,7 @@ async def set_harness_memory(hid: str, request: Request) -> dict:
                                               'and `observe` (true or false) if it changes.', "memory")
     if "observe" in body and not isinstance(body["observe"], bool):
         raise uhp_error(422, "invalid_input", "`observe` is true or false.", "observe")
-    ws = _plug_workspace(request, p)
+    ws = memory_plane.place((hv or {}).get("workspace"))      # the agent's own workspace, whichever is open
     if "memory" in body:
         ask = _memory_ask(body["memory"])
         await _memory_ask_check(org, ws, ask, p)
@@ -23199,9 +24236,10 @@ async def set_harness_memories(hid: str, request: Request) -> dict:
         mid = str(body.get("default_memory_id") or "")
         if mid:
             m = await memory_plane._load(org, mid)
-            if not m or not await memory_plane.effective(org, m, memory_routes.principals_of(p)):
+            if not m or not await memory_plane.effective(org, m, memory_plane.placed(memory_routes.principals_of(p),
+                                                                                     v.get("workspace"))):
                 raise uhp_error(404, "memory_not_found", "No memory with that id.", "default_memory_id")
-            if "write" not in await memory_plane.effective(org, m, [_agent(hid)]):
+            if "write" not in await memory_plane.effective(org, m, _agent_pr(hid, v)):
                 raise uhp_error(422, "memory_invalid",
                                 f"This agent may not write that memory. Grant `{_agent(hid)}` write on it first.", "default_memory_id")
         patch["default_memory_id"] = mid
@@ -23280,9 +24318,12 @@ async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = "", *, 
     if sv.get("memory_off"):
         return None
     person = _json_obj(sv.get("memory_person"))
+    hv = hv if hv is not None else await _harness_vertex(hid)
+    if not hv:
+        return None                          # no agent, no workspace: nothing it could reach
     return memory_local.Local(org, hid, await _harness_memories(hid, org, hv, sid=sid),
                               person=person if person.get("node") and person.get("principal") else None,
-                              counts=counts, around=around, session=sid)
+                              workspace=str(hv.get("workspace") or ""), counts=counts, around=around, session=sid)
 
 
 async def _memories_turn_start(hid: str, org: str, hv: dict | None, sid: str, text: str) -> tuple[str, dict, int]:
@@ -23348,6 +24389,23 @@ async def _memories_known_at_start(seam, text: str, sid: str) -> tuple[str, int]
 
 
 _NO_END_USER = "no end user named"
+
+
+def _task_speaker(task_person: dict | None, body, principal: dict) -> str:
+    """Who is speaking in a task, as its memory names them (Richard 11-10: by the name they sign in with, never
+    "user"). In a person's own memory, that person. In a memory others share, only a member calling from the console:
+    members already see each other there. An end user an app names (`user`) is never named in a shared memory (CAT
+    22:42Z, under Richard's rule that memory never crosses into other people's data): their id, often an address,
+    would land in what the app's other end users recall. "" for that one (the line keeps "user"); "you" when nothing
+    names anyone."""
+    if (task_person or {}).get("user"):
+        return str(task_person["user"])[:256]               # their own memory
+    if principal.get("via") != "api_key" and not principal.get("calibration") and principal.get("member"):
+        return str(principal["member"]).strip()[:256]       # a member, by the name they sign in with
+    meta = getattr(body, "metadata", None) or {}
+    if str(getattr(body, "user", None) or "").strip() or (isinstance(meta.get("user"), str) and meta["user"].strip()):
+        return ""                                           # an app's end user, in a shared memory: "user"
+    return "you"
 
 
 async def _task_person(org: str, hid: str, hv: dict | None, body, principal: dict) -> dict:
@@ -23435,7 +24493,8 @@ def _translator_answer(tr) -> str:
 _memory_corrected: set[str] = set()
 
 
-async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str, resp_id: str = "") -> None:
+async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str, resp_id: str = "",
+                            speaker: str = "") -> None:
     """After a completed turn: what was asked and what was answered, sent as one episode to the
     memory the harness writes by default (in a person's task, that person's own). No model runs here; what the
     provider derives from it, and when, is the provider's. Best-effort: a memory that cannot take the episode never
@@ -23467,8 +24526,11 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             # the turn saw no note at all, so nothing told it to wait. Settled below, whatever happens.
             await _memories_note(org, sid, resp_id, kept, [], pending=True, at=mid)
             out = await memory_plane.observe(prov, mid, [{
-                "content": [{"type": "text", "role": role, "text": text}
-                            for role, text in (("user", str(rec.get("user_text") or "")), ("assistant", answer)) if text.strip()],
+                # what the person said under their own name (_task_speaker), so an engine that writes "who: what" draws
+                # them, and never a "user" beside the name they give
+                "content": [{"type": "text", "role": role, "text": text, **({"name": name} if name else {})}
+                            for role, name, text in (("user", speaker, str(rec.get("user_text") or "")),
+                                                     ("assistant", "", answer)) if text.strip()],
                 "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
                 memory_plane.writer_of(hid, agent=True))
         except memory_plane.MemoryError as e:
@@ -24167,6 +25229,22 @@ def _skill_key(name: str) -> str:
     """The runner's skill directory name (its _skill_dir_name), so two skills the gateway sees
     as different cannot land in one folder."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(name or ""))
+def _plugin_json(raw: dict, path: str) -> tuple[object, str]:
+    """(the document, "") or (None, why it does not parse). The why is the parser's reason and where it stopped,
+    so a person can find the mistake (#725), and never the file's text."""
+    try:
+        text = raw.get("content") if raw.get("content") is not None \
+            else base64.b64decode(raw.get("content_b64") or "").decode()
+    except ValueError:   # binascii.Error and UnicodeDecodeError are both ValueErrors
+        return None, f"{path} is not UTF-8 text"
+    try:
+        return json.loads(text), ""
+    except json.JSONDecodeError as e:
+        return None, f"{path} is not valid JSON: {e.msg} at line {e.lineno} column {e.colno}"
+    except (TypeError, ValueError, RecursionError):
+        return None, f"{path} is not valid JSON"
+
+
 def _plugin_invalid(name: str, path: str, reason: str) -> HTTPException:
     return uhp_error(422, "plugin_invalid", f"Plugin {name or 'package'}: {reason}", "plugins",
                      {"path": path, "reason": reason})
@@ -24182,34 +25260,79 @@ def _plugin_path_ok(path, name: str) -> str:
     return path
 
 
-def _plugin_frontmatter(text: str) -> dict:
-    """The top-level scalars of a SKILL.md frontmatter: plain values, quoted values, trailing
-    comments dropped, and `>` / `|` block scalars joined, which is what the Agent Skills fields
-    (name, description) are written with in practice."""
-    m = re.match(r"^---\r?\n(.*?)\r?\n---", text or "", flags=re.S)
-    out: dict = {}
-    key, block = None, None
-    for line in (m.group(1) if m else "").splitlines():
-        if line.startswith((" ", "\t")):
-            if key and block is not None:
-                block.append(line.strip())
+_FRONTMATTER_MAX = 65536     # what a SKILL.md frontmatter reader reads: a name and a description are short
+
+
+def _frontmatter_uncomment(v: str) -> str:
+    """v without a YAML comment, which starts at a `#` at the start or after whitespace. One linear
+    search: `(^|\\s+)#.*$` backtracked over a run of spaces with no `#` (20K spaces took 1.7 s and
+    200K minutes), and a plugin's SKILL.md reaches this reader in the gateway every org shares."""
+    m = re.search(r"(?:^|\s)#", v)
+    return (v[:m.start()] if m else v).rstrip()
+
+
+def _frontmatter_close(s: str, q: str) -> int:
+    """Where the quoted value that opens s ends: a double-quoted one skips backslash escapes, and in
+    a single-quoted one '' is a quote. -1 when it never closes."""
+    i = 1
+    while i < len(s):
+        if q == '"' and s[i] == "\\":
+            i += 2
             continue
-        if key and block is not None:
-            out[key] = " ".join(block).strip()
-            block = None
-        key = None
-        if ":" not in line:
+        if s[i] == q:
+            if q == "'" and s[i + 1:i + 2] == "'":
+                i += 2
+                continue
+            return i
+        i += 1
+    return -1
+
+
+def _frontmatter_value(v: str, more: list[str]) -> str:
+    """One top-level value, read as YAML reads it, given its first line and the indented lines
+    after it, joined into one line."""
+    lines = [x.strip() for x in more if x.strip()]
+    if v[:1] in ("'", '"'):
+        # A quoted value runs to its closing quote, over more lines if it has to, and a comment may
+        # follow it: `"Formats issues like #123" # note` is "Formats issues like #123". Double quotes
+        # take backslash escapes, which is how the console writes a description (JSON.stringify).
+        q, raw = v[0], " ".join([v] + lines)
+        end = _frontmatter_close(raw, q)
+        body = raw[1:end] if end > 0 else raw[1:]
+        if q == "'":
+            return body.replace("''", "'")
+        try:
+            return json.loads('"' + body + '"')
+        except ValueError:
+            return re.sub(r"\\(.)", r"\1", body)
+    head = _frontmatter_uncomment(v)
+    if re.fullmatch(r"[>|][1-9+-]{0,2}", head):
+        return " ".join(lines)              # a `>` or `|` block, as one line
+    # A plain value ends at a ` #` comment, and indented lines after it continue it; with nothing
+    # after the colon, the value is those lines.
+    rest = (_frontmatter_uncomment(x) for x in lines)
+    return " ".join(p for p in (head, *rest) if p)
+
+
+def _plugin_frontmatter(text: str) -> dict:
+    """The top-level scalars of a SKILL.md frontmatter, read as YAML reads the forms the Agent
+    Skills fields (name, description) are written in: a plain value (a ` #` comment ends it,
+    indented lines continue it), a double-quoted value with backslash escapes, a single-quoted
+    value ('' is one quote), and a `>` or `|` block. Each comes back as one line. The gateway's
+    SKILL.md readers all read it here, and the runner's _frontmatter reads it the same way."""
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", (text or "").lstrip("\ufeff")[:_FRONTMATTER_MAX], flags=re.S)
+    entries: list[tuple[str, str, list[str]]] = []
+    for line in (m.group(1) if m else "").splitlines():
+        if line.startswith((" ", "\t")) or not line.strip():
+            if entries:
+                entries[-1][2].append(line)
+            continue
+        if line.startswith("#") or ":" not in line:
+            entries.append(("", "", []))    # a comment or a stray line ends the value before it
             continue
         k, v = line.split(":", 1)
-        key, v = k.strip(), v.strip()
-        v = re.sub(r"\s+#.*$", "", v)
-        if v in (">", "|", ">-", "|-", ">+", "|+"):
-            block = []
-            continue
-        out[key] = v.strip("'\"")
-    if key and block is not None:
-        out[key] = " ".join(block).strip()
-    return out
+        entries.append((k.strip(), v.strip(), []))
+    return {k: _frontmatter_value(v, more) for k, v, more in entries if k}
 
 
 def _plugin_command_ok(cmd) -> str | None:
@@ -24342,11 +25465,9 @@ def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
     raw = by_path.get("plugin.json")
     if raw is None:
         raise _plugin_invalid(sent_name or "", "plugin.json", "no plugin.json at the plugin root")
-    try:
-        manifest = json.loads(raw.get("content") if raw.get("content") is not None
-                              else base64.b64decode(raw.get("content_b64") or "").decode())
-    except Exception:  # noqa: BLE001
-        raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not valid JSON")
+    manifest, why = _plugin_json(raw, "plugin.json")
+    if why:
+        raise _plugin_invalid(sent_name or "", "plugin.json", why)
     if not isinstance(manifest, dict):
         raise _plugin_invalid(sent_name or "", "plugin.json", "plugin.json is not an object")
     if "$schema" not in manifest:
@@ -24393,13 +25514,13 @@ def _plugin_read_package(files: list, sent_name: str | None = None) -> dict:
     servers: list[dict] = []
     raw = by_path.get("mcp.json")
     if raw is not None:
-        try:
-            mcp = json.loads(raw.get("content") if raw.get("content") is not None
-                             else base64.b64decode(raw.get("content_b64") or "").decode())
-        except Exception:  # noqa: BLE001
-            mcp = None
+        mcp, why = _plugin_json(raw, "mcp.json")
         entries = mcp.get("mcpServers") if isinstance(mcp, dict) else None
-        if not isinstance(mcp, dict) or set(mcp) != {"$schema", "mcpServers"} or not isinstance(entries, dict):
+        if why:
+            # it said "not an object of exactly $schema and mcpServers", which sent people looking at the keys
+            skipped.append({"path": "mcp.json", "reason": why})
+            entries = {}
+        elif not isinstance(mcp, dict) or set(mcp) != {"$schema", "mcpServers"} or not isinstance(entries, dict):
             skipped.append({"path": "mcp.json", "reason": "not an object of exactly $schema and mcpServers"})
             entries = {}
         elif mcp.get("$schema") != _PLUGIN_MCP_SCHEMA:
@@ -24609,6 +25730,13 @@ async def _harness_export_plugin(v: dict) -> dict:
             continue
         sname = str(s.get("name") or s.get("id") or "mcp")
         url = str(s["url"])
+        if _hosted_mcp_path(url):
+            # A tool this instance serves itself (an agent's memory, media) is this instance's, at its own
+            # address: an instance that installs the package gives its own, and this one's address is
+            # nothing there. Left out, and said, so the importer knows what to add.
+            skipped.append({"path": f"mcp.json#/mcpServers/{sname}",
+                            "reason": "a tool this instance serves itself is not exported"})
+            continue
         try:
             u = urllib.parse.urlsplit(url)
             if u.username or u.password:
@@ -24678,7 +25806,8 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     memory_ws = _plug_workspace(request, p)
     memory_ask = _memory_ask(body.memory)
     await _memory_ask_check(org, memory_ws, memory_ask, {**p, "member": member})
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    _harness_header_names_refuse(body)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=workspace, env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
     body.plugins = await _plugins_prepare(body, org)
@@ -24716,8 +25845,10 @@ async def list_harnesses(org: str, request: Request,
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}")
-async def get_harness(org: str, hid: str, request: Request) -> dict:
+async def get_harness(org: str, hid: str, request: Request,
+                      response: Response = None) -> dict:  # type: ignore[assignment]
     v = await _mcp_migrate(org, hid, await _harness_in_reach(await _owned_org(request, org), hid))
+    _harness_etag(response, v)
     return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
 
 
@@ -24768,11 +25899,15 @@ async def export_harness_plugin(org: str, hid: str, request: Request) -> dict:
 
 
 @app.put("/v1/orgs/{org}/harnesses/{hid}")
-async def update_harness(org: str, hid: str, body: HarnessBody, request: Request) -> dict:
+async def update_harness(org: str, hid: str, body: HarnessBody, request: Request,
+                         response: Response = None) -> dict:  # type: ignore[assignment]
     _caller = await _owned_org(request, org)
     # V1C02-005: bind the mutation to the caller's org — a foreign harness id must not be editable.
     cur = await _harness_in_reach(_caller, hid)
     cur = await _mcp_migrate(org, hid, cur)
+    # If-Match (Harnesses §5.2): a harness changed since the caller's read is refused before anything
+    # in the body is looked at, and nothing is written.
+    _harness_if_match(request, cur)
     # Harnesses §5.2: id, base and createdAt are immutable. A body naming a different base is
     # refused rather than applied, because applying it would change the behaviour of every
     # session already attached to this harness.
@@ -24783,7 +25918,9 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur)
+    _harness_header_names_refuse(body)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur, p=_caller, ws=cur.get("workspace"),
+                                                 env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
@@ -24792,8 +25929,9 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     # refused save that had already scrubbed a record would disconnect a database nobody removed.
     await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
-    v = await _vertex_get(hid)
-    return _harness_out(v or {"id": hid}, await memory_plane.grant_counts(org))
+    v = await _vertex_get(hid) or {"id": hid}
+    _harness_etag(response, v)
+    return _harness_out(v, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/orgs/{org}/harnesses/{hid}")
@@ -24845,7 +25983,8 @@ async def _harness_memory_kept(org: str, hid: str, v: dict, caller: dict) -> dic
         m = await memory_plane._load(org, mid)
         if not m or str(m.get("provisioned_for") or "") != hid:
             return {}
-        if "delete" not in await memory_plane.effective(org, m, memory_routes.principals_of(caller)):
+        if "delete" not in await memory_plane.effective(org, m, memory_plane.placed(memory_routes.principals_of(caller),
+                                                                                   v.get("workspace"))):
             return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
     except Exception as e:  # noqa: BLE001 - the agent is deleted, and its memory is kept, whatever this read did
         print(f"[memories] {hid}: its memory could not be read at its delete: {type(e).__name__}", flush=True)
@@ -24892,22 +26031,28 @@ async def _memories_gone_with(org: str, hid: str, principals: list[str], budget:
         for m in due:
             mid = str(m["id"])
             if not ({mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid, strict=True))} & held):
-                go.append(mid)
+                go.append(m)
     except Exception as e:  # noqa: BLE001 - nothing is deleted on a read that couldn't answer
         print(f"[memories] {hid}: no memory was deleted with it, a read couldn't answer: {type(e).__name__}", flush=True)
         return _MEMORY_UNCHECKED
     gone = 0
-    for i, mid in enumerate(go):
+    for i, m in enumerate(go):
+        mid = str(m["id"])
         if budget.get("n", 0) >= _MEMORY_SWEEP_CAP:
             print(f"[memories] the sweep stopped at {_MEMORY_SWEEP_CAP} memories: {len(go) - i} more of {org}'s "
                   f"wait for the next sweep, and {hid} with them", flush=True)
             return _MEMORY_CAPPED
-        if await memory_plane._load(org, mid) is None:
-            continue                                  # went with one deleted before it in this sweep
         try:
-            below = await memory_plane.delete(org, mid, principals)
+            if await memory_plane._load(org, mid) is None:
+                continue                              # went with one deleted before it in this sweep
+            # as the deleter, in the memory's own workspace as the strict read above found it (the agent's): the
+            # workspace is never a second read, so a read that fails can't make it "another workspace's"
+            below = await memory_plane.delete(org, mid, memory_plane.placed(principals, memory_plane.place_of(m)))
         except memory_plane.MemoryError:
             continue                                  # theirs to delete, not this deleter's; or a read below it failed
+        except Exception as e:  # noqa: BLE001 - nothing more is deleted on a read that couldn't answer; the agent waits
+            print(f"[memories] {hid}: {mid} was not deleted with it, a read couldn't answer: {type(e).__name__}", flush=True)
+            return _MEMORY_UNCHECKED
         budget["n"] = budget.get("n", 0) + 1
         gone += 1
         print(f"[memories] {hid}: {mid} went with it ({len(below)} with the people's memories below)", flush=True)
@@ -25053,6 +26198,15 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
     return org, p.get("member", "")
 
 
+async def _pub_org_principal(request: Request) -> tuple[str, dict]:
+    """(org, principal) for a public route that needs the caller's reach, not just its member."""
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    return org, p
+
+
 # Harnesses §5.1: a create's key is kept a day, as Tasks §6 asks of a task's, so a deploy retried the
 # next morning still finds the first copy.
 _HARNESS_IDEM_TTL = 86400
@@ -25128,7 +26282,8 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
         if first is not None:
             return _harness_out(first)
     try:
-        body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+        _harness_header_names_refuse(body)
+        body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"), env=body.env)
         body.skills = await _skills_prepare(body.skills)
         await _environment_check_ref(org, body.environment, p)
         body.plugins = await _plugins_prepare(body, org)
@@ -25304,17 +26459,21 @@ def _setup_build_plugin(t: str) -> dict:
     return {"name": label, "about": about, "tools": tools}
 
 
-def _setup_build_skill_md(files) -> str:
+def _setup_skill_md(files) -> str:
     md = next((f for f in files or [] if isinstance(f, dict) and str(f.get("path") or "").lower() == "skill.md"), None)
-    return str((md or {}).get("content") or "")[:1500]
+    return str((md or {}).get("content") or "")
+
+
+def _setup_build_skill_md(files) -> str:
+    return _setup_skill_md(files)[:1500]
 
 
 def _setup_skill_about(sk: dict) -> str:
-    """A skill's description, from its SKILL.md's frontmatter when it is inline ('' when it is not)."""
+    """A skill's description, from its SKILL.md's frontmatter when it is inline ('' when it is not).
+    The whole SKILL.md, not the builder's 1,500-character excerpt, so a long frontmatter still ends."""
     files = sk.get("files") if isinstance(sk.get("files"), list) else None
-    md = _setup_build_skill_md(files) if files else str(sk.get("content") or "")
-    m = re.search(r"^description:\s*(.+)$", md, re.MULTILINE)
-    return m.group(1).strip().strip("\"'")[:240] if m else ""
+    md = _setup_skill_md(files) if files else str(sk.get("content") or "")
+    return " ".join(str(_plugin_frontmatter(md).get("description") or "").split())[:240]
 
 
 def _setup_build_mcp_id(url: str) -> str:
@@ -25376,6 +26535,7 @@ async def _setup_build_inventory(p: dict, bases, ctx: dict) -> dict:
                 servers[iid] = {"name": str(e.get("name") or host or url)[:60],
                                 "about": f"Served at {host}." if host else ""}
                 ctx["mcp"][iid] = e
+                ctx.setdefault("mcp_ws", {})[iid] = r.get("workspace")
         return skills, servers
 
     async def env_part():
@@ -25447,18 +26607,21 @@ async def _setup_build_skill_copy(sk: dict) -> dict:
     return (await _skills_prepare([{"name": name, "enabled": True, "files": files}]))[0]
 
 
-async def _setup_build_server_copy(org: str, e: dict) -> dict:
+async def _setup_build_server_copy(org: str, e: dict, *, src_ws, dst_ws) -> dict:
     """An MCP server as a new setup's own copy (Add-ons › Tools' Add to setups): an id of its own, a
-    stored token copied under that id (only its reference is kept), a header reference as it is."""
+    stored token copied under that id (only its reference is kept), a header reference as it is.
+    The token is read only where it is bound (the source setup's workspace `src_ws`, at the server's
+    address), and the copy is bound to that address and the new setup's workspace `dst_ws`."""
     nid = "mcp." + uuid.uuid4().hex[:8]
     out = {k: v for k, v in e.items() if k not in ("id", "auth")}
     out.update(id=nid, enabled=True)
     auth = str(e.get("auth") or "")
     if auth.startswith("vault:"):
-        token = await _resolve_mcp_auth(org, auth)
+        use = _mcp_use_of_url(e.get("url"))
+        token = await _resolve_mcp_auth(org, auth, use=use, ws=src_ws)
         if not token:
             raise RuntimeError("the server's token could not be read")
-        out["auth"] = (await _mcp_secret_store(org, nid, token))["ref"]
+        out["auth"] = (await _mcp_secret_store(org, nid, token, ws=dst_ws, uses={use}))["ref"]
     elif auth:
         out["auth"] = auth
     return out
@@ -25503,7 +26666,8 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
                 attached[x["id"]] = "off"
                 continue
             try:
-                servers.append(await _setup_build_server_copy(org, e))
+                servers.append(await _setup_build_server_copy(
+                    org, e, src_ws=(ctx.get("mcp_ws") or {}).get(x["id"]), dst_ws=ws))
                 taken.add(nm)
                 attached[x["id"]] = "on"
             except Exception as err:  # noqa: BLE001
@@ -25512,7 +26676,7 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
         await _harness_create_as(p, HarnessBody(name=name, base=cfg["base"], default_model=cfg["model"],
                                                 system_prompt=cfg["instructions"], environment=env,
                                                 skills=skills or None, mcp_servers=servers or None,
-                                                memory="auto", memory_hint=cfg.get("memoryHint") or None), hid=hid)
+                                                memory="auto", memory_hint=_setup_build_hint(cfg) or None), hid=hid)
     if any(x["id"] == setup_compose.MEDIA_ID for x in cfg["plugins"]):
         try:
             await _hosted_media_attach(org, hid, await _harness_in_reach(p, hid), dict(_SETUP_MEDIA_DECL))
@@ -25537,13 +26701,23 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
     return {"name": name, "attached": attached}
 
 
+def _setup_build_hint(cfg: dict) -> str:
+    """The hint a built setup's memory is chosen from. The person's own goal, as typed, when it names what the agent
+    should remember clearly (memory_choice.named_clearly): then the same request always gets the same memory. The
+    builder model's own words for it otherwise. The builder writes the agent's name and instructions afresh each
+    time, and "Personal relationship notes" chose a shared Graphiti memory where "Personal relationship updates", for
+    the same request, chose one kept apart per person (2026-11-10)."""
+    goal = str(cfg.get("goal") or "")[:1000]
+    return goal if memory_choice.named_clearly(goal) else str(cfg.get("memoryHint") or "")[:1000]
+
+
 async def _setup_build_memory(p: dict, cfg: dict) -> dict:
     """The memory the agent a build saves will get, and why: {engine, scope, reason}, chosen the way the save chooses
     it (memory_choice over the engines connected in the person's workspace and answering, from the same words: its
     name, instructions, the goal's hint, its servers and skills), so the card says it while the setup is saved. Nothing
     is made here; the save provisions it (_harness_create_as, memory "auto")."""
     words = {"name": str(cfg.get("name") or ""), "instructions": str(cfg.get("instructions") or ""),
-             "hint": str(cfg.get("memoryHint") or "")[:1000],
+             "hint": _setup_build_hint(cfg),
              "tools": [str(x.get("name") or "") for x in cfg.get("mcpServers") or [] if isinstance(x, dict)],
              "skills": [str(x.get("name") or "") for x in cfg.get("skills") or [] if isinstance(x, dict)]}
     running, failing = await _memory_engines_state(str(p["org"]), _memory_ws_of(p))
@@ -25585,9 +26759,9 @@ async def setup_build_start(body: SetupBuildBody, request: Request) -> dict:
              "skill_text": lambda iid: _setup_build_skill_text(ctx, iid),
              "find": lambda q: asyncio.sleep(0, result=[]),
              "conn": lambda: _setup_build_wires(org), "client": _client(),
-             "save": lambda cfg, hid: _setup_build_save(p, cfg, hid, ctx),
+             "save": lambda cfg, hid: _setup_build_save(p, {**cfg, "goal": body.job}, hid, ctx),
              "exists": lambda hid: _setup_build_exists(org, hid),
-             "propose": lambda cfg: _setup_build_memory(p, cfg)}
+             "propose": lambda cfg: _setup_build_memory(p, {**cfg, "goal": body.job})}
     try:
         return await setup_builder.start(org, who, body.key, body.job, body.base, body.model, bases=bases, run_parts=parts)
     except setup_builder.BadKey:
@@ -25938,7 +27112,8 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        # second needs more steps than a document does. Absent, the base's default.
                        max_step=spec.get("max_step"),
                        timeout_seconds=spec.get("timeout_seconds"))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    _harness_header_names_refuse(body)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, p=p, ws=p.get("workspace"), env=body.env)
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
     # plugin's own servers must not take, so they count as the harness's here.
@@ -25994,7 +27169,8 @@ async def list_harnesses_public(request: Request) -> dict:
 
 
 @app.get("/v1/harnesses/{hid}")
-async def get_harness_public(hid: str, request: Request) -> dict:
+async def get_harness_public(hid: str, request: Request,
+                             response: Response = None) -> dict:  # type: ignore[assignment]
     _caller = await _pub_principal(request)
     if hid.startswith("harn_uhp_"):
         external = next((item for item in await _uhp_harnesses(_caller) if item["id"] == hid), None)
@@ -26003,6 +27179,7 @@ async def get_harness_public(hid: str, request: Request) -> dict:
         raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
     org = _caller["org"]
     v = await _mcp_migrate(org, hid, await _harness_in_reach(_caller, hid))
+    _harness_etag(response, v)   # its version, for an update's If-Match (Harnesses §5.2)
     return {**_harness_out(v, await memory_plane.grant_counts(org)), **await _harness_memory_live(org, v)}
 
 
@@ -26087,7 +27264,8 @@ async def list_bases(request: Request) -> dict:
             "models": [{"id": m["id"], "available": m["available"], "default": m["default"],
                         "reasoning": list(reasoning.levels_for(m["id"]))}
                        for m in view["models"]],
-            "tools": [{"name": n, "label": lbl, "enforcement": b["tool_enforcement"]}
+            # each tool's own word: a base's `hard_tools` are withheld even where the rest are only asked
+            "tools": [{"name": n, "label": lbl, "enforcement": _tool_enforcement(b, n)}
                       for n, lbl in b["tools"]],
             # Skills bundled into the image, which every base can use. A base ALSO discovers
             # skills of its own at run time that nothing outside a turn can enumerate, so
@@ -26219,7 +27397,11 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
 
 
 @app.put("/v1/harnesses/{hid}")
-async def update_harness_public(hid: str, body: HarnessBody, request: Request) -> dict:
+async def update_harness_public(hid: str, body: HarnessBody, request: Request,
+                                response: Response = None) -> dict:  # type: ignore[assignment]
+    """Replace a harness's configuration (Harnesses §5.2). If-Match, optional: the ETag a read of the
+    harness answered. A harness that changed since is refused 412 and nothing is written. The answer
+    carries the version written. Without If-Match it replaces as it always has."""
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid)
@@ -26227,13 +27409,15 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     if _p.get("calibration") and str(body.calibrates or "") != str(v.get("calibrates") or ""):
         raise uhp_error(403, "forbidden", "A calibration credential cannot grant calibration.", "calibrates")
     v = await _mcp_migrate(org, hid, v)
+    _harness_if_match(request, v)   # before anything in the body is looked at; see update_harness
     if body.base and body.base != str(v.get("base") or ""):   # Harnesses §5.2, as in update_harness
         raise uhp_error(409, "harness_mismatch",
                         "A harness's base cannot change; create a different harness for a different base.",
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v)
+    _harness_header_names_refuse(body)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v, p=_p, ws=v.get("workspace"), env=body.env)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))
@@ -26243,9 +27427,11 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     await _plugs_ensure_required(org, hid)
     # An agent that holds memories keeps the tools to reach them, whatever list of servers a
     # client saved: its access is its grants, and a harness save is not a revocation.
-    if await memory_plane.granted(org, _agent(hid)):
+    if await memory_plane.granted(org, _agent(hid), v.get("workspace")):
         await _memories_ensure(org, hid, await _vertex_get(hid) or v)
-    return _harness_out(await _vertex_get(hid) or {"id": hid}, await memory_plane.grant_counts(org))
+    saved = await _vertex_get(hid) or {"id": hid}
+    _harness_etag(response, saved)
+    return _harness_out(saved, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/harnesses/{hid}")

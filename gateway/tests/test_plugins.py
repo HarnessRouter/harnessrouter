@@ -7,6 +7,7 @@ of the conformance suite measures, without a live turn: create, read, files, exp
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -115,6 +116,34 @@ def test_no_manifest_is_refused(api):
     assert r.status_code == 422 and r.json()["error"]["code"] == "plugin_invalid"
 
 
+@pytest.mark.parametrize("text,where", [
+    ('{"name": "x"', "line 1 column 13"),                       # the closing brace is missing
+    ('{\n  "name": "x",\n}', "line 3 column 1"),                # a trailing comma
+])
+def test_a_malformed_manifest_is_refused_with_where_the_parser_stopped(api, text, where):
+    """#725, the gateway's half: an API caller sees where the mistake is, and never the file's text."""
+    files = [{"path": "plugin.json", "content": text}] + _package(manifest=None)
+    r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code", "plugins": [{"files": files}]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "plugin_invalid"
+    reason = r.json()["error"]["detail"]["reason"]
+    assert reason.startswith("plugin.json is not valid JSON: ") and reason.endswith(where), reason
+    assert '"name"' not in r.json()["error"]["message"]
+
+
+def test_a_manifest_that_is_not_utf8_says_so(api):
+    files = [{"path": "plugin.json", "content_b64": "/w=="}] + _package(manifest=None)
+    r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code", "plugins": [{"files": files}]})
+    assert r.status_code == 422 and r.json()["error"]["detail"]["reason"] == "plugin.json is not UTF-8 text"
+
+
+def test_a_malformed_mcp_json_is_skipped_with_where_the_parser_stopped(api):
+    files = _package(manifest=MANIFEST) + [{"path": "mcp.json", "content": '{"mcpServers": {'}]
+    h = _create(api, plugins=[{"files": files}])
+    (pl,) = h["plugins"]
+    [skip] = [s for s in pl["skipped"] if s["path"] == "mcp.json"]
+    assert skip["reason"].startswith("mcp.json is not valid JSON: ") and "line 1 column" in skip["reason"]
+
+
 def test_unknown_schema_is_refused_naming_the_supported_ones(api):
     m = {**MANIFEST, "$schema": "https://agent-plugins.org/schemas/0.0.1/plugin.schema.json"}
     r = api.post("/v1/harnesses", json={"name": "x", "base": "claude-code",
@@ -154,6 +183,21 @@ def test_an_invalid_component_is_skipped_and_recorded(api):
     assert paths == ["mcp.json#/mcpServers/bad", "mcp.json#/mcpServers/leaky",
                      "plugin.json#/vendorField", "skills/wrong-name"]
     assert all(s["reason"] for s in pl["skipped"])
+
+
+@pytest.mark.parametrize(("frontmatter", "description"), [
+    # As the console writes it (JSON.stringify): the # is text and the escapes are decoded.
+    ('description: "Formats issues like #123 and says \\"done\\""', 'Formats issues like #123 and says "done"'),
+    # Nothing after the colon, the value on the indented lines: YAML's plain multi-line form.
+    ("description:\n  Reads the shop's tickets\n  and sorts them.", "Reads the shop's tickets and sorts them."),
+    ("description: >-\n  Folded\n  text.", "Folded text."),
+    ("description: 'It''s quoted' # a comment", "It's quoted"),
+], ids=["console-json", "plain-on-next-lines", "folded", "single-quoted"])
+def test_a_skill_description_is_read_as_yaml_reads_it(api, frontmatter, description):
+    skill = [{"path": "skills/shop-skill/SKILL.md", "content": f"---\nname: shop-skill\n{frontmatter}\n---\nBody\n"}]
+    h = _create(api, plugins=[{"files": _package(manifest=MANIFEST, skill=False, extra=skill)}])
+    (pl,) = h["plugins"]
+    assert pl["skipped"] == [] and pl["skills"] == [{"name": "shop-skill", "description": description}]
 
 
 def test_a_component_collision_with_the_harness_is_refused(api):
@@ -233,6 +277,21 @@ def test_export_is_a_package_that_installs_again_without_credentials(api):
     assert got["name"] == "plugged"
     assert [s["name"] for s in got["mcpServers"]] == ["vault"]
     assert [s["name"] for s in got["skills"]] == ["own-skill"]
+
+
+def test_export_leaves_out_a_tool_this_instance_serves_itself(api, monkeypatch):
+    """An agent's memory (and any server this instance hosts) is at this instance's own address: an
+    instance that installs the package gives its own, so it is left out and said, never exported."""
+    monkeypatch.setattr(app, "_own_origins", lambda: ["http://127.0.0.1:8080"])
+    v = {"id": "chrn_exp", "name": "Plugged", "mcp_servers": json.dumps([
+        {"name": "vault", "url": "https://mcp.example.invalid/mcp", "transport": "http", "enabled": True},
+        {**app._MEMORIES_ENTRY, "url": "http://127.0.0.1:8080/v1/mcp/memories", "transport": "http", "enabled": True}])}
+    pl = asyncio.run(app._harness_export_plugin(v))
+    files = {f["path"]: f for f in pl["files"]}
+    assert list(json.loads(files["mcp.json"]["content"])["mcpServers"]) == ["vault"]
+    assert {"path": "mcp.json#/mcpServers/memories", "reason": "a tool this instance serves itself is not exported"} in pl["skipped"]
+    (got,) = _create(api, plugins=[{"files": pl["files"]}])["plugins"]
+    assert [s["name"] for s in got["mcpServers"]] == ["vault"]
 
 
 def test_a_missing_plugin_is_plugin_not_found(api):

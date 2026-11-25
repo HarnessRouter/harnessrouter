@@ -820,6 +820,15 @@ def _managed_harness(ctx, **cfg) -> dict:
 def _supported_base(ctx) -> str:
     if ctx.state.get("_base"):
         return ctx.state["_base"]
+    # A harness the suite makes for itself runs the model the caller named (--model), and that model is one the
+    # named harness's base serves; the first base the server lists may not serve it (a Gemini model was refused
+    # on Codex as model_unavailable, so EN-07 failed and F-09 skipped). So with --harness-id the suite's own
+    # harnesses are made on that harness's base.
+    if ctx.harness_id:
+        own = str(_harness(ctx).get("base") or "")
+        if own:
+            ctx.state["_base"] = own
+            return own
     probe = ctx.client.post("/v1/harnesses", body={"name": "uhp-conformance-probe",
                                                   "base": "uhp-conformance-unknown-base"})
     supported = (((probe.json or {}).get("error") or {}).get("detail") or {}).get("supported") or []
@@ -1639,6 +1648,68 @@ def _t12_measure(ctx, hid: str, nonce: str, model: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
+# Full — resuming an interrupted turn (Tasks §3.3, capability resume)
+# ══════════════════════════════════════════════════════════════════════════════════════
+# A server cuts a turn short when it restarts or drains, and a client asks to carry on with a
+# `resume` item chained on that response. A black-box suite cannot make a server restart, so this
+# check measures what it can: the refusals §3.3 requires of a resume that has nothing to resume.
+# That a resume of a real interrupted turn is single-use, idempotent and honoured on a `lost`
+# workspace is measured by the reference server's own tests (gateway/tests/test_resume.py), which
+# can cut a turn. A server without the capability is not checked: §3.3 asks it to refuse the item
+# (SHOULD), but requiring that within the version would fail servers that conformed before it
+# (VERSIONING: a server need not reject input it accepted), so a client checks the capability first.
+
+
+def _resume_item(note: str | None = None) -> dict:
+    return {"type": "resume", **({"note": note} if note else {})}
+
+
+def _post_resume(ctx, prev: str | None, items: list) -> "object":
+    body: dict = {"input": items}
+    if prev:
+        body["previous_response_id"] = prev
+    return ctx.client.post("/v1/responses", body=body)
+
+
+def _finished_response(ctx) -> str:
+    """The id of a response that ended and was not interrupted: the one nothing can be resumed from."""
+    r = _run_blocking(ctx)
+    if r.status != 200 or not isinstance(r.json, dict) or not r.json.get("id"):
+        raise Skip(f"the task to chain a resume on did not return a response (HTTP {r.status})")
+    return str(r.json["id"])
+
+
+@check("T-15", "A resume with nothing to resume is refused, and starts no task", "full",
+       f"{SPEC}/tasks.md#33-resuming-an-interrupted-turn")
+def t15(ctx):
+    """§3.3 on a server that reports `resume`: a resume chained on a response that is not
+    interrupted is `409 resume_not_pending`; a resume with no `previous_response_id`, with another
+    item beside it, or twice in one request is `400 invalid_input`. None of them starts a task, so
+    the response named is as it was."""
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if not caps.get("resume"):
+        raise Skip("this server does not report the resume capability")
+    prev = _finished_response(ctx)
+    before = ctx.client.get(f"/v1/responses/{prev}")
+    refused = _post_resume(ctx, prev, [_resume_item()])
+    assert refused.status == 409 and _error_code(refused) == "resume_not_pending", (
+        f"a resume chained on a response that was not interrupted returned HTTP {refused.status} "
+        f"{_error_code(refused)!r}; §3.3 requires 409 resume_not_pending")
+    for what, got in (
+            ("no previous_response_id", _post_resume(ctx, None, [_resume_item()])),
+            ("another item beside it", _post_resume(ctx, prev, [_resume_item(),
+                                                                 {"role": "user", "content": "go on"}])),
+            ("a second resume", _post_resume(ctx, prev, [_resume_item(), _resume_item()]))):
+        assert got.status == 400 and _error_code(got) == "invalid_input", (
+            f"a resume with {what} returned HTTP {got.status} {_error_code(got)!r}; §3.3 requires "
+            "400 invalid_input")
+    after = ctx.client.get(f"/v1/responses/{prev}")
+    assert (before.json or {}).get("status") == (after.json or {}).get("status"), (
+        "a refused resume changed the response it named")
+    return "409 resume_not_pending for a finished response; 400 invalid_input for three malformed shapes"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
 # Full — a question for the person (Tasks §3.2, capability input_requests)
 # ══════════════════════════════════════════════════════════════════════════════════════
 # A harness that needs one answer ends its turn on the question: the response is `incomplete`
@@ -2346,6 +2417,26 @@ def en06(ctx):
     return f"{len(ids)} harness(es) read it"
 
 
+def _en07_task(ctx, hid: str, mount: str, model: str):
+    body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
+                      f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
+            "metadata": {"harness_id": hid}, "stream": False}
+    if model:
+        body["model"] = model
+    return ctx.client.post("/v1/responses", body=body)
+
+
+def _supported_bases(ctx) -> list[str]:
+    """Every base the server says it supports, as its refusal of an unknown one lists them (the same probe
+    _supported_base reads the first of)."""
+    if "_bases" not in ctx.state:
+        probe = ctx.client.post("/v1/harnesses", body={"name": "uhp-conformance-probe", "base": "uhp-conformance-unknown-base"})
+        if probe.status == 200:
+            ctx.client.delete(f"/v1/harnesses/{(probe.json or {}).get('id')}")
+        ctx.state["_bases"] = [str(b) for b in ((((probe.json or {}).get("error") or {}).get("detail") or {}).get("supported") or [])]
+    return ctx.state["_bases"]
+
+
 @check("EN-07", "A task reads the environment at its mount path, read-only, and its session names it", "full",
        f"{SPEC}/environments.md#6-what-a-session-sees")
 def en07(ctx):
@@ -2353,12 +2444,24 @@ def en07(ctx):
     e = _built_environment(ctx)
     h = _managed_harness(ctx, environment=e["id"])
     mount = e["mount"]
-    body = {"input": (f"Run this shell command and reply with its output only, nothing else: "
-                      f"cat {mount}/data/hello.txt; touch {mount}/write-probe 2>&1 | tail -1; echo WRITE_RC=$?"),
-            "metadata": {"harness_id": h["id"]}, "stream": False}
-    if ctx.model:
-        body["model"] = ctx.model
-    r = ctx.client.post("/v1/responses", body=body)
+    r = _en07_task(ctx, h["id"], mount, ctx.model)
+    if r.status == 400 and _error_code(r) == "environment_unsupported":
+        # The named harness's base cannot mount an environment (one that runs elsewhere), and the server says
+        # so before the task starts, which is an answer, not a defect. An environment is the server's, so it
+        # is read on a base that can: each other base the server lists, on that base's own default model,
+        # since the model the caller named is one the named harness's base serves.
+        own = str(h.get("base") or "")
+        for base in [b for b in _supported_bases(ctx) if b != own]:
+            try:
+                h = _managed_harness(ctx, base=base, environment=e["id"])
+            except Skip:
+                continue
+            r = _en07_task(ctx, h["id"], mount, "")
+            if not (r.status in (400, 422) and _error_code(r) in ("environment_unsupported", "model_unavailable")):
+                break
+        else:
+            raise Skip("no base on this server mounts an environment for a task (each said environment_unsupported "
+                       "or had no model to run), so nothing was read")
     assert r.status == 200, f"the task did not start: HTTP {r.status} {r.text[:200]}"
     resp = r.json or {}
     text = " ".join(str(c.get("text") or "") for it in resp.get("output") or [] for c in it.get("content") or [] if isinstance(c, dict))
@@ -2947,6 +3050,27 @@ def _branch_archive(ctx, sid):
         return {name: archive.read(name) for name in archive.namelist() if not name.endswith("/")}
 
 
+# A turn's `memory` note can still be pending when its response is answered: what the agent's memory keeps from the turn
+# is written after it, and the note then settles. A transcript compared before and after a branch is read once no turn's
+# memory is pending, so the comparison is of the whole transcript, `memory` included, and never of a note settling.
+MEMORY_SETTLE_S = 180
+
+
+def _settled_turns(ctx, sid):
+    """The session's transcript once no turn's memory note is pending. Still pending at the bound: the check is unread
+    (a skip, never a pass)."""
+    deadline = time.time() + MEMORY_SETTLE_S
+    while True:
+        r = ctx.client.get(f"/v1/sessions/{sid}/turns")
+        assert r.status == 200, f"GET the session's turns returned HTTP {r.status}"
+        turns = (r.json or {}).get("turns") if isinstance(r.json, dict) else None
+        if not any(isinstance(t, dict) and ((t.get("memory") or {}).get("pending")) for t in turns or []):
+            return r.json
+        if time.time() > deadline:
+            raise Skip(f"unread: a turn's memory was still pending after {MEMORY_SETTLE_S} s, so the transcript was not compared")
+        time.sleep(2)
+
+
 def _branch_case(ctx):
     _branching(ctx)
     if "branch_case" in ctx.state:
@@ -2977,8 +3101,7 @@ def _branch_case(ctx):
     latest = _branch_archive(ctx, sid)
     if latest.get(filename, b"").strip() != f"{token}-3".encode() or future not in latest:
         raise Skip("the harness did not establish the later-turn file fixture")
-    turns_before = ctx.client.get(f"/v1/sessions/{sid}/turns")
-    assert turns_before.status == 200
+    turns_before = _settled_turns(ctx, sid)
     branched = ctx.client.post("/v1/responses", body={
         "input": "Reply with exactly: branched. Do not write or change any files.",
         "previous_response_id": rid, "branch": True, **({"model": ctx.model} if ctx.model else {}), "metadata": {"harness_id": h["id"]}})
@@ -2988,7 +3111,7 @@ def _branch_case(ctx):
     assert target and target != sid, "branch continued the original session instead of creating a new one"
     assert meta.get("branched_from") == rid, "branch response omitted or changed metadata.branched_from"
     case = {"source": sid, "point": rid, "target": target, "first": original,
-            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before.json,
+            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before,
             "branch_response": (branched.json or {}).get("id"), "harness": h["id"]}
     ctx.state["branch_case"] = case
     return case
@@ -3009,9 +3132,7 @@ def b01(ctx):
 def b02(ctx):
     case = _branch_case(ctx)
     assert _branch_archive(ctx, case["source"]) == case["latest"], "branch changed original files"
-    after = ctx.client.get(f"/v1/sessions/{case['source']}/turns")
-    assert after.status == 200
-    assert after.json == case["turns_before"], "branch changed the original transcript"
+    assert _settled_turns(ctx, case["source"]) == case["turns_before"], "branch changed the original transcript"
 
 
 @check("B-03", "Session inspection identifies the branch's source response and session", "full",
@@ -3037,9 +3158,8 @@ def b05(ctx):
         "input": "Reply with exactly: ran.", "branch": True,
         **({"model": ctx.model} if ctx.model else {}),
         "metadata": {"harness_id": case["harness"], "session_id": case["source"]}})
-    after = ctx.client.get(f"/v1/sessions/{case['source']}/turns")
-    assert after.status == 200
-    assert after.json == case["turns_before"], (
+    after = _settled_turns(ctx, case["source"])
+    assert after == case["turns_before"], (
         f"branch: true without previous_response_id ran a task in the session it named (HTTP {response.status})")
     assert response.status == 400, f"branch: true without previous_response_id returned HTTP {response.status}"
     assert ((response.json or {}).get("error") or {}).get("code") == "invalid_input"

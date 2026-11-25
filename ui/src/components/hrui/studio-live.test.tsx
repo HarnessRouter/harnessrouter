@@ -269,7 +269,7 @@ test('a task that started while the watch was down shows once it is back: runnin
   expect(pill(rowOfList('h2'))).toBe('idle');
 });
 
-test('a setup’s health and p95 come from its tasks of the day: three finished, two failed is Failing', async () => {
+test('a harness’s health and p95 come from its tasks of the day: three finished, two failed is Failing', async () => {
   tasks.h1 = [card('a', 'failed', 12), card('b', 'failed', 30), card('c', 'completed', 61)];
   tasks.h2 = [card('d', 'completed', 5), card('e', 'completed', 9), card('f', 'completed', 90)];
   await open();
@@ -314,7 +314,7 @@ test('nothing is read on a timer; shown again, the stream opens and the rows are
 
 const readsOf = (id: string) => dx.fetchHarnessTasks.mock.calls.filter(([x]) => x === id).length;
 
-test('a frame from the workspace feed updates its setup\'s card at once, with no polling while the stream is up', async () => {
+test('a frame from the workspace feed updates its harness\'s card at once, with no polling while the stream is up', async () => {
   mockFeed.state = 'up';
   await open();
   expect(mockFeed.opened).toBe(1);                       // one watch for the tab
@@ -402,7 +402,7 @@ test('a watch that never comes up (its reads fail): the rows are read once, neve
   expect(reads()).toBe(2);
 });
 
-test('a setup list that could not be read says only that: no paused line, no empty-workspace cue', async () => {
+test('a harness list that could not be read says only that: no paused line, no empty-workspace cue', async () => {
   hx.listCustom.mockRejectedValue(new Error('Request failed.'));
   await open();
   await wait(PAUSED_AFTER_MS);
@@ -431,7 +431,7 @@ test('the stream is closed while the page is hidden and opened again when it is 
 
 // ── what a row claims when a read fails (Richard, 10-19) ──────────────────────────────────────────
 
-test('a read that fails keeps the row: a healthy setup stays as it was read, with its numbers, in both views', async () => {
+test('a read that fails keeps the row: a healthy harness stays as it was read, with its numbers, in both views', async () => {
   tasks.h1 = [card('s1', 'completed')];
   mockFeed.state = 'up';
   await open();
@@ -471,7 +471,7 @@ test('a read that fails on the first load claims nothing: no health, no number, 
   expect(figures('h1')).toEqual(['—', '—', '—']);
   expect(pill(cardOf('h2'))).toBe('healthy');
   // a total over the rows that answered would read as the whole: the header leaves it out
-  expect(meta()).toContain('2 setups');
+  expect(meta()).toContain('2 harnesses');
   expect(meta()).not.toContain('task');
   await view('List');
   expect(rowOfList('h1').querySelector('.pill-sk')).not.toBeNull();
@@ -524,8 +524,8 @@ test('a catch-up read that hangs ends at its deadline, and the next catch-up run
   warn.mockRestore();
 });
 
-test('at most a few setups are read at once; the rows draw on time and fill in place', async () => {
-  const many = Array.from({ length: 14 }, (_, i) => H(`m${i}`, `Setup ${i}`));
+test('at most a few harnesses are read at once; the rows draw on time and fill in place', async () => {
+  const many = Array.from({ length: 14 }, (_, i) => H(`m${i}`, `Harness ${i}`));
   hx.listCustom.mockResolvedValue(many);
   let out = 0, peak = 0;
   const answer: (() => void)[] = [];

@@ -134,9 +134,10 @@ function agentModel(K: ReturnType<typeof Iso>, o: Tower, opts: Opts) {
     if (!n) return;
     const pk = 'part:' + k, dk2 = drops[pk] != null, dl2 = dk2 ? drops[pk] : 0;
     if (dk2) out.push(ripple(px, py, px + 2, py + 2, Z, dl2));
-    // Memory stands right in front of the Plugin corner, so a stack of it would hide that corner: one brick high,
-    // and its count goes on the brick as any part's does past its stack
-    const cap = k === 'memory' ? 1 : PART_STACK, h = Math.min(n, cap);
+    // every part the same, Memory too (Richard 11-10): one brick per item up to PART_STACK, then the count on the top
+    // brick. Memory stands in front of the Plugin corner and is drawn after it, so its stack covers that corner's
+    // lower bricks the way a brick in front would, and the Plugin stack's top still shows above it
+    const cap = PART_STACK, h = Math.min(n, cap);
     let g = '';
     for (let j = 0; j < h; j++) g += K.box(px, py, Z + j, px + 2, py + 2, Z + j + 1);
     g += K.stud(px + 1, py + 1, Z + h, 2);

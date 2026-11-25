@@ -138,10 +138,13 @@ def test_who_acts_on_a_memory_is_one_vocabulary(people, tree):
     ada, _ = people
     url = f"/v1/memories/{tree['acme']}/grants"
     # a grant is held by a member (a person or an agent, the same kind) or a group; a server's own kind is x.-prefixed
-    for who in ("member:cy@example.com", "member:chrn_1", "group:sales", "x.team:blue"):
+    for who in ("member:cy@example.com", "member:chrn_1", "group:default", "x.team:blue"):
         g = ada.post(url, json={"principal": who, "privileges": ["read"]})
         assert g.status_code == 200, (who, g.text)
         ada.delete(f"{url}/{g.json()['id']}")
+    # a group is a workspace, and a memory is used only in its own
+    r = ada.post(url, json={"principal": "group:sales", "privileges": ["read"]})
+    assert r.status_code == 422 and _code(r) == "memory_other_workspace"
     # a provider writes but holds no grant, and a kind nobody defined is refused, not stored
     for who in ("provider:mem0", "harness:chrn_1", "user:cy@example.com", "workspace:w1", "key:k1", "nobody"):
         r = ada.post(url, json={"principal": who, "privileges": ["read"]})

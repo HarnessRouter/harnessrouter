@@ -17,7 +17,8 @@ import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
 import { hasSchema } from './caps';
 import { Ghost } from './CardArt';
-import { canDraw, coverGraphOf, coverState, drawnCover, isGraph, keepCover, picKindOf, type Drawn } from './cover';
+import { canDraw, coverGraphOf, coverState, drawnCover, heldFlat, isGraph, keepCover, markHeldLooked, picKindOf, type CoverGraph, type Drawn } from './cover';
+import { readHeld } from './graph/held';
 import { MemoryArt } from './MemoryArt';
 import { engineOf, msOf, PLUS, SEARCH, shownName, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
@@ -85,6 +86,19 @@ export function MemoriesPage() {
     listMemories({ counts: false, sort: 'recent' }).then(setList).catch(() => setFailed(true));
   }, []);
   useEffect(() => { read(); }, [read]);
+  // Back on the page (another tab or window shown again): read the list again, so an agent's memory made meanwhile
+  // is there without a reload. Quietly: a read that fails keeps what is shown. At most once in five seconds.
+  useEffect(() => {
+    let last = Date.now();
+    const again = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - last < 5000) return;
+      last = Date.now();
+      listMemories({ counts: false, sort: 'recent' }).then(setList).catch(() => { /* keep what is shown */ });
+    };
+    window.addEventListener('focus', again);
+    document.addEventListener('visibilitychange', again);
+    return () => { window.removeEventListener('focus', again); document.removeEventListener('visibilitychange', again); };
+  }, []);
   // a setup's Settings sends a person here to make a memory
   useEffect(() => { if (new URLSearchParams(window.location.search).get('new') === '1') setOpen({ k: 'new' }); }, []);
 
@@ -95,34 +109,45 @@ export function MemoriesPage() {
     return p && m.builtin !== undefined ? { ...p, schema: { ...p.schema, builtin: m.builtin || undefined } } : p;
   }, [providers]);
   // The covers still missing, and the ones drawn before the drawing changed, made one at a time once the page has
-  // settled: the schema read where the engine reads one and nothing says what the cover showed (its only read), drawn
-  // offscreen as the Schema tab draws it, kept where this person may write the memory, and shown. One with a person's
-  // own types is made again by its Schema tab, never here. Until a new one comes, a card shows the one it has.
+  // settled: the schema read where the engine reads one and nothing says what the cover showed (its only read), or what
+  // the memory holds where nobody sets its types (read again only once it has been used since), drawn offscreen as the
+  // Schema tab draws it, kept where this person may write the memory, and shown. One with a person's own types is made
+  // again by its Schema tab, never here. Until a new one comes, a card shows the one it has.
   useEffect(() => {
     if (!list || !providers || !canDraw()) return undefined;
-    const todo = list.flatMap((m) => {
+    type How = 'held' | 'schema' | 'own';
+    const todo = list.flatMap((m): { m: Memory; how: How }[] => {
       if (drawnCover(m.id)) return [];
       const p = providerOf(m), k = picKindOf(m, p);
-      if (k === 'graph' || k === 'maybe') return [{ m, read: hasSchema(p) }];
+      if (k === 'held') return heldFlat(m) ? [] : [{ m, how: 'held' }];
+      if (k === 'graph' || k === 'maybe') return [{ m, how: hasSchema(p) ? 'schema' : 'own' }];
       if (k !== 'cover' || !m.privileges?.includes('write')) return [];
       const st = coverState(m, p);
-      return st === 'fresh' ? [] : [{ m, read: st === 'read' }];
+      return st === 'fresh' ? [] : [{ m, how: st === 'held' ? 'held' : st === 'read' ? 'schema' : 'own' }];
     });
     if (!todo.length) return undefined;
     let live = true;
     const t = setTimeout(() => {
       void (async () => {
-        for (const { m, read: wants } of todo) {
+        for (const { m, how } of todo) {
           await idle();
           if (!live) return;
           const p = providerOf(m);
-          let schema: LSchema | null = null, read = true;
-          if (wants) {
-            try { schema = schemaIn(await getSchema(m.id)); } catch { read = false; }
+          let schema: LSchema | null = null, read = true, g: CoverGraph | null = null;
+          if (how === 'held') {
+            // what it holds: a read that fails draws nothing, and the card keeps what it shows
+            try { g = (await readHeld(m.id, p)).graph; } catch { read = false; }
+            if (!live) return;
+            if (!read) continue;
+            markHeldLooked(m.id, !isGraph(g));
+          } else {
+            if (how === 'schema') {
+              try { schema = schemaIn(await getSchema(m.id)); } catch { read = false; }
+            }
+            if (!live) return;
+            g = coverGraphOf(schema, p);
           }
-          if (!live) return;
-          const g = coverGraphOf(schema, p);
-          if (!isGraph(g)) {
+          if (!g || !isGraph(g)) {
             if (read && !m.cover_at) setFlat((f) => ({ ...f, [m.id]: true }));
             continue;
           }
@@ -137,9 +162,12 @@ export function MemoriesPage() {
     }, SETTLE_MS);
     return () => { live = false; clearTimeout(t); };
   }, [list, providers, providerOf]);
-  const art = (m: Memory, mini?: boolean) => (
-    <MemoryArt m={m} kind={flat[m.id] ? 'brick' : picKindOf(m, providerOf(m))} drawn={drawn[m.id] || drawnCover(m.id)} mini={mini} />
-  );
+  const art = (m: Memory, mini?: boolean) => {
+    const k = picKindOf(m, providerOf(m));
+    // what it holds is drawn here, so where nothing can be drawn, or it held no graph when last read, it is its brick
+    const brick = flat[m.id] || (k === 'held' && (heldFlat(m) || !canDraw()));
+    return <MemoryArt m={m} kind={brick ? 'brick' : k} drawn={drawn[m.id] || drawnCover(m.id)} mini={mini} />;
+  };
 
   const created = (m: Memory) => {
     toast(`${m.name} created.`);

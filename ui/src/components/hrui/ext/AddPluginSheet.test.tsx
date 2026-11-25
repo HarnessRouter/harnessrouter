@@ -69,7 +69,7 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => { root.unmount(); }); });
 
-test('each connected plugin has its switch; flipping one writes the setup at once', async () => {
+test('each connected plugin has its switch; flipping one writes the harness at once', async () => {
   await open();
   expect(rows().map((r) => r.querySelector('b')?.textContent)).toEqual(['GitHub', 'Vercel']);
   expect(tog('GitHub').getAttribute('aria-pressed')).toBe('true');
@@ -90,7 +90,7 @@ test('a plugin connected here moves up, offered to include', async () => {
   await click(document.querySelector('[aria-label="Connect Browser"]') as HTMLButtonElement);
   expect(m.setPlug).toHaveBeenCalledWith('browser', { enabled: true });
   expect(onChanged).toHaveBeenCalled();
-  expect(rowOf('Browser').textContent).toContain('Just connected. Include it in this setup?');
+  expect(rowOf('Browser').textContent).toContain('Just connected. Include it in this harness?');
   expect(tileNames()).toEqual([]);
   await click(tog('Browser'));
   expect(onSet).toHaveBeenLastCalledWith(['github', 'browser']);

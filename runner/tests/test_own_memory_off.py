@@ -178,11 +178,11 @@ def test_a_codex_turn_with_platform_memory_switches_its_memories_off(started):
 
 
 def test_a_claude_turn_with_platform_memory_switches_its_auto_memory_off(started):
-    """Claude Code 2.1.280 keeps an auto memory of its own by default, -p included: measured, its request
-    carried a "# auto memory" section beside the platform's memories server."""
+    """Claude Code keeps an auto memory of its own by default, -p included: measured on 2.1.280 and again on
+    2.1.311, its request carried a "# auto memory" section beside the platform's memories server."""
     _, ws = started("claude", [GATEWAY_MEMORIES], provider="anthropic")
     p = next(ws.rglob(".claude/settings.json"))
     assert json.loads(p.read_text())["autoMemoryEnabled"] is False
     # the next turn without the platform's memory gives Claude Code its own back
     _, ws2 = started("claude", [], provider="anthropic")
-    assert not list(ws2.rglob(".claude/settings.json")), "nothing to write on a fresh session"
+    assert "autoMemoryEnabled" not in json.loads(next(ws2.rglob(".claude/settings.json")).read_text())

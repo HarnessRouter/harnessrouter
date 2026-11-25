@@ -246,7 +246,7 @@ def test_a_grant_to_another_harness_or_a_person_isn_t_counted(client, mid):
 def test_another_organization_s_grants_aren_t_read(client, mid):
     hid = holding(client, mid)
     assert asyncio.run(memory_plane.grant_counts("someone-else")) == {}
-    assert asyncio.run(memory_plane.grant_counts(ORG))[f"member:{hid}"] == 1
+    assert asyncio.run(memory_plane.grant_counts(ORG))[(f"member:{hid}", "default")] == 1
 
 
 def test_the_list_reads_grants_once_however_many_rows_it_has(client, mid, monkeypatch):

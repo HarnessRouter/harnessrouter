@@ -199,8 +199,11 @@ def test_the_entrypoint_gives_an_install_with_no_key_one_at_first_start():
     assert '"$PY" -I -c' in block and '"$PY" -c' not in block
     # before the gateway starts, and after the entrypoint's own HOME and data-dir setup
     assert ep.index('HR_SECRET_KEY_FILE="$DATA_DIR/secret-key"') < ep.index("uvicorn app:app")
-    # the runner never gets it: it is the product's, not the agents' (unchanged)
-    assert "-u HR_SECRET_KEY" in ep
+    # the runner never gets it: it is the product's, not the agents'. The runner starts with every
+    # secret-shaped name dropped from its environment, this one among them.
+    assert "runner_env_only && exec env HR_INTERNAL_KEY_FILE=" in ep
+    names = re.search(r"RUNNER_SECRET_ENV='([^']+)'", ep).group(1)
+    assert re.search(names, "HR_SECRET_KEY", re.I) and re.search(names, "GATEWAY_SECRET_KEY", re.I)
 
 
 # ── what the store does with a record ─────────────────────────────────────────────────────────

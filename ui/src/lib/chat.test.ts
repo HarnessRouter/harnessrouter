@@ -145,7 +145,7 @@ describe('a turn’s own stream', () => {
   });
 });
 
-describe('a setup’s live feed', () => {
+describe('a harness’s live feed', () => {
   let random: jest.SpyInstance;
   beforeEach(() => { jest.useFakeTimers(); random = jest.spyOn(Math, 'random').mockReturnValue(0.5); });
   afterEach(() => { random.mockRestore(); jest.useRealTimers(); });

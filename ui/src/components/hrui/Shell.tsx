@@ -26,8 +26,9 @@ export const LINKS = {
   repo: 'https://github.com/HarnessRouter/harnessrouter',
 };
 
-// `nav` is the design's name for the place: its stylesheet keeps Add-ons and API Keys off the phone bar by
-// it (they are in More there)
+// `nav` is the design's name for the place: its stylesheet keeps Add-on and API Key off the phone bar by
+// it (they are in More there). The words are the hosted console's too, each in the singular (Richard, 11-14:
+// Studio is Harness, and every word singular)
 type Place = { key: string; href: string; label: string; icon: React.ReactNode; aria?: string; nav: string };
 const BASE_PLACES: Place[] = [
   { key: 'studio', href: '/studio', label: '工作台', icon: Ic.studio, aria: 'Harness Studio', nav: 'agents' },

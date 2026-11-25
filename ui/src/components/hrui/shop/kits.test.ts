@@ -33,11 +33,11 @@ describe('fetchKitBases', () => {
 });
 
 describe('launchKit', () => {
-  it('hands back what the setup runs on, from the launch’s own answer', async () => {
+  it('hands back what the harness runs on, from the launch’s own answer', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ harnessId: 'h1', route: '/kits/dashboard', created: true, harness: { base: 'codex', defaultModel: 'gpt-b' } }) });
     expect(await launchKit('dashboard', { base: 'codex', model: 'gpt-b' })).toEqual({ harnessId: 'h1', route: '/kits/dashboard', created: true, runningOn: { base: 'codex', model: 'gpt-b' } });
   });
-  it('an answer without the setup names nothing it runs on', async () => {
+  it('an answer without the harness names nothing it runs on', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ harnessId: 'h1', route: '', created: false }) });
     expect((await launchKit('dashboard')).runningOn).toBeNull();
   });

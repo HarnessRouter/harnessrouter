@@ -599,7 +599,7 @@ def test_the_hosted_namespace_never_resolves_as_a_bearer_token(harness, capsys):
     """The refusal at the funnel every outbound credential passes through, so it holds for callers
     that do not exist yet."""
     capsys.readouterr()
-    assert asyncio.run(app._resolve_mcp_auth(ORG, f"vault:{_key(harness)}")) == ""
+    assert asyncio.run(app._resolve_mcp_auth(ORG, f"vault:{_key(harness)}", use=app.USE_ENV, ws="", any_ws=True)) == ""
     assert "refusing to resolve" in capsys.readouterr().out
 
 

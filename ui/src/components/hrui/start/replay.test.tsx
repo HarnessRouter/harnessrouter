@@ -80,7 +80,7 @@ it('an import that fails once is asked for again, and the recording plays', asyn
   expect(await fresh.loadRecording(1)).toBeNull();               // a demo with none: null, it runs live
 });
 
-it('a setup saved from no recording is null at once', async () => {
+it('a harness saved from no recording is null at once', async () => {
   await act(async () => { root.render(<Probe source="" />); });
   expect(state.run).toBeNull();
   expect(state.failed).toBe(false);

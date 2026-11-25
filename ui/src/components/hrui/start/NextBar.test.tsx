@@ -30,23 +30,23 @@ afterEach(() => {
 });
 
 describe('the Next card', () => {
-  test('your app at the left, the setup by its own name at the right, task over and result back between', () => {
+  test('your app at the left, the harness by its own name at the right, task over and result back between', () => {
     const card = show('Product images');
     expect(card.classList.contains('nx2')).toBe(true);
-    expect(card.querySelector('.bs-nk')?.textContent).toBe('Next');
+    expect(card.querySelector('.bs-nk')?.textContent).toBe('下一步');
     const [app, setup] = Array.from(card.querySelectorAll<HTMLElement>('.nx-end'));
-    expect(app.querySelector('b')?.textContent).toBe('Your app');
-    expect(app.querySelector('span')?.textContent).toBe('Built by your coding agent');
+    expect(app.querySelector('b')?.textContent).toBe('你的应用');
+    expect(app.querySelector('span')?.textContent).toBe('由编程智能体构建');
     expect(setup.querySelector('b')?.textContent).toBe('Product images');
-    expect(setup.querySelector('span')?.textContent).toBe('Runs every task in HarnessRouter');
+    expect(setup.querySelector('span')?.textContent).toBe('在智能体网关执行所有任务');
     // the bricks in their states: your app still to build, the setup built
     expect(app.querySelector('svg.iso.nx-b .bk.next')).not.toBeNull();
     expect(setup.querySelector('svg.iso.nx-b .bk.built')).not.toBeNull();
     expect(card.querySelectorAll('.bk .su')).toHaveLength(8);
     // the wires: the task goes over, the result comes back
-    expect(card.querySelector('.nx-wire .go')?.textContent).toBe('task');
-    expect(card.querySelector('.nx-wire .back')?.textContent).toBe('result');
-    expect(card.querySelector('.nx-mid button')?.textContent).toBe('Connect your app');
+    expect(card.querySelector('.nx-wire .go')?.textContent).toBe('任务');
+    expect(card.querySelector('.nx-wire .back')?.textContent).toBe('结果');
+    expect(card.querySelector('.nx-mid button')?.textContent).toBe('连接你的应用');
     // no dash anywhere in its words, and this edition is not the hosted service
     expect(card.textContent).not.toMatch(/[-–—]/);
     expect(card.textContent).not.toContain('Cloud');
@@ -57,14 +57,14 @@ describe('the Next card', () => {
     const card = show('Product images');
     const flow = card.querySelector('.nx-flow') as HTMLElement;
     expect(flow.getAttribute('role')).toBe('group');
-    expect(flow.getAttribute('aria-label')).toBe('Your app, built by your coding agent, sends each task to Product images. It runs in HarnessRouter and the result comes back.');
+    expect(flow.getAttribute('aria-label')).toBe('Your app, built by your coding agent, sends each task to Product images. It runs in 智能体网关 and the result comes back.');
     card.querySelectorAll('.nx-end, .nx-wire').forEach((e) => expect(e.getAttribute('aria-hidden')).toBe('true'));
     // the button is never inside a picture, where it would be hidden with the picture's contents
     const btn = card.querySelector('button') as HTMLButtonElement;
     expect(btn.closest('[role="img"], [aria-hidden="true"]')).toBeNull();
   });
 
-  test('a long name is the setup’s own, whole in the sentence and the tooltip', () => {
+  test('a long name is the harness’s own, whole in the sentence and the tooltip', () => {
     const long = 'Quarterly supplier invoice reconciliation for every regional office';
     const card = show(long);
     const b = card.querySelector('.nx-setup b') as HTMLElement;
@@ -73,7 +73,7 @@ describe('the Next card', () => {
     expect(card.querySelector('.nx-flow')?.getAttribute('aria-label')).toContain(`sends each task to ${long}.`);
   });
 
-  test('Connect your app asks the setup’s page for its Connect your app sheet', () => {
+  test('Connect your app asks the harness’s page for its Connect your app sheet', () => {
     const heard = jest.fn();
     const on = (e: Event) => heard((e as CustomEvent).detail);
     window.addEventListener(SET_UP_APP_EVENT, on);

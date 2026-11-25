@@ -29,6 +29,12 @@ test('a sub memory opened before it is read says so, and one that failed offers 
   const failed = rows(tree({ root: { children: [m('sub')] }, sub: { failed: true } }), { isOpen: open });
   expect(failed[1]).toMatchObject({ kind: 'note', tone: 'failed', retry: 'records' });
 });
+test('under an agent’s memory, the signed-in person’s own comes first and stands open (Richard 11-10)', () => {
+  const view = tree({ root: { children: [m('dana'), m('mine', { yours: true }), m('eli')] }, mine: { records: [r('m1')] } });
+  expect(said(rows(view))).toEqual(['0:memory:mine', '1:group:note', '2:record:m1', '0:memory:dana', '0:memory:eli']);
+  // closed by the person, it stays closed
+  expect(said(rows(view, { isOpen: (k, d) => (k === memoryKey('mine') ? false : d) }))).toEqual(['0:memory:mine', '0:memory:dana', '0:memory:eli']);
+});
 test('a sub memory with nothing in it has no way in; one whose count is unknown keeps it', () => {
   const none = rows(tree({ root: { children: [m('a', { records: { count: 0 } }), m('b', { records: { count: null } })] } }));
   expect(none.map((x) => (x.kind === 'memory' ? x.expandable : null))).toEqual([false, true]);

@@ -7,7 +7,7 @@ import { handFirstTest, takeFirstTest } from './check';
 
 beforeEach(() => { sessionStorage.clear(); jest.useRealTimers(); });
 
-test('the first test is handed over once, marked as New setup’s, and then it is gone', () => {
+test('the first test is handed over once, marked as New harness’s, and then it is gone', () => {
   jest.useFakeTimers();
   handFirstTest('chrn_1', { input: 'Review the payment clause.', send: false, free: false });
   expect(takeFirstTest('chrn_1')).toEqual({ input: 'Review the payment clause.', send: false, free: false, setup: true });
@@ -23,7 +23,7 @@ test('a page load in between still finds it, from the tab', () => {
   expect(kept && JSON.parse(kept)).toMatchObject({ input: 'x', send: false });
 });
 
-test('another setup has none; one left more than a few minutes is dropped', () => {
+test('another harness has none; one left more than a few minutes is dropped', () => {
   expect(takeFirstTest('chrn_none')).toBeNull();
   sessionStorage.setItem('hr.first:chrn_old', JSON.stringify({ input: 'x', send: false, free: false, at: Date.now() - 6 * 60_000 }));
   expect(takeFirstTest('chrn_old')).toBeNull();

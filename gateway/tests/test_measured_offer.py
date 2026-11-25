@@ -21,7 +21,7 @@ FAILED = {
     "jcode": {"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview", "nemotron-3-super",
               "llama-3.3-70b", "muse-glimmer-30b", "muse-spark-1.1"},
     "opensquilla": {"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview", "nemotron-3-super",
-                    "gpt-6.1-sol"},
+                    "gpt-6.1-sol", "gpt-6.2-sol"},   # 6.2-sol as gpt-6.1-sol until the 6.2 line is measured
     "nanobot": {"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super", "gpt-5.6-luna"},
 }
 REACH = {"mimo": "opencode", "jcode": "kimi", "opensquilla": "kimi", "nanobot": "kimi"}

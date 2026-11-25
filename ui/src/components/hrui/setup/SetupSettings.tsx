@@ -46,6 +46,7 @@ import {
   countOn, isOwnSkill, setupPlugins, setupSkills, setupTools,
 } from './setupParts';
 import { PluginSwitches, pluginLines, type PluginsIn } from './PluginSwitches';
+import { parsePluginManifest } from './pluginManifest';
 import { openNewSetup } from '../start/open';
 import { MemoryLayer, memorySummary } from '../memories/MemoryLayer';
 import { announceAgentMemory } from '../memories/AgentMemory';
@@ -232,11 +233,10 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       }
       const mf = files.find((f) => f.path === 'plugin.json');
       if (!mf || mf.content === undefined) throw new Error('That folder has no plugin.json at its root, so it is not a plugin package.');
-      let manifest: HarnessPlugin['manifest'] & { $schema?: string } = {};
-      try { manifest = JSON.parse(mf.content) as typeof manifest; } catch { throw new Error('Its plugin.json is not valid JSON.'); }
+      const manifest = parsePluginManifest<HarnessPlugin['manifest'] & { $schema?: string }>(mf.content);
       const name = String(manifest?.name || '');
       if (!name) throw new Error('Its plugin.json names no plugin.');
-      if ((rec.plugins || []).some((p) => p.name === name)) throw new Error(`A plugin named ${name} is already installed on this setup.`);
+      if ((rec.plugins || []).some((p) => p.name === name)) throw new Error(`A plugin named ${name} is already installed on this harness.`);
       const schemas = await pluginSchemas();
       if (schemas.length && !schemas.includes(String(manifest.$schema || ''))) {
         throw new Error(manifest.$schema ? `This package targets ${manifest.$schema}, which is not installed here (it installs ${schemas.join(', ')}).` : 'Its plugin.json names no $schema, which every package must.');
@@ -294,7 +294,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   // ── Save and Discard ───────────────────────────────────────────────────────────────────────
   async function save() {
     if (busy) return;
-    if (!c.name.trim()) { onLayer('harness'); point('setName'); toast('Give the setup a name.'); return; }
+    if (!c.name.trim()) { onLayer('harness'); point('setName'); toast('Give the harness a name.'); return; }
     const badL = (fid: string, msg: string) => { onLayer('runtime'); point(fid); toast(msg); };
     const turns = c.turns.trim(), mins = c.mins.trim();
     if (turns && !(/^\d+$/.test(turns) && +turns >= 1)) { badL('setTurns', 'Max steps must be a whole number, 1 or more.'); return; }
@@ -411,7 +411,8 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const inv = (fid: string) => (bad === fid ? true : undefined);
 
   // ── the model's options and thinking levels ────────────────────────────────────────────────
-  const keyOf = (m: string) => !!providers.connectionFor(m);
+  // a key this harness's base can run the model through, not any key the instance has for it (#696)
+  const keyOf = (m: string) => !!providers.connectionFor(m, oob?.backend ?? undefined);
   const modelIds = oobModels(oob);
   // the models that can run now, and the one chosen (said when it has no provider); one that can't is
   // left out, never listed disabled (Richard 10-19). A setup with no model of its own has the harness
@@ -524,7 +525,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
                   );
                 })}
               </div>
-            ) : capEmpty('skill', 'No skills on this setup yet.')
+            ) : capEmpty('skill', 'No skills on this harness yet.')
         ) : (
           <div className="cap-list">
             {toolList.map((x) => {
@@ -705,11 +706,11 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           is stored securely first, only its reference goes into the draft) */}
       {pop?.k === 'mcp' ? (
         <McpSheet server={mcpEdit} keptAuth={mcpEdit?.auth} headers={c.headers} onClose={() => setPop(null)}
-          nameTaken={(n) => (c.mcp.some((x, k) => k !== pop.i && (x.name || '').toLowerCase() === n.toLowerCase()) ? `This setup already has an MCP server named ${n}.` : '')}
+          nameTaken={(n) => (c.mcp.some((x, k) => k !== pop.i && (x.name || '').toLowerCase() === n.toLowerCase()) ? `This harness already has an MCP server named ${n}.` : '')}
           onSave={async (v) => {
             const id = mcpEdit?.id || newMcpId();
             let auth: string | undefined;
-            try { auth = await authFor(id, v.token, mcpEdit?.auth); } catch { return 'The token could not be stored. Try again.'; }
+            try { auth = await authFor(id, v.token, mcpEdit?.auth, v.url); } catch { return 'The token could not be stored. Try again.'; }
             const m: McpServer = { ...(mcpEdit || { transport: 'http', enabled: true }), id, name: v.name, url: v.url };
             if (auth) m.auth = auth; else delete m.auth;
             set('mcp', pop.i != null ? c.mcp.map((x, k) => (k === pop.i ? m : x)) : [...c.mcp, m]);

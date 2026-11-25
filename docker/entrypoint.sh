@@ -27,6 +27,18 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "[harnessrouter] ERROR: the container must start as root. It drops privileges itself: the product runs as 'agent', every agent process as its own session uid. Remove --user from docker run."
   exit 1
 fi
+# The per-session uids keep sessions out of each other's files and out of the product's; the host kernel
+# decides whether one user may hard-link another user's file (fs.protected_hardlinks), and the container
+# cannot set it. Said once at start when the host allows it; an unreadable setting says nothing.
+protected_hardlinks_warning() {
+  local v
+  v="$(cat -- "${1:-/proc/sys/fs/protected_hardlinks}" 2>/dev/null)" || v=""
+  if [ "$v" = "0" ]; then
+    echo "[harnessrouter] WARN: this host allows hard links to other users' files (fs.protected_hardlinks=0); set it to 1 on the host"
+  fi
+  return 0
+}
+protected_hardlinks_warning
 PRODUCT=agent
 # Root must never read or run anything the product user can change, or a bug in the gateway or the
 # console (which run as that user) becomes root at the next start (reported privately,
@@ -216,7 +228,7 @@ export HARNESS_GATEWAY_URL="${HARNESS_GATEWAY_URL:-http://127.0.0.1:8080}"
 export NEXT_PUBLIC_HR_EDITION=selfhost
 
 # The Claude Code release this image was verified with; see install_backends.
-export CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.280}"
+export CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.311}"
 
 if [ "$ROLE" != "runner" ]; then
 # ── console login ─────────────────────────────────────────────────────────────
@@ -472,8 +484,9 @@ install_base() {
 # chowns. Everything else runs as the base's own install uid: a package manager filling a tree (npm ci
 # and every tarball it extracts, npm rebuild and the one install script it runs, an override's npm
 # install with its scripts, pip and any sdist it builds), tar unpacking a release archive (iu_untar),
-# and every check that runs an installed file. One step still runs as root, System One's `playwright
-# install-deps` (it calls apt); scripts/check-install-pins.py names it, and that list only shrinks.
+# and every check that runs an installed file. Nothing an install brought runs as root any more:
+# scripts/check-install-pins.py holds that, and its list of exceptions (ROOT_RUNS) is empty. The last
+# one, System One's `playwright install-deps`, is now apt with a list written here (chromium_libs).
 #
 # One uid per base (INSTALL_UID_BASE + its place in INSTALL_UID_ORDER, below the session uids), so a
 # package in one base cannot reach another base's tree, and the uid owns a directory only while it
@@ -991,25 +1004,97 @@ export PLAYWRIGHT_BROWSERS_PATH="$TOOLS/ms-playwright"
 # none of its libraries (measured: libatk, libatspi, libXcomposite "not found", and every launch
 # died before CDP came up). They are installed per container, keyed on a marker in the container's
 # own filesystem: on the first install, and on every start that finds the venv already there.
+#
+# They are Debian's, by apt, from the list written here, not by `playwright install-deps`: that ran
+# the venv's driver as root, code an install brought (#623, step 3), to arrive at this same apt
+# command; apt runs only what Debian signed. The list is Playwright $SYSTEMONE_PLAYWRIGHT_PIN's own
+# for this image's Debian 13 (its nativeDeps table, `debian13-x64`, the `tools` and `chromium`
+# packages; `debian13-arm64` is the same list), the packages `install-deps chromium` asks apt for.
+# scripts/check-chromium-libs.py holds the list to the pinned Playwright's: in the tests job against
+# Playwright's source at that tag, and in the release gate against the driver the venv installed, on
+# the Debian the container runs, where it also reads that every package is installed. A Playwright
+# bump that changes its list fails there until this list moves with it. The list holds for the default
+# pin only: an operator who sets HR_SYSTEMONE_PLAYWRIGHT_VERSION gets a warning, since another
+# Playwright can ask for other packages and its Chromium would then fail at launch, not at install.
+CHROMIUM_LIBS_PLAYWRIGHT=1.64.1
+CHROMIUM_LIBS=(
+  # tools
+  xvfb fonts-noto-color-emoji fonts-unifont libfontconfig1 libfreetype6 xfonts-scalable fonts-liberation
+  fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf fonts-freefont-ttf
+  # chromium
+  libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3
+  libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1
+  libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
+)
 CHROMIUM_LIBS_MARK=/var/lib/harnessrouter/chromium-libs
 chromium_libs() {
   [ -f "$CHROMIUM_LIBS_MARK" ] && return 0
-  echo "[harnessrouter]   installing the system libraries Chromium links against (this container)…"
-  "$TOOLS/systemone-venv/bin/playwright" install-deps chromium >/dev/null 2>&1 || return 1
+  [ "$SYSTEMONE_PLAYWRIGHT_PIN" = "$CHROMIUM_LIBS_PLAYWRIGHT" ] \
+    || echo "[harnessrouter]   WARNING: HR_SYSTEMONE_PLAYWRIGHT_VERSION=$SYSTEMONE_PLAYWRIGHT_PIN, but the browser library list is Playwright $CHROMIUM_LIBS_PLAYWRIGHT's; if that version asks for other packages, its Chromium will fail at launch until CHROMIUM_LIBS in docker/entrypoint.sh is updated"
+  echo "[harnessrouter]   installing the system libraries Chromium links against (this container: ${#CHROMIUM_LIBS[@]} Debian packages, by apt)…"
+  # apt's lists are fetched for this and removed after, as the image's own apt steps do; its output
+  # is shown only when it fails, the way try_install shows an installer's.
+  if ! cl_out="$(DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 \
+                 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${CHROMIUM_LIBS[@]}" 2>&1)"; then
+    printf '%s\n' "$cl_out" | tail -n 8 | sed 's/^/[harnessrouter]     /'
+    rm -rf /var/lib/apt/lists/*; return 1
+  fi
+  rm -rf /var/lib/apt/lists/*
   mkdir -p "$(dirname "$CHROMIUM_LIBS_MARK")" && : > "$CHROMIUM_LIBS_MARK"
+}
+# The Chromium builds the venv's Playwright launches, from its own browsers.json, read as text (nothing
+# of the venv runs here), as their directory names under PLAYWRIGHT_BROWSERS_PATH. Checking for any
+# chromium-* was not enough: a pin change installs a new Playwright beside the old build, the new build
+# was never downloaded, and every volume that came through the 1.64.1 pin (#646) had a System One
+# browser that failed at launch ("Executable doesn't exist at .../chromium_headless_shell-1248/...").
+# Root reads it, during a first install while the venv is still the install uid's: so the image's own
+# interpreter by its path, and only a regular file of at most 1 MB reached through no link (not a
+# FIFO that would hang the start, not a link to another file); what it prints is names, never content.
+chromium_builds() {
+  "$PY" -I -c '
+import glob, json, os, re, stat, sys
+for f in glob.glob(sys.argv[1] + "/lib/python3*/site-packages/playwright/driver/package/browsers.json"):
+    if os.path.realpath(f) != os.path.join(os.path.realpath(sys.argv[1]), os.path.relpath(f, sys.argv[1])):
+        continue                                   # a link somewhere inside the venv on the way to it
+    try:
+        fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        continue
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_size > 1 << 20:
+            continue
+        data = fh.read(1 << 20)
+    try:
+        doc = json.loads(data)
+    except ValueError:
+        continue
+    for b in doc.get("browsers") or [] if isinstance(doc, dict) else []:
+        n, r = (str(b.get("name") or ""), str(b.get("revision") or "")) if isinstance(b, dict) else ("", "")
+        if n in ("chromium", "chromium-headless-shell") and re.fullmatch(r"[0-9]{1,8}", r):
+            print(n.replace("-", "_") + "-" + r)
+' "$TOOLS/systemone-venv" 2>/dev/null
+}
+# Every one of them there and downloaded to the end: Playwright writes INSTALLATION_COMPLETE last.
+chromium_current() {
+  local want d
+  want="$(chromium_builds)"; [ -n "$want" ] || return 1
+  for d in $want; do [ -f "$PLAYWRIGHT_BROWSERS_PATH/$d/INSTALLATION_COMPLETE" ] || return 1; done
+}
+# Playwright's driver downloads them, as the install uid, into a directory that uid holds meanwhile;
+# the builds an earlier Playwright left go with the directory.
+chromium_download() {
+  echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
+  rm -rf "$PLAYWRIGHT_BROWSERS_PATH"; mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && iu_take "$PLAYWRIGHT_BROWSERS_PATH" \
+    && iu "$TOOLS/systemone-venv/bin/playwright" install chromium && iu_give "$PLAYWRIGHT_BROWSERS_PATH" \
+    || { iu_drop "$PLAYWRIGHT_BROWSERS_PATH"; return 1; }
 }
 install_systemone() {
   # A failed install leaves NO venv behind: the executable is the definition of installed, and a
   # venv whose pip step failed reported the base as available on a box where it could not run.
   install_pinned_venv systemone "${HR_SYSTEMONE_BASE_PYTHON:-python3}" "$TOOLS/systemone-venv" systemone-harness "${SYSTEMONE_REQS[@]}" \
     || { rm -rf "$TOOLS/systemone-venv"; return 1; }
-  if ! ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
-    echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
-    # Playwright's driver downloads it, as the install uid, into a directory that uid holds meanwhile.
-    rm -rf "$PLAYWRIGHT_BROWSERS_PATH"; mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && iu_take "$PLAYWRIGHT_BROWSERS_PATH" \
-      && iu "$TOOLS/systemone-venv/bin/playwright" install chromium && iu_give "$PLAYWRIGHT_BROWSERS_PATH" \
-      || { iu_drop "$PLAYWRIGHT_BROWSERS_PATH"; rm -rf "$TOOLS/systemone-venv"; return 1; }
-  fi
+  chromium_current || chromium_download || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   chromium_libs || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   # Prove the loop imports and the version is the pin, the way every other installer here proves
   # its executable: an install that cannot import is a base that dies on its first turn.
@@ -2013,7 +2098,7 @@ install_backends() {
   mkdir -p "$TOOLS"
   # The npm bases' $TOOLS/bin/<cmd> is a link npm_link_bins makes (or, for an override, the one npm -g
   # makes); install_base checks the executable either way.
-  # Claude Code: a model can require a minimum CLI (Claude Opus 5.5 needs 2.1.280; the API refuses
+  # Claude Code: a model can require a minimum CLI (Claude Opus 5.5 needs 2.1.280, Claude Fable 5.2 2.1.290; the API refuses
   # older ones), and a volume that installed the CLI once, months ago, would otherwise never learn it.
   if wanted claude && ! current claude "$(npm_ident claude "$CLAUDE_SPEC")"; then
     echo "[harnessrouter] installing Claude Code $CLAUDE_CODE_VERSION (Anthropic's terms apply)…"
@@ -2066,6 +2151,14 @@ install_backends() {
     install_base systemone "System One Harness" install_systemone || true
   fi
   if wanted systemone && [ -x "$TOOLS/systemone-venv/bin/playwright" ]; then
+    # A volume whose Playwright moved on without its browser (a pin change before chromium_current) gets
+    # the build it launches here, on the next start; a current one costs one read of browsers.json. The
+    # download runs as System One's install uid (install_as_uid), outside install_base: a failure here
+    # leaves the base and its stamp as they are, and the next start tries again.
+    chromium_current || try_install "System One's Chromium" install_as_uid systemone chromium_download \
+      || echo "[harnessrouter]   WARNING: the System One base's Chromium could not be downloaded; its browser environments will not start until it is (retried on the next start)"
+    # Root runs apt-get here, so it must resolve on the base PATH: this block stays above the line that
+    # puts $TOOLS/bin, a tree the install uids fill, ahead of it (export PATH="$TOOLS/bin:$PATH").
     chromium_libs || echo "[harnessrouter]   WARNING: Chromium's system libraries could not be installed; the System One base's browser environments will not start until they are (retried on the next start)"
   fi
   if wanted cheetahclaws && ! current cheetahclaws "$(pinned_ident cheetahclaws "${CHEETAHCLAWS_REQS[@]}")"; then
@@ -2226,8 +2319,24 @@ os.replace(tmp, path)
 PYEOF
   }
   write_runner_state starting 0 0 starting ""
+RUNNER_SECRET_ENV='^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$|_KEY$|_PASS(WORD)?$|_PWD$|_CREDENTIALS?$|_DSN$'
+RUNNER_URL_CREDENTIAL='://[^/@[:space:]:]*:[^/@[:space:]]*@'
+RUNNER_PROXY_ENV='^(HTTP|HTTPS|ALL|FTP|NO)_PROXY$'
+runner_env_only() {
+  local v
+  shopt -s nocasematch
+  for v in $(compgen -e); do
+    if [[ $v =~ $RUNNER_SECRET_ENV ]]; then export -n "$v"; continue; fi
+    # a password in a URL is a secret whatever the name; a proxy's stays (agents need it to reach anything)
+    if [[ ${!v} =~ $RUNNER_URL_CREDENTIAL && ! $v =~ $RUNNER_PROXY_ENV ]]; then export -n "$v"; fi
+  done
+  shopt -u nocasematch
+}
+RUNNER_KEY_DIR=/run/harnessrouter
+install -d -m 700 -o root -g root "$RUNNER_KEY_DIR"
+( umask 077; printf '%s' "$HARNESS_INTERNAL_KEY" > "$RUNNER_KEY_DIR/internal-key" )
   RUNNER_HOST="${HR_RUNNER_BIND:-$([ "$ROLE" = "runner" ] && echo 0.0.0.0 || echo 127.0.0.1)}"
-  ( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
+  ( cd /app/runner && runner_env_only && exec env HR_INTERNAL_KEY_FILE="$RUNNER_KEY_DIR/internal-key" \
       HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host "$RUNNER_HOST" --port 8081 --log-level warning ) &
   pids+=($!)
   write_runner_state installing 0 0 installing_backends ""
@@ -2241,7 +2350,7 @@ if [ -d "$TOOLS/venv/bin" ]; then export PATH="$TOOLS/venv/bin:$PATH"; fi
 export NODE_PATH="$TOOLS/lib/node_modules"
 kill "${pids[0]}"
 wait "${pids[0]}" || true
-( cd /app/runner && exec env -u HR_AUTH_USER -u HR_AUTH_PASSWORD -u HR_AUTH_STORE -u HR_SECRET_KEY \
+( cd /app/runner && runner_env_only && exec env HR_INTERNAL_KEY_FILE="$RUNNER_KEY_DIR/internal-key" \
     HR_SESSION_UIDS=1 "$PY" -m uvicorn server:app --host "$RUNNER_HOST" --port 8081 --log-level warning ) &
 pids[0]=$!
 fi

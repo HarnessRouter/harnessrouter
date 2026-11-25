@@ -18,6 +18,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [Configuration](#configuration)
 - [Using the API](#using-the-api)
 - [Running on a cloud VM](#running-on-a-cloud-vm)
+- [Hard links on the host](#hard-links-on-the-host)
 - [Putting it on a public URL](#putting-it-on-a-public-url)
 - [Architecture](#architecture)
 - [Resources](#resources)
@@ -103,9 +104,10 @@ The agent CLIs are installed the same way. On the first start, root downloads ea
 it against a version and a digest written into the image. Anything that runs a downloaded package's
 own code runs as a separate user for that agent alone: npm or pip filling its folder, an install
 script, the checks that it works. When the install finishes, nothing of that user is left running,
-and the folder belongs to root again. One step still runs as root: the system libraries for the
-System One agent's browser, which Playwright installs with apt. An install can reach the network,
-as it must to download, so on a cloud VM block the metadata address as
+and the folder belongs to root again. Root itself installs one thing: the system libraries for the
+System One agent's browser, with apt, from a package list written into the image, so what root runs
+there is Debian's and nothing a download brought. An install can reach the network, as it must to
+download, so on a cloud VM block the metadata address as
 [Running on a cloud VM](#running-on-a-cloud-vm) shows; that covers the agents too.
 
 No extra privilege is granted to get there: no `--privileged`, no `--cap-add`, no custom seccomp
@@ -576,6 +578,7 @@ An agent runs in its own session, under its own user, and can read that session'
 
 - **Provider keys and remote MCP servers:** the server keeps the key, the server's address and its headers. The session gets a local address and a token that stops working when the turn ends, so nothing in its environment, folder or checkpoint still works afterwards.
 - **Your instance's own secrets:** the key that protects stored credentials, and the console password, can't be read by a session.
+- **A stored token goes only where it was stored for:** the server whose address it was stored with (its host and port), or a harness's variables when it was stored for them, and only to harnesses in the workspace it was stored in. `PUT /v1/mcp-secrets/{ref}` takes `{"token", "url"}` for a server or `{"token", "env": true}` for a variable, and a store should name one of them: stored with neither, a token is bound where a harness in its workspace first names it, and the log says so. To use a token for another server, store it again with that server's address. Storing a token again binds it to the workspace it is stored from, so harnesses in other workspaces stop getting it; the answer's `other_workspaces_dropped` counts them. A token a harness names at a request-supplied address, or in a `$headers.` value, is never read, and a harness that names a stored token for a server whose address is filled in per request can't be saved until that server gets a fixed address or its token becomes a `$headers.` value. Tokens that harnesses named before this release are bound at start to where each one is named; one named in more than one place is listed by its places in the log at every start until it is stored again, and `HR_MCP_BIND_STRICT=1` holds such a token, so it is sent nowhere, instead of binding it. One named only at an address filled in per task is held until it is stored again with its server's address.
 
 Some things can't be hidden from it:
 
@@ -972,11 +975,13 @@ networks:
 
 Each agent you create from then on gets its own memory, named after it, on the engine that suits what it does: separate facts for each person for an agent that serves people, a graph for one that tracks things that change, lessons for one that should get better at its work, notes for one whose memory people read, and none for one that only transforms what it's given. The console shows the choice and the reason, and **Change** picks another engine or none. After a task, what mattered in it is kept, and the agent recalls it before answering the next time.
 
-**Separately for each person.** For an agent that serves people, memory is kept separately for each person, identified by the task's `user`. Send your own authenticated user id there, never text the person types, because the `user` decides whose memory a task reads. A task sent with an API key and no `user` runs without memory.
+**Separately for each person.** For an agent that serves people, memory is kept separately for each person, identified by the task's `user`. Send your own authenticated user id there, never text the person types, because the `user` decides whose memory a task reads. A task sent with an API key and no `user` runs without memory. A person who talks to the agent in the console is identified by their sign-in name, so a task whose `user` is that same name reads and writes the memory they keep there with that agent.
 
-**Personal data.** The user ids you send are stored with each person's memory, as data you hold about them. When someone asks you to delete what an agent remembers about them, delete their memory: in the console, open the agent's memory, where each person's memory is listed under it, and delete theirs; or with the API, `DELETE /v1/memories/{id}`, where `GET /v1/memories?ancestor=<the agent's memory id>` lists each person's memory and its id. Deleting a memory deletes what its engine holds for it too, so do it while the engines run.
+**Personal data.** The user ids you send are stored with each person's memory, as data you hold about them. When someone asks you to delete what an agent remembers about them, delete their memory: in the console, open the agent's memory, where each person's memory is listed under it, and delete theirs; or with the API, `DELETE /v1/memories/{id}`, where `GET /v1/memories?ancestor=<the agent's memory id>` lists each person's memory and its id. Deleting a memory removes it from HarnessRouter and from its engine's store, so nothing recalls or shows it again; do it while the engines run. Mem0 and ReMe also keep copies of their own that deleting doesn't reach yet (Mem0 a history log with each fact's words, ReMe the conversations records were drawn from): [What deleting leaves behind](memories-engines.md#what-deleting-leaves-behind) says where they are and how to clear them.
 
-**When an agent is deleted.** Its memory, and each person's memory, are kept with it for the 30 days a deleted agent can be restored, so a restored agent comes back with everything it remembered. When the agent is removed for good, they are deleted with it, unless another agent still uses that memory: then it stays until the last agent using it is removed too. A deleted agent inside its 30 days still counts as using the memory it used. They are deleted as whoever deleted the agent, so a memory that person may not delete stays, for whoever manages it. One daily sweep deletes at most 25 memories, and the next one goes on where it stopped. Keep the engines running: deleting a memory deletes what its engine holds for it.
+**When an agent is deleted.** Its memory, and each person's memory, are kept with it for the 30 days a deleted agent can be restored, so a restored agent comes back with everything it remembered. When the agent is removed for good, they are deleted with it, unless another agent still uses that memory: then it stays until the last agent using it is removed too. A deleted agent inside its 30 days still counts as using the memory it used. They are deleted as whoever deleted the agent, so a memory that person may not delete stays, for whoever manages it. One daily sweep deletes at most 25 memories, and the next one goes on where it stopped. Keep the engines running: deleting a memory removes it from its engine's store, apart from the copies [Mem0 and ReMe keep](memories-engines.md#what-deleting-leaves-behind).
+
+**Memories made with an API key.** A key made for no particular person owns the memories it creates: it reads, adds to and deletes them. Other keys and people in the workspace don't reach them unless the key grants them access (`POST /v1/memories/{id}/grants`). If you'll revoke or rotate such a key, first grant its memories to the person who should keep them; after that, only the grants reach them. A key made for a person creates memories as that person, as before.
 
 **More than one replica.** Which memories an agent or a person may reach is read once and kept for 3 seconds on each replica. If you run more than one HarnessRouter replica, set `HR_MEMORY_GRANTS_TTL_S=0` on every replica, so that access taken away on one replica is refused on the others at once, not up to 3 seconds later.
 
@@ -1231,7 +1236,10 @@ also removes the hosted tools behind it. Read the harness first, then send back 
 `system_prompt`, `default_model`, `mcp_servers`, `skills`, `disabled_tools`, `additional_headers`,
 `max_step`, `timeout_seconds` and `reasoning_effort` (the write body uses these snake_case names; the record you read
 uses camelCase) with the new package appended to `plugins`. Installed plugins round-trip as
-`{name, enabled, blob}`, so send those back unchanged and add the new one beside them. A harness's
+`{name, enabled, blob}`, so send those back unchanged and add the new one beside them. The read
+answers an `ETag`: send it back as `If-Match` on the PUT, and if the harness changed since your read
+(an edit in the console, another script) the PUT is refused with `412` `precondition_failed` and
+nothing is written, so read it again and redo the change instead of overwriting theirs. A harness's
 `source` (where it came from, as its create said, for example the demo run the console's Start saved
 it from) is not part of that configuration: it is kept as created, whatever a PUT sends.
 
@@ -1383,6 +1391,19 @@ sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
 ```
 
 Make the rule permanent the way your distribution does (for example `netfilter-persistent save`), and don't give the VM a role it doesn't need. Bedrock or Vertex through an instance role also goes over this path: with the block in place, give the connection its own credential instead, which the relay holds for the turn.
+
+## Hard links on the host
+
+Each session runs under its own user, and that is what keeps one session out of another's files. The host's kernel decides whether a user may make a hard link to a file it doesn't own. When it allows that, the separation is weaker than it should be. Set `fs.protected_hardlinks` to 1 on the host:
+
+```bash
+sudo sysctl -w fs.protected_hardlinks=1
+echo 'fs.protected_hardlinks = 1' | sudo tee /etc/sysctl.d/90-protected-hardlinks.conf
+```
+
+The first line changes it now; the file in `/etc/sysctl.d` keeps it after a reboot. Most distributions that use systemd already set it to 1. The container checks at start and prints a warning when it is 0.
+
+A checkpoint reads a session's folder as that session, so a file the session can't read is left out of it, and the runner's log names it. If the log names a file you know is the user's own, check that it has a single name (`stat -c %h` prints 1) and is inside that session's workspace, then give it to the session's user with `chown`; the next checkpoint takes it.
 
 ## Putting it on a public URL
 

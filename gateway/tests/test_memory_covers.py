@@ -283,9 +283,10 @@ def test_the_key_is_the_organization_and_the_memory_alone(people):
     key = memory_plane.cover_key(ORG, mid)
     assert key == f"memory-covers/{hashlib.sha256(ORG.encode()).hexdigest()[:32]}/{mid}"
     assert memory_plane.cover_key(OTHER, mid) != key
-    # nothing the client sends moves it
-    r = _put(ada, mid, PNG, sig="k", **{"content-disposition": 'attachment; filename="../../x"', "x-cover-key": "../x",
-                                        "x-harness-workspace": "elsewhere"})
+    # nothing the client sends moves it; from another workspace, the memory isn't there at all
+    r = _put(ada, mid, PNG, sig="k", **{"x-harness-workspace": "elsewhere"})
+    assert r.status_code == 404 and _code(r) == "memory_not_found"
+    r = _put(ada, mid, PNG, sig="k", **{"content-disposition": 'attachment; filename="../../x"', "x-cover-key": "../x"})
     assert r.status_code == 200
     assert _kept(mid) is not None
     root = os.path.join(str(app.BACKING.blob._root), app.BLOB_KB)       # the instance's own file store, self-hosted

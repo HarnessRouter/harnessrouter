@@ -46,7 +46,7 @@ describe('the memory line', () => {
   afterEach(() => { act(() => root.unmount()); el.remove(); });
   const OWN = { id: 'hmem_a', name: 'ux-walk-support', engine: 'mem0', scope: 'per_user', reason: 'It serves people, so it keeps each person’s facts and preferences, separately per person.' };
 
-  test('saved: the engine and why, read from the setup, and Change offers the four engines and None', async () => {
+  test('saved: the engine and why, read from the harness, and Change offers the four engines and None', async () => {
     let mem: unknown = OWN;
     const s = service({
       'GET /v1/harnesses/chrn_t': () => ({ id: 'chrn_t', memory: mem }),
@@ -88,7 +88,7 @@ describe('the memory line', () => {
     expect(el.querySelector('.am-line')?.textContent).toBe('Memory: None, no memory engine is running here; one command starts them: deploy/memories/up.sh');
   });
 
-  test('before the setup exists, the line is what the build proposes, with nothing to change yet', async () => {
+  test('before the harness exists, the line is what the build proposes, with nothing to change yet', async () => {
     await act(async () => { root.render(<Assembly s={{ cfg: { ...CFG, memory: { memory: { ...OWN, engine: 'graphiti', scope: 'shared', reason: 'It tracks people, things and how they relate over time.' }, reason: '' } }, savedAt: null, plugins: {}, done: false }} />); });
     expect(el.querySelector('.am-line')?.textContent).toBe('Memory: Graphiti, it tracks people, things and how they relate over time.');
     expect(el.querySelector('.am-line button')).toBeNull();

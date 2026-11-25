@@ -122,7 +122,7 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
         if (why) { r.failed.push({ id, why }); continue; }
         // each copy keeps its own stored token, under its own id
         const mid = newMcpId();
-        const auth = await authFor(mid, m.token, undefined);
+        const auth = await authFor(mid, m.token, undefined, m.url);
         await saveCustom({ ...h, mcpServers: [...(h.mcpServers || []), { id: mid, name: m.name, url: m.url, transport: 'http', enabled: true, ...(auth ? { auth } : {}) }] });
         r.done.push(id);
       } catch { r.failed.push({ id, why: '' }); }
@@ -155,7 +155,7 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
         const out: McpServer[] = [];
         for (const m of list) {
           if (!mine.includes(m)) { out.push(m); continue; }
-          const auth = await authFor(m.id, v.token, m.auth);
+          const auth = await authFor(m.id, v.token, m.auth, v.url);
           const kept: McpServer = { ...m, name: v.name, url: v.url };
           if (auth) kept.auth = auth; else delete kept.auth;
           out.push(kept);
@@ -163,7 +163,7 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
         return out;
       }
       const id = newMcpId();
-      const auth = await authFor(id, v.token, borrowed);
+      const auth = await authFor(id, v.token, borrowed, v.url);
       return [...list, { id, name: v.name, url: v.url, transport: 'http', enabled: true, ...(auth ? { auth } : {}) }];
     });
     await reload();
@@ -171,7 +171,7 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
       return `It could not be saved to ${sayNames(r.failed)}${r.done.length ? `. ${sayNames(r.done)} ${r.done.length === 1 ? 'has' : 'have'} it now` : ''}. Try again.`;
     }
     const more = v.to.filter((id) => !users.includes(id)).length, dropped = users.filter((id) => !v.to.includes(id)).length;
-    toast(more || dropped ? `${v.name} saved. ${v.to.length === 1 ? '1 setup uses' : `${v.to.length} setups use`} it.` : `${v.name} saved.`);
+    toast(more || dropped ? `${v.name} saved. ${v.to.length === 1 ? '1 harness uses' : `${v.to.length} harnesses use`} it.` : `${v.name} saved.`);
     setOpen(null);
     return '';
   }

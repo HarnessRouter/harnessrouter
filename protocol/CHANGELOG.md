@@ -2,6 +2,56 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.19.post11 (2026-11-17)
+
+T-15 checks the addition below. On a server that reports `resume`, it requires `409
+resume_not_pending` for a resume chained on a response that is not interrupted, and `400
+invalid_input` for a resume with no `previous_response_id`, with another item beside it, or twice, and
+that none of them changes the response named. A black-box suite cannot make a server restart, so
+that a resume of a real interrupted turn is single-use, idempotent and honoured on a lost workspace
+is not measured here; the reference server's tests cover it. Every verdict a server had before is
+unchanged: T-15 skips on a server without the capability, and nothing checks what such a server does
+with the item.
+
+## 2026-10-19, addition: an interrupted turn can be resumed (capability `resume`, #673)
+
+A server ends a turn itself when it restarts or drains, and a client had no way to say "carry on
+from there", nor to learn what the cut left. Such a response is **interrupted**, reported `failed`
+with `error.detail.reason` `interrupted` as before, and now also says what is left:
+`error.detail.workspace` is `kept` (the working directory is as the turn left it), `checkpoint` (as of
+the last saved tool step) or `lost`, and `error.detail.effects_may_repeat` is `true` when the step that
+was running may run again, since a checkpoint cannot tell whether a tool's outside effect happened.
+On a server that reports `resume`, a `resume` item in `input`, alone, chained on that response with
+`previous_response_id`, continues the session and tells the harness, in the server's own words, that
+the last turn was cut off; an optional `note` reaches it as the person's words
+([Tasks §3.3](versions/2026-10-19/tasks.md#33-resuming-an-interrupted-turn)). A resume is single-use
+and explicit: a response that is not interrupted, or that a later task has already resumed or passed
+over, is `409` `resume_not_pending`; a resume with no `previous_response_id`, another item beside it
+or a second resume is `400` `invalid_input`; an `Idempotency-Key` is honoured as on any task; and a
+`lost` workspace is still resumable, from the conversation alone. A client sends the item only to a
+server that reports the capability; a server without it should refuse the item `400` `invalid_input`
+rather than read it as an empty task, but is not required to, since that would tighten what an
+existing server accepts. Under
+[VERSIONING](VERSIONING.md) a new optional input item, new response fields and a new error code fit
+within a version. Not done here: moving an interrupted turn from `failed` to `incomplete` with
+`incomplete_details.reason` `interrupted`, which changes the class a client acts on and waits for the
+next dated version; `workspace` and `effects_may_repeat` then move to `incomplete_details`.
+
+## 2026-10-19, addition: an update can name the version it was built from (ETag, If-Match)
+
+`PUT /v1/harnesses/{harness_id}` replaces the whole configuration, so a client that builds its body
+from a read (an app applying the copy of the harness it keeps, an upgrade step) silently overwrote
+whatever changed between its read and its write. A server MAY now answer a harness's read and
+update with an `ETag`, the harness's version, and one that does MUST honour `If-Match` on that
+harness's update ([Harnesses §5.2](versions/2026-10-19/harnesses.md#52-update)): a version that is no
+longer current is refused `412` `precondition_failed` and nothing is written; `*` matches the harness
+as it is; an update without `If-Match` replaces as before. The precondition is judged after scope
+(another caller's harness is still `404`) and before the body. Under [VERSIONING](VERSIONING.md) an
+optional request header and a response header fit within a version: a server that sends no `ETag`
+is unchanged, and a client learns support from the `ETag` it reads rather than from a capability.
+`412` joins `invalid_request_error`'s statuses, and the code is unprefixed on the precedent of
+`idempotency_key_reused`, as a code this specification now covers.
+
 ## Conformance suite 2026.10.19.post6 (2026-11-04)
 
 B-01…B-06 check the addition below on a server that reports `session_branching`: the first

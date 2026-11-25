@@ -181,7 +181,7 @@ export default function SetupPage() {
   // a task of another setup, or one that is gone, lets go of the address; a read that failed says so
   // in the task's place, with Try again
   const linked = useLinkedTask(id, testSid, list, !!testSid && mine.current.has(testSid), () => {
-    toast('That task is not in this setup.');
+    toast('That task is not in this harness.');
     newTest();
   });
   // Connect your app: the design's sheet, over whichever tab is open

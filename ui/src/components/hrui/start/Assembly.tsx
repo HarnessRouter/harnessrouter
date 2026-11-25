@@ -153,13 +153,13 @@ export function Assembly({ s }: { s: AssemblyState }) {
       note={s.done ? 'Not connected' : 'Plugin'} />);
   });
   return (
-    <div className="bs-wrap"><section className={`bs bs-compact bs-save ${s.done ? 'done' : 'building'}`} aria-label="Your setup">
+    <div className="bs-wrap"><section className={`bs bs-compact bs-save ${s.done ? 'done' : 'building'}`} aria-label="Your harness">
       <div className="bs-h">
         <span className="bs-ic" aria-hidden="true">
           <Markup style={{ display: 'block' }} html={slabIcon()} />
           {s.done ? <Markup className="bs-done" html={CHECK_SVG} /> : null}
         </span>
-        <span className="bs-tt" role="status"><span className="bs-k">{cfg.name}</span><b>{s.done ? 'Setup saved.' : 'Saving your setup…'}</b></span>
+        <span className="bs-tt" role="status"><span className="bs-k">{cfg.name}</span><b>{s.done ? 'Harness saved.' : 'Saving your harness…'}</b></span>
       </div>
       <div className="bs-board">
         <div className="bs-grid bs-g1">{g1}</div>

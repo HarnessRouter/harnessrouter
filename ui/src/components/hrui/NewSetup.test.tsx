@@ -58,7 +58,7 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('Save starts a build with the sentence and Auto as it is, then opens the page of the setup being made', async () => {
+test('Save starts a build with the sentence and Auto as it is, then opens the page of the harness being made', async () => {
   await open({ job: 'Answer support emails: look up the order, then draft a reply.' });
   expect(save().disabled).toBe(false);
   await act(async () => { save().click(); });

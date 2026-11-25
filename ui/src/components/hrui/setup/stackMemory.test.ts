@@ -46,12 +46,16 @@ test('every part is drawn in the order that keeps it behind what stands in front
   expect(svg.indexOf('data-tw="plugin"')).toBeLessThan(svg.indexOf('data-tw="memory"'));
   expect(svg.indexOf('data-tw="memory"')).toBeLessThan(svg.indexOf('data-tw="env"'));
 });
-test('it never stacks, so it can’t hide the corner behind it: more than one is a count on the brick, as any part past its stack', () => {
-  const polys = (n: number) => (brick(isoSvg(withMemories(tower(), n), 24, true), 'memory').match(/<polygon/g) || []).length;
-  expect(polys(5)).toBe(polys(1));
-  expect(brick(isoSvg(withMemories(tower(), 1), 24, true), 'memory')).not.toContain('part-n-lbl');
-  expect(brick(isoSvg(withMemories(tower(), 2), 24, true), 'memory')).toContain('>2<');
-  expect(brick(isoSvg(tower({ mcp: 5 }), 24, true), 'mcp')).toContain('>5<');
+test('it stacks like every part: a brick each up to three, then the count on the top brick (Richard 11-10)', () => {
+  const polys = (svg: string, k: string) => (brick(svg, k).match(/<polygon/g) || []).length;
+  const mem = (n: number) => isoSvg(withMemories(tower(), n), 24, true), mcp = (n: number) => isoSvg(tower({ mcp: n }), 24, true);
+  for (const n of [1, 2, 3, 4, 6]) expect(polys(mem(n), 'memory')).toBe(polys(mcp(n), 'mcp'));
+  expect(polys(mem(2), 'memory')).toBeGreaterThan(polys(mem(1), 'memory'));
+  expect(polys(mem(3), 'memory')).toBeGreaterThan(polys(mem(2), 'memory'));
+  expect(polys(mem(5), 'memory')).toBe(polys(mem(3), 'memory'));
+  for (const n of [1, 2, 3]) expect(brick(mem(n), 'memory')).not.toContain('part-n-lbl');
+  expect(brick(mem(4), 'memory')).toContain('>4<');
+  expect(brick(mcp(5), 'mcp')).toContain('>5<');
 });
 test('what Settings reads now overrides the list, down to none', () => {
   const had = withMemories(tower(), 2);
@@ -59,7 +63,7 @@ test('what Settings reads now overrides the list, down to none', () => {
   expect(isoSvg(now, 24, true)).not.toContain('data-tw="memory"');
   expect(now.st.memory).toBe('empty');
 });
-test('a setup’s row carries the count the list read, and only that', () => {
+test('a harness’s row carries the count the list read, and only that', () => {
   const h = (memories?: { count: number }) => ({ id: 'h', name: 'x', base: 'claude-code', baseLabel: 'x', defaultModel: 'm', systemPrompt: '', mcpServers: [{ id: 'mcp.memories', name: 'memories', url: 'http://x/v1/mcp/memories', enabled: true }], skills: [], plugins: [], ...(memories ? { memories } : {}) });
   const row = (m?: { count: number }) => rowOf(h(m) as never, 'x', [], false, undefined, null, Date.now());
   expect(row({ count: 2 }).tower.parts.memory).toBe(2);

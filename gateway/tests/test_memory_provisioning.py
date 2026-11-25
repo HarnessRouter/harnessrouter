@@ -277,7 +277,8 @@ def test_the_operator_sees_each_persons_memory_by_who_they_are(client, per_perso
     kids = client.get("/v1/memories", params={"parent": shared}, headers=ADA).json()["data"]
     people = {k["end_user"]: k for k in kids}
     assert "dana@guests.example" in people and people["dana@guests.example"]["restricted"] is True
-    assert people["dana@guests.example"]["name"] == memory_plane.end_user_hash("dana@guests.example")
+    # named after the person (Richard 11-10), not a hash that read as an empty stranger
+    assert people["dana@guests.example"]["name"] == "dana@guests.example"
     # someone else holds nothing on a person's memory: it is not there for them
     assert client.get(f"/v1/memories/{people['dana@guests.example']['id']}", headers=BEN).status_code == 404
 
@@ -303,7 +304,7 @@ def test_a_task_from_an_api_key_that_names_nobody_runs_without_memory_and_says_s
     asked = len(stub.calls)
     run(gw._memories_observe(ORG, hid, sid, hv, {"user_text": "Remember me.", "model": "m"}, "Sure."))
     assert len(stub.calls) == asked
-    section, _ = run(gw.memory_tools.doc_section(gw.memory_local.Local(ORG, hid, run(gw._harness_memories(hid, ORG, hv, sid=sid)))))
+    section, _ = run(gw.memory_tools.doc_section(gw.memory_local.Local(ORG, hid, run(gw._harness_memories(hid, ORG, hv, sid=sid)), workspace=hv.get("workspace"))))
     assert section == ""
     # and the turn's record says the same
     run(gw._resp_put("resp_skip1", {"id": "resp_skip1", "status": "completed", "output": [], "_input": [{"content": "hi"}]},
@@ -773,7 +774,7 @@ def test_a_memory_made_for_an_agent_is_taken_back_when_a_later_step_fails(client
     assert h["memory"] is None and h["memory_reason"].startswith("The memory couldn't be made just now")
     assert _live_memories() == before, "the memory made for it is gone again"
     v = run(gw._harness_vertex(h["id"]))
-    assert not v.get("memory_default") and not run(gw.memory_plane.granted(ORG, f"member:{h['id']}"))
+    assert not v.get("memory_default") and not run(gw.memory_plane.granted(ORG, f"member:{h['id']}", v.get("workspace")))
 
 
 # ── an agent's own memory: kept with it for its 30 days, then gone with it ──────────────────
@@ -961,6 +962,50 @@ def test_a_failed_read_of_the_grants_deletes_no_memory(client, monkeypatch):
     fail["label"] = None
     assert x["id"] in _sweep()["removed"]["harnesses"]
     assert _live_memories(org) == before, "the other agent holds it"
+
+
+def test_a_failed_read_of_the_memory_at_its_delete_deletes_nothing(client, monkeypatch, capsys):
+    """The sweep deletes an agent's memory as its deleter, in the memory's own workspace, read from the strict read it
+    decided on, never from a second read. A read of the memory that fails at its delete deletes nothing: the agent
+    waits for the next sweep, and the log says why."""
+    hdr = _org_of_its_own(client, "memory-unread")
+    org = hdr["x-harness-org"]
+    x = _agent(client, name="Front desk", prompt="Help each customer with returns.", headers=hdr).json()
+    mid = x["memory"]["id"]
+    before = _live_memories(org)
+    assert mid in before
+    assert client.delete(f"/v1/harnesses/{x['id']}", headers=hdr).status_code == 200
+    _past_its_30_days(x["id"])
+    g = gw.BACKING.graph
+    real = g.get
+
+    async def get(vid, label=None):
+        if vid == mid:
+            raise sqlite3.OperationalError("disk I/O error")
+        return await real(vid, label)
+    monkeypatch.setattr(g, "get", get)
+    out = _sweep()
+    assert x["id"] not in out["removed"]["harnesses"] and out["left"]["harnesses"] == gw._MEMORY_UNCHECKED
+    assert _live_memories(org) == before
+    assert f"[memories] {x['id']}: {mid} was not deleted with it, a read couldn't answer: OperationalError" in capsys.readouterr().out
+    monkeypatch.setattr(g, "get", real)
+    assert x["id"] in _sweep()["removed"]["harnesses"]
+    assert mid not in _live_memories(org)
+
+
+def test_an_agent_in_another_workspace_takes_its_memory_with_it(client):
+    """The sweep's delete acts in the memory's own workspace: an agent made in a workspace other than the default
+    still takes the memory made for it when it is removed for good."""
+    hdr = _org_of_its_own(client, "ops-agent")
+    ops = {**hdr, "x-harness-workspace": "ops"}
+    assert client.put("/v1/plugs/mem0", headers=ops, json={"secrets": {"api_key": KEY}}).json()["status"] == "connected"
+    x = _agent(client, name="On call", prompt="Help each customer with outages.", headers=ops).json()
+    mid = x["memory"]["id"]
+    assert run(gw.memory_plane._load(hdr["x-harness-org"], mid))["workspace"] == "ops"
+    assert client.delete(f"/v1/harnesses/{x['id']}", headers=ops).status_code == 200
+    _past_its_30_days(x["id"])
+    assert x["id"] in _sweep()["removed"]["harnesses"]
+    assert mid not in _live_memories(hdr["x-harness-org"])
 
 
 def test_a_failed_read_of_what_is_below_a_memory_deletes_no_memory(client, monkeypatch):
@@ -1165,6 +1210,32 @@ def test_the_builder_is_told_memory_is_the_platforms_and_its_save_provisions(cli
     assert info["engine"] == "mem0" and info["scope"] == "per_user" and v["memory_hint"] == "each guest's dietary needs"
     assert v["memory_default"] == info["id"]
     assert (info["engine"], info["scope"], v["memory_reason"]) == (said["engine"], said["scope"], said["reason"])
+
+
+
+def test_the_persons_own_goal_decides_the_memory_when_it_is_clear_whatever_the_builder_wrote(client):
+    # 2026-11-10: the same typed request got Graphiti (shared) once and Mem0 (per person) once, because the builder
+    # names the agent and words the hint afresh each time. The goal as typed is read first.
+    inv = {"bases": {"claude-code": {"name": "Claude Code", "default": "m", "models": ["m"], "skills": True, "auto": True}}}
+    goal = ("Keep a timeline of the people in my life and how we're all related: what's happening with each of my "
+            "friends and family over time, and the plans we make together.")
+    cfg = setup_builder.settle({"name": "Personal relationship updates", "instructions": "You are a personal assistant. " * 8,
+                                "example_task": "What's new with Melanie?", "memory_hint": "the user's personal preferences"},
+                               inv, "claude-code", "m", {}, goal)
+    p = {"org": ORG, "member": "ada@example.com", "workspace": ""}
+    # without the goal, the builder's words decide: kept per person
+    assert run(gw._setup_build_memory(p, cfg))["scope"] == "per_user"
+    # with it, as the build passes it: the goal decides, for the card and for the save alike. What it decides is the
+    # nature (Graphiti's) and so the scope; the engine is the best of those running here (CI runs Mem0 alone)
+    said = run(gw._setup_build_memory(p, {**cfg, "goal": goal}))
+    assert said["scope"] == "shared" and "Graphiti" in said["reason"]
+    hid = gw._rid("chrn")
+    run(gw._setup_build_save(p, {**cfg, "model": "", "goal": goal}, hid, {}))
+    v = run(gw._harness_vertex(hid))
+    info = json.loads(v["memory_info"])
+    assert (info["engine"], info["scope"]) == (said["engine"], "shared") and v["memory_hint"] == goal
+    # a goal that names nothing clearly leaves it to the builder's words, as before
+    assert gw._setup_build_hint({**cfg, "goal": "Help me out."}) == "the user's personal preferences"
 
 
 # ── the instructions ─────────────────────────────────────────────────────────────────────────
@@ -1533,3 +1604,26 @@ def test_another_organizations_engines_are_never_lent(client):
     other = {**ADA, "x-harness-org": "provorg-elsewhere", "x-harness-workspace": "ws.later"}
     h = client.post("/v1/harnesses", headers=other, json={"name": "Support replies", "base": "claude-code"}).json()
     assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+
+
+def test_a_persons_memory_named_by_a_hash_before_is_named_after_them_when_next_used(client, per_person):
+    hid, shared = per_person
+    m = run(memory_plane._load(ORG, shared))
+    who = "gil@guests.example"
+    node, _ = run(memory_plane.end_user_node(ORG, m, who))
+    # as 0.41.10 and earlier named it
+    run(gw.BACKING.graph.upsert("Memory", node["id"], {"name": memory_plane.end_user_hash(who)}))
+    memory_plane._PEOPLE.clear()
+    again, _ = run(memory_plane.end_user_node(ORG, m, who))
+    assert again["id"] == node["id"] and again["name"] == who
+    assert run(memory_plane._load(ORG, node["id"]))["name"] == who
+
+
+def test_a_persons_own_memory_says_it_is_theirs_and_no_one_elses(client, per_person):
+    hid, shared = per_person
+    m = run(memory_plane._load(ORG, shared))
+    node, _ = run(memory_plane.end_user_node(ORG, m, "ada@example.com"))     # Ada's own: she talks to it in the console
+    other, _ = run(memory_plane.end_user_node(ORG, m, "hal@guests.example"))
+    kids = {k["id"]: k for k in client.get("/v1/memories", params={"parent": shared}, headers=ADA).json()["data"]}
+    assert kids[node["id"]].get("yours") is True and "yours" not in kids[other["id"]]
+    assert "yours" not in client.get(f"/v1/memories/{shared}", headers=ADA).json()

@@ -42,7 +42,7 @@ async function show(list: TL, recorded: RecordedRow | null, o: { f?: TaskFilter;
 beforeEach(() => { el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el); });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('the recorded first task is the oldest row: its request, Recorded, when the setup was made; opening it opens it', async () => {
+test('the recorded first task is the oldest row: its request, Recorded, when the harness was made; opening it opens it', async () => {
   const onOpen = jest.fn();
   await show(listOf([card('s2'), card('s1')]), { title: REQ, at: Date.now() - 180_000, on: false, onOpen });
   const rs = rows();
@@ -90,7 +90,7 @@ test('a recording that could not be read is said at the list’s end, with Try a
   expect(retry).toHaveBeenCalledTimes(1);
 });
 
-test('a setup with no recording reads as before', async () => {
+test('a harness with no recording reads as before', async () => {
   await show(listOf([]), null);
   expect(text()).toContain('No tasks yet');
   expect(text()).not.toContain('Recorded');

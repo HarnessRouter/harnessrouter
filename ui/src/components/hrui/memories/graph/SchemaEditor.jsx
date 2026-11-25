@@ -16,13 +16,13 @@ import { kindInfo } from '../tree';
 import { StarterArt } from '../CardArt';
 import { vendorName } from '../vendors';
 import CytoscapeCanvas, { colorFor } from './CytoscapeCanvas.jsx';
-import { exploreOf, readGraph } from './adapter';
 import { I, IconByName, needsCatalog, useIconCatalog } from './graphIcons.jsx';
-import { arrive, footprint, initialLayout } from './layout';
-import { applyDrafts, cloneSchema, graphOf, heldGraph, newRelation } from './schemaDraft';
+import { arrive, footprint } from './layout';
+import { applyDrafts, cloneSchema, graphOf, newRelation } from './schemaDraft';
 import { withBuiltin } from './builtin';
 import { buildSchemaElements, schemaCaption } from './schemaElements';
-import { coverGraphOf, useCoverKeeper } from '../cover';
+import { isGraph, markHeldLooked, useCoverKeeper } from '../cover';
+import { readHeld } from './held';
 import './graph.css';
 
 const SWATCHES = [
@@ -940,24 +940,16 @@ function HeldSchema({ memory, provider, onOpenData }) {
   const [state, setState] = useState({ loading: true, failed: false, held: null, truncated: false });
   const read = useCallback(() => {
     setState((x) => ({ ...x, loading: true, failed: false }));
-    readGraph(memory.id).then((g) => {
-      const ex = exploreOf(g);
-      const held = heldGraph(ex, (k) => kindInfo(k, null));
-      held.stated = held.graph.vertex_types.some((v) => !(builtinOf(provider)?.types || []).some((t) => t.name === v.label));
-      const nodes = held.graph.vertex_types.map((v) => ({ id: v.label, ...footprint(`${typeLabel(v.label)}\n00 records`, 38) }));
-      const edges = held.graph.edge_types.flatMap((e) => e.connections.map((c) => ({ source: c.from_type, target: c.to_type })));
-      const { pos } = initialLayout(nodes, edges, { spread: 1.7 });
-      held.graph.vertex_types.forEach((v) => { const p = pos.get(v.label); v.ui.position = { x: Math.round(p.x), y: Math.round(p.y) }; });
-      // what the provider makes itself, locked, and what writers stated beside it
-      held.graph = withBuiltin(held.graph, provider);
-      setState({ loading: false, failed: false, held, truncated: !!g.truncated });
+    // what the memory holds, with what the provider makes itself beside it, locked (graph/held.ts)
+    readHeld(memory.id, provider).then((held) => {
+      markHeldLooked(memory.id, !isGraph(held.graph));
+      setState({ loading: false, failed: false, held, truncated: held.truncated });
     }).catch(() => setState({ loading: false, failed: true, held: null, truncated: false }));
   }, [memory.id, provider]);
   useEffect(() => { read(); }, [read]);
   const held = state.held;
-  // what this memory holds changes with every task; its cover is what the provider makes itself, which doesn't
-  const ownGraph = useMemo(() => coverGraphOf(null, provider), [provider]);
-  useCoverKeeper(memory, ownGraph, !state.loading);
+  // its cover is this drawing, without the counts: made again only when a kind of record or a link first appears
+  useCoverKeeper(memory, held && isGraph(held.graph) ? held.graph : null, !state.loading && !state.failed);
   // counted from the records read: where they were cut short, no count is shown rather than one too low
   const count = useCallback((key) => (held && !state.truncated && held.count[key] != null ? held.count[key] : null), [held, state.truncated]);
   return (

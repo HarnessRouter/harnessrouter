@@ -16,12 +16,12 @@ const BARS = ['components/hrui', 'app/(app)/studio'].flatMap((d) => files(join(S
   readFileSync(p, 'utf8').split('\n').map((text, i) => ({ file: relative(SRC, p), n: i + 1, text }))
     .filter((l) => /className="ag-bar[" ]/.test(l.text)));
 
-test('every setup bar is the right-aligned bar', () => {
+test('every harness bar is the right-aligned bar', () => {
   expect(BARS.length).toBeGreaterThanOrEqual(3);                           // the setup page's, its loading bar and the building page's
   expect(BARS.filter((l) => !/className="ag-bar ag-rt"/.test(l.text)).map((l) => `${l.file}:${l.n}`)).toEqual([]);
 });
 
-test('the building page\'s tabs carry the setup page\'s icons', () => {
+test('the building page\'s tabs carry the harness page\'s icons', () => {
   const build = readFileSync(join(SRC, 'components/hrui/start/BuildPage.tsx'), 'utf8');
   expect(build).toContain('{TASKS_IC}Tasks');
   expect(build).toContain('{SETTINGS_IC}Settings');

@@ -50,7 +50,7 @@ describe('a recorded first run', () => {
     }
     expect(n).toBe(DEMOS.length);
   });
-  test('the setup: what the recording ran on, its own skills saved under fresh ids, its request, without the hosted image tools', () => {
+  test('the harness: what the recording ran on, its own skills saved under fresh ids, its request, without the hosted image tools', () => {
     const c = templateOf(0, RUN, 'Hermes');
     expect(c).toMatchObject({ name: 'Product images', instructions: DEMOS[0].instr, exampleTask: RUN.request, base: 'hermes', baseName: 'Hermes', model: 'gpt-5.4' });
     expect(c?.skills).toEqual([{ id: RUN.template.skills[0].id, name: RUN.template.skills[0].name }]);
@@ -72,7 +72,7 @@ describe('a recorded first run', () => {
     expect(replaySpeed({ ...RUN, durMs: 21_700 })).toBeCloseTo(1.45, 2);
     expect(replaySpeed({ ...RUN, durMs: 14_300 })).toBe(1);
   });
-  test('a setup names the run it was saved from on its record, and its list finds that run', () => {
+  test('a harness names the run it was saved from on its record, and its list finds that run', () => {
     const mark = recordedMark({ ...RUN, ranAt: 1792378362430 });
     expect(mark).toBe('demo:0@1792378362430');
     expect(mark.length).toBeLessThanOrEqual(200);   // the record keeps 200 characters of it

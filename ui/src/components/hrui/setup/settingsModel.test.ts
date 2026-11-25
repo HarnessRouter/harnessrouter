@@ -51,7 +51,7 @@ describe('a stored secret’s reference', () => {
     for (const v of ['vault:rotate', 'vault:harness-conn-x', 'region']) expect(showRef(v)).toBe(v);
   });
 
-  it('shows a setup’s variables in the words a person types', () => {
+  it('shows a harness’s variables in the words a person types', () => {
     const h = { name: 'h', env: { DEPLOY: 'vault:harness-mcp-deploy', MODE: 'secret:rotate', OLD: 'vault:rotate' } } as unknown as CustomHarness;
     expect(cfgOf(h).vars).toEqual([
       { name: 'DEPLOY', value: 'secret:harness-mcp-deploy' }, { name: 'MODE', value: 'secret:rotate' }, { name: 'OLD', value: 'vault:rotate' },

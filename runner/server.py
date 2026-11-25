@@ -243,7 +243,7 @@ if _SESSION_UIDS:
     # _fs_as changes a thread's filesystem uid and gid. Supplementary groups stay the process's, and root's hold
     # group 0, so inside that scope a link the session planted still reached whatever group 0 could write. Root
     # needs none of them (its capabilities decide outside the scope), and every session process is given its own
-    # list (_as_session).
+    # list (_in_session, through setpriv).
     os.setgroups([])
     _secured = environments.secure_store()   # environments from before per-environment groups
     if _secured:
@@ -255,8 +255,38 @@ if _SESSION_UIDS:
 # bedrock or vertex turn reaches its provider through the relay, see _bedrock_relay_route).
 _SECRET_ENV = re.compile(r"^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$"
                          r"|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD"
-                         r"|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$", re.I)
-_INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
+                         r"|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$"
+                         # and the shapes an operator's own names take: FOO_KEY, DB_PASS, SMTP_PWD,
+                         # X_CREDENTIALS, SENTRY_DSN (docker/entrypoint.sh holds the same list)
+                         r"|_KEY$|_PASS(WORD)?$|_PWD$|_CREDENTIALS?$|_DSN$", re.I)
+# A value that carries a password in a URL (DATABASE_URL=postgres://user:pass@host/db) is a secret
+# whatever its name. A proxy's is kept: an agent behind an authenticating proxy needs it to reach
+# anything, and the operator put it there for exactly that.
+_URL_CREDENTIAL = re.compile(r"://[^/@\s:]*:[^/@\s]*@")
+_PROXY_ENV = re.compile(r"^(HTTP|HTTPS|ALL|FTP|NO)_PROXY$", re.I)
+
+
+def _secret_env(name: str, value: str) -> bool:
+    return bool(_SECRET_ENV.search(name)) or (bool(_URL_CREDENTIAL.search(value or "")) and not _PROXY_ENV.match(name))
+def _read_internal_key() -> str:
+    """The internal key the gateway signs its calls with. The image's entrypoint hands it over in a
+    root-only file (HR_INTERNAL_KEY_FILE) and starts the runner with no secret in its environment.
+    A file that was named and cannot be read stops the runner, rather than leaving its routes
+    without a key."""
+    path = os.environ.get("HR_INTERNAL_KEY_FILE", "")
+    if not path:
+        return os.environ.get("HARNESS_INTERNAL_KEY", "")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            key = fh.read().strip()
+    except OSError as e:
+        raise RuntimeError(f"HR_INTERNAL_KEY_FILE names {path}, which cannot be read: {e.strerror}") from None
+    if not key:
+        raise RuntimeError(f"HR_INTERNAL_KEY_FILE names {path}, which is empty")
+    return key
+
+
+_INTERNAL_KEY = _read_internal_key()
 _uid_lock = threading.Lock()
 
 # How long an untouched session workspace is kept. Sessions are resumable from their checkpoint,
@@ -350,16 +380,33 @@ def _session_uid(ws: str) -> int | None:
     return uid if _SESSION_UID_BASE <= uid < _SESSION_UID_BASE + _SESSION_UID_SPAN else None
 
 
-def _as_session(ws: str, env: dict | None = None) -> dict:
-    """Popen/run keyword arguments that make a child act as this session. Empty when the wall is
-    off, so every spawn site reads the same with or without it. A turn's agent process (the sites
-    that pass the turn's env) also joins the group of the one environment the turn names, which is
-    what lets it read that environment and no other (runner/environments.py)."""
+_SETPRIV = shutil.which("setpriv") or "/usr/bin/setpriv"
+
+
+def _in_session(argv: list[str], ws: str, env: dict | None = None) -> list[str]:
+    """The command line that runs `argv` as this session: unchanged when the wall is off, so every
+    spawn site reads the same with or without it. A turn's agent process (the sites that pass the
+    turn's env) also joins the group of the one environment the turn names, which is what lets it
+    read that environment and no other (runner/environments.py).
+
+    The identity change is setpriv's: root execs it with the child's own scrubbed environment, and
+    setpriv then takes the session's uid and groups. Never Popen's user=/group=."""
     uid = _session_uid(ws)
     if uid is None:
-        return {}
+        return list(argv)
+    if not (os.path.isfile(_SETPRIV) and os.access(_SETPRIV, os.X_OK)):
+        # never run a session's process as root because the tool that drops the uid is missing
+        raise RuntimeError(f"setpriv is not available ({_SETPRIV}); a session process cannot start without it")
+    # The parent's lookup, as Popen made it: a CLI that is not installed still fails the spawn with
+    # FileNotFoundError naming it, rather than as setpriv's exit code after it started.
+    # setpriv resolves argv[0] on the same PATH (the child's environment), so argv stays as given.
+    if not argv or not shutil.which(argv[0], path=(env or os.environ).get("PATH")):
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), argv[0] if argv else "")
     gid = environments.reader_gid((env or {}).get("HR_ENVIRONMENT"))
-    return {"user": uid, "group": uid, "extra_groups": [gid] if gid is not None else []}
+    groups = f"--groups={gid}" if gid is not None else "--clear-groups"
+    # --inh-caps=-all: nothing in the inheritable set either, so no capability can come back through a
+    # file's own capabilities after the exec
+    return [_SETPRIV, f"--reuid={uid}", f"--regid={uid}", groups, "--inh-caps=-all", "--", *argv]
 
 
 def _ensure_passwd(uid: int, home: str) -> None:
@@ -924,7 +971,7 @@ def _child_env() -> dict:
     """The environment an agent process starts from: the runner's, minus anything secret-shaped.
     On the self-hosted box the runner's environment is the container's, and that carried the
     console password, the internal key and the secret-store key into every agent process."""
-    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
+    return {k: v for k, v in os.environ.items() if not _secret_env(k, v)}
 
 
 @app.middleware("http")
@@ -1244,8 +1291,9 @@ _GIT_SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
 def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", ws, *_GIT_SAFE, *args], capture_output=True, text=True,
-                          env={**_child_env(), **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
+    genv = {**_child_env(), **_GIT_ENV, **(env or {})}
+    return subprocess.run(_in_session(["git", "-C", ws, *_GIT_SAFE, *args], ws, genv), capture_output=True, text=True,
+                          env=genv, check=check)
 
 
 # Config the runner rewrites every turn and that can carry MCP credentials (see CHECKPOINT_EXCLUDE).
@@ -1343,6 +1391,16 @@ def _write_gitignore(gi: pathlib.Path) -> None:
 
 
 
+_GIT_OID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
+
+def _git_oid(out: str) -> str:
+    """An object id as git printed it, or "". The session's repo is the agent's, so an id read back
+    from it is used as an argument only when it is one: never a value that could read as an option."""
+    out = (out or "").strip()
+    return out if _GIT_OID.fullmatch(out) else ""
+
+
 def _git_shed_cli_home_history(ws: str) -> None:
     """Rewrite a pre-#193 workspace repo down to what /produced reads — the collected cursor's
     tree and HEAD's tree, each without .harness/home — and prune everything else.
@@ -1364,23 +1422,29 @@ def _git_shed_cli_home_history(ws: str) -> None:
         env = {"GIT_INDEX_FILE": scratch}
         _git(ws, "read-tree", commit, env=env)
         _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home", env=env)
-        return _git(ws, "write-tree", env=env).stdout.strip()
+        return _git_oid(_git(ws, "write-tree", env=env).stdout)
 
     try:
         parent: list[str] = []
         if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
             c_tree = _tree_without_home(_COLLECTED_REF)
-            c_new = _git(ws, "commit-tree", c_tree, "-m", "collected (cli home history shed)").stdout.strip()
+            c_new = _git_oid(_git(ws, "commit-tree", c_tree, "-m", "collected (cli home history shed)").stdout) if c_tree else ""
             if c_new:
                 _git(ws, "update-ref", _COLLECTED_REF, c_new)
                 parent = ["-p", c_new]
         h_tree = _tree_without_home("HEAD")
-        h_new = _git(ws, "commit-tree", h_tree, *parent, "-m", "checkpoint (cli home history shed)").stdout.strip()
+        h_new = _git_oid(_git(ws, "commit-tree", h_tree, *parent, "-m", "checkpoint (cli home history shed)").stdout) if h_tree else ""
         if h_new:
             _git(ws, "update-ref", "HEAD", h_new)      # HEAD is symbolic: this moves the branch
     finally:
+        # As the session: .git is the agent's to rearrange, and /hydrate, /checkpoint and /produced reach this
+        # with no scope of their own, so the removal is judged as the session wherever the name now leads.
         try:
-            os.unlink(scratch)
+            with _fs_as(_session_uid(ws)):
+                # where the name leads now, and only inside this workspace: a .git made to lead elsewhere is left alone
+                real = os.path.realpath(scratch)
+                if real.startswith(os.path.realpath(ws) + os.sep):
+                    os.unlink(real)
         except OSError:
             pass
     _git(ws, "reflog", "expire", "--expire=now", "--all")
@@ -1654,17 +1718,88 @@ def _codex_mcp_toml(servers: list[dict]) -> str:
     return "\n" + "\n".join(blocks) + "\n"
 
 
+_FRONTMATTER_MAX = 65536     # what a SKILL.md frontmatter reader reads: a name and a description are short
+
+
+def _frontmatter_uncomment(v: str) -> str:
+    """v without a YAML comment, which starts at a `#` at the start or after whitespace. One linear
+    search: `(^|\\s+)#.*$` backtracked over a run of spaces with no `#` (20K spaces took 1.7 s and
+    200K minutes), and a plugin's SKILL.md reaches this reader in the gateway every org shares."""
+    m = re.search(r"(?:^|\s)#", v)
+    return (v[:m.start()] if m else v).rstrip()
+
+
+def _frontmatter_close(s: str, q: str) -> int:
+    """Where the quoted value that opens s ends (-1: never). As the gateway's reader of the same name."""
+    i = 1
+    while i < len(s):
+        if q == '"' and s[i] == "\\":
+            i += 2
+            continue
+        if s[i] == q:
+            if q == "'" and s[i + 1:i + 2] == "'":
+                i += 2
+                continue
+            return i
+        i += 1
+    return -1
+
+
+def _frontmatter_value(v: str, more: list[str]) -> str:
+    lines = [x.strip() for x in more if x.strip()]
+    if v[:1] in ("'", '"'):
+        q, raw = v[0], " ".join([v] + lines)
+        end = _frontmatter_close(raw, q)
+        body = raw[1:end] if end > 0 else raw[1:]
+        if q == "'":
+            return body.replace("''", "'")
+        try:
+            return json.loads('"' + body + '"')
+        except ValueError:
+            return re.sub(r"\\(.)", r"\1", body)
+    head = _frontmatter_uncomment(v)
+    if re.fullmatch(r"[>|][1-9+-]{0,2}", head):
+        return " ".join(lines)
+    rest = (_frontmatter_uncomment(x) for x in lines)
+    return " ".join(p for p in (head, *rest) if p)
+
+
+def _frontmatter(text: str) -> tuple[dict, str]:
+    """A SKILL.md's frontmatter scalars and its body. Read exactly as the gateway's
+    _plugin_frontmatter reads them (the two are tested on the same shapes): a plain value (a ` #`
+    comment ends it, indented lines continue it), a double-quoted value with backslash escapes (the
+    console writes descriptions that way), a single-quoted one ('' is a quote), a `>` or `|` block,
+    each as one line. A one-line `description:` regex read `>-` as what a folded skill does."""
+    t = (text or "").lstrip("\ufeff")
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", t[:_FRONTMATTER_MAX], flags=re.S)
+    if not m:
+        return {}, t
+    entries: list[tuple[str, str, list[str]]] = []
+    for line in m.group(1).splitlines():
+        if line.startswith((" ", "\t")) or not line.strip():
+            if entries:
+                entries[-1][2].append(line)
+            continue
+        if line.startswith("#") or ":" not in line:
+            entries.append(("", "", []))
+            continue
+        k, v = line.split(":", 1)
+        entries.append((k.strip(), v.strip(), []))
+    return {k: _frontmatter_value(v, more) for k, v, more in entries if k}, t[m.end():]
+
+
 def _skill_desc(files: list[dict]) -> str:
-    """Best-effort one-line description from a skill's SKILL.md (YAML `description:` or first prose)."""
+    """One line saying what a skill does: its SKILL.md frontmatter's description, else the first
+    line of prose in its body."""
     for f in files or []:
         if str((f or {}).get("path", "")).lower().endswith("skill.md"):
-            txt = (f or {}).get("content") or ""
-            m = re.search(r"(?im)^description:\s*(.+)$", txt)
-            if m:
-                return m.group(1).strip().strip("\"'")
-            for line in txt.splitlines():
+            fm, body = _frontmatter((f or {}).get("content") or "")
+            d = " ".join(str(fm.get("description") or "").split())
+            if d:
+                return d
+            for line in body.splitlines():
                 s = line.strip().lstrip("#").strip()
-                if s and not s.startswith("---") and not s.lower().startswith("name:"):
+                if s and not s.startswith("---"):
                     return s[:200]
     return ""
 
@@ -3097,7 +3232,9 @@ def _claude_thinking_env(model: str) -> dict:
 
 # Claude Code 2.1.280's built-in tools, by the names its permission rules take, read off the pinned
 # release's own tool definitions. The gateway's catalog offers switches only from these (or from an
-# id in _CLAUDE_TOOL_RENAMES), which gateway/tests/test_catalog_tool_names.py holds.
+# id in _CLAUDE_TOOL_RENAMES), which gateway/tests/test_catalog_tool_names.py holds. 2.1.311 still takes
+# every switch the catalog offers (tools-off-check: each switched-off tool withheld); the tools it added
+# are in _CLAUDE_TOOL_ALSO and _CLAUDE_ALWAYS_DENY below.
 CLAUDE_TOOLS = ("Agent", "AskUserQuestion", "Bash", "Edit", "EnterPlanMode", "ExitPlanMode", "Glob", "Grep",
                 "LSP", "NotebookEdit", "Read", "Skill", "TaskCreate", "TaskGet", "TaskList", "TaskStop",
                 "TaskUpdate", "TodoWrite", "ToolSearch", "WebFetch", "WebSearch", "Write")
@@ -3105,6 +3242,19 @@ CLAUDE_TOOLS = ("Agent", "AskUserQuestion", "Bash", "Edit", "EnterPlanMode", "Ex
 # tool before it became Agent: harnesses store the catalog's id, so the id stays, and the deny list is
 # written with the current name rather than relying on the CLI's own table of old names.
 _CLAUDE_TOOL_RENAMES = {"Task": "Agent"}
+# A switch also withholds the tool that does the same thing another way: Workflow runs subagents as Agent does,
+# and Monitor runs a shell command as Bash does. Claude Code 2.1.311 drops Monitor itself when Bash is denied
+# (measured), but nothing promises a later release keeps that, so the deny list says it.
+_CLAUDE_TOOL_ALSO = {"Agent": ("Workflow",), "Bash": ("Monitor",)}
+# Claude Code 2.1.311's tools that reach past this one turn, read off the request it sends with nothing
+# switched off (scripts/tools-off-check.py, 0.41.12). Denied on every turn, as _KILO_ALWAYS_DENY is:
+# - ListAgents and SendMessage find and message other Claude Code sessions on the same machine, and on a
+#   self-hosted box another person's turn can be one of them;
+# - ScheduleWakeup and CronCreate/CronDelete/CronList promise a later turn: every turn here is one process the
+#   gateway starts, nothing resumes a session unasked, so the agent would say it will come back and never would;
+# - PushNotification and DesignSync act on a Claude account's devices and designs, which a turn here has none of.
+_CLAUDE_ALWAYS_DENY = ("ListAgents", "SendMessage", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList",
+                       "PushNotification", "DesignSync")
 
 
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
@@ -3231,8 +3381,9 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     # Reconciled on EVERY turn, not only when something is off: HOME is checkpointed, so a deny list an
     # earlier turn wrote stayed in the file after the harness switched the tool back on, and the tool
     # stayed withheld. Anything else the file holds is left as it is.
-    names = list(dict.fromkeys(_CLAUDE_TOOL_RENAMES.get(n, n) for n in
-                               (t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip())))
+    off = [_CLAUDE_TOOL_RENAMES.get(n, n) for n in
+           (t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip())]
+    names = list(dict.fromkeys([*off, *(a for n in off for a in _CLAUDE_TOOL_ALSO.get(n, ())), *_CLAUDE_ALWAYS_DENY]))
     settings_path = cfg_dir / "settings.json"
     try:
         current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
@@ -4514,7 +4665,7 @@ PROMPT_PRELOAD_CJS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "p
 PROMPT_ARGV_SO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_argv.so")
 PROMPT_ARG = "{hr:prompt}"   # the launchers' placeholder for the file's text
 PROMPT_DIR = ".hr-prompt"    # in the session's tmp/
-_IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x400, 0x8000
+_IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_OPEN, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x20, 0x400, 0x8000
 _IN_NONBLOCK, _IN_CLOEXEC = 0o4000, 0o2000000
 
 
@@ -4644,16 +4795,45 @@ def _prompt_folder_drop(cwd: str, uid: int | None, made_tmp: bool) -> None:
                 os.rmdir(os.path.join(cwd, "tmp"))
 
 
+def _cli_holds(name: str) -> bool:
+    """Whether a process that was handed this prompt file (its name in the process's command line or environment)
+    holds it open now: the CLI's own open, read from /proc as the runner (root). Any other reader (a scan of the
+    session's files, a checkpoint of its tree) was handed nothing, and its read must not take the file from the CLI:
+    on 0.41.9's release candidate a scan of the session volume read goose's prompt file first, the file went, and
+    goose then answered "Instruction file not found"."""
+    nb, tail = name.encode(), f"/{PROMPT_DIR}/{name}"
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                handed = nb in f.read()
+            if not handed:
+                with open(f"/proc/{pid}/environ", "rb") as f:
+                    handed = nb in f.read()
+            if not handed:
+                continue
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                with contextlib.suppress(OSError):
+                    if os.readlink(f"/proc/{pid}/fd/{fd}").endswith(tail):
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 def _prompt_watch(held: dict) -> None:
     """For a CLI handed its prompt file by path: remove the file as soon as the CLI has read it, at the first
-    close that follows a read (inotify, on the file the descriptor names, so no path is looked up again).
-    Linux only; elsewhere, or when the CLI never reads it, the file goes when the turn ends (_prompt_discard)."""
+    close that follows the CLI's own read (inotify, on the file the descriptor names, so no path is looked up
+    again). An open counts as the CLI's only when a process handed the file holds it at that moment (_cli_holds);
+    a read by anything else leaves it where it is. Linux only; elsewhere, when the CLI never reads it, or when its
+    read was over before it could be seen, the file goes when the turn ends (_prompt_discard)."""
     if _LIBC is None or held.get("fd") is None:
         return
     ifd = _LIBC.inotify_init1(_IN_NONBLOCK | _IN_CLOEXEC)
     if ifd < 0:
         return
-    mask = _IN_ACCESS | _IN_CLOSE_NOWRITE | _IN_DELETE_SELF
+    mask = _IN_OPEN | _IN_ACCESS | _IN_CLOSE_NOWRITE | _IN_DELETE_SELF
     if _LIBC.inotify_add_watch(ifd, f"/proc/self/fd/{held['fd']}".encode(), mask) < 0:
         os.close(ifd)
         return
@@ -4662,7 +4842,7 @@ def _prompt_watch(held: dict) -> None:
     cwd, made_tmp = held["cwd"], held.get("made_tmp", False)
 
     def run() -> None:
-        seen_read = False
+        seen_read = cli = False
         try:
             while not stop.is_set():
                 if not select.select([ifd], [], [], 0.25)[0]:
@@ -4675,7 +4855,9 @@ def _prompt_watch(held: dict) -> None:
                 while off + 16 <= len(buf):
                     _wd, ev, _cookie, size = struct.unpack_from("iIII", buf, off)
                     off += 16 + size
-                    seen_read = seen_read or bool(ev & _IN_ACCESS)
+                    if ev & _IN_OPEN and not cli:
+                        cli = _cli_holds(name)
+                    seen_read = seen_read or bool(cli and ev & _IN_ACCESS)
                     done = done or bool((seen_read and ev & _IN_CLOSE_NOWRITE) or ev & (_IN_DELETE_SELF | _IN_IGNORED))
                 if done:
                     with _fs_as(uid), contextlib.suppress(OSError):
@@ -4836,10 +5018,31 @@ def _mcp_same_server(base: str, url: str) -> bool:
     return a.scheme == "http" and b.scheme == "https"
 
 
-def _mcp_through_relay(servers: list[dict] | None) -> list[dict]:
+# OpenHands freezes its agent, MCP addresses included, when the conversation is first created, and no
+# endpoint updates it (openhands_driver._conversation_id). So the relay address turn 1 gave it is the one
+# every later turn calls, and a token minted per turn was forgotten by then: every follow-up failed with the
+# relay's 401 (#714). These bases get a token that is the same for the session and the server on every
+# turn. Each turn registers it again and forgets it when it ends, as every route is forgotten, so between
+# turns it opens nothing; and it is keyed on the runner's internal key, so no other session can make it.
+_MCP_STABLE_FOR = frozenset({"openhands"})
+_MCP_STABLE_FALLBACK = uuid.uuid4().hex + uuid.uuid4().hex    # a runner with no internal key: stable per process
+
+
+def _mcp_session_token(session: tuple[str, str], name: str, url: str) -> str:
+    """The relay token of one MCP server in one session, the same on every turn of that session.
+    `session` is the gateway's session id AND the session's folder: under HR_SANDBOX_PER_SESSION every
+    session's folder is the workspace root, so the folder alone would give two sessions one token, and
+    a process left in a reused sandbox could call the relay during the next session's turn."""
+    key = (_INTERNAL_KEY or _MCP_STABLE_FALLBACK).encode()
+    msg = "\0".join(("hr-mcp-relay", session[0], session[1], name, url)).encode()
+    return "hr-mcp-" + hmac.new(key, msg, hashlib.sha256).hexdigest()[:32]
+
+
+def _mcp_through_relay(servers: list[dict] | None, stable_for: tuple[str, str] | None = None) -> list[dict]:
     """Every remote server, as the session will see it: a relay address and no credential. Runs before
     any writer or bridge reads the list, so all of them get this without knowing about it. A stdio
-    server runs as the session and is left as it is."""
+    server runs as the session and is left as it is. With `stable_for` (the session, for a base in
+    _MCP_STABLE_FOR) the address is the same on every turn of that session (_mcp_session_token)."""
     out: list[dict] = []
     for s in servers or []:
         s = s or {}
@@ -4856,7 +5059,8 @@ def _mcp_through_relay(servers: list[dict] | None) -> list[dict]:
                 srv = _QuietHTTPServer(("127.0.0.1", 0), _McpRelayHandler)
                 threading.Thread(target=srv.serve_forever, daemon=True).start()
                 _MCP_RELAY["server"], _MCP_RELAY["port"] = srv, srv.server_address[1]
-            tok = "hr-mcp-" + uuid.uuid4().hex
+            tok = (_mcp_session_token(stable_for, str(s.get("name") or ""), url) if stable_for
+                   else "hr-mcp-" + uuid.uuid4().hex)
             _MCP_RELAY["routes"][tok] = {"url": url, "headers": _mcp_headers(s), "endpoints": {}}
             port = _MCP_RELAY["port"]
         sse = str(s.get("transport") or "").lower() == "sse" or parts.path.rstrip("/").endswith("/sse")
@@ -6581,8 +6785,15 @@ def _usage_fields(u) -> dict:
         return out
     if "promptTokenCount" in u or "candidatesTokenCount" in u:
         cached = n(u.get("cachedContentTokenCount"))
+        # candidatesTokenCount is the answer alone. Google bills the thinking as output too ("Output
+        # price (including thinking tokens)"), so thoughtsTokenCount is added, the way completion_tokens
+        # already carries reasoning_tokens on the OpenAI shapes (#690). toolUsePromptTokenCount (what a
+        # grounded turn's search fed back to the model) is prompt-side and stays out of the output; it is
+        # not added to the input either, since retrieved Search context "is not charged as input tokens"
+        # and the searches are billed per query, not per token (Gemini API pricing, 2026-11-13).
         return {"input_tokens": max(n(u.get("promptTokenCount")) - cached, 0),
-                "output_tokens": n(u.get("candidatesTokenCount")), "cache_read_tokens": cached}
+                "output_tokens": n(u.get("candidatesTokenCount")) + n(u.get("thoughtsTokenCount")),
+                "cache_read_tokens": cached}
     return {}
 
 
@@ -6868,13 +7079,20 @@ def _fill_relay_usage(ev: dict, env: dict) -> None:
     has no cache split while the provider's does: a CLI that sums the provider's input and cache
     reads into one number bills every cached token at the full input rate (goose and OpenHands
     on Claude, read at list price in a customer's cost sheet, 2026-09-30). The provider's own
-    statement is the one that prices."""
+    statement is the one that prices.
+
+    On a gemini-cli turn (its route is Google's native API, `google_native`) the relay's count
+    replaces the CLI's whenever the relay saw the turn. Google's usageMetadata states the answer, the
+    thinking and a grounded turn's tool-use prompt apart; the CLI's stats count only the answer as
+    output and fold the rest into one total (#690), so they are the fallback (_gemini_usage) for a
+    turn the relay did not see."""
     relay = _relay_usage(env)
     if not relay:
         return
     own = ev.get("usage")
     cached = ("cache_read_tokens", "cache_write_tokens")
-    if not own or (any(relay.get(k) for k in cached) and not any((own or {}).get(k) for k in cached)):
+    if (not own or _turn_relay_flags(env).get("google_native")
+            or (any(relay.get(k) for k in cached) and not any((own or {}).get(k) for k in cached))):
         ev["usage"] = relay
 
 
@@ -11420,8 +11638,21 @@ def _gemini_usage(stats: dict) -> dict:
     prompt INCLUDING the cached part and `cached` is that part (its own `input` is the fresh count
     and agrees), so the fresh input is the difference, the same subtraction the codex path makes;
     without it the cached prefix (8k tokens of system prompt on a one-word turn) would be billed
-    at the full input rate."""
+    at the full input rate.
+
+    The stats' `output_tokens` is candidatesTokenCount alone: the thinking Google bills as output
+    appears only in `total_tokens` (checked in @google/gemini-cli-core 0.58.0 and 0.67.0), so the
+    output is max(output_tokens, total_tokens - input_tokens), both read gross, before the cached
+    part is taken off the input (#690). The max keeps it from counting the thinking twice if a later
+    gemini-cli puts it in output_tokens. This is the fallback for a turn the relay did not see
+    (_fill_relay_usage prices from Google's own usageMetadata when it did). Its known limit: on a
+    turn grounded with Google Search, total_tokens also holds toolUsePromptTokenCount, which the
+    stats do not report apart, so that part is counted as output here."""
     u = _norm_token_usage(stats)
+    if (isinstance(stats, dict) and isinstance(stats.get("total_tokens"), (int, float))
+            and isinstance(stats.get("input_tokens"), (int, float))):
+        generated = int(stats["total_tokens"]) - int(stats["input_tokens"])
+        u["output_tokens"] = max(int(u.get("output_tokens") or 0), generated)
     if isinstance(stats, dict) and isinstance(stats.get("cached"), (int, float)) and stats["cached"] > 0:
         cached = int(stats["cached"])
         u["cache_read_tokens"] = cached
@@ -13885,7 +14116,10 @@ def _jcode_anthropic_listed() -> list[str]:
     global _JCODE_ANTHROPIC_LISTED
     if _JCODE_ANTHROPIC_LISTED is None:
         try:
-            with tempfile.TemporaryDirectory(prefix="hr-jcode-models-") as home:
+            # The CLI runs as root with this folder as its home, so the folder is root's (0700) whatever identity
+            # the calling thread holds: the builders ask from inside a session's scope (_fs_as), where a folder
+            # made would be the session's.
+            with _fs_as(0), tempfile.TemporaryDirectory(prefix="hr-jcode-models-") as home:
                 r = subprocess.run(["jcode", "model", "list", "--provider", "anthropic-api"], capture_output=True,
                                    text=True, timeout=30, env={**_child_env(), "HOME": home, "JCODE_NO_TELEMETRY": "1",
                                                                "ANTHROPIC_AUTH_TOKEN": "placeholder",
@@ -15616,8 +15850,10 @@ def _fast_agent_known(model: str) -> dict | None | bool:
     if model in _FA_KNOWN:
         return _FA_KNOWN[model]
     try:
+        # From /, never a shared scratch folder: the probe runs as root, and fast-agent looks for its
+        # configuration in the folder it starts in.
         out = subprocess.run([FAST_AGENT_PYTHON, "-I", "-c", _FA_PROBE, model], capture_output=True,
-                             text=True, timeout=60, cwd=tempfile.gettempdir())
+                             text=True, timeout=60, cwd="/")
         view = json.loads(out.stdout.strip().splitlines()[-1]) if out.returncode == 0 else False
     except (OSError, subprocess.SubprocessError, ValueError, IndexError):
         view = False
@@ -16011,6 +16247,31 @@ _turns_lock = threading.Lock()
 _TURN_MARK = "HR_TURN_ID"
 
 
+# The tmux socket directory openhands' driver makes for a turn (tempfile.mkdtemp(prefix="oh", dir="/tmp"),
+# runner/openhands_driver.py): /tmp/oh and mkdtemp's letters, digits and underscores, and nothing else.
+_TURN_TMUX_DIR = re.compile(r"/tmp/oh[a-z0-9_]+")
+
+
+def _remove_turn_tmux_dir(d: str, uid: int) -> bool:
+    """Remove a tmux socket directory a turn's process named in its TMUX_TMPDIR. The value comes from the
+    session's own process, so it is treated as the session's input: the RAW value must be exactly the
+    shape the driver makes (judged before any normalising), it must be a real directory (not a link)
+    owned by the uid of the process that named it, and the removal runs as that uid (_fs_as), so it can
+    take nothing the process could not have removed itself. rmtree walks by descriptor and refuses a
+    directory swapped for a link under it."""
+    if not _TURN_TMUX_DIR.fullmatch(d):
+        return False
+    try:
+        st = os.lstat(d)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+        return False
+    with _fs_as(uid):
+        shutil.rmtree(d, ignore_errors=True)
+    return True
+
+
 def _sweep_turn_processes(turn_id: str) -> int:
     """Kill every process still carrying this turn's marker, and remove the tmux socket
     directory such a process names. The group kill misses a process that put itself in a new
@@ -16023,28 +16284,28 @@ def _sweep_turn_processes(turn_id: str) -> int:
         return 0
     want = f"{_TURN_MARK}={turn_id}".encode()
     killed = 0
-    dirs: set[str] = set()
+    dirs: set[tuple[str, int]] = set()          # (the directory a process named, that process's uid)
     me = os.getpid()
     for entry in os.listdir("/proc") if os.path.isdir("/proc") else []:
         if not entry.isdigit() or int(entry) == me:
             continue
         try:
             environ = pathlib.Path("/proc", entry, "environ").read_bytes()
+            uid = os.stat(f"/proc/{entry}").st_uid
         except OSError:
             continue
         if want not in environ.split(b"\0"):
             continue
         for kv in environ.split(b"\0"):
             if kv.startswith(b"TMUX_TMPDIR="):
-                dirs.add(kv.split(b"=", 1)[1].decode(errors="replace"))
+                dirs.add((kv.split(b"=", 1)[1].decode(errors="replace"), uid))
         try:
             os.kill(int(entry), signal.SIGKILL)
             killed += 1
         except OSError:
             pass
-    for d in dirs:
-        if d.startswith("/tmp/oh"):
-            shutil.rmtree(d, ignore_errors=True)
+    for d, uid in dirs:
+        _remove_turn_tmux_dir(d, uid)
     return killed
 
 
@@ -16320,7 +16581,7 @@ def _run_turn_proc(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize,
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+        proc = subprocess.Popen(_in_session(cmd, cwd, env), cwd=cwd, env=env, text=True, bufsize=1,
                                 # NOTHING a turn runs may wait on stdin. A CLI that takes its
                                 # prompt there reads the turn's prompt file (_prompt_handover),
                                 # which ends; every other one gets nothing, never the runner's
@@ -16335,7 +16596,7 @@ def _run_turn_proc(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize,
                                 # turned out to be irrelevant.
                                 stdin=stdin,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True, **_as_session(cwd, env))
+                                start_new_session=True)
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return
@@ -16715,9 +16976,9 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
             print(f"[resume] codex app-server: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
             append({"type": "assistant", "message": {"content": [{"type": "text", "text": _CODEX_NO_ROLLOUT_NOTE}]}})
     try:
-        proc = subprocess.Popen(["codex", "app-server"], cwd=cwd, env=env, text=True, bufsize=1,
+        proc = subprocess.Popen(_in_session(["codex", "app-server"], cwd, env), cwd=cwd, env=env, text=True, bufsize=1,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True, **_as_session(cwd, env))
+                                start_new_session=True)
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn app-server: {e}"[:500], done=True)
         return
@@ -17178,9 +17439,9 @@ def _run_hermes_proc(turn_id: str, cwd: str, env: dict, model: str, provider: st
         cmd = launch + ["-z", PROMPT_ARG, "--provider", provider, "--model", model,
                         "--usage-file", usage_path]
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+        proc = subprocess.Popen(_in_session(cmd, cwd, env), cwd=cwd, env=env, text=True, bufsize=1,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                start_new_session=True, **_as_session(cwd, env))
+                                start_new_session=True)
     except Exception as e:  # noqa: BLE001
         rec.update(status="failed", error=f"spawn: {e}"[:500], done=True)
         return
@@ -17518,8 +17779,22 @@ def backends() -> dict:
 # that holds several sessions puts them beside its workspace root, as environments.py does with its
 # own root, so a runner started some other way keeps them as long as its workspaces too; a
 # per-session sandbox, or a runner that cannot write there, keeps /tmp.
+#
+# Behind the write-wall the runner writes and removes markers as root, and a shared scratch folder is one
+# every session can make names in, so the wall takes its marker folder from the entrypoint or not at all:
+# HR_WS_MARKER_DIR must name a real directory of root's, mode 0700, or the runner refuses to start.
 def _ws_marker_dir() -> str:
     named = os.environ.get("HR_WS_MARKER_DIR")
+    if _SESSION_UIDS:
+        try:
+            st = os.lstat(named) if named else None
+        except OSError:
+            st = None
+        if st is None or not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or stat.S_IMODE(st.st_mode) != 0o700:
+            raise RuntimeError("HR_SESSION_UIDS=1 requires HR_WS_MARKER_DIR to name a directory owned by root with "
+                               f"mode 0700 (the image's entrypoint makes one on the data volume); got {named!r}. "
+                               "Refusing to start rather than keep workspace markers somewhere sessions can write")
+        return named
     if named:
         return named
     if _SANDBOX_PER_SESSION:
@@ -17563,6 +17838,18 @@ def _ws_marker_clear(identifier: str) -> None:
             path.unlink()
 
 
+_WS_PROBE_FRESH = "fresh"
+
+
+def _ws_fresh_identifier(identifier: str) -> bool:
+    """Whether `fresh` may be answered for this identifier at all. The sha probe also needs the
+    session's own checkpoint sha; `fresh` claims a folder on the marker's name alone, so it holds only
+    while one identifier is one marker and one folder: not empty, not the `_default` they fall back to,
+    and not one that sanitising (_SID_SAFE, the 120-character cut) would fold onto another session's."""
+    raw = identifier or ""
+    return bool(raw) and raw != "_default" and _SID_SAFE.sub("_", raw.strip())[:120] == raw
+
+
 def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     """Whether this session's workspace still holds checkpoint `sha`: the marker says so AND the
     folder is there to back it. The marker lives outside the workspace on purpose (it has to
@@ -17573,8 +17860,14 @@ def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     no session to resume and the conversation started over (#194). A workspace
     restored from a checkpoint always carries its .git (the tarball does, and _git_ensure runs
     after every restore), so a folder without one holds nothing, whatever the marker says; the
-    marker that vouched for it is dropped so the full hydrate that follows starts clean."""
-    if _ws_marker_get(identifier) != sha:
+    marker that vouched for it is dropped so the full hydrate that follows starts clean.
+
+    `sha` empty is the fresh start (probe `fresh`, #712): a workspace this runner started empty and
+    no checkpoint has replaced since. Only a marker FILE that says so counts; no marker is no claim.
+    A session whose first turn was cut before any checkpoint had its folder wiped by the follow-up's
+    restore from nothing: its files and the CLI's conversation both, though the cut turn's error said
+    the workspace was kept."""
+    if not _ws_marker_path(identifier).is_file() or _ws_marker_get(identifier) != sha:
         return False
     if (ws_path / ".git").is_dir():
         return True
@@ -17747,7 +18040,11 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # answers yes — making follow-up turns start instantly instead of paying wipe + untar.
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
-            if _ws_holds(identifier, ws_path, probe):
+            # `fresh` asks about a session that never saved a checkpoint: does this runner still hold
+            # the workspace it started empty for it (#712)? A sha is hex, so the word is never one.
+            held = (_ws_fresh_identifier(identifier) and _ws_holds(identifier, ws_path, "")
+                    if probe == _WS_PROBE_FRESH else _ws_holds(identifier, ws_path, probe))
+            if held:
                 return {"ok": True, "skipped": True, "restored": False}
             return {"ok": True, "skipped": False}
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
@@ -17760,8 +18057,9 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         restored = False
         if nbytes:
             with open(spool_path, "rb") as tar_in:
-                proc = subprocess.run(["tar", "xzf", "-", "-C", ws], stdin=tar_in, capture_output=True,
-                                      env=_child_env(), **_as_session(ws))
+                tenv = _child_env()
+                proc = subprocess.run(_in_session(["tar", "xzf", "-", "-C", ws], ws, tenv), stdin=tar_in,
+                                      capture_output=True, env=tenv)
             if proc.returncode != 0:
                 raise HTTPException(500, f"untar failed: {proc.stderr.decode(errors='replace')[:300]}")
             restored = True
@@ -17774,6 +18072,18 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
     _git_ensure(ws)
     n = sum(1 for p in pathlib.Path(ws).rglob("*") if ".git" not in p.parts)
     return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws}
+
+
+# GNU tar's own line for a path --ignore-failed-read let it pass over: `tar: <name>: Warning: Cannot open: <why>`
+# (also Cannot read, stat, readlink, savedir). Only the name is kept, for the log; nothing of the file is read.
+_TAR_SKIPPED = re.compile(r"^tar: (.+?): Warning: Cannot [a-z]+: ")
+_TAR_SKIPPED_SHOWN = 20
+
+
+def _tar_skipped(stderr: bytes | str | None) -> list[str]:
+    """The paths tar's stderr says it left out because they could not be read."""
+    text = stderr.decode(errors="replace") if isinstance(stderr, bytes) else (stderr or "")
+    return [m.group(1)[:300] for m in (_TAR_SKIPPED.match(ln) for ln in text.splitlines()) if m]
 
 
 @app.get("/checkpoint")
@@ -17811,12 +18121,23 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
     excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
     fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     try:
+        # The archive is read as the session, as /hydrate's untar writes as it: the checkpoint holds what the
+        # session can read in its own tree and nothing else, and the tar process starts from _child_env, never
+        # the runner's environment. A file the session cannot read is left out (--ignore-failed-read) and named
+        # in the log, rather than failing the checkpoint; any other failure still fails it.
         with os.fdopen(fd, "wb") as out:
-            proc = subprocess.run(["tar", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
-                                  stdout=out, stderr=subprocess.PIPE)
+            tenv = _child_env()
+            proc = subprocess.run(_in_session(["tar", "--ignore-failed-read", "-I", "gzip -1", "-cf", "-", *excl, "-C", ws, "."],
+                                              ws, tenv), stdout=out, stderr=subprocess.PIPE, env=tenv)
         if proc.returncode != 0:
             os.unlink(tar_path)
             raise HTTPException(500, f"tar failed: {proc.stderr.decode(errors='replace')[:300]}")
+        skipped = _tar_skipped(proc.stderr)
+        if skipped:
+            shown = ", ".join(skipped[:_TAR_SKIPPED_SHOWN]) + (f" and {len(skipped) - _TAR_SKIPPED_SHOWN} more"
+                                                             if len(skipped) > _TAR_SKIPPED_SHOWN else "")
+            print(f"[checkpoint] WARNING: {identifier}: {len(skipped)} path(s) the session cannot read were left "
+                  f"out of the checkpoint: {shown}", flush=True)
         h = hashlib.sha256()
         nbytes = 0
         with open(tar_path, "rb") as f:
@@ -17853,8 +18174,9 @@ def _collected_init(ws: str) -> None:
     semantics: what arrived in the checkpoint was not produced by any turn here."""
     if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode != 0:
         head = _git(ws, "rev-parse", "-q", "--verify", "HEAD")
-        if head.returncode == 0:
-            _git(ws, "update-ref", _COLLECTED_REF, head.stdout.strip())
+        oid = _git_oid(head.stdout) if head.returncode == 0 else ""
+        if oid:
+            _git(ws, "update-ref", _COLLECTED_REF, oid)
 
 
 def _collected_at_turn_start(ws: str) -> None:
@@ -17966,8 +18288,9 @@ def _produced_ack(ws: str) -> str:
     _git_ensure(ws)
     _git(ws, "add", "-A")
     _git(ws, "commit", "-q", "-m", f"collected {int(time.time())}", "--allow-empty")
-    head = _git(ws, "rev-parse", "HEAD").stdout.strip()
-    _git(ws, "update-ref", _COLLECTED_REF, head)
+    head = _git_oid(_git(ws, "rev-parse", "HEAD").stdout)
+    if head:
+        _git(ws, "update-ref", _COLLECTED_REF, head)
     return head
 
 
@@ -18532,7 +18855,10 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # Installed plugin packages, whole, at their roots; then every stdio server a plugin declares
         # becomes a launcher every backend writer below already knows how to hand to its CLI.
         plugin_roots = _write_plugins(cwd, req.plugins)
-        servers = req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else _mcp_through_relay(req.mcp_servers)
+        servers = (req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else
+                   _mcp_through_relay(req.mcp_servers,
+                                      stable_for=((identifier or "", os.path.realpath(cwd))
+                                                  if backend in _MCP_STABLE_FOR else None)))
         # whether the platform's memory is attached, from the address the gateway sent (only its path is read): the
         # base's own memory tools are then withheld (_own_memory_off; hermes in its config, below)
         platform_memory = _has_platform_memory(req.mcp_servers)
@@ -18975,16 +19301,22 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
     if not state.is_file():
         return None
     if not (auth and auth.api_key):
+        # The record is a file in the session's tree: the log names it and its size, never what it holds.
+        try:
+            with _fs_as(_session_uid(ws)):
+                size = state.stat().st_size
+        except OSError:
+            size = -1
         print(f"[workspace] {ws}: remote Qoder objects recorded but no credential came with the delete; "
-              f"left in place: {state.read_text()[:600]}", flush=True)
+              f"left in place, as recorded in {QODER_STATE_REL} ({size} bytes)", flush=True)
         return {"backend": "qoder", "purged": False, "reason": "no credential", "state": QODER_STATE_REL}
     base = (auth.base_url or QODER_DEFAULT_BASE).rstrip("/")
     relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)
     job = {"purge": True, "cwd": ws, "base_url": relay_base, "api_key": relay_tok}
     try:
         penv = _child_env()
-        proc = subprocess.run(_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv), capture_output=True, text=True,
-                              env=penv, timeout=180, **_as_session(ws))
+        proc = subprocess.run(_in_session(_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv), ws, penv),
+                              capture_output=True, text=True, env=penv, timeout=180)
     except Exception as e:  # noqa: BLE001
         print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
         return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}

@@ -29,6 +29,7 @@ import os
 import re
 import time
 import uuid
+import weakref
 
 from memory_live import Announced
 from memory_tools import REFUSE_STANDING, STANDING_IS_A_PERSONS, set_by_a_person
@@ -59,6 +60,9 @@ FILES = None
 # Where a memory's cover is kept (the picture its card shows, made by the console from its schema): app.py binds the
 # instance's own file store, the one its other files are kept in, `await COVERS.get(key) / put(key, data) / delete(key)`.
 COVERS = None
+# Which workspace a member acts in, when it acts in only one: app.py binds `await PLACE_OF(org, principal) -> str | None`,
+# an agent's harness's workspace, None for a person (who acts in whichever workspace they open) or anyone unknown.
+PLACE_OF = None
 COVER_MAX = 512 * 1024
 COVER_TYPES = ("image/png", "image/webp")
 # The most pixels a cover may have, checked from its header before any pixel is read: a few hundred KB of PNG can say
@@ -143,6 +147,42 @@ class MemoryError(Exception):
     def __init__(self, status: int, code: str, message: str, param: str | None = None):
         super().__init__(message)
         self.status, self.code, self.message, self.param = status, code, message, param
+
+
+# ── a memory's workspace: where it is reached from ─────────────────────────────────────────────
+# A memory belongs to the workspace it was made in and is reached only from there (Richard, 2026-11-10): listed, read,
+# written, recalled and shared only by someone acting in that workspace, and used only by that workspace's agents.
+# Every access check's principals carry the one workspace the caller acts in, `in:<workspace>` (acting_in), which no
+# grant can name (_PRINCIPAL). Principals that carry no workspace, or two, reach nothing: a path that forgot to say
+# where it acts fails closed instead of reaching every workspace. What was made before workspaces carries none and is
+# the Default Workspace's, as everywhere else.
+DEFAULT_PLACE = "default"
+_IN = "in:"
+
+
+def place(workspace) -> str:
+    """A workspace as memories compare it: none, and the organization's Default Workspace by its other name, are one."""
+    ws = str(workspace or "").strip()
+    return DEFAULT_PLACE if not ws or ws.endswith("__hr_default") else ws
+
+
+def place_of(memory: dict) -> str:
+    return place((memory or {}).get("workspace"))
+
+
+def acting_in(workspace) -> str:
+    return _IN + place(workspace)
+
+
+def where(principals) -> str | None:
+    """The one workspace these principals act in, or None when they name none or more than one."""
+    found = {str(x)[len(_IN):] for x in principals or [] if str(x).startswith(_IN)}
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def placed(principals, workspace) -> list[str]:
+    """These principals, acting in this workspace and no other."""
+    return [x for x in principals or [] if not str(x).startswith(_IN)] + [acting_in(workspace)]
 
 
 def _not_found() -> MemoryError:
@@ -230,6 +270,12 @@ class Provider:
     async def forget(self, mid: str, rid: str, writer: dict) -> dict:
         self._no("forget a record")
 
+    async def ready_to_change(self, mid: str) -> None:
+        """Before a write that changes records already kept (a fact that closes an older value, a contradiction kept on
+        both ends): a provider that reads in the background waits here, or refuses with nothing written. Most read
+        nothing in the background, so nothing waits."""
+        return None
+
     async def close_episode(self, mid: str, rid: str, writer: dict) -> None:
         """A conversation closed because something it taught was forgotten, and nothing else with it. Where
         a provider's `forget` of an episode takes what it taught along too, it says otherwise here."""
@@ -287,6 +333,11 @@ class Provider:
 PROPERTY_TYPES = ("text", "choice", "date", "number", "yesno")
 
 
+# The prefix of the fields this server keeps on a provider's own records (hr_stated, hr_text, ...): a schema never names
+# one, so nothing a provider extracts into a schema's types can carry one.
+OWN_FIELDS = "hr_"
+
+
 def schema_clean(raw: dict | None) -> dict:
     """A memory's schema as stored: {types: [{name, description, properties: [{name, type, description, options}]}],
     relations: [{name, description, from, to}]}. Refused in words, whole."""
@@ -296,6 +347,8 @@ def schema_clean(raw: dict | None) -> dict:
         name = str((t or {}).get("name") or "").strip()
         if not name.isidentifier():
             raise MemoryError(422, "memory_invalid", f"A type's name must be one word of letters and digits: {name!r}.", "types")
+        if name.lower().startswith(OWN_FIELDS):
+            raise MemoryError(422, "memory_invalid", f"Names starting with {OWN_FIELDS} are reserved for HarnessRouter's own fields: {name!r}.", "types")
         if name in seen:
             raise MemoryError(422, "memory_invalid", f"Two types are called {name}.", "types")
         seen.add(name)
@@ -305,6 +358,8 @@ def schema_clean(raw: dict | None) -> dict:
             pt = str((p or {}).get("type") or "text")
             if not pn.isidentifier() or pt not in PROPERTY_TYPES:
                 raise MemoryError(422, "memory_invalid", f"{name}: a property needs a one-word name and a type of {', '.join(PROPERTY_TYPES)}.", "types")
+            if pn.lower().startswith(OWN_FIELDS):
+                raise MemoryError(422, "memory_invalid", f"{name}: names starting with {OWN_FIELDS} are reserved for HarnessRouter's own fields: {pn!r}.", "types")
             props.append({"name": pn, "type": pt, "description": str(p.get("description") or ""), **({"options": [str(x) for x in p["options"]]} if p.get("options") else {})})
         types.append({"name": name, "description": str(t.get("description") or ""), "properties": props, **({k: t[k] for k in ("color", "icon", "x", "y", "caption") if k in t})})
     rels = []
@@ -458,15 +513,46 @@ def grants_changed(org: str = "") -> None:
         _GRANTS.pop(k, None)
 
 
+# A key minted for no one (no member) owns what it creates as itself: created_by "key:<key id>", and its principal is
+# that same string (memory_routes.principals_of). A member's created_by is their bare id, matched as member:<id>. The
+# prefix is reserved: a member id that starts with it is no one (creator_of, principals_of), so a person can never be
+# named to hold what a key made. Before, such a key's memories were stamped created_by "" and reached by no caller, the
+# key that made them included (UHP conformance ME-01..13 on 0.41.16).
+KEY_PREFIX = "key:"
+
+
+def creator_of(caller: dict) -> str:
+    """Who a caller creates as: its member, or a key minted for no one as key:<key id>; '' when it is neither (a
+    member under the reserved prefix included), and create() refuses that."""
+    member = str(caller.get("member") or "")
+    if member:
+        return "" if member.startswith(KEY_PREFIX) else member
+    if caller.get("via") == "api_key" and caller.get("key_id"):
+        return KEY_PREFIX + str(caller["key_id"])
+    return ""
+
+
+def creator_principal(created_by) -> str:
+    """The principal a node's creator holds all four privileges as: key:<id> for a key, member:<id> for a member,
+    and no one for an empty creator (a node made before keys were creators is reached through grants only)."""
+    c = str(created_by or "")
+    if not c:
+        return ""
+    return c if c.startswith(KEY_PREFIX) else f"member:{c}"
+
+
 async def effective(org: str, memory: dict, principals: list[str]) -> list[str]:
     """The privileges these principals hold on the memory: every grant on it and on the ancestors
     the cutoff-aware chain reaches. The creator of a node holds all four on it, an implicit grant
-    that flows down like any other."""
+    that flows down like any other. Nothing, from any workspace but the memory's own (acting_in)."""
+    if where(principals) != place_of(memory):
+        return []
     chain = await _chain(org, memory)
     ids = {str(m["id"]) for m in chain}
     privs: set[str] = set()
     for m in chain:
-        if f"member:{m.get('created_by') or ''}" in principals and m.get("created_by"):
+        creator = creator_principal(m.get("created_by"))
+        if creator and creator in principals:
             return list(PRIVILEGES)
     for g in await _org_grants(org):
         if str(g.get("memory_id") or "") in ids and str(g.get("principal") or "") in principals \
@@ -527,7 +613,9 @@ async def out(org: str, memory: dict, principals: list[str], privs: list[str] | 
             # drawing it shows, so the console makes another only when the drawing changes
             "cover_at": _ms_or_none(memory.get("cover_at")), "cover_sig": str(memory.get("cover_sig") or "") or None,
             # who a person's memory is for: the operator's to see (they may delete it), never the agent's
-            **({"end_user": str(memory["end_user"])} if memory.get("end_user") and "delete" in privs else {})}
+            **({"end_user": str(memory["end_user"])} if memory.get("end_user") and "delete" in privs else {}),
+            # the caller's own (Richard 11-10): a person's memory for the person asking, which their console opens first
+            **({"yours": True} if memory.get("end_user") and f"member:{memory['end_user']}" in principals else {})}
 
 
 def _ms_or_none(v) -> int | None:
@@ -573,6 +661,9 @@ async def create(org: str, member: str, workspace: str, principals: list[str], *
                  parent_id=None, restricted=False, provider="", extra: dict | None = None) -> dict:
     """`extra`: the server's own properties for the memory (app.py's `provisioned_for`), never a caller's."""
     name, description = _clean(name, description)
+    if not member:
+        # a memory no caller could ever reach: refused, never made (creator_of says who can create)
+        raise MemoryError(403, "memory_forbidden", "This credential can't own a memory. Use a console session or an API key.")
     prov = str(provider or "").strip()
     parent = None
     if parent_id:
@@ -647,9 +738,14 @@ async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
         return hit[1], hit[2]
     principal, mid = end_user_principal(pid, user), end_user_mid(pid, user)
     node = await _load(org, mid)
+    # named after the person (Richard 11-10): one named by a hash read as an empty stranger to the person it was for
+    named = user[:_NAME_MAX]
+    if node is not None and str(node.get("name") or "") == end_user_hash(user):
+        await GRAPH.upsert("Memory", mid, {"name": named}, raise_on_fail=True)
+        node = {**node, "name": named}
     if node is None:
         node = await _make(org, str(parent.get("created_by") or ""), str(parent.get("workspace") or ""),
-                           end_user_hash(user), _PERSON_DESC, parent, True, str(parent.get("provider") or ""), mid=mid,
+                           named, _PERSON_DESC, parent, True, str(parent.get("provider") or ""), mid=mid,
                            extra={"end_user": user[:_NAME_MAX * 4], "end_user_hash": end_user_hash(user), "end_user_of": pid})
     if not any(str(g.get("principal") or "") == principal and str(g.get("deleted") or "0") != "1"
                and set(json.loads(g.get("privileges") or "[]")) >= {"read", "write"}
@@ -723,6 +819,8 @@ def _clean_parts(parts):
     for p in parts or []:
         if isinstance(p, dict) and isinstance(p.get("text"), str):
             p = {**p, "text": clean_text(p["text"])}
+        if isinstance(p, dict) and isinstance(p.get("name"), str):
+            p = {**p, "name": clean_text(p["name"])}       # who said it: a person's own string, cleaned like their words
         out.append(p)
     return out
 
@@ -1047,6 +1145,7 @@ async def revise(prov: Provider, mid: str, rid: str, patch: dict, writer: dict, 
     """A record changed. Every writer comes through here, a person's request and an agent's tool."""
     _no_agent_standing(writer, {k: v for k, v in (patch.get("attributes") or {}).items() if k == "standing"})
     await _not_a_persons_standing(prov, mid, rid, writer)
+    await pay_owed(prov, mid)
     if expected is None:
         return await prov.revise(mid, rid, patch, writer)
     return await prov.revise(mid, rid, patch, writer, expected=expected)
@@ -1111,14 +1210,124 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
             record = {**record, "time": {**(record.get("time") or {}), "valid_to": min(later)[1]}}
         if conflicts:
             record = {**record, "references": [*(record.get("references") or []), *[{"rel": "contradicts", "memory_id": "", "record_id": c} for c in conflicts]]}
+    if closes or conflicts or any(x.get("rel") == "contradicts" for x in record.get("references") or []):
+        # it changes records already kept once it is written, and that change can wait on the provider: wait now, so a
+        # memory that can't take the change yet refuses before anything is written, never after
+        await prov.ready_to_change(mid)
+        await pay_owed(prov, mid)
+        await owed_room(mid)
     made = await prov.remember(mid, record, writer)
     by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
+    owed: list[str] = []
     for o in closes:
-        await prov.revise(mid, str(o["id"]), {"time": {"valid_to": (record.get("time") or {}).get("valid_from") or _now_iso()}}, by_server)
-    await keep_on_both_ends(prov, mid, made, by_server)
+        valid_to = (record.get("time") or {}).get("valid_from") or _now_iso()
+        try:
+            await prov.revise(mid, str(o["id"]), {"time": {"valid_to": valid_to}}, by_server)
+        except MemoryError as e:
+            if e.status < 500:
+                raise
+            await _owe(mid, {"op": "close", "mid": mid, "rid": str(o["id"]), "valid_to": valid_to, "by": by_server})
+            owed.append(str(o["id"]))
+    owed += await keep_on_both_ends(prov, mid, made, by_server)
     if placing:
-        made = {**made, "closed": [str(o["id"]) for o in closes], "conflicts": conflicts}
+        made = {**made, "closed": [str(o["id"]) for o in closes if str(o["id"]) not in owed], "conflicts": conflicts}
+    if owed:
+        made = {**made, "owed": owed}
     return made
+
+
+# ── what a write that stands still owes ──────────────────────────────────────────────────────────────────────────────
+# A write that changes records already kept (closing an older value, a contradiction kept on both ends) makes its own
+# record first, then the change. When the provider can't take the change just then (5xx, such as still reading at its
+# bound), the record stands and the answer is 200 with the change named `owed`, never an error after a write, which a
+# client would retry into a duplicate. The change is kept on the memory, out of any client's view, and made at the
+# memory's next change.
+OWED = "owed"
+# A memory whose provider keeps refusing could owe without end: past this many, a write that would owe more is refused
+# (503, nothing written) rather than an owed change dropped.
+OWED_CAP = 50
+OWED_FULL = "This memory has changes it couldn't make yet, so nothing was written. Ask again in a moment."
+# The list is read, changed and written back on the memory's node, so changes to one memory's list take turns (this
+# process serves every request of an instance). A change being made is never waited on under it.
+_OWED_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _owed_lock(mid: str) -> asyncio.Lock:
+    lock = _OWED_LOCKS.get(mid)
+    if lock is None:
+        lock = _OWED_LOCKS[mid] = asyncio.Lock()
+    return lock
+
+
+async def owed_room(mid: str) -> None:
+    """503, before anything is written, when this memory owes as many changes as it may."""
+    if len(await _owed_of(mid)) >= OWED_CAP:
+        raise MemoryError(503, "memory_unavailable", OWED_FULL)
+
+
+async def _owed_of(mid: str) -> list[dict]:
+    v = await GRAPH.get(mid, label="Memory") if GRAPH is not None else None
+    try:
+        ops = json.loads((v or {}).get(OWED) or "[]")
+    except (TypeError, ValueError):
+        ops = []
+    return [o for o in ops if isinstance(o, dict) and o.get("rid")] if isinstance(ops, list) else []
+
+
+async def _set_owed(mid: str, ops: list[dict]) -> None:
+    await GRAPH.upsert("Memory", mid, {OWED: json.dumps(ops, separators=(",", ":"))}, raise_on_fail=True)
+
+
+async def _owe(mid: str, op: dict) -> None:
+    async with _owed_lock(mid):
+        ops = await _owed_of(mid)
+        if op not in ops:
+            await _set_owed(mid, [*ops, op])
+            print(f"[memory] owed: 1 added, {len(ops) + 1} on the memory", flush=True)
+
+
+async def pay_owed(prov: Provider, mid: str) -> None:
+    """What this memory still owes, made now. A change the provider still can't take stays owed; one whose record is
+    gone or closed is owed no longer."""
+    ops = await _owed_of(mid)
+    if not ops:
+        return
+    left, paid, dropped = [], 0, 0
+    for op in ops:
+        # only a record of this memory, read now: an owed change never reaches another memory's records
+        if str(op.get("mid") or "") != mid:
+            dropped += 1
+            continue
+        try:
+            cur = await prov.get(mid, str(op["rid"]))
+            if not cur or (cur.get("status") or "active") != "active":
+                dropped += 1         # gone, closed, or not this memory's
+                continue
+            if op.get("op") == "close":
+                if (cur.get("time") or {}).get("valid_to"):
+                    dropped += 1     # closed meanwhile: its end is someone's, not ours to move
+                    continue
+                await prov.revise(mid, str(op["rid"]), {"time": {"valid_to": op.get("valid_to") or _now_iso()}}, op.get("by") or {})
+            elif op.get("op") == "contradicts":
+                with_ = str(op.get("with") or "")
+                if with_ and not any(x.get("rel") == "contradicts" and str(x.get("record_id")) == with_ for x in cur.get("references") or []):
+                    await prov.revise(mid, str(op["rid"]), {"references": [*(cur.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": with_}]},
+                                      op.get("by") or {})
+            else:
+                dropped += 1
+                continue
+            paid += 1
+        except MemoryError as e:
+            if e.status >= 500:
+                left.append(op)
+            else:
+                dropped += 1
+    if left != ops:
+        async with _owed_lock(mid):
+            # what was owed meanwhile, while these were being made, stays owed
+            meanwhile = [o for o in await _owed_of(mid) if o not in ops]
+            await _set_owed(mid, [*left, *meanwhile])
+        print(f"[memory] owed: {paid} paid, {dropped} dropped, {len(left) + len(meanwhile)} still owed", flush=True)
 
 
 async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
@@ -1126,6 +1335,7 @@ async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
     taught are still in that conversation, and an agent asked to forget something can't be relied on to know
     that: real turns left exactly this behind. So the conversation closes with it. What else it taught stays."""
     await _not_a_persons_standing(prov, mid, rid, writer)
+    await pay_owed(prov, mid)
     before = await prov.get(mid, rid)
     out = await prov.forget(mid, rid, writer)
     by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
@@ -1142,17 +1352,26 @@ async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
     return out
 
 
-async def keep_on_both_ends(prov: Provider, mid: str, record: dict, writer: dict) -> None:
-    """`contradicts` says the same from either end, so it is kept on both records (§4.2)."""
+async def keep_on_both_ends(prov: Provider, mid: str, record: dict, writer: dict) -> list[str]:
+    """`contradicts` says the same from either end, so it is kept on both records (§4.2). Called once `record` is
+    written: a change the provider can't take just then is owed (pay_owed), and the ids it owes are answered."""
     rid = str(record.get("id") or "")
+    owed: list[str] = []
     for ref in record.get("references") or []:
         other = str(ref.get("record_id") or "")
         if ref.get("rel") != "contradicts" or str(ref.get("memory_id") or mid) != mid or not other or other == rid:
             continue
-        o = await prov.get(mid, other)
-        if not o or any(x.get("rel") == "contradicts" and str(x.get("record_id")) == rid for x in o.get("references") or []):
-            continue
-        await prov.revise(mid, other, {"references": [*(o.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": rid}]}, writer)
+        try:
+            o = await prov.get(mid, other)
+            if not o or any(x.get("rel") == "contradicts" and str(x.get("record_id")) == rid for x in o.get("references") or []):
+                continue
+            await prov.revise(mid, other, {"references": [*(o.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": rid}]}, writer)
+        except MemoryError as e:
+            if e.status < 500:
+                raise
+            await _owe(mid, {"op": "contradicts", "mid": mid, "rid": other, "with": rid, "by": writer})
+            owed.append(other)
+    return owed
 
 
 def _now_iso() -> str:
@@ -1337,13 +1556,18 @@ async def grants(org: str, mid: str, principals: list[str]) -> list[dict]:
 
 async def grant(org: str, mid: str, principals: list[str], principal: str, privileges: list,
                 by: str) -> dict:
-    await need(org, mid, principals, "delete")
+    m, _ = await need(org, mid, principals, "delete")
     principal = str(principal or "").strip()
     privs = [p for p in PRIVILEGES if p in (privileges or [])]
     if not _PRINCIPAL.fullmatch(principal):
         raise MemoryError(422, "memory_invalid", "A principal is `<kind>:<id>`: a member (a person or an agent) or a group.", "principal")
     if not privs:
         raise MemoryError(422, "memory_invalid", "Name at least one of read, write, create, delete.", "privileges")
+    group = principal.startswith("group:")
+    there = place(principal.split(":", 1)[1]) if group else (await PLACE_OF(org, principal) if PLACE_OF else None)
+    if there is not None and place(there) != place_of(m):
+        raise MemoryError(422, "memory_other_workspace", ("That's another workspace." if group else "That agent is in another "
+                          "workspace.") + " A memory is used only in the workspace it belongs to.", "principal")
     return await _put_grant(org, mid, principal, privs, by)
 
 
@@ -1384,35 +1608,39 @@ async def given(org: str, principals: list[str]) -> list[dict]:
     return [o for *_, o in sorted(res, key=lambda x: x[:3])]
 
 
-async def granted(org: str, principal: str) -> list[tuple[dict, list[str]]]:
+async def granted(org: str, principal: str, workspace) -> list[tuple[dict, list[str]]]:
     """Every memory this principal holds a grant ON (not merely below one), with what it may do
     there, highest in the tree first. It is where a member was let in: the same answer for a person
-    and for an agent, and the only source of what an agent's harness shows as its memories."""
+    and for an agent, and the only source of what an agent's harness shows as its memories. Only the memories of
+    the workspace it acts in: a grant on another workspace's memory gives nothing (acting_in)."""
     res = []
     for g in await _org_grants(org):
         if str(g.get("principal") or "") != str(principal) or str(g.get("deleted") or "0") == "1":
             continue
         m = await _load(org, str(g.get("memory_id") or ""))
         if m:
-            res.append((len(await _chain(org, m)), str(m.get("name") or "").casefold(), m, await effective(org, m, [principal])))
+            res.append((len(await _chain(org, m)), str(m.get("name") or "").casefold(), m,
+                        await effective(org, m, [principal, acting_in(workspace)])))
     return [(m, privs) for _, _, m, privs in sorted(res, key=lambda x: (x[0], x[1], str(x[2]["id"]))) if privs]
 
 
-async def grant_counts(org: str) -> dict[str, int]:
-    """How many memories each principal holds a grant on: what `granted` says of one, for a list of many. One read
-    of the organization's grants and one of its memories, however long the list is. A grant left on a memory
-    since deleted, or one taken away, doesn't count, and neither does whether a server entry happens to exist."""
+async def grant_counts(org: str) -> dict[tuple[str, str], int]:
+    """How many memories each principal holds a grant on, in each workspace: {(principal, place): n}, what `granted`
+    says of one, for a list of many (an agent's count is the one in its own workspace). One read of the organization's
+    grants and one of its memories, however long the list is. A grant left on a memory since deleted, or one taken
+    away, doesn't count, and neither does whether a server entry happens to exist."""
     grants = await GRAPH.find("MemoryGrant", {"org": org})
     if not grants:
         return {}
-    live = {str(m.get("id") or "") for m in await GRAPH.find("Memory", {"org": org}) if str(m.get("deleted") or "0") != "1"}
-    held: dict[str, set[str]] = {}
+    live = {str(m.get("id") or ""): place_of(m) for m in await GRAPH.find("Memory", {"org": org})
+            if str(m.get("deleted") or "0") != "1"}
+    held: dict[tuple[str, str], set[str]] = {}
     for g in grants:
         mid = str(g.get("memory_id") or "")
         if str(g.get("deleted") or "0") == "1" or mid not in live:
             continue
         if any(p in PRIVILEGES for p in json.loads(g.get("privileges") or "[]")):
-            held.setdefault(str(g.get("principal") or ""), set()).add(mid)
+            held.setdefault((str(g.get("principal") or ""), live[mid]), set()).add(mid)
     return {who: len(mids) for who, mids in held.items()}
 
 

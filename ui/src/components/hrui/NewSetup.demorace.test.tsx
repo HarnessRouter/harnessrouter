@@ -45,7 +45,7 @@ afterEach(() => { act(() => root.unmount()); el.remove(); });
 test('a demo opened before the harness list lands takes its own pair once it does, and saves as the demo', async () => {
   await act(async () => { root.render(<NewSetup pre={{ demo: 0 }} onClose={() => {}} />); });
   await flush();
-  expect(picks()[0]).toBe('Auto');                                     // nothing to pick from yet
+  expect(picks()[0]).toBe('自动');                                     // nothing to pick from yet
   mockBases.value = { 'claude-code': { takesSkills: true } };
   await act(async () => { root.render(<NewSetup pre={{ demo: 0 }} onClose={() => {}} />); });
   await flush();
@@ -58,7 +58,7 @@ test('a demo whose model could not run yet when the sheet settled on Auto takes 
   mockRuns.models = [];                                                   // the model's availability has not landed
   await act(async () => { root.render(<NewSetup pre={{ demo: 0 }} onClose={() => {}} />); });
   await flush();
-  expect(picks()).toEqual(['Claude Code', 'Auto']);
+  expect(picks()).toEqual(['Claude Code', '自动']);
   mockRuns.models = ['claude-sonnet'];
   await act(async () => { root.render(<NewSetup pre={{ demo: 0 }} onClose={() => {}} />); });
   await flush();

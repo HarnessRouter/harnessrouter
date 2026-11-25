@@ -72,7 +72,7 @@ test('a base the server says this instance has not installed is not offered', ()
   expect(h.offeredOob({ roder: base('roder', 'ready') }).map((o) => o.id)).toEqual(['roder']);
 });
 
-test('a setup saved with no model of its own keeps none, whatever the catalog says', async () => {
+test('a harness saved with no model of its own keeps none, whatever the catalog says', async () => {
   const h = fresh();
   hf.mockResolvedValueOnce(json(MODELS));
   await h.fetchModelCatalog();
@@ -115,10 +115,10 @@ test('bases that cannot be read are failed (after their retries), never the cons
   act(() => root.unmount());
 });
 
-test('a setup list answer without the list is a failed read, never "no setups"', async () => {
+test('a harness list answer without the list is a failed read, never "no harnesses"', async () => {
   const h = fresh();
   hf.mockResolvedValueOnce(json({ detail: 'ok' }));
-  await expect(h.listCustom()).rejects.toThrow('Your setups could not be read just now.');
+  await expect(h.listCustom()).rejects.toThrow('Your harnesses could not be read just now.');
   hf.mockResolvedValueOnce(json({ harnesses: [] }));
   await expect(h.listCustom()).resolves.toEqual([]);
 });

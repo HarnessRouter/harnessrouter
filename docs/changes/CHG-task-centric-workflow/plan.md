@@ -405,3 +405,10 @@ start 后不确定保留 unknown；回退保留历史回执和 pin。本切片�
 先覆盖 Gateway SSE 提取、状态转换和真实 TaskExecutor 结果写回，再运行任务、并发、审批策略和事件回归。后续步骤仍是
 受信生产 backend factory、审批决定/精确 continuation、Response/SSE 续接、客户端 Attention/审批卡，以及全部完成后
 才发布新的 UHP 日期版本和 capability discovery。
+
+
+## 2026-11-25 最新上游集成
+
+在独立分支以 merge 保留原提交历史，集成官方 main 17a3ef23；恢复点为 bec309aa。冲突仅按现有契约合并：中文入口与 Hexa Cloud 删除边界保留，接纳上游恢复输入校验、模型兼容、插件/凭据修正；运行中审批继续 fail closed。Runner 启动同时保留 split role、readiness、动态登记及上游内部 key 文件与环境隔离。
+
+先消除冲突并做类型/语法检查；运行 Cloud 删除、hydrate/resume、Plugin/能力绑定、审批门禁和 Runner 隔离测试，再验证客户端、编排 API 和浏览器旅程。涉及启动脚本的检查在 Linux 容器执行。仅将有证据的验证写入 change-record.yaml，PR 保持草稿，远端 CI 和上游维护者接受范围独立回读。

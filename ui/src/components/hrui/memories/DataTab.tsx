@@ -340,7 +340,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
               <p>{held
                 ? (!all.length && below?.people ? 'What it keeps about each person is under their name. Choose a record to read it.'
                   : graphOpen ? 'Choose one from the list or the graph to read it.' : 'Choose one from the list to read it.')
-                : `Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
+                : `Add the first record, or give ${memory.name} to a harness and let it write.`}</p>
               {!held && write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
               {!held && schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
             </div>

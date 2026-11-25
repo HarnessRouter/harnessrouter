@@ -122,7 +122,11 @@ def env(monkeypatch):
     who = {"p": dict(ADA)}
     chat = FakeChat()
     store: dict[str, dict] = {r["id"]: dict(r) for r in _setup_rows()}
-    vault: dict[tuple[str, str], str] = {(gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001"): "crm-token-not-real"}
+    vault: dict[tuple[str, str], str] = {
+        (gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001"): "crm-token-not-real",
+        # bound as a store binds it: the server it was stored for, in the workspace its setup is in
+        (gw._org_tenant(ORG_A), "harness-mcpbind-mcp-crm00001"): json.dumps(
+            {"uses": [gw._mcp_use_of_url("https://crm.acme.example/mcp")], "workspaces": [WS_A]})}
     rec: dict = {"plugs_attach": [], "media": [], "offered": [], "lookups": [], "wires": [], "runner_envs": {}}
 
     async def principal(_request):
@@ -238,6 +242,43 @@ def mcp_id(url: str) -> str:
 CRM = mcp_id("https://crm.acme.example/mcp")
 
 
+@pytest.mark.parametrize(("skill", "about"), [
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: >-\n  How the shop writes\n  to customers.\n---\n"}]},
+     "How the shop writes to customers."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: |\n  Line one.\n---\n"}]}, "Line one."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  '---\nname: tone\ndescription: "Quoted value" # note\n---\n'}]}, "Quoted value"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\n---\nBody.\ndescription: body only\n"}]}, ""),
+    ({"content": "---\nname: tone\ndescription: Plain content value\n---\n"}, "Plain content value"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\npadding: " + "x" * 1500 + "\ndescription: After padding\n---\n"}]},
+     "After padding"),
+    # The console writes a description with JSON.stringify: escapes, and a ` #` that is text.
+    ({"files": [{"path": "SKILL.md", "content":
+                  '---\nname: tone\ndescription: "Formats issues like #123 and says \\"done\\""\n---\n'}]},
+     'Formats issues like #123 and says "done"'),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: 'It''s the shop voice' # note\n---\n"}]}, "It's the shop voice"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription: Writes replies # how\n  in the shop's voice.\n---\n"}]},
+     "Writes replies in the shop's voice."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "---\nname: tone\ndescription:\n  Writes replies\n\n  in the shop's voice.\n---\n"}]},
+     "Writes replies in the shop's voice."),
+    ({"files": [{"path": "SKILL.md", "content":
+                  '---\nname: tone\ndescription: "Runs over\n  two lines"\n---\n'}]}, "Runs over two lines"),
+    ({"files": [{"path": "SKILL.md", "content":
+                  "\ufeff---\r\nname: tone\r\ndescription: Windows line ends\r\n---\r\nBody\r\n"}]},
+     "Windows line ends"),
+], ids=["folded", "literal", "quoted-comment", "body-only", "plain-content", "long-frontmatter",
+        "console-json", "single-quoted", "plain-continued", "plain-on-next-lines", "quoted-two-lines", "bom-crlf"])
+def test_skill_about_reads_description_from_complete_frontmatter(skill, about):
+    assert gw._setup_skill_about(skill) == about
+
+
 # ── the builder, and what it reads ───────────────────────────────────────────────────────────────
 def test_the_builder_runs_on_the_instances_own_model_reading_this_workspace_only(env):
     r = start(env)
@@ -312,6 +353,10 @@ def test_a_job_is_saved_into_the_workspace_with_its_own_copies_of_the_skill_and_
     new_key = srv["auth"][len("vault:"):]
     assert new_key != "harness-mcp-mcp-crm00001" and env["vault"][(gw._org_tenant(ORG_A), new_key)] == "crm-token-not-real"
     assert env["vault"][(gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001")] == "crm-token-not-real"
+    # the copy is bound to the workspace its setup record got (not the default), and a turn there reads it
+    bind = json.loads(env["vault"][(gw._org_tenant(ORG_A), gw._mcp_bind_key(new_key))])
+    assert h["workspace"] == WS_A and bind["workspaces"] == [gw._mcp_ws(ORG_A, WS_A)]
+    assert bind["uses"] == [gw._mcp_use_of_url("https://crm.acme.example/mcp")]
     assert out["attached"] == {"skill:reply-tone": "on", CRM: "on"}
     assert env["plugs_attach"] == [] and env["media"] == []
 

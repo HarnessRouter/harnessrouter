@@ -76,7 +76,9 @@ export function buildRows(a: BuildArgs): Row[] {
     const v = view(mid);
     if (!v) return filtering ? [] : [{ kind: 'note', key: `load:${mid}`, depth, parent, memoryId: mid, tone: 'loading', text: 'Loading…' }];
     const out: Row[] = [];
-    for (const child of v.children || []) {
+    // the signed-in person's own memory first (Richard 11-10), then the others as the service listed them
+    const kids = [...(v.children || [])].sort((a, b) => Number(!!b.yours) - Number(!!a.yours));
+    for (const child of kids) {
       const key = memoryKey(child.id);
       const count = child.records?.count ?? null;
       const inner = () => visit(child.id, depth + 1, key);
@@ -90,7 +92,7 @@ export function buildRows(a: BuildArgs): Row[] {
       }
       // a count the service could not say is no reason to hide the way in
       const expandable = (child.children?.count || 0) > 0 || count === null || count > 0;
-      const open = expandable && isOpen(key, false);
+      const open = expandable && isOpen(key, !!child.yours);       // one's own stands open until closed
       out.push({ kind: 'memory', key, depth, parent, memoryId: child.id, memory: child, count, expandable, open });
       if (open) out.push(...inner());
     }

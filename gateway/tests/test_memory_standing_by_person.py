@@ -65,7 +65,7 @@ def _call(client, hid, tool, **args):
 def _section(hid, known=""):
     """The Memory section a next task of this agent is given."""
     entries = run(gw._harness_memories(hid, ORG, run(gw._harness_vertex(hid))))
-    return run(mt.doc_section(memory_local.Local(ORG, hid, entries), known=known))[0]
+    return run(mt.doc_section(memory_local.Local(ORG, hid, entries, workspace=""), known=known))[0]
 
 
 def _standing_part(section):
@@ -125,7 +125,7 @@ def test_an_agents_writing_operation_on_a_persons_standing_instruction_is_refuse
     rule = client.post(f"/v1/memories/{world['mid']}/records", headers=ADA, json={
         "type": "x.fixture.counter", "title": "Escalations this week", "attributes": {"standing": True, "n": 0}}).json()
     entries = run(gw._harness_memories(world["hid"], ORG, run(gw._harness_vertex(world["hid"]))))
-    seam = memory_local.Local(ORG, world["hid"], entries)
+    seam = memory_local.Local(ORG, world["hid"], entries, workspace="")
     with pytest.raises(mt.Refused) as e:
         run(seam.operate(world["mid"], rule["id"], "increment", {"by": 1}))
     assert e.value.message == mt.REFUSE_STANDING

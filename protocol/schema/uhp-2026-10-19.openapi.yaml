@@ -121,6 +121,8 @@ paths:
       responses:
         '200':
           description: The harness
+          headers:
+            ETag: { $ref: '#/components/headers/HarnessVersion' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Harness' }
@@ -132,6 +134,16 @@ paths:
       description: |
         Conformance class Full. `id`, `base` and `createdAt` are immutable — changing the base of an
         existing harness would silently change the behaviour of every session attached to it.
+        `If-Match` (optional) names the version the body was built from; see Harnesses §5.2.
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          description: |
+            The `ETag` a read of the harness answered, a comma-separated list of them, or `*`. A
+            harness whose version is none of them is refused with `412` and nothing is written.
+            Honoured by a server that answers reads with an `ETag`.
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -140,10 +152,19 @@ paths:
       responses:
         '200':
           description: The updated harness
+          headers:
+            ETag: { $ref: '#/components/headers/HarnessVersion' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Harness' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '412':
+          description: |
+            `precondition_failed`: the harness changed since the read whose `ETag` the `If-Match`
+            names. Nothing was written; read it again and redo the change.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     delete:
       tags: [Harnesses]
       operationId: deleteHarness
@@ -1641,6 +1662,13 @@ components:
       description: The protocol version actually used to serve this response.
       required: true
       schema: { type: string, examples: ['2026-08-11'] }
+    HarnessVersion:
+      description: |
+        The harness's version, a strong validator that changes whenever something an update
+        replaces changes. Optional; a server that sends it honours `If-Match` on the harness's
+        update (Harnesses §5.2).
+      required: false
+      schema: { type: string, examples: ['"5d41402abc4b2a76b9719d911017c592"'] }
 
   parameters:
     MemoryId:
@@ -1811,6 +1839,12 @@ components:
             with reason `input_required` and an `input_request` item, and the answer is an
             `input_response` item on the next request, chained on that response. See Tasks §3.2.
             Optional at every class.
+        resume:
+          type: boolean
+          description: |
+            A `resume` item in `input`, chained on a response the server itself cut short (`failed`,
+            `error.detail.reason` `interrupted`), continues the session and tells the harness it was
+            cut off. See Tasks §3.3. Optional at every class.
         plugins:
           type: boolean
           description: |
@@ -2173,6 +2207,8 @@ components:
             are the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).
             With `previous_response_id`, on a server with `input_requests`, one item may be an
             `InputResponse`: the answer to the question that response asked (Tasks §3.2).
+            On a server with `resume`, one item may be a `Resume` instead: a request to carry on an
+            interrupted response, alone in `input` (Tasks §3.3).
         model: { type: string, description: Canonical model id. Omitted means the harness default. }
         metadata:
           type: object
@@ -2349,6 +2385,41 @@ components:
         answer:
           type: string
           description: An option `id` for `choice` and `confirm`; any text for `free_text` and `secret`.
+
+    Resume:
+      type: object
+      required: [type]
+      description: |
+        A request to carry on a response the server itself cut short, as the only item of
+        `CreateResponseRequest.input` on a request chained on that response (Tasks §3.3). A resume
+        is single-use: a response already resumed, or passed over, is `409 resume_not_pending`.
+      properties:
+        type: { type: string, const: resume }
+        note:
+          type: string
+          description: The person's words for the harness, given to it as they are.
+
+    InterruptedDetail:
+      type: object
+      required: [reason]
+      description: |
+        `Error.detail` of a `failed` response the server itself cut short (Tasks §3.3). A client
+        deciding whether to resume reads `workspace` and `effects_may_repeat`.
+      properties:
+        reason: { type: string, const: interrupted }
+        workspace:
+          type: string
+          enum: [kept, checkpoint, lost]
+          description: |
+            `kept`: the working directory is as the turn left it. `checkpoint`: as of the last saved
+            tool step. `lost`: nothing of it survived; the turn is still resumable, from the
+            conversation alone.
+        effects_may_repeat:
+          type: boolean
+          description: |
+            `true` when the step running when the turn was cut may run again, because a checkpoint
+            cannot tell whether a tool's outside effect happened.
+      additionalProperties: true
 
     ContentPart:
       type: object
@@ -2737,10 +2808,12 @@ components:
             - harness_busy
             - plugin_conflict
             - idempotency_key_reused
+            - precondition_failed
             - branch_unavailable
             - input_not_pending
             - input_request_expired
             - input_response_invalid
+            - resume_not_pending
             - file_too_large
             - model_unavailable
             - model_not_available

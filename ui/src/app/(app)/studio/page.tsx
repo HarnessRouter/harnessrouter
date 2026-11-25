@@ -98,7 +98,7 @@ export default function StudioPage() {
   const tot = list.reduce((s, r) => s + r.day.n, 0);
   const capped = list.some((r) => r.dayCapped);
   const meta = [
-    rows === null || error ? '' : own ? `${own} setup${own === 1 ? '' : 's'}` : 'No setups yet',
+    rows === null || error ? '' : own ? `${own} ${own === 1 ? 'harness' : 'harnesses'}` : 'No harnesses yet',
     whole && runningN ? `${runningN} running` : '',
     whole && tot ? `${tot}${capped ? '+' : ''} task${tot === 1 ? '' : 's'} in 24 h` : '',
   ].filter(Boolean);

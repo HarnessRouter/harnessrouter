@@ -202,7 +202,8 @@ def test_the_wall_leaves_a_session_scope_no_group_zero(tmp_path):
     os.chown(victim, 0, 0)
     os.chmod(victim, 0o664)
     runner = str(pathlib.Path(__file__).resolve().parents[1])
-    env = {**os.environ, "HR_SESSION_UIDS": "1", "HARNESS_WORKSPACE": str(tmp_path)}
+    markers = tempfile.mkdtemp(prefix="hrmarkers-")          # root's, 0700: the wall refuses to start without one
+    env = {**os.environ, "HR_SESSION_UIDS": "1", "HARNESS_WORKSPACE": str(tmp_path), "HR_WS_MARKER_DIR": markers}
     out = subprocess.run([sys.executable, "-c", GROUP_ZERO_PROBE, str(victim), runner, str(UID)],
                          env=env, cwd=runner, capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-800:]

@@ -59,7 +59,7 @@ describe('workingNow', () => {
 });
 
 describe('liveTower', () => {
-  it('runs only the bricks the turn works through, and only where the setup has them', () => {
+  it('runs only the bricks the turn works through, and only where the harness has them', () => {
     const t = liveTower(towerOf(facts({ parts: { skill: 0, plugin: 1, mcp: 0, env: 0 } })), ['b-runtime', 'backend', 'b-sessions', 'b-orch', 'plugin', 'skill']);
     expect(t.st.plugin).toBe('run');
     expect(t.st.skill).toBe('empty');

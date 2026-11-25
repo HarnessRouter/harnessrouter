@@ -215,3 +215,69 @@ def test_a_memory_falls_back_and_says_so_and_says_how_to_start_one():
     c = mc.for_memory(name="Competitor research", running=["mem0", "reme"])
     assert c.engine in ("mem0", "reme") and c.reason.endswith(f"Graphiti fits best; it isn't running here, so {mc.LABEL[c.engine]} keeps it for now.")
     assert mc.for_memory(name="Anything", running=[]) == mc.Choice(None, mc.PER_USER, mc.NO_ENGINE, "")
+
+
+# ── the person's own words decide when they're clear (New setup) ──────────────────────────────
+# Studio's builder model writes the agent's name and instructions afresh each time. The same typed request once got a
+# shared Graphiti memory ("Personal relationship notes") and once one kept apart per person ("Personal relationship
+# updates"), 2026-11-10. The goal as typed is read first; when it names a nature clearly, it decides.
+TIMELINE = ("Keep a timeline of the people in my life and how we're all related: what's happening with each of my "
+            "friends and family over time, and the plans we make together, so I never have to repeat myself.")
+
+
+def test_a_goal_that_names_a_nature_clearly_is_read_as_that_nature():
+    assert mc.named_clearly(TIMELINE) == mc.GRAPHITI
+    assert mc.named_clearly("Be my personal assistant and learn my preferences.") == mc.MEM0
+    assert mc.named_clearly("Turn the runbooks and meeting notes into a handbook people can read and edit.") == mc.REME
+    assert mc.named_clearly("Get better at our deploys: learn from each incident and postmortem.") == mc.HINDSIGHT
+
+
+def test_a_goal_that_names_two_natures_or_none_decides_nothing():
+    assert mc.named_clearly("A personal assistant that tracks relationships between my contacts.") == ""
+    assert mc.named_clearly("Help me out.") == ""
+    assert mc.named_clearly("") == ""
+
+
+@pytest.mark.parametrize("name", ["Personal relationship notes", "Personal relationship updates", "Personal life support"])
+def test_the_same_goal_gets_the_same_memory_whatever_the_builder_named_the_agent(name):
+    # what the save does (gateway/app.py _setup_build_hint): the goal is the hint when it is clear
+    c = mc.choose(name=name, instructions="You help the person keep up with their friends and family.", hint=TIMELINE)
+    assert (c.engine, c.scope) == (mc.GRAPHITI, mc.SHARED)
+
+
+# ── an agent that works with what earlier tasks left is never "memory would add nothing" ─────────────────
+# On the test instance (11-10), "Keep a log of my running" got no memory: the instructions the builder wrote said
+# "extract" and "summarize" on the way to "correct an earlier entry" and "use the running history".
+RUNNING_LOG = (
+    "You help runners record individual runs and understand how their training changes over time. Each request may "
+    "describe a run, correct an earlier entry, or ask for a summary or comparison of previous weeks.\n\nIdentify the "
+    "requested action first. For a new run, extract the date when supplied, distance and units, and the runner's "
+    "description of how it felt. For training summaries, use the available running history to group runs by clearly "
+    "stated week boundaries. Summarize patterns in reported effort or feelings separately from numerical changes.")
+
+
+def test_a_running_log_whose_instructions_extract_and_summarize_still_remembers():
+    assert mc.scores(name="Running log", instructions=RUNNING_LOG)[0] == mc.NONE, "the verbs alone read as none"
+    got = mc.choose(running=None, name="Running log", hint="each runner's runs, distances, feelings, and weekly training changes",
+                    instructions=RUNNING_LOG)
+    assert got.engine in mc.ENGINES and got.reason != mc.REASON[mc.NONE]
+
+
+@pytest.mark.parametrize("name, instructions", [
+    ("Meal summaries", "Summarize what I ate today and compare it with previous days."),
+    ("Invoice extractor", "Extract totals from each invoice and keep a running log of what each supplier billed."),
+    ("Workout notes", "Classify each workout, and remember what I said about my knee last time."),
+    ("Reading digest", "Summarize each article I send, so my reading history builds up over the weeks."),
+])
+def test_words_about_what_earlier_tasks_left_keep_an_agent_from_needing_no_memory(name, instructions):
+    assert mc.choose(running=None, name=name, instructions=instructions).engine in mc.ENGINES
+
+
+@pytest.mark.parametrize("name, instructions", [
+    ("Summaries", "Summarizes the pasted text into three bullets. Needs no history: each request is independent."),
+    ("Date extractor", "Extracts a timeline of dates from the given document."),
+    ("Login helper", "Helps a person log in, then summarize the error they saw."),
+    ("Translator", "Translates the given text into French."),
+])
+def test_an_agent_that_only_works_on_what_it_is_given_still_needs_none(name, instructions):
+    assert mc.choose(running=None, name=name, instructions=instructions).engine is None

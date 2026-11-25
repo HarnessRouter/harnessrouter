@@ -680,7 +680,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
       ) : null}
       {sheet?.t === 'forget' ? (
         <ConfirmSheet id="mtFg" title={`Forget ${short(sheet.r)}?`} confirmLabel="Forget" busy={busy} refused={refused || undefined}
-          body={hasHistory(providerOfMemory(sheet.mid)) ? 'Setups stop seeing it, and its history is kept.' : 'Setups stop seeing it.'}
+          body={hasHistory(providerOfMemory(sheet.mid)) ? 'Harnesses stop seeing it, and its history is kept.' : 'Harnesses stop seeing it.'}
           onClose={closeSheet} onConfirm={() => void forget(sheet.r, sheet.mid)} />
       ) : null}
       {sheet?.t === 'erase' ? (
@@ -691,7 +691,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
       ) : null}
       {sheet?.t === 'delete' ? (
         <ConfirmSheet id="mtDl" title={`Delete ${sheet.m.name}?`} confirmLabel="Delete memory" busy={busy} refused={refused || undefined}
-          body={`${sheet.m.name}, its records and anything below it are destroyed, and setups lose it at once. This cannot be undone.`}
+          body={`${sheet.m.name}, its records and anything below it are destroyed, and harnesses lose it at once. This cannot be undone.`}
           onClose={closeSheet} onConfirm={() => void removeMemory(sheet.m, sheet.parent)} />
       ) : null}
       {sheet?.t === 'rename' ? (

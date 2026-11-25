@@ -18,7 +18,7 @@ const mem = (o: object = {}) => ({ id: 'hmem_a', object: 'memory', name: 'Suppor
   parent_id: null, ancestors: [], restricted: false, privileges: ['read', 'write', 'create', 'delete'], records: { count: 0 }, children: { count: 2 }, used_by: [{ harness_id: H, name: 'Support' }], ...o });
 const use = (routes: Record<string, unknown>) => { const s = service(routes); (harnessFetch as jest.Mock).mockImplementation(s.fetcher); return s; };
 
-test('the memory a setup’s record names, and whether the service made it for the setup', () => {
+test('the memory a harness’s record names, and whether the service made it for the harness', () => {
   expect(ownMemoryOf(harness(OWN))).toEqual({ id: 'hmem_a', name: 'Support', engine: 'mem0', provisioned: true });
   expect(ownMemoryOf(harness({ ...OWN, provisioned: undefined }))?.provisioned).toBe(false);
   expect(ownMemoryOf(harness(null))).toBeNull();
@@ -36,12 +36,12 @@ test('delete: its memory, and each person’s, are kept 30 days with it, then de
   expect(memoryOnDeleteLine(x)).toBe('Its memory, and each person\'s memory, are kept for 30 days with it, then deleted (5 facts in all).');
 });
 
-test('delete: a memory another setup uses stays, and the dialog says who', async () => {
+test('delete: a memory another harness uses stays, and the dialog says who', async () => {
   use({ [`GET /v1/harnesses/${H}`]: harness(OWN), 'GET /v1/memories/hmem_a': mem({ children: { count: 0 }, records: { count: 3 }, used_by: [{ harness_id: H, name: 'Support' }, { harness_id: 'chrn_b', name: 'Billing' }] }) });
   expect(memoryOnDeleteLine(await memoryOnDelete(H))).toBe('Its memory, Support, stays: Billing uses it too.');
 });
 
-test('delete: a count that can’t be said is left out, and a memory the setup was given is not mentioned', async () => {
+test('delete: a count that can’t be said is left out, and a memory the harness was given is not mentioned', async () => {
   use({ [`GET /v1/harnesses/${H}`]: harness(OWN), 'GET /v1/memories/hmem_a': mem(), 'GET /v1/memories': { data: [{ ...mem(), id: 'hmem_p1', records: { count: null } }] } });
   expect(memoryOnDeleteLine(await memoryOnDelete(H))).toBe('Its memory, and each person\'s memory, are kept for 30 days with it, then deleted.');
   use({ [`GET /v1/harnesses/${H}`]: harness({ ...OWN, provisioned: false }) });
@@ -61,7 +61,7 @@ test('deleted: the toast says what the service did with the memory, and nothing 
   expect(deletedToast('Support', {})).toBe('Support deleted');
 });
 
-test('rename: a memory still named after the setup follows it, its description too; one a person renamed keeps its name', () => {
+test('rename: a memory still named after the harness follows it, its description too; one a person renamed keeps its name', () => {
   const made = { name: autoMemoryName('Support'), description: autoMemoryDescription('Support') };
   expect(memoryRenameOf('Support', 'Customer care', made, true)).toEqual({ name: 'Customer care', description: 'What Customer care remembers from its work.' });
   expect(memoryRenameOf('Support', 'Customer care', { ...made, description: 'Our own words.' }, true)).toEqual({ name: 'Customer care' });
@@ -73,7 +73,7 @@ test('rename: a memory still named after the setup follows it, its description t
   expect(memoryRenameOf(long, 'Short', { name: long.slice(0, 120), description: '' }, true)).toEqual({ name: 'Short' });
 });
 
-test('rename: through the memory update route, and only for a memory the service made for the setup', async () => {
+test('rename: through the memory update route, and only for a memory the service made for the harness', async () => {
   const s = use({ 'GET /v1/memories/hmem_a': mem(), 'PUT /v1/memories/hmem_a': (c: { body: unknown }) => ({ ...mem(), ...(c.body as object) }) });
   expect(await followRename(harness(OWN), 'Support', 'Customer care')).toBe(true);
   expect(s.sent('PUT', '/v1/memories/hmem_a')[0].body).toEqual({ name: 'Customer care', description: 'What Customer care remembers from its work.' });

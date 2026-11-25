@@ -292,7 +292,8 @@ def test_a_package_on_disk_holds_no_remote_credential(tmp_path):
 def test_every_writer_is_downstream_of_the_relay():
     src = (pathlib.Path(srv.__file__)).read_text()
     body = src[src.index("def _start_turn("):]
-    seam = body.index("servers = req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else _mcp_through_relay(req.mcp_servers)")
+    seam = body.index("servers = (req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else\n"
+                      "                   _mcp_through_relay(req.mcp_servers,")
     assert seam < body.index("req.mcp_servers = _sse_bridges(cwd, _plugin_launchers(cwd, servers), req.backend)")
     assert seam < body.index("mcp_servers=req.mcp_servers")
     assert "req.mcp_servers" not in body[:seam], "nothing reads the servers before the relay has them"

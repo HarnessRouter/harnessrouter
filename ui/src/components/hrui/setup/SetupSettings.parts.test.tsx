@@ -96,7 +96,7 @@ const partSays = (k: string) => el.querySelector(`.part.built[data-tw=${k}] smal
 const railLine = () => Array.from(el.querySelectorAll('.ly-list .ly-n')).find((b) => b.querySelector('b')?.textContent === 'Capabilities')?.querySelector('small')?.textContent;
 const button = (t: string) => Array.from(el.querySelectorAll('button')).find((b) => b.textContent === t) as HTMLButtonElement | undefined;
 
-describe('a setup whose only plugin is a package installed on it', () => {
+describe('a harness whose only plugin is a package installed on it', () => {
   test('the Plugins tab reads 1 and lists it, with its line and its switch on', async () => {
     await settings(setup());
     expect(tabs()).toEqual(['Plugins 1', 'Skills 3', 'Tools 7']);
@@ -119,7 +119,7 @@ describe('a setup whose only plugin is a package installed on it', () => {
 });
 
 describe('built-ins in the tabs, only what was added in the picture', () => {
-  test('a setup with only built-ins: the tabs list them, the stack and the line say nothing was added', async () => {
+  test('a harness with only built-ins: the tabs list them, the stack and the line say nothing was added', async () => {
     const h = setup({ plugins: [] });
     await settings(h, 'caps', 'skill');
     expect(tabs()).toEqual(['Plugins 0', 'Skills 3', 'Tools 7']);
@@ -201,7 +201,7 @@ describe('only what a person needs', () => {
 
 // ── what Settings shows when a read fails or a choice was never made (Richard 10-19: no fallbacks) ──
 describe('no fallbacks', () => {
-  test('a setup with no model of its own keeps none: the harness default is its choice, never a model filled in', async () => {
+  test('a harness with no model of its own keeps none: the harness default is its choice, never a model filled in', async () => {
     hx.oobModels.mockReturnValue(['glm-5.3', 'gpt-5.4']);
     (hx.oobDefaultModel as jest.Mock).mockReturnValue('gpt-5.4');
     hx.modelAvailability.mockImplementation(() => 'yes');

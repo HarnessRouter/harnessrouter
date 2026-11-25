@@ -696,9 +696,10 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
     if (resumed && last) setModel(last);
   }, []);
 
-  const keyOf = (m: string) => { const c = providers.connectionFor(m); return c ? (providerById(c.provider)?.name || c.provider) : ''; };
+  // the key a task on this harness runs through, not the instance's for the model (#696)
+  const keyOf = (m: string) => { const c = providers.connectionFor(m, oob?.backend ?? undefined); return c ? (providerById(c.provider)?.name || c.provider) : ''; };
   // what the pill and the list call a model; '' is the setup's default, or a past task's own last model
-  const nameOf = (m: string) => m || (slot.resume ? 'Same model' : `Setup default${harnessDefault ? ` (${harnessDefault})` : ''}`);
+  const nameOf = (m: string) => m || (slot.resume ? 'Same model' : `Harness default${harnessDefault ? ` (${harnessDefault})` : ''}`);
   const cantRun = !!model && modelAvailability(oob?.backend, model) === 'no';
   const shown = (models || []).filter((m) => nameOf(m).toLowerCase().includes(q.trim().toLowerCase()));
   const choose = (m: string) => { if (codexBlocked(oob?.backend, seen, m)) return; setModel(m); setPop(null); setQ(''); pkRef.current?.focus(); };

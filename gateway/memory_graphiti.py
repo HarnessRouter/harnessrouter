@@ -16,7 +16,8 @@ against that server on 2026-11-04.
       `hr_read:<node>` taken in the background (11-06, so each system is used as it is built to be): the entities
       and facts it finds come from the stated record, never from the copy, which is not shown. Graphiti's merging
       can rewrite a node's summary, so a stated node keeps its words in `hr_text`. Revising re-reads; forgetting
-      or erasing it takes the copy, and what came only from it, away.
+      or erasing it takes the copy, and what came only from it, away. A recall answers a fact read from a stated
+      record as that record (_as_stated).
   holds    = Graphiti's own: a new fact that contradicts an old one closes it (`invalid_at`), and the old
       one stays readable. A closed fact is `superseded`, and `time.valid_to` says when.
   forget   = a fact closed now; a stated node marked. erase = deleted. An erased fact's words can still be in
@@ -26,8 +27,10 @@ against that server on 2026-11-04.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
+import os
 import time
 import uuid
 
@@ -40,6 +43,17 @@ NODE, EDGE, EPISODE = "node_", "edge_", "ep_"
 SESSION = " session:"   # how an episode's source names the task it came from (observe), after who sent it
 READ = "hr_read:"    # the name of the episode Graphiti reads a stated record as, followed by the node's uuid
 LINK = "hr_link"     # on an edge made for a record's reference, not for a fact
+# Graphiti reads what a memory is given in the background. A revise, forget, erase or a memory's delete first waits for
+# the memory's readings (queued and being read) to finish, this long at most for the whole call, and is refused
+# untouched while any remain: asking again finishes it.
+SETTLE_S = 120.0     # HR_GRAPHITI_SETTLE_S sets another, for a server that reads more slowly
+SETTLE_NAP = 1.0
+BUSY = "It is still being read just now, so nothing was changed. Ask again in a moment."
+ERASE_LEFT = "It couldn't all be erased just now. Erase it again."
+# A server that can't say how much it has still to read (built before /groups/{group}/pending) is never taken for one
+# with nothing to read: the change is refused until the server is rebuilt.
+REBUILD = ("Your Graphiti server can't say whether it is still reading this memory, so nothing was changed. "
+           "Rebuild it with deploy/memories/up.sh, then ask again.")
 # Tests set an httpx transport here so every call is exercised without a server.
 transport: httpx.BaseTransport | None = None
 # Every other call opens its connections through the gateway's checked network (app.py sets this), so an address
@@ -49,6 +63,13 @@ checked_transport = None
 
 def _transport():
     return transport if transport is not None else (checked_transport() if checked_transport else None)
+
+
+def _settle_s() -> float:
+    try:
+        return float(os.environ.get("HR_GRAPHITI_SETTLE_S") or SETTLE_S)
+    except ValueError:
+        return SETTLE_S
 
 
 class GraphitiUnavailable(mp.MemoryError):
@@ -75,6 +96,14 @@ def _is_link(e: dict) -> bool:
 def _now() -> str:
     d = _dt.datetime.now(_dt.timezone.utc)
     return d.strftime("%Y-%m-%dT%H:%M:%S.") + f"{d.microsecond // 1000:03d}Z"
+
+
+# Whether a Graphiti server leaves a record we stated standing when an episode that mentions it is removed: its
+# /healthz says keeps_stated_records (deploy/memories/graphiti/server.py, keep_stated). One that predates it deletes a
+# node only the removed episode mentions, and extraction links a record's node to the copy of it Graphiti read, so
+# replacing or dropping that copy deleted the record. Read once in a while per server address.
+KEEPS_TTL_S = 300
+_KEEPS: dict[str, tuple[float, bool]] = {}
 
 
 class Graphiti(mp.Provider):
@@ -245,11 +274,54 @@ class Graphiti(mp.Provider):
             pass
         self._copies_at.pop(mid, None)
 
-    async def _drop_copies(self, mid: str, node: str) -> None:
+    async def _keeps_stated(self) -> bool:
+        hit = _KEEPS.get(self.base)
+        if hit and time.time() - hit[0] < KEEPS_TTL_S:
+            return hit[1]
+        try:
+            r = await self._call("GET", "/healthz")
+            keeps = r.status_code == 200 and (r.json() or {}).get("keeps_stated_records") is True
+        except (mp.MemoryError, ValueError):
+            keeps = False
+        _KEEPS[self.base] = (time.time(), keeps)
+        return keeps
+
+    async def _drop_copies(self, mid: str, node: str, keep_record: bool = True) -> None:
+        """What Graphiti read from a record leaves with its copies. `keep_record` (a revision, a forget): the record
+        itself stays, so on a server that would delete it with its copy (_keeps_stated is false) each copy is
+        forgotten instead, which clears its words and keeps the record; what it taught then stays until the server
+        is rebuilt. An erase deletes the copies either way: the record goes too, and a forgotten copy keeps the
+        words beside it."""
+        delete = not keep_record or await self._keeps_stated()
         for ep, rid in (await self._copies(mid, episodes=await self._episodes(mid))).items():
             if rid == NODE + node:
-                await self._call("DELETE", f"/groups/{mid}/episodes/{ep}")
+                if delete:
+                    await self._call("DELETE", f"/groups/{mid}/episodes/{ep}")
+                else:
+                    await self._call("POST", f"/groups/{mid}/episodes/{ep}/forget", body={"at": _now()})
         self._copies_at.pop(mid, None)
+        self._eps_at.pop(mid, None)
+
+    async def _settled(self, mid: str, left: str, until: float, code: str = "memory_unavailable") -> None:
+        """Waits until the memory's background readings (queued and being read) are done, until `until`; still reading
+        then: 503 in `left`'s words. A count that can't be read, or a server without it (404), is a 503 too, never
+        taken for none."""
+        while True:
+            r = await self._call("GET", f"/groups/{mid}/pending")
+            if r.status_code == 404:
+                raise mp.MemoryError(503, code, REBUILD)
+            try:
+                n = int((r.json() or {})["pending"])
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise mp.MemoryError(503, code, left) from None
+            if n <= 0:
+                return
+            if time.monotonic() >= until:
+                raise mp.MemoryError(503, code, left)
+            await asyncio.sleep(SETTLE_NAP)
+
+    async def ready_to_change(self, mid):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
 
     async def _schema(self, mid: str) -> dict:
         m = await mp._load(self.org, mid) if self.org else None
@@ -260,6 +332,7 @@ class Graphiti(mp.Provider):
 
     # ── lifecycle ─────────────────────────────────────────────────────────────────────────────
     async def drop(self, mid):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         await self._call("DELETE", f"/groups/{mid}")
 
     async def count(self, mid):
@@ -304,7 +377,10 @@ class Graphiti(mp.Provider):
         extraction = await self._extraction(mid)
         records = []
         for e in episodes:
-            text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
+            # each line under who said it: the person by name where the part names them, so the graph's node for them is
+            # them (Richard 11-10: never a node called "user" beside one called by the name they gave), else the role
+            text = "\n".join(f"{p.get('name') or p.get('role')}: {p['text']}" if p.get("name") or p.get("role") else str(p["text"])
+                             for p in e.get("content") or [] if p.get("text"))
             session = str((e.get("attributes") or {}).get("session_id") or "")
             r = await self._call("POST", "/episodes", body={
                 "group_id": mid, "content": text,
@@ -324,6 +400,7 @@ class Graphiti(mp.Provider):
         return {"records": records, "job": None}
 
     async def revise(self, mid, rid, patch, writer):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         cur = await self.get(mid, rid)
         if not cur or cur["status"] != "active":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
@@ -364,6 +441,7 @@ class Graphiti(mp.Provider):
         return {**self._node_out(mid, r.json()), "supersedes": cur["version"]}
 
     async def forget(self, mid, rid, writer):
+        await self._settled(mid, BUSY, time.monotonic() + _settle_s())
         cur = await self.get(mid, rid)
         if not cur or cur["status"] != "active":
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
@@ -387,6 +465,9 @@ class Graphiti(mp.Provider):
 
     async def erase(self, mid, rids):
         erased, unreachable = [], []
+        until = time.monotonic() + _settle_s()
+        if rids:
+            await self._settled(mid, BUSY, until)
         for rid in rids:
             cur = await self.get(mid, rid)
             if not cur:
@@ -396,8 +477,20 @@ class Graphiti(mp.Provider):
                 if any(x["rel"] == "derived_from" for x in cur["references"]):
                     unreachable.append(rid)      # its words can still be in the episode it came from
             elif rid.startswith(NODE):
-                await self._drop_copies(mid, rid[len(NODE):])
-                r = await self._call("DELETE", f"/groups/{mid}/nodes/{rid[len(NODE):]}")
+                uid = rid[len(NODE):]
+                await self._drop_copies(mid, uid, keep_record=False)
+                r = await self._call("DELETE", f"/groups/{mid}/nodes/{uid}")
+                # said erased only once it reads gone after the memory's readings; otherwise deleted once more, then a
+                # 503, and asking again finishes it
+                for last in (False, True):
+                    await self._settled(mid, ERASE_LEFT, until, "memory_cleanup_incomplete")
+                    await self._drop_copies(mid, uid, keep_record=False)
+                    if (await self._call("GET", f"/groups/{mid}/nodes/{uid}")).status_code == 404:
+                        r = httpx.Response(200)
+                        break
+                    if last:
+                        raise mp.MemoryError(503, "memory_cleanup_incomplete", ERASE_LEFT)
+                    r = await self._call("DELETE", f"/groups/{mid}/nodes/{uid}")
             else:
                 r = await self._call("DELETE", f"/groups/{mid}/episodes/{rid[len(EPISODE):]}")
                 self._eps_at.pop(mid, None)
@@ -497,5 +590,36 @@ class Graphiti(mp.Provider):
         rows = self._facts_out(mid, d.get("edges") or [], copies) + [self._node_out(mid, n, copies) for n in d.get("nodes") or []] + \
             [self._episode_out(mid, x) for x in d.get("episodes") or [] if not self._is_copy(x)]
         why = [w for w, on in (("query", query), ("text", text), ("filters", later)) if on]
-        kept = [x for x in rows if keep(x)]
+        kept = await self._as_stated(mid, [x for x in rows if keep(x)], keep)
         return {"results": [{"record": x, "memory_id": mid, "score": round(1 - i / max(len(kept), 1), 4), "why": why} for i, x in enumerate(kept)][:limit], "degraded": degraded, "abstain": False}
+
+    async def _as_stated(self, mid: str, rows: list[dict], keep) -> list[dict]:
+        """A fact Graphiti read from a stated record's copy says what that record says, and the stated record is the
+        one a reader acts on: it keeps its writer's words, its references, and a disagreement it is part of. So such a
+        fact is answered as the stated record it came from, at the fact's place, each record once. A hit on one side
+        of a disagreement then brings the other (§6.3), which a fact Graphiti drew from it, carrying no `contradicts`,
+        did not (UHP conformance ME-12). A fact that came from an episode, even in part, stays as it is, and so does
+        one whose stated record can't be read or is not one this recall keeps.
+
+        Only a stated record's copy is named `hr_read:<node>` (_read_copy; observe names none), so a fact's
+        `derived_from` that is a node is a stated record. Who wrote its latest version doesn't change that: a record on
+        one side of a disagreement is revised by the server on its writer's behalf when the other side is written
+        (written_by kind provider, on_behalf_of), and judging by the writer left a fact drawn from it answered as
+        itself, without the other side (ME-12 failed whenever that fact ranked first: 2 recalls in 4 on a live instance)."""
+        found = {x["id"]: x for x in rows}
+        out: list[dict] = []
+        placed: set[str] = set()
+        for x in rows:
+            src = [str(r.get("record_id") or "") for r in x.get("references") or [] if r.get("rel") == "derived_from"]
+            if x["id"].startswith(EDGE) and src and all(s.startswith(NODE) for s in src):
+                stated = [found.get(s) or await self.get(mid, s) for s in src]
+                if all(s and keep(s) for s in stated):
+                    for s in stated:
+                        if s["id"] not in placed:
+                            placed.add(s["id"])
+                            out.append(s)
+                    continue
+            if x["id"] not in placed:
+                placed.add(x["id"])
+                out.append(x)
+        return out

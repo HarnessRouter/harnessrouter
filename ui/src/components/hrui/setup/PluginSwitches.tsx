@@ -51,7 +51,7 @@ export interface PluginsIn {
   packages: { name: string; on: boolean; desc: string; left: number }[];
 }
 
-const JUST = 'Just connected. Include it in this setup?';
+const JUST = 'Just connected. Include it in this harness?';
 const without = (list: string[], x: string) => list.filter((y) => y !== x);
 
 /** Every row of the tab (unordered): the rule at the top. Workspace plugins only once both they and the

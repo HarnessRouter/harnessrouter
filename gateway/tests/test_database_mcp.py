@@ -450,6 +450,16 @@ def test_a_connection_string_with_no_database_says_so(api, kit):
     assert r.status_code == 400 and "names no database" in r.json()["error"]["message"]
 
 
+@pytest.mark.parametrize("port", ["abc", "99999", "0"])
+def test_an_invalid_connection_string_port_is_a_safe_error(api, kit, port):
+    password = "invalid-port-password"
+    r = _launch(api, kit, "postgres", f"postgresql://u:{password}@host:{port}/db")
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["code"] == "invalid_connection_string"
+    assert password not in err["message"]
+
+
 def test_no_key_to_encrypt_with_is_a_sentence_naming_the_variable(api, kit, monkeypatch):
     """The 501 the operator of a keyless instance must see. Not a 500, and not a plaintext write."""
     monkeypatch.delenv("HR_SECRET_KEY", raising=False)
@@ -785,7 +795,8 @@ def test_a_hosted_entry_pointed_elsewhere_hands_that_server_nothing(api, connect
 def test_a_remote_entry_naming_a_hosted_record_resolves_to_nothing(connected):
     """The refusal at the funnel every outbound credential passes through, so it holds for callers
     that do not exist yet."""
-    assert asyncio.run(app._resolve_mcp_auth(ORG, f"vault:{_key(connected)}")) == ""
+    for use in ("host:evil.example:443", app.USE_ENV, ""):
+        assert asyncio.run(app._resolve_mcp_auth(ORG, f"vault:{_key(connected)}", use=use, ws="", any_ws=True)) == ""
 
 
 def test_a_url_that_only_looks_like_ours_is_not_treated_as_ours(api, connected):

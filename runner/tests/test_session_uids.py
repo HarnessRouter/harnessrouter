@@ -20,7 +20,7 @@ def test_wall_off_changes_nothing(tmp_path, monkeypatch):
     ws = tmp_path / "s1"
     ws.mkdir()
     assert server._session_uid(str(ws)) is None
-    assert server._as_session(str(ws)) == {}
+    assert server._in_session(["git", "status"], str(ws)) == ["git", "status"]
     server._isolate_session(str(ws))          # a no-op, not an error, on a non-root test process
     assert (ws.stat().st_mode & 0o777) == 0o755 or (ws.stat().st_mode & 0o777) == 0o775
 
@@ -31,7 +31,7 @@ def test_session_uid_reads_the_directory_owner(tmp_path, monkeypatch):
     ws.mkdir()
     # Owned by the test user: outside the session range, so "not isolated yet".
     assert server._session_uid(str(ws)) is None
-    assert server._as_session(str(ws)) == {}
+    assert server._in_session(["git", "status"], str(ws)) == ["git", "status"]
     fake = server._SESSION_UID_BASE + 7
     real_stat = os.stat
 
@@ -40,12 +40,38 @@ def test_session_uid_reads_the_directory_owner(tmp_path, monkeypatch):
 
     monkeypatch.setattr(server.os, "stat", lambda p, *a, **k: St() if str(p) == str(ws) else real_stat(p, *a, **k))
     assert server._session_uid(str(ws)) == fake
-    assert server._as_session(str(ws)) == {"user": fake, "group": fake, "extra_groups": []}
+    monkeypatch.setattr(server, "_SETPRIV", sys.executable)        # any executable stands in for setpriv here
+    sp = server._SETPRIV
+    path = {"PATH": os.environ.get("PATH", "")}
+    assert server._in_session(["git", "status"], str(ws), path) == [sp, f"--reuid={fake}", f"--regid={fake}", "--clear-groups", "--inh-caps=-all", "--", "git", "status"]
     # a turn that names an environment joins that environment's group, and only then
     gid = server.environments.GID_BASE + 3
     monkeypatch.setattr(server.environments, "reader_gid", lambda m: gid if m == "/env/studio" else None)
-    assert server._as_session(str(ws), {"HR_ENVIRONMENT": "/env/studio"}) == {"user": fake, "group": fake, "extra_groups": [gid]}
-    assert server._as_session(str(ws), {"PATH": "/usr/bin"}) == {"user": fake, "group": fake, "extra_groups": []}
+    assert server._in_session(["git"], str(ws), {**path, "HR_ENVIRONMENT": "/env/studio"}) == [sp, f"--reuid={fake}", f"--regid={fake}", f"--groups={gid}", "--inh-caps=-all", "--", "git"]
+    assert server._in_session(["git"], str(ws), path)[3] == "--clear-groups"
+    # a CLI that is not installed fails the spawn as Popen did, naming it, before anything starts
+    with pytest.raises(FileNotFoundError) as e:
+        server._in_session(["no-such-cli-xyz"], str(ws), path)
+    assert e.value.errno == errno.ENOENT and e.value.filename == "no-such-cli-xyz"
+    # without setpriv a session process does not start at all: never as root instead
+    monkeypatch.setattr(server, "_SETPRIV", str(tmp_path / "missing-setpriv"))
+    with pytest.raises(RuntimeError, match="setpriv"):
+        server._in_session(["git"], str(ws), path)
+
+
+def test_no_spawn_changes_the_uid_before_its_exec():
+    """Every session process, and every environment build step, starts through setpriv (_in_session,
+    _as_identity); Popen's user=/group=/extra_groups= are never used for one."""
+    import re
+    runner = Path(__file__).resolve().parents[1]
+    src = (runner / "server.py").read_text()
+    assert not re.search(r"\b(user|group|extra_groups)\s*=\s*(uid|gid|fake|_session)", src)
+    assert "_as_session(" not in src
+    # environments.py's build steps: the same, through _as_identity
+    env_src = (runner / "environments.py").read_text()
+    assert not re.search(r"subprocess\.(run|Popen)\([^)]*\b(user|group|extra_groups)\s*=", env_src, re.S)
+    assert "**run_as" not in env_src and "**(run_as" not in env_src
+    assert not re.search(r"\b(user|group)\s*=\s*gid\b", env_src)
 
 
 @pytest.mark.parametrize("name,stripped", [
@@ -55,9 +81,25 @@ def test_session_uid_reads_the_directory_owner(tmp_path, monkeypatch):
     ("PATH", False), ("HOME", False), ("HR_DSH_PYTHON", False), ("HR_PI_MCP_EXT", False),
     ("NODE_PATH", False), ("HERMES_DISABLE_LAZY_INSTALLS", False), ("OFFICECLI_RESIDENT_FLUSH", False),
     ("HARNESS_WORKSPACE", False), ("HR_BACKENDS", False),
+    ("FOO_KEY", True), ("DB_PASS", True), ("SMTP_PASSWORD", True), ("SMTP_PWD", True), ("SENTRY_DSN", True),
+    ("SERVICE_CREDENTIALS", True), ("GPG_KEY", True),
+    ("OLDPWD", False), ("HR_MEMORY_RELAY_KEYS", False), ("HR_INTERNAL_KEY_FILE", False), ("HR_AIDER_HISTORY_TOKENS", False),
 ])
 def test_child_env_strips_secrets_and_keeps_the_runtime(monkeypatch, name, stripped):
     monkeypatch.setenv(name, "v")
+    assert (name not in server._child_env()) is stripped
+
+
+@pytest.mark.parametrize("name,value,stripped", [
+    ("DATABASE_URL", "postgres://app:s3cret@db:5432/app", True),
+    ("REDIS_URL", "redis://:s3cret@cache:6379/0", True),
+    ("HTTPS_PROXY", "http://user:pw@proxy:3128", False),      # agents need their proxy to reach anything
+    ("https_proxy", "http://user:pw@proxy:3128", False),
+    ("HOMEPAGE_URL", "https://example.com/a@b", False),       # an @ that is not a credential
+    ("MIRROR_URL", "https://mirror.example/pypi", False),
+])
+def test_child_env_strips_urls_that_carry_a_password(monkeypatch, name, value, stripped):
+    monkeypatch.setenv(name, value)
     assert (name not in server._child_env()) is stripped
 
 
@@ -222,3 +264,23 @@ def test_what_a_session_did_to_its_own_tree_is_a_verdict(monkeypatch, tmp_path, 
 def test_anything_else_stays_the_failure_it_was(monkeypatch, tmp_path, make_error):
     with pytest.raises(OSError):
         _turn_meets(monkeypatch, tmp_path, make_error)
+
+
+def test_the_runner_reads_its_key_from_the_file_and_fails_closed(tmp_path):
+    """The entrypoint starts the runner with no secret in its environment and the key in a root-only file;
+    a named file that is missing or empty stops the runner instead of leaving its routes keyless."""
+    import subprocess
+    key = tmp_path / "internal-key"
+    key.write_text("k" * 64)
+    os.chmod(key, 0o600)
+    code = "import server; print(len(server._INTERNAL_KEY))"
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "/tmp"),
+           "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "HR_INTERNAL_KEY_FILE": str(key)}
+    ok = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+    assert ok.returncode == 0 and ok.stdout.strip().endswith("64"), ok.stderr[-400:]
+    for bad in (tmp_path / "missing", tmp_path / "empty"):
+        if bad.name == "empty":
+            bad.write_text("")
+        r = subprocess.run([sys.executable, "-c", code], env={**env, "HR_INTERNAL_KEY_FILE": str(bad)},
+                           capture_output=True, text=True, timeout=120)
+        assert r.returncode != 0 and "HR_INTERNAL_KEY_FILE" in r.stderr, (bad.name, r.stdout, r.stderr[-300:])

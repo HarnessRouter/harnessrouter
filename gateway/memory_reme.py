@@ -277,7 +277,8 @@ class ReMe(mp.Provider):
         for e in episodes:
             rid = "hrec_" + uuid.uuid4().hex
             parts = [p for p in e.get("content") or [] if p.get("text")]
-            body = "\n\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in parts)
+            body = "\n\n".join(f"{p.get('name') or p.get('role')}: {p['text']}" if p.get("name") or p.get("role") else str(p["text"])
+                                 for p in parts)
             on_behalf = {"kind": "provider", "id": self.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
             front = self._front(rid, {"type": "episode", "attributes": e.get("attributes") or {}, "content": [{"type": "text", "text": body}]}, on_behalf, 1)
             path = f"{self._dir(mid)}/episodes/{rid}.md"
@@ -291,7 +292,7 @@ class ReMe(mp.Provider):
     async def _note_from(self, mid: str, rid: str, parts: list[dict], writer: dict) -> dict | None:
         """ReMe's agent writes a note about the turn into the shared `daily` folder. It is moved into this
         memory's folder before anything else can read it there. A failure here costs the note, not the episode."""
-        msgs = [{"name": str(p.get("role") or "user"), "role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]} for p in parts]
+        msgs = [{"name": str(p.get("name") or p.get("role") or "user"), "role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]} for p in parts]
         try:
             # memory_hint: ReMe's own guidance for the note its agent writes ("Extra hint" in its auto_memory prompt)
             d = await self._call("auto_memory", {"messages": msgs, "session_id": f"{mid}_{rid}", "memory_hint": mp.EXTRACTION_GUIDE})

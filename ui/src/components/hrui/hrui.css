@@ -556,7 +556,7 @@
 #hrui .proto-h:where(:not(.hrui-legacy *)){display:block;margin:10px 8px 4px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 #hrui .proto-pop button:where(:not(.hrui-legacy *))::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--line);flex:none}
 #hrui .proto-pop button.on:where(:not(.hrui-legacy *))::before{background:var(--accent)}
-#hrui .toast:where(:not(.hrui-legacy *)){position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:60}
+#hrui .toast:where(:not(.hrui-legacy *)){position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);width:max-content;max-width:min(760px,calc(100vw - 32px));text-align:center;background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:18px;font-size:13px;z-index:60}
 
 @media (max-width:1000px){
   #hrui .agent-wrap:where(:not(.hrui-legacy *)){grid-template-columns:minmax(0,1fr)}
