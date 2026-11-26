@@ -271,6 +271,38 @@ def test_writers_on_one_record_go_one_at_a_time_and_the_second_sees_the_first():
     assert memory_live._locks == {}, "a lock outlives its writers"
 
 
+def test_a_cancelled_waiting_writer_doesn_t_leave_its_record_lock():
+    """A cancelled writer waiting behind another must not leave the record's lock alive."""
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+
+    class Slow:
+        async def revise(self, mid, rid, patch, writer):
+            entered.set()
+            await finish.wait()
+            return {"id": rid, "version": 2}
+
+    async def go():
+        p = memory_live.Announced(Slow())
+        first = asyncio.create_task(p.revise("hmem_x", "r", {"title": "a"}, {"id": "agent"}))
+        await asyncio.wait_for(entered.wait(), timeout=0.2)
+        second = asyncio.create_task(p.revise("hmem_x", "r", {"title": "b"}, {"id": "person"}))
+
+        async def second_is_waiting():
+            while memory_live._locks.get(("hmem_x", "r"), [None, 0])[1] != 2:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(second_is_waiting(), timeout=0.2)
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(second, timeout=0.2)
+        finish.set()
+        return await asyncio.wait_for(first, timeout=0.2)
+
+    assert asyncio.run(go())["version"] == 2
+    assert memory_live._locks == {}, "a cancelled waiter left its record lock alive"
+
+
 def test_writers_on_different_records_don_t_wait_for_each_other():
     running = []
 
