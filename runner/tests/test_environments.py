@@ -110,6 +110,102 @@ def test_import_keeps_a_single_file_with_or_without_a_wrapping_directory(
     assert {e["path"] for e in E.tree("henv_single")} == {"new.txt"}
 
 
+def test_failed_archive_import_preserves_existing_source(store, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    E.write_file("henv_keep", "scripts/render.py", b"print('keep')\n")
+    os.chmod(E.source_dir("henv_keep") / "scripts" / "render.py", 0o755)
+    E.write_file("henv_keep", "config.yaml", b"a: 1\n")
+
+    bad_txt = tmp_path / "bad.txt"
+    bad_txt.write_bytes(b"not an archive\n")
+
+    corrupt_zip = tmp_path / "corrupt.zip"
+    with zipfile.ZipFile(corrupt_zip, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("good.txt", b"first\n")
+        zf.writestr("broken.txt", b"hello world " * 10)
+    zraw = bytearray(corrupt_zip.read_bytes())
+    zraw[zraw.find(b"hello world")] ^= 0xFF
+    corrupt_zip.write_bytes(bytes(zraw))
+    assert zipfile.is_zipfile(corrupt_zip)
+
+    trunc_tar = tmp_path / "trunc.tar.gz"
+    with tarfile.open(trunc_tar, "w:gz") as tf:
+        for i in range(5):
+            payload = (f"file {i} " * 200).encode()
+            ti = tarfile.TarInfo(f"f{i}.txt")
+            ti.size = len(payload)
+            tf.addfile(ti, io.BytesIO(payload))
+    traw = trunc_tar.read_bytes()
+    trunc_tar.write_bytes(traw[:len(traw) // 2])
+    assert tarfile.is_tarfile(trunc_tar)
+
+    conflict_zip = tmp_path / "conflict.zip"
+    with zipfile.ZipFile(conflict_zip, "w") as zf:
+        zf.writestr("other.txt", b"ok\n")
+        zf.writestr("foo", b"as file\n")
+        zf.writestr("foo/bar.txt", b"nested\n")
+
+    for bad_path in (bad_txt, corrupt_zip, trunc_tar, conflict_zip):
+        with pytest.raises(HTTPException) as exc:
+            E.import_archive("henv_keep", str(bad_path), replace=True)
+        assert exc.value.status_code == 400, bad_path.name
+        assert E.source_stat("henv_keep") == {"count": 2, "bytes": 19}, bad_path.name
+        assert E.read_file("henv_keep", "scripts/render.py")[0] == b"print('keep')\n"
+        assert os.stat(E.source_dir("henv_keep") / "scripts" / "render.py").st_mode & 0o111
+
+    with pytest.raises(HTTPException) as exc:
+        E.import_archive("henv_keep", str(corrupt_zip), replace=False)
+    assert exc.value.status_code == 400
+    assert not (E.source_dir("henv_keep") / "good.txt").exists()
+
+    with pytest.raises(HTTPException) as exc:
+        E.import_archive("henv_never", str(bad_txt), replace=True)
+    assert exc.value.status_code == 400
+    assert not E.env_dir("henv_never").exists()
+
+    app = FastAPI()
+    app.include_router(E.router)
+    resp = TestClient(app).post("/environments/henv_keep/import", params={"replace": 1}, content=b"not an archive")
+    assert resp.status_code == 400
+    assert E.source_stat("henv_keep") == {"count": 2, "bytes": 19}
+
+
+def test_archive_import_refuses_escape_symlink_and_preserves_merge_modes(store, tmp_path):
+    E.write_file("henv_sym", "keep.txt", b"ok\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, E.source_dir("henv_sym") / "linkdir")
+
+    escape_zip = tmp_path / "escape.zip"
+    with zipfile.ZipFile(escape_zip, "w") as zf:
+        zf.writestr("a.txt", b"partial\n")
+        zf.writestr("linkdir/pwn.txt", b"escape\n")
+
+    with pytest.raises(HTTPException) as exc:
+        E.import_archive("henv_sym", str(escape_zip), replace=False)
+    assert exc.value.status_code == 400
+    assert not (outside / "pwn.txt").exists()
+    assert not (E.source_dir("henv_sym") / "a.txt").exists()
+
+    E.write_file("henv_merge", "existing.txt", b"keep\n")
+    merge_tar = tmp_path / "merge.tar.gz"
+    with tarfile.open(merge_tar, "w:gz") as tf:
+        for name, data, mode in (("bin/run.sh", b"#!/bin/sh\necho ok\n", 0o755), ("note.txt", b"hi\n", 0o644)):
+            ti = tarfile.TarInfo(name)
+            ti.size = len(data)
+            ti.mode = mode
+            tf.addfile(ti, io.BytesIO(data))
+
+    E.import_archive("henv_merge", str(merge_tar), replace=False)
+    src = E.source_dir("henv_merge")
+    assert (src / "existing.txt").read_bytes() == b"keep\n"
+    assert os.stat(src / "bin" / "run.sh").st_mode & 0o111
+    assert not (os.stat(src / "note.txt").st_mode & 0o111)
+    assert oct(os.stat(src).st_mode & 0o777) == "0o700"
+
+
 def _wait(env_id, n, timeout=240):
     for _ in range(timeout * 4):
         rec = E.build_record(env_id, n)
