@@ -498,7 +498,8 @@ def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dic
         except (FileExistsError, IsADirectoryError, NotADirectoryError):
             raise HTTPException(400, "the archive contains conflicting file and directory paths")
         except OSError as e:
-            # Corrupt gzip (BadGzipFile) and bz2 streams raise OSError with errno=None; real disk errors carry errno.
+            # Corrupt gzip (BadGzipFile) and bz2 streams raise OSError with errno=None.
+            # Real disk errors carry an errno.
             if e.errno is None:
                 raise HTTPException(400, f"the archive is corrupt or unreadable: {e}")
             raise
@@ -506,7 +507,7 @@ def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dic
             src = source_dir(env_id)
             if replace and src.exists():
                 shutil.rmtree(src)
-            # Member counts come from archive extraction; _copy_without_links enforces dst containment and skips links.
+            # Member counts come from extraction. _copy_without_links checks containment and skips links.
             _copy_without_links(str(stage), _source(env_id))
             stat_out = source_stat(env_id)
     return {"written": written, "skipped": skipped, **stat_out}
