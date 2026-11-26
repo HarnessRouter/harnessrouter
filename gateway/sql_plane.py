@@ -161,14 +161,14 @@ _LIMIT_TAIL = re.compile(rf"(?:\b{_ROW_CLAUSE}\s*)+$", re.I)
 _LIMITS = re.compile(r"\b(?:limit|fetch)\b", re.I)   # an OFFSET alone limits nothing
 
 
-def with_limit(sql: str, max_rows: int) -> tuple[str, bool]:
+def with_limit(sql: str, max_rows: int, engine: str = "") -> tuple[str, bool]:
     """The statement with a row cap, and whether one was added.
 
     Wrapping in a subquery would be the robust way and it breaks ORDER BY semantics in enough
     engines to be worse. A trailing LIMIT is appended only when the statement does not already end
     in one; a query with its own smaller LIMIT keeps it.
     """
-    bare = _strip(sql).strip().rstrip(";").strip()
+    bare = _strip(sql, engine).strip().rstrip(";").strip()
     tail = _LIMIT_TAIL.search(bare)
     if tail and _LIMITS.search(tail.group(0)):
         return sql, False
@@ -348,7 +348,7 @@ async def run_query(engine: str, dsn: str, sql: str, *, timeout: float = DEFAULT
     checked = check_readonly(sql, engine)
     # One row past the cap is asked for, so _rows_out can see that there was more and say
     # `truncated`; with LIMIT max_rows the database never returns the row that would tell it.
-    capped, added = with_limit(checked, max_rows + 1)
+    capped, added = with_limit(checked, max_rows + 1, engine)
     out = await (_pg_query if engine == "postgres" else _mysql_query)(dsn, capped, timeout, max_rows)
     out["limit_applied"] = added and max_rows or None
     return out
