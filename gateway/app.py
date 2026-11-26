@@ -15412,7 +15412,12 @@ async def _ssrf_check(url: str) -> str | None:
 #                  for the same reason, on the other address family.
 _INTERNAL_NETS = (ipaddress.ip_network("100.64.0.0/10"),
                   ipaddress.ip_network("::ffff:100.64.0.0/106"),
-                  ipaddress.ip_network("fec0::/10"))
+                  ipaddress.ip_network("fec0::/10"),
+                  # 6to4 and Teredo carry an IPv4 address inside an IPv6 one. `is_private` covers them only
+                  # from Python 3.12.4 on (the list changed between patch releases), so they are named here
+                  # rather than left to whichever patch level the image happens to have.
+                  ipaddress.ip_network("2002::/16"),
+                  ipaddress.ip_network("2001::/32"))
 
 
 async def _internal_target(host: str, port: int) -> str | None:
@@ -15851,11 +15856,8 @@ def _db_engine(engine: str) -> str:
     return e
 
 
-def _db_parse(engine: str, conn: str) -> tuple[str, str]:
-    """(host, database) from a connection string, with the string itself validated.
-
-    Parsed at attach time so a person can later confirm WHICH database is attached without the
-    credential ever being read back out of the secret store."""
+def _db_parse_parts(engine: str, conn: str) -> tuple[str, str, int | None, str]:
+    """(display host, hostname, port, database) from a validated database connection string."""
     from urllib.parse import urlparse
     try:
         u = urlparse((conn or "").strip())
@@ -15884,7 +15886,16 @@ def _db_parse(engine: str, conn: str) -> tuple[str, str]:
         raise uhp_error(400, "invalid_connection_string",
                         "The port must be a number from 1 to 65535.",
                         "connection_string") from e
-    host = u.hostname + (f":{port}" if port else "")
+    host = (f"[{u.hostname}]:{port}" if ":" in u.hostname else f"{u.hostname}:{port}") if port else u.hostname
+    return host, u.hostname, port, db
+
+
+def _db_parse(engine: str, conn: str) -> tuple[str, str]:
+    """(host, database) from a connection string, with the string itself validated.
+
+    Parsed at attach time so a person can later confirm WHICH database is attached without the
+    credential ever being read back out of the secret store."""
+    host, _, _, db = _db_parse_parts(engine, conn)
     return host, db
 
 
@@ -16186,15 +16197,13 @@ async def _db_validate(engine: str, conn: str) -> tuple[str, str, str, str]:
     if not c:
         raise uhp_error(400, "invalid_connection_string",
                         "A connection string is required.", "connection_string")
-    host, db = _db_parse(eng, c)
+    host, hostname, port, db = _db_parse_parts(eng, c)
     # A connection string is a target this server opens a socket to on a caller's say-so, which is
     # the same thing an MCP URL is — so it passes the same check, for the same reason, with the
     # same exemption: self-hosted, the "internal" network is the operator's own machine and a
     # database on localhost is the normal case rather than an attack.
     if not _pool_is_local():
-        hostname, _, port = host.partition(":")
-        blocked = await _internal_target(hostname, int(port) if port.isdigit() else
-                                         (5432 if eng == "postgres" else 3306))
+        blocked = await _internal_target(hostname, port or (5432 if eng == "postgres" else 3306))
         if blocked:
             raise uhp_error(400, "unreachable_host",
                             f"This server cannot connect to {hostname}: {blocked}.",
