@@ -558,6 +558,9 @@ async def recall(mid: str, request: Request) -> dict:
     b = await _json(request)
     if not (b.get("query") or b.get("text") or b.get("filters")):
         raise _uhp_error(422, "memory_invalid", "Give a query, text or filters.")
+    limit = b.get("limit")
+    if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool)):
+        raise _uhp_error(422, "memory_invalid", "`limit` is a whole number: the most results to return.", "limit")
     req = {k: b.get(k) for k in ("query", "text", "filters", "types", "as_of", "include")}
     req["limit"] = max(1, min(int(b.get("limit") or 8), 100))
     depth = b.get("depth")
@@ -600,6 +603,9 @@ async def graph(mid: str, request: Request) -> dict:
     hops = b.get("hops", 1)
     if not isinstance(hops, int) or isinstance(hops, bool) or not 0 <= hops <= 3:
         raise _uhp_error(422, "memory_invalid", "`hops` is 0 to 3: how many references away from the start.", "hops")
+    limit = b.get("limit")
+    if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool)):
+        raise _uhp_error(422, "memory_invalid", "`limit` is a whole number: the most nodes to return.", "limit")
     types = b.get("types")
     if types is not None and (not isinstance(types, list) or not all(isinstance(t, str) for t in types)):
         raise _uhp_error(422, "memory_invalid", "`types` is a list of record types.", "types")

@@ -127,6 +127,56 @@ work fails after they have committed to it.
 A client SHOULD present unavailable models as disabled rather than hiding them, so a user can see
 that a model exists and is not configured, rather than wondering why it is missing.
 
+### 3.2 Bases
+
+```http
+GET /v1/bases
+```
+
+A server MAY list the bases a harness can be built on, so a client that creates harnesses
+([§5.1](#51-create)) can offer a base's models and tools before any harness on it exists. A server
+that serves this route returns this shape (`BaseCatalog` in the [schema](schema.md)):
+
+```json
+{
+  "bases": [
+    {
+      "id": "claude-code", "object": "harness.base", "label": "Claude Code", "backend": "claude",
+      "status": "ready", "systemPrompt": "…", "defaultModel": "claude-sonnet-4.6",
+      "models": [ { "id": "claude-sonnet-4.6", "available": true, "default": true,
+                    "reasoning": ["low", "medium", "high"] } ],
+      "tools": [ { "name": "Bash", "label": "Bash", "enforcement": "hard" } ],
+      "builtinSkills": [], "builtinSkillsEnumerable": false,
+      "takesSkills": true, "takesEnvironments": true, "takesInputRequests": true
+    }
+  ],
+  "runtimeDefaults": { "maxStep": 400, "timeoutSeconds": 7200 },
+  "capabilities": { "input_history": true, "input_requests": true }
+}
+```
+
+- `id` is the value a harness names in `base`, and stays opaque to a client ([§2](#2-the-harness-object)).
+- `status` is `ready` when the server can run a task on the base. A base the server knows but does not
+  hold is listed with `not_installed` and a `statusReason` in words, so a client can show it without
+  offering it. A client treats any other value as not ready.
+- `models` is the same computed view as [`GET /v1/models`](#3-models) for the base's `backend`;
+  `available` is the promise of [§3.1](#31-available-is-a-promise). `reasoning` lists the levels a
+  model takes, lowest first, and is empty when none is known.
+- `tools[].name` is the value `disabled_tools` takes ([§4.3](#43-disabled-tools)). `enforcement` is
+  `hard` when a disabled tool is withheld from the agent, `instruction` when the agent is only told
+  not to use it.
+- `builtinSkillsEnumerable: false` says the base also finds skills of its own at run time that cannot
+  be listed from outside a task, so `builtinSkills` is not everything the agent has.
+- `takesSkills`, `takesEnvironments` and `takesInputRequests` say whether a harness on the base takes
+  `skills`, an `environment`, and whether a task on it can end by asking the person
+  ([Tasks §3.2](tasks.md#32-asking-the-person)).
+- `runtimeDefaults` are the limits a task gets when neither the request nor the harness sets one.
+  `capabilities` repeats, for these bases, the booleans [`GET /v1/uhp`](lifecycle.md) reports under the
+  same names.
+
+The casing is the harness object's (`camelCase`), one of this version's known compromises
+([VERSIONING](../../VERSIONING.md)). As everywhere, a client ignores fields it does not know.
+
 ## 4. Tools and skills
 
 A configured harness carries three things that decide what its agent can do. All three are part of

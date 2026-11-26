@@ -1,2 +1,2 @@
-systemone-harness[browser] @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz
+systemone-harness[browser] @ https://github.com/HarnessRouter/SystemOneHarness/releases/download/v0.4.0/systemone_harness-0.4.0-py3-none-any.whl
 playwright==1.64.1

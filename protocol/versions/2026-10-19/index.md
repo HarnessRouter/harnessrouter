@@ -46,6 +46,7 @@ the [protocol README](../../README.md).
 | `GET` | `/v1/sessions/{id}/files/archive` | Extended | [Files](files.md) |
 | `GET` | `/v1/containers/{cid}/files/{fid}/content` | Extended | [Files](files.md) |
 | `GET` | `/v1/containers/{cid}/files/{fid}/pdf` | Extended | [Files](files.md) |
+| `GET` | `/v1/bases` | Full, optional | [Harnesses](harnesses.md#32-bases) |
 | `POST` | `/v1/harnesses` | Full | [Harnesses](harnesses.md) |
 | `PUT` | `/v1/harnesses/{id}` | Full | [Harnesses](harnesses.md) |
 | `DELETE` | `/v1/harnesses/{id}` | Full | [Harnesses](harnesses.md) |
