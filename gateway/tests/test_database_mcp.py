@@ -526,6 +526,9 @@ def test_hosted_database_probe_accepts_public_ipv6_and_preserves_port(
     ("mysql", f"mysql://u:{PASSWORD}@[::]:3306/shop", "::", 3306),
     ("postgres", f"postgresql://u:{PASSWORD}@[fd00:ec2::254]:5432/shop", "fd00:ec2::254", 5432),
     ("postgres", f"postgresql://u:{PASSWORD}@[64:ff9b::a9fe:a9fe]:5432/shop", "64:ff9b::a9fe:a9fe", 5432),
+    # 6to4 and Teredo spellings of the metadata address, refused by name whatever the Python patch level
+    ("postgres", f"postgresql://u:{PASSWORD}@[2002:a9fe:a9fe::1]:5432/shop", "2002:a9fe:a9fe::1", 5432),
+    ("postgres", f"postgresql://u:{PASSWORD}@[2001:0:a9fe:a9fe::]:5432/shop", "2001:0:a9fe:a9fe::", 5432),
 ])
 def test_hosted_database_refuses_internal_ipv6_by_full_host(
     api, kit, monkeypatch, engine, dsn, want_host, want_port
