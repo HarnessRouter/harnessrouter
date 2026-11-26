@@ -5,6 +5,7 @@ people: Microsoft's own permissions are the boundary, and its refusal is surface
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -48,6 +49,12 @@ class Graph:
         if p == "/me/drive/root/children":
             assert auth == "Bearer tok-rt-ada"
             return httpx.Response(200, json={"value": [{"name": "notes.md", "id": "i1", "size": 12, "webUrl": "https://x/notes.md", "file": {"mimeType": "text/markdown"}}]})
+        if p == "/me/drive/root:/notes.md":
+            assert auth == "Bearer tok-rt-ada"
+            return httpx.Response(200, json={"name": "notes.md", "file": {"mimeType": "text/markdown"}})
+        if p == "/me/drive/root:/notes.md:/content":
+            assert auth == "Bearer tok-rt-ada"
+            return httpx.Response(200, content=b"hello")
         if p == "/sites":
             return httpx.Response(200, json={"value": [{"id": "s1", "name": "Engineering", "displayName": "Engineering", "webUrl": "https://contoso.sharepoint.com/sites/Engineering"}]})
         if p == f"/sites/{SITE}/drive/root/children":
@@ -116,6 +123,26 @@ def test_the_application_identity_must_name_the_person(graph):
     assert "mailbox of bob@contoso.com" in out and graph.grants == ["client_credentials"]
     out = _call("resources", {}, {"client_secret": SECRET}, APP)
     assert "the application" in out
+
+
+def test_read_file_never_cuts_below_one_character(graph):
+    def read(max_chars):
+        out = _call("read_file", {"path": "notes.md", "max_chars": max_chars}, ADA, DELEGATED)
+        return json.loads(out) if isinstance(out, str) else out
+
+    for max_chars, content, truncated in (
+        (-1, "h", "4 more characters not shown"),
+        (-3, "h", "4 more characters not shown"),
+        (2, "he", "3 more characters not shown"),
+        (0, "hello", None),
+        (100, "hello", None),
+    ):
+        out = read(max_chars)
+        assert out["content"] == content
+        if truncated is None:
+            assert "truncated" not in out
+        else:
+            assert out["truncated"] == truncated
 
 
 def test_tool_names_and_the_type_are_served():
