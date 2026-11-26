@@ -4,6 +4,10 @@
 self-assessment, not passing most of it. The suite is in this repository, it runs against any server
 over HTTP, and anyone can run it against anyone's implementation.
 
+For native servers, adapters, and remote services, see [Implement a server](../SERVING.md).
+The guide compares open-source and closed-source paths, test layers, and the evidence needed
+for a scoped conformance claim. Both source models use the same suite and acceptance criteria.
+
 ## Running it
 
 ```bash
