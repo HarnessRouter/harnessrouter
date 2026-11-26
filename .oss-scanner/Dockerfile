@@ -31,7 +31,7 @@ WORKDIR /src
 RUN python -m pip install --no-cache-dir \
       -r gateway/requirements.txt -r runner/requirements.txt \
       pytest pytest-asyncio httpx jsonschema build wheel 'setuptools>=68' \
-      'systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@3266a17537e283dc5539439835c0b4cab02bf5c0' \
+      'systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/releases/download/v0.4.0/systemone_harness-0.4.0-py3-none-any.whl' \
       'cheetahclaws==3.5.88' 'qca-sdk==0.6.0' \
     && python -m pip install --no-cache-dir -e protocol/conformance \
     && python -m pip check
