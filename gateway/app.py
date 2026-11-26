@@ -15412,7 +15412,12 @@ async def _ssrf_check(url: str) -> str | None:
 #                  for the same reason, on the other address family.
 _INTERNAL_NETS = (ipaddress.ip_network("100.64.0.0/10"),
                   ipaddress.ip_network("::ffff:100.64.0.0/106"),
-                  ipaddress.ip_network("fec0::/10"))
+                  ipaddress.ip_network("fec0::/10"),
+                  # 6to4 and Teredo carry an IPv4 address inside an IPv6 one. `is_private` covers them only
+                  # from Python 3.12.4 on (the list changed between patch releases), so they are named here
+                  # rather than left to whichever patch level the image happens to have.
+                  ipaddress.ip_network("2002::/16"),
+                  ipaddress.ip_network("2001::/32"))
 
 
 async def _internal_target(host: str, port: int) -> str | None:
