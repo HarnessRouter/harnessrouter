@@ -24121,13 +24121,21 @@ async def _git_url_refused(url: str) -> tuple[str | None, str]:
     is its operator's own and is allowed, with no pin; on a shared deployment an address that
     resolves to a private, local or metadata range is refused, since the clone runs on this side
     (reported privately, GHSA-mw9j-m5jf-5r56), and the clone is pinned to an address classified
-    here as "<host>:<port>:<address>", so the name is not resolved again when git connects."""
+    here as "<host>:<port>:<address>" (with an IPv6 host bracketed), so the name is not resolved
+    again when git connects."""
     if _pool_is_local():
         return None, ""
     from urllib.parse import urlparse
     u = str(url or "")
     if u.startswith("git@"):
-        host, port = u[4:].split(":", 1)[0], 22
+        rest = u[4:]
+        if rest.startswith("["):
+            host, sep, _ = rest[1:].partition("]:")
+            if not sep:
+                return "invalid url", ""
+        else:
+            host = rest.split(":", 1)[0]
+        port = 22
     else:
         try:
             p = urlparse(u)
@@ -24137,7 +24145,8 @@ async def _git_url_refused(url: str) -> tuple[str | None, str]:
     if not host:
         return "url has no host", ""
     addrs, why = await _classify_target(host, port)
-    return (why, "") if why else (None, f"{host}:{port}:{addrs[0]}")
+    shown = f"[{host}]" if ":" in host else host
+    return (why, "") if why else (None, f"{shown}:{port}:{addrs[0]}")
 
 
 @app.post("/v1/environments/{env_id}/import")

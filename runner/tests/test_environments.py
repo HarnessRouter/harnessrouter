@@ -794,6 +794,87 @@ def test_a_pinned_git_clone_connects_to_the_address_the_gateway_classified(store
                          "https://git.example/team/repo.git", pin=bad)
 
 
+def test_pinned_git_clone_handles_ipv6_literal_hosts(store, monkeypatch):
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        os.makedirs(cmd[-1], exist_ok=True)
+        pathlib.Path(cmd[-1], "README.md").write_text("hi\n")
+        return None
+
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    eid = "henv_" + "e" * 32
+    E.import_git(eid, "https://[2606:4700::6810:1]/org/repo.git",
+                 pin="[2606:4700::6810:1]:443:2606:4700::6810:1")
+    E.import_git(eid, "http://[2606:4700::6810:1]/org/repo.git",
+                 pin="[2606:4700::6810:1]:80:2606:4700::6810:1")
+    E.import_git(eid, "https://[2606:4700:0000::6810:1]:8443/org/repo.git",
+                 pin="[2606:4700:0000::6810:1]:8443:2606:4700::6810:1")
+    E.import_git(eid, "https://git.example/org/repo.git",
+                 pin="git.example:443:2606:4700::6810:1")
+    E.import_git(eid, "ssh://git@[2606:4700::6810:1]/org/repo.git",
+                 pin="[2606:4700::6810:1]:22:2606:4700::6810:1")
+    E.import_git(eid, "git@[2606:4700::6810:1]:org/repo.git",
+                 pin="[2606:4700::6810:1]:22:2606:4700::6810:1")
+
+    https_lit, http_lit, https_port, https_name_v6, ssh_lit, scp_lit = seen
+    assert https_lit[:4] == ["git", "-c", "http.followRedirects=false", "clone"]
+    assert http_lit[:4] == ["git", "-c", "http.followRedirects=false", "clone"]
+    assert https_port[:4] == ["git", "-c", "http.followRedirects=false", "clone"]
+    assert https_name_v6[:5] == ["git", "-c", "http.curloptResolve=git.example:443:[2606:4700::6810:1]",
+                                 "-c", "http.followRedirects=false"]
+    want_ssh = ["git", "-c", "core.sshCommand=ssh -o HostName=2606:4700::6810:1 -o HostKeyAlias=2606:4700::6810:1"]
+    assert ssh_lit[:3] == want_ssh
+    assert scp_lit[:3] == want_ssh
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(E.router)
+    r = TestClient(app).post(
+        f"/environments/{eid}/import",
+        params={"git_url": "https://[2606:4700::6810:1]/org/repo.git",
+                "git_pin": "[2606:4700::6810:1]:443:2606:4700::6810:1"},
+    )
+    assert r.status_code == 200 and seen[-1][:4] == ["git", "-c", "http.followRedirects=false", "clone"]
+
+    for url, bad_pin in (
+        ("https://[2606:4700::6810:1]/org/repo.git", "2606:4700::6810:1:443:2606:4700::6810:1"),
+        ("https://git.example/org/repo.git", "[git.example]:443:140.82.112.3"),
+        ("https://140.82.112.3/org/repo.git", "[140.82.112.3]:443:140.82.112.3"),
+        ("https://evil.example/org/repo.git", "[2606:4700::6810:1]:443:2606:4700::6810:1"),
+        ("https://[2606:4700::6810:1]:8443/org/repo.git", "[2606:4700::6810:1]:443:2606:4700::6810:1"),
+        ("https://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:443:2606:4700::6810:2"),
+        ("https://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:0:2606:4700::6810:1"),
+        ("https://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:70000:2606:4700::6810:1"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            E.import_git(eid, url, pin=bad_pin)
+        assert exc.value.status_code == 400
+
+
+def test_git_accepts_ipv6_literal_pin_args_without_curl_resolve_error():
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git not installed")
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0",
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    control = subprocess.run(
+        ["git", "-c", "http.curloptResolve=[::1]:1:[::1]", "ls-remote", "http://[::1]:1/org/repo.git"],
+        capture_output=True, text=True, timeout=5, env=env,
+    )
+    assert "Couldn't parse CURLOPT_RESOLVE entry" in control.stderr
+    args = E._git_pin_args("http://[::1]:1/org/repo.git", "[::1]:1:::1")
+    r = subprocess.run(
+        ["git", *args, "ls-remote", "http://[::1]:1/org/repo.git"],
+        capture_output=True, text=True, timeout=5, env=env,
+    )
+    assert "Couldn't parse CURLOPT_RESOLVE entry" not in r.stderr
+
+
 def test_a_write_waiting_on_a_snapshot_or_a_slow_import_leaves_the_runner_answering(store, monkeypatch):
     """The runner answers every turn from one event loop. A write waiting for the source lock, or a
     git clone, run on that loop froze every other request until it ended (on 0.32.8 a 4.6 s import
