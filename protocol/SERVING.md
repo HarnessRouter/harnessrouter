@@ -2,7 +2,7 @@
 
 How an open-source or closed-source agent harness becomes UHP compliant: choose a serving
 path, implement the contract, and publish evidence from the conformance suite. The protocol's
-precise claim is **"UHP <version> conformant (<class>)"**. This guide is the practical companion
+precise claim is `UHP <version> conformant (<class>)`. This guide is the practical companion
 to the [specification](versions/2026-10-19/index.md); where the two disagree, the specification wins.
 
 ## Choose a serving path
@@ -147,7 +147,7 @@ link the product/version and document how a measurer can obtain authorized acces
 endpoint or installable build. Arrange credentials privately with the measurer; do not paste them
 into an issue or listing PR. The underlying proprietary source need not be published.
 
-A report can support the scoped wording **"UHP <served version> conformant (<fully passed class>)"**.
+A report can support the scoped wording `UHP <served version> conformant (<fully passed class>)`.
 Identify the measured implementation and configuration next to the claim. For a wrapped harness,
 attribute the result to the named adapter/server deployment rather than claiming that the unwrapped
 upstream product implements UHP natively. Re-measure after relevant server, adapter, harness,
