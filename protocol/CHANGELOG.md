@@ -2,6 +2,22 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-10-19, addition: `GET /v1/bases` is described (#737)
+
+The reference server has long served `GET /v1/bases`, but no published schema described it. A
+client that generates from the schema could not read, for each base, its status, its models with
+availability and reasoning levels, or its tool names and how far disabling each one goes.
+`GET /v1/models` is keyed by backend, not by base, and lists no tools. The route and its objects
+(`BaseCatalog`, `Base`, `BaseModel`, `BaseTool`, `BaseSkill`) are now in the 2026-10-19 OpenAPI
+document and JSON Schema, and [Harnesses §3.2](versions/2026-10-19/harnesses.md#32-bases) describes
+them. The route is optional: a server MAY serve it, and one that does returns this shape. Under
+[VERSIONING](VERSIONING.md), describing a route that is already served, with objects that accept
+unknown fields, fits within a version. The shape is the one every served version answers with,
+since the reference server serves them all from one code path. Not done here: a per-base flag
+saying whether a harness on the base takes `mcp_servers`. Every base the reference server lists
+takes them today; on the one remote runtime (`qoder`), a plugin's stdio servers are reported
+unavailable. So there is nothing yet for such a flag to distinguish.
+
 ## Conformance suite 2026.10.19.post11 (2026-11-17)
 
 T-15 checks the addition below. On a server that reports `resume`, it requires `409

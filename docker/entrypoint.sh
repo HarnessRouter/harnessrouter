@@ -933,13 +933,11 @@ GROK_SHA="$(pin_sha GROK 1.0.41 "$GROK_PIN" "$(by_arch \
 # docker/locks/systemone.lock.txt, rebuilt when the pin or the lock moves. The executable is the
 # venv's python, which the runner hands runner/systemone_driver.py.
 SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.4.0}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
-# The COMMIT the v0.4.0 tag pointed at (2026-11-07), not the tag: a tag can be moved, a commit
-# cannot, and the tag is ours to move by mistake. An overridden version is fetched by its tag. It is
-# GitHub's source archive of that commit, not a git checkout, because --require-hashes takes a file
-# with a digest and no VCS requirement; the lock holds the archive's sha256, and it is the one
-# distribution of this lock that is built here (setuptools, from build.lock.txt). A wheel published
-# with the release would remove even that.
-if [ "$SYSTEMONE_PIN" = "0.4.0" ]; then SYSTEMONE_REF=3266a17537e283dc5539439835c0b4cab02bf5c0; else SYSTEMONE_REF="v$SYSTEMONE_PIN"; fi
+# THE WHEEL COMES FROM THE GITHUB RELEASE (the opensquilla precedent): SystemOneHarness publishes no
+# PyPI release, and its release workflow attaches a wheel built on the runner. The lock names that
+# asset by URL with its sha256, so a re-uploaded or moved asset fails the install rather than
+# reaching a volume. A wheel, so nothing of this lock is built here; until 0.4.0's wheel existed,
+# GitHub's source archive of the tagged commit was built by the install uid against setuptools.
 # Playwright drives the browser environments; the version a fresh volume resolved on 0.38.2.
 SYSTEMONE_PLAYWRIGHT_PIN="${HR_SYSTEMONE_PLAYWRIGHT_VERSION:-1.64.1}"
 # HR_SYSTEMONE_SPEC overrides where pip takes the package from (a mirror, a fork, a local tree
@@ -947,7 +945,7 @@ SYSTEMONE_PLAYWRIGHT_PIN="${HR_SYSTEMONE_PLAYWRIGHT_VERSION:-1.64.1}"
 # brings Browser Use, and with it the page and game environments; the Chromium they drive is
 # installed beside the venv on the data volume (Playwright's, world-readable), because the image
 # ships no browser and a session process cannot read root's cache.
-SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[browser] @ https://github.com/HarnessRouter/SystemOneHarness/archive/${SYSTEMONE_REF}.tar.gz}"
+SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[browser] @ https://github.com/HarnessRouter/SystemOneHarness/releases/download/v${SYSTEMONE_PIN}/systemone_harness-${SYSTEMONE_PIN}-py3-none-any.whl}"
 SYSTEMONE_REQS=("$SYSTEMONE_SPEC" "playwright==$SYSTEMONE_PLAYWRIGHT_PIN")
 export PLAYWRIGHT_BROWSERS_PATH="$TOOLS/ms-playwright"
 # The libraries that Chromium links against live in the container, not on the volume the browser
@@ -1043,7 +1041,7 @@ chromium_download() {
 install_systemone() {
   # A failed install leaves NO venv behind: the executable is the definition of installed, and a
   # venv whose pip step failed reported the base as available on a box where it could not run.
-  install_pinned_venv systemone "${HR_SYSTEMONE_BASE_PYTHON:-python3}" "$TOOLS/systemone-venv" systemone-harness "${SYSTEMONE_REQS[@]}" \
+  install_pinned_venv systemone "${HR_SYSTEMONE_BASE_PYTHON:-python3}" "$TOOLS/systemone-venv" "" "${SYSTEMONE_REQS[@]}" \
     || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   chromium_current || chromium_download || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   chromium_libs || { rm -rf "$TOOLS/systemone-venv"; return 1; }
@@ -1523,8 +1521,8 @@ for name in ("Nanobot", "STREAM_EVENT_TEXT_DELTA", "STREAM_EVENT_REASONING_DELTA
 # pinned by version AND by the sha256 of each of its files, installed with `pip --require-hashes
 # --no-deps --only-binary=:all:`. A file whose bytes differ, or a dependency the lock does not name,
 # fails the install, and a base that failed to install is not offered. Wheels only, so no package's
-# build code runs here, except for the few distributions a base names that publish no wheel (an sdist,
-# or systemone's source archive); those are built by the base's install uid, never by root, with
+# build code runs here, except for the few distributions a base names that publish no wheel (an sdist);
+# those are built by the base's install uid, never by root, with
 # --no-build-isolation against setuptools from build.lock.txt, because pip's isolated build would
 # fetch its backend fresh and unhashed. The pins are part of the reviewed, digest-pinned image;
 # nothing about them is fetched at boot except the files themselves (#623, step 2).
