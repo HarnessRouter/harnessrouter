@@ -766,17 +766,14 @@ def test_git_accepts_ipv6_literal_pin_args_without_curl_resolve_error():
         pytest.skip("git not installed")
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0",
            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
-    control = subprocess.run(
-        ["git", "-c", "http.curloptResolve=[::1]:1:[::1]", "ls-remote", "http://[::1]:1/org/repo.git"],
-        capture_output=True, text=True, timeout=5, env=env,
-    )
-    assert "Couldn't parse CURLOPT_RESOLVE entry" in control.stderr
     args = E._git_pin_args("http://[::1]:1/org/repo.git", "[::1]:1:::1")
     r = subprocess.run(
         ["git", *args, "ls-remote", "http://[::1]:1/org/repo.git"],
         capture_output=True, text=True, timeout=5, env=env,
     )
+    assert r.returncode != 0
     assert "Couldn't parse CURLOPT_RESOLVE entry" not in r.stderr
+    assert "connect" in r.stderr.lower(), r.stderr
 
 
 def test_a_write_waiting_on_a_snapshot_or_a_slow_import_leaves_the_runner_answering(store, monkeypatch):
