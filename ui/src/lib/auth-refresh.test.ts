@@ -4,6 +4,11 @@
 // current at completion, or is dropped when the token changed underneath it.
 import { logout, refreshMe, refreshToken, reconcileSession, switchOrg } from './auth';
 
+// These are the hosted session's paths: a self-hosted console has one implicit session and none of
+// them runs. Pinned, because an environment that builds the self-hosted edition
+// (NEXT_PUBLIC_HR_EDITION=selfhost, as the offline audit image does) otherwise skips every one.
+jest.mock('@/lib/edition', () => ({ ...jest.requireActual('@/lib/edition'), SELF_HOSTED: false }));
+
 const SESSION_KEY = 'agentstudio.session';
 const ME = { member: { id: 'member.ann', name: 'Ann' }, org_id: 'A', orgs: [{ id: 'A' }, { id: 'B' }] };
 
