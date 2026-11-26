@@ -517,6 +517,15 @@ def test_hosted_database_probe_accepts_public_ipv6_and_preserves_port(
 @pytest.mark.parametrize("engine,dsn,want_host,want_port", [
     ("postgres", f"postgresql://u:{PASSWORD}@[::1]:5432/shop", "::1", 5432),
     ("mysql", f"mysql://u:{PASSWORD}@[fe80::1]:3306/shop", "fe80::1", 3306),
+    # Every IPv6 spelling of an internal place, now that an IPv6 literal reaches the check rather
+    # than being refused for its colons: IPv4-mapped loopback and metadata, the unspecified
+    # address (which a connect() takes as this machine), a unique-local address (where one cloud
+    # serves its metadata over IPv6), and NAT64's spelling of the metadata address.
+    ("postgres", f"postgresql://u:{PASSWORD}@[::ffff:127.0.0.1]:5432/shop", "::ffff:127.0.0.1", 5432),
+    ("postgres", f"postgresql://u:{PASSWORD}@[::ffff:169.254.169.254]:5432/shop", "::ffff:169.254.169.254", 5432),
+    ("mysql", f"mysql://u:{PASSWORD}@[::]:3306/shop", "::", 3306),
+    ("postgres", f"postgresql://u:{PASSWORD}@[fd00:ec2::254]:5432/shop", "fd00:ec2::254", 5432),
+    ("postgres", f"postgresql://u:{PASSWORD}@[64:ff9b::a9fe:a9fe]:5432/shop", "64:ff9b::a9fe:a9fe", 5432),
 ])
 def test_hosted_database_refuses_internal_ipv6_by_full_host(
     api, kit, monkeypatch, engine, dsn, want_host, want_port
