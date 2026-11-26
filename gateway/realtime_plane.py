@@ -48,10 +48,13 @@ from pydantic import BaseModel
 # The switch: voice calls are served only where HR_REALTIME is set. Unset by default: nobody.
 ENABLED = os.environ.get("HR_REALTIME", "").strip().lower() in ("1", "true", "yes", "on")
 # The instance's Azure OpenAI connection by its name; empty: the first enabled Azure OpenAI
-# connection that has a key and an Azure endpoint.
+# connection that has a credential (a key, or a Microsoft Entra sign-in) and an Azure endpoint.
 INTEGRATION = os.environ.get("HR_REALTIME_INTEGRATION", "").strip()
-DEPLOYMENT = os.environ.get("HR_REALTIME_DEPLOYMENT", "gpt-realtime-2-1").strip()
 MODEL = os.environ.get("HR_REALTIME_MODEL", "gpt-realtime-2.1").strip()
+# A deployment is named by whoever made the resource. Its name is read, in this order, from the
+# connection's own model row for MODEL (the row every other base reads), from this setting, and
+# last from MODEL itself.
+DEPLOYMENT = os.environ.get("HR_REALTIME_DEPLOYMENT", "").strip()
 # Azure takes the input transcription model as the name of a transcription DEPLOYMENT on the same
 # resource (its documented deviation from OpenAI's reference), gpt-4o-transcribe for one. Empty:
 # the caller's speech is not transcribed by the provider (the model's own spoken answers still are).
@@ -207,10 +210,34 @@ def azure_host(url: str) -> str:
     return host if ok else ""
 
 
+_ENTRA_FIELDS = ("tenant_id", "client_id", "client_secret")
+
+
+def signs_in_with_entra(cfg: dict) -> bool:
+    return str((cfg or {}).get("auth") or "").strip().lower() == "entra"
+
+
+def has_credential(cfg: dict) -> bool:
+    """A key, or for a connection that signs in with Microsoft Entra its three sign-in fields."""
+    if signs_in_with_entra(cfg):
+        return all(str(cfg.get(f) or "").strip() for f in _ENTRA_FIELDS)
+    return bool(str((cfg or {}).get("api_key") or "").strip())
+
+
+def deployment_of(integ: dict, model: str, fallback: str = "") -> str:
+    """The name of the deployment that serves `model` on this connection: the connection's own model
+    row for it, else `fallback`, else the model's name."""
+    for row in integ.get("models") or []:
+        if isinstance(row, dict) and str(row.get("canonical") or "").strip() == model:
+            pid = str(row.get("provider_id") or "").strip()
+            if pid:
+                return pid
+    return fallback or model
+
+
 def pick_integration(integrations: list[dict], name: str = "") -> dict | None:
     """The Azure OpenAI connection a call is minted on: the one named, else the first enabled Azure
-    connection (`azure` or `azure-foundry`) with a key and an Azure endpoint. A connection that signs in
-    with Microsoft Entra (no key) is not one this adapter uses yet."""
+    connection (`azure` or `azure-foundry`) with a credential and an Azure endpoint."""
     for integ in integrations or []:
         if not isinstance(integ, dict) or integ.get("enabled") is False:
             continue
@@ -220,7 +247,7 @@ def pick_integration(integrations: list[dict], name: str = "") -> dict | None:
         if provider not in ("azure", "azure-foundry"):
             continue
         cfg = integ.get("config") or {}
-        if str(cfg.get("auth") or "").strip().lower() == "entra" or not str(cfg.get("api_key") or "").strip():
+        if not has_credential(cfg):
             continue
         if azure_host(str(cfg.get("base_url") or "")):
             return integ
@@ -245,33 +272,52 @@ def session_body(spec: CallSpec, deployment: str, transcribe: str, ttl_s: int) -
 class AzureRealtime:
     """Azure OpenAI's realtime API on the instance's Azure OpenAI connection, read from the
     instance's connections at every mint (a rotated key is used at once). The key is sent to Azure's
-    own hosts only, in the `api-key` header, and appears in no answer, record or line."""
+    own hosts only, in the `api-key` header, and appears in no answer, record or line.
+
+    A connection that signs in with Microsoft Entra holds no key. `sign_in` (the gateway's own, which
+    keeps a token until it ages) turns the connection into a token, sent as a Bearer in the key's
+    place. Without `sign_in` such a connection cannot be used and the mint says so."""
 
     name = "azure"
 
     def __init__(self, integrations: typing.Callable[[], typing.Awaitable[list[dict]]], *, integration: str = "",
-                 deployment: str = "", model: str = "", transcribe: str | None = None, ttl_s: int = 0):
+                 deployment: str = "", model: str = "", transcribe: str | None = None, ttl_s: int = 0,
+                 sign_in: typing.Callable[[dict], typing.Awaitable[str]] | None = None):
         self._integrations = integrations
+        self._sign_in = sign_in
         self.integration = integration or INTEGRATION
         self.deployment = deployment or DEPLOYMENT
         self.model = model or MODEL
         self.transcribe = TRANSCRIBE if transcribe is None else transcribe
         self.ttl_s = ttl_s or SECRET_TTL_S
 
-    async def _conn(self) -> tuple[str, str]:
+    async def _conn(self) -> tuple[str, dict, str]:
+        """The resource's host, the one credential header, and the deployment's name."""
         integ = pick_integration(await self._integrations(), self.integration)
         if not integ:
             raise ProviderError(503, NOT_SET_UP)
         cfg = integ.get("config") or {}
-        return azure_host(str(cfg.get("base_url") or "")), str(cfg.get("api_key") or "").strip()
+        host = azure_host(str(cfg.get("base_url") or ""))
+        deployment = deployment_of(integ, self.model, self.deployment)
+        if not signs_in_with_entra(cfg):
+            return host, {"api-key": str(cfg.get("api_key") or "").strip()}, deployment
+        if not self._sign_in:
+            raise ProviderError(503, NOT_SET_UP)
+        try:
+            token = await self._sign_in({**cfg, "provider": integ.get("provider")})
+        except HTTPException as e:
+            # the gateway's sign-in words its own refusals for the person who fixes the connection,
+            # and none of them carries the secret or a token
+            raise ProviderError(503 if e.status_code == 401 else 502, str(e.detail)) from None
+        return host, {"authorization": f"Bearer {token}"}, deployment
 
     async def mint(self, spec: CallSpec) -> Minted:
-        host, key = await self._conn()
+        host, credential, deployment = await self._conn()
         url = f"https://{host}/openai/v1/realtime/client_secrets"
-        body = session_body(spec, self.deployment, self.transcribe, self.ttl_s)
+        body = session_body(spec, deployment, self.transcribe, self.ttl_s)
         try:
             async with httpx.AsyncClient(transport=transport, timeout=15.0) as c:
-                r = await c.post(url, json=body, headers={"api-key": key, "content-type": "application/json"})
+                r = await c.post(url, json=body, headers={**credential, "content-type": "application/json"})
         except httpx.HTTPError as e:
             raise ProviderError(502, f"The voice service could not be reached ({type(e).__name__}).") from None
         if r.status_code >= 400:
@@ -299,7 +345,7 @@ class AzureRealtime:
         voice = str(((sess.get("audio") or {}).get("output") or {}).get("voice") or spec.voice)
         return Minted(client_secret=secret, expires_at=expires,
                       webrtc_url=f"https://{host}/openai/v1/realtime/calls",
-                      deployment=self.deployment, model=self.model, voice=voice,
+                      deployment=deployment, model=self.model, voice=voice,
                       ref={"provider": self.name, "session": str(sess.get("id") or "")[:80]})
 
     async def end(self, ref: dict) -> None:

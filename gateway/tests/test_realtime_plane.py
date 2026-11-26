@@ -243,6 +243,92 @@ def test_the_picker_takes_either_azure_label_with_a_key_on_an_azure_host():
     assert not rp.pick_integration([conn()], "b")
 
 
+ENTRA = {"base_url": "https://voice-res.openai.azure.com/openai/v1", "auth": "entra",
+         "tenant_id": "t-1", "client_id": "c-1", "client_secret": "SENTINEL-entra-secret-never-leaves"}
+
+
+def _entra(w, sign_in):
+    w.connections = [{"name": "Azure OpenAI", "provider": "azure-foundry", "config": dict(ENTRA)}]
+    w.provider._sign_in = sign_in
+
+
+def test_a_connection_that_signs_in_with_entra_mints_with_its_token_as_a_bearer(w, capsys):
+    asked = []
+
+    async def sign_in(conn):
+        asked.append(conn)
+        return "entra-token-1"
+    _entra(w, sign_in)
+    out = w.create()
+    req = w.az.calls[0]
+    assert req.headers["authorization"] == "Bearer entra-token-1" and "api-key" not in req.headers
+    # the sign-in is handed the connection as the gateway's own sign-in reads it
+    assert asked == [{**ENTRA, "provider": "azure-foundry"}]
+    seen = req.content.decode() + json.dumps(out) + json.dumps(w.records) + "".join(capsys.readouterr())
+    assert ENTRA["client_secret"] not in seen and "entra-token-1" not in seen
+
+
+def test_a_key_left_on_an_entra_connection_is_not_sent(w):
+    async def sign_in(conn):
+        return "entra-token-2"
+    _entra(w, sign_in)
+    w.connections[0]["config"]["api_key"] = AZURE_KEY
+    w.create()
+    req = w.az.calls[0]
+    assert req.headers["authorization"] == "Bearer entra-token-2" and "api-key" not in req.headers
+
+
+def test_a_sign_in_entra_refuses_stops_the_call_before_azure_is_asked(w):
+    async def refused(conn):
+        raise HTTPException(401, "Microsoft Entra refused this connection's sign-in: AADSTS7000215")
+
+    async def unreachable(conn):
+        raise HTTPException(502, "Microsoft Entra could not be reached for this connection's sign-in: ConnectError")
+    _entra(w, refused)
+    e = _refused(w.create)
+    assert e.status_code == 503 and "AADSTS7000215" in str(e.detail)
+    _entra(w, unreachable)
+    assert _refused(w.create).status_code == 502
+    assert w.az.calls == []
+
+
+def test_an_entra_connection_with_nobody_to_sign_it_in_is_not_set_up(w):
+    _entra(w, None)
+    e = _refused(w.create)
+    assert e.status_code == 503 and str(e.detail) == rp.NOT_SET_UP
+    assert w.az.calls == []
+
+
+def test_the_picker_takes_an_entra_connection_only_with_all_three_of_its_fields():
+    def conn(**drop):
+        return {"name": "a", "provider": "azure", "config": {k: v for k, v in ENTRA.items() if k not in drop}}
+    assert rp.pick_integration([conn()])
+    for field in ("tenant_id", "client_id", "client_secret"):
+        assert not rp.pick_integration([conn(**{field: 1})])
+    # a key left on a connection that says it signs in with Entra is not used in its place
+    keyed = conn(client_secret=1)
+    keyed["config"]["api_key"] = "k"
+    assert not rp.pick_integration([keyed])
+
+
+def test_the_deployment_is_the_connections_own_row_then_the_setting_then_the_models_name(w):
+    def asked_for():
+        w.az.calls.clear()
+        out = w.create()
+        assert out["deployment"] == w.az.body()["session"]["model"]
+        return out["deployment"]
+    azure = w.connections[1]
+    assert asked_for() == "gpt-realtime-2-1"                      # the setting
+    azure["models"] = [{"canonical": "gpt-4o", "provider_id": "other"},
+                       {"canonical": rp.MODEL, "provider_id": "voice-prod"}]
+    assert asked_for() == "voice-prod"                            # the row, over the setting
+    azure["models"] = [{"canonical": rp.MODEL, "provider_id": " "}]
+    assert asked_for() == "gpt-realtime-2-1"                      # a row with no id says nothing
+    del azure["models"]
+    w.provider.deployment = ""
+    assert asked_for() == rp.MODEL == "gpt-realtime-2.1"          # neither: the model's own name
+
+
 def test_a_tool_call_runs_through_the_plugs_server_as_the_harness(w):
     sid = w.create()["session_id"]
     assert w.tool(sid, arguments='{"state": "open"}') == {"status": "done", "output": "2 open pull requests"}
