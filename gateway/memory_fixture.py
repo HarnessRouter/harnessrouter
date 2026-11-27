@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 
-from memory_plane import MemoryError, Provider, drawn_by_the_engine, record_words, said, tokens_of
+from memory_plane import MemoryError, Provider, cursor_at, drawn_by_the_engine, record_words, said, tokens_of
 
 _OPEN = None
 
@@ -182,8 +182,8 @@ class FixtureProvider(Provider):
         return [r for r in rows if self._match(r, req.get("filters"))]
 
     async def list(self, mid, req):
+        start = cursor_at(req)
         rows = sorted(self._select(mid, req), key=lambda r: (r["time"]["written_at"], r["id"]))
-        start = int(req.get("cursor") or 0)
         page = rows[start:start + int(req.get("limit") or 50)]
         nxt = start + len(page)
         return {"records": page, "next": str(nxt) if nxt < len(rows) else None}

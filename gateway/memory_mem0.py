@@ -429,8 +429,8 @@ class Mem0(mp.Provider):
         degraded: list[str] = []
         if req.get("as_of"):
             raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past instant.")
+        page = mp.cursor_at(req, 1)
         flt, later = self._filters(mid, req, degraded)
-        page = int(req.get("cursor") or 1)
         r = await self._call("POST", "/v3/memories/", params={"page": page, "page_size": int(req.get("limit") or 50)},
                              body={"filters": flt, "show_expired": req.get("include") == "all"})
         doc = r.json() if r.status_code == 200 else {}
@@ -782,6 +782,7 @@ class Mem0Server(Mem0):
     async def list(self, mid, req):
         if req.get("as_of"):
             raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
+        at = mp.cursor_at(req)
         degraded: list[str] = []
         flat, later = self._flat(mid, req, degraded)
         ents, items = await asyncio.gather(self._entities(mid), self._all(mid, expired=req.get("include") == "all"))
@@ -791,7 +792,7 @@ class Mem0Server(Mem0):
         checks += [{"field": f"attributes.{k}", "op": "eq", "value": v} for k, v in flat.items() if k not in ("user_id", _RESERVED + "type")]
         rows = [x for x in rows if all(mp.matches(x, f) for f in [*checks, *later])]
         rows.sort(key=lambda x: str(x["time"]["written_at"] or ""), reverse=True)
-        at, size = int(req.get("cursor") or 0), int(req.get("limit") or 50)
+        size = int(req.get("limit") or 50)
         return {"records": rows[at:at + size], "next": str(at + size) if at + size < len(rows) else None}
 
     async def recall(self, mid, req):
