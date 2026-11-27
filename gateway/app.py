@@ -16520,6 +16520,21 @@ def _jsonrpc_result(rid, result: dict) -> JSONResponse:
     return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": result})
 
 
+def _jsonrpc_request(body: bytes) -> tuple[str, object, dict]:
+    """The JSON-RPC body of a hosted MCP call as (method, id, params); 400 when it is not an object or its params is not one."""
+    try:
+        req = json.loads(body or b"{}")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "malformed JSON-RPC request") from None
+    if not isinstance(req, dict):
+        raise HTTPException(400, "malformed JSON-RPC request")
+    method, rid, params = req.get("method") or "", req.get("id"), req.get("params")
+    params = {} if params is None else params
+    if not isinstance(params, dict):
+        raise HTTPException(400, "malformed JSON-RPC request")
+    return method, rid, params
+
+
 def _tool_text(text: str, is_error: bool = False) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
@@ -16536,11 +16551,7 @@ async def database_mcp(request: Request):
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
     hid, _sid, key = claims
-    try:
-        req = json.loads(await request.body() or b"{}")
-    except Exception:  # noqa: BLE001
-        raise HTTPException(400, "malformed JSON-RPC request") from None
-    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+    method, rid, params = _jsonrpc_request(await request.body())
 
     if method == "initialize":
         return _jsonrpc_result(rid, {
@@ -16573,6 +16584,7 @@ async def database_mcp(request: Request):
             "again — you cannot connect it yourself.", True))
     name = params.get("name") or ""
     args = params.get("arguments") or {}
+    args = args if isinstance(args, dict) else {}
     try:
         if name == "schema":
             out = await sql_plane.introspect(rec["engine"], rec["dsn"],
@@ -18984,11 +18996,7 @@ async def media_mcp(request: Request):
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
     hid, sid, key = claims
-    try:
-        req = json.loads(await request.body() or b"{}")
-    except Exception:  # noqa: BLE001
-        raise HTTPException(400, "malformed JSON-RPC request") from None
-    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+    method, rid, params = _jsonrpc_request(await request.body())
 
     if method == "initialize":
         return _jsonrpc_result(rid, {
@@ -20488,11 +20496,7 @@ async def plugs_mcp(request: Request):
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
     hid, sid, key = claims
-    try:
-        req = json.loads(await request.body() or b"{}")
-    except Exception:  # noqa: BLE001
-        raise HTTPException(400, "malformed JSON-RPC request") from None
-    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+    method, rid, params = _jsonrpc_request(await request.body())
 
     if method == "initialize":
         return _jsonrpc_result(rid, {
@@ -23297,11 +23301,7 @@ async def memories_mcp(request: Request):
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
     hid, sid, key = claims
-    try:
-        req = json.loads(await request.body() or b"{}")
-    except Exception:  # noqa: BLE001
-        raise HTTPException(400, "malformed JSON-RPC request") from None
-    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+    method, rid, params = _jsonrpc_request(await request.body())
     if method == "initialize":
         return _jsonrpc_result(rid, {"protocolVersion": str(params.get("protocolVersion") or "2024-11-05"),
                                      "capabilities": {"tools": {}}, "serverInfo": {"name": "memories", "version": "1"}})

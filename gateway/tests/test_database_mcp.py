@@ -841,6 +841,23 @@ def test_an_unknown_tool_and_an_unknown_method_are_answered_not_crashed(client, 
     assert m.json()["error"]["code"] == -32601
 
 
+def test_query_treats_non_object_arguments_as_empty(client, connected, monkeypatch):
+    received = []
+
+    async def fake_run_query(_engine, _dsn, sql, max_rows):
+        received.append(sql)
+        return {"columns": [], "rows": []}
+
+    monkeypatch.setattr(app.sql_plane, "run_query", fake_run_query)
+    tok = _cred(connected)
+    for arguments in (["select 1"], "select 1", {"sql": "SELECT 1"}):
+        r = _rpc(client, tok, "tools/call", {"name": "query", "arguments": arguments})
+        assert r.status_code == 200
+        body = r.json()
+        assert "result" in body and "error" not in body
+    assert received == ["", "", "SELECT 1"]
+
+
 # ── how the tool reaches a turn ──────────────────────────────────────────────────
 
 def _plugins(hid: str, sid: str = "sess-42") -> list[dict]:
