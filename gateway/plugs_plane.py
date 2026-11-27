@@ -429,7 +429,7 @@ async def _(c, f, cfg, a):
     if not texty:
         out["note"] = "Not a text file: its bytes are not read here. The person can open it at webUrl."
         return out
-    cap = min(int(a.get("max_chars") or 20_000), M365_MAX_CHARS)
+    cap = max(1, min(int(a.get("max_chars") or 20_000), M365_MAX_CHARS))
     r = await _graph(c, f, cfg, "GET", f"{root}/root:/{path}:/content", raw=True)
     text = r.content.decode("utf-8", "replace")
     out["content"] = text[:cap]
