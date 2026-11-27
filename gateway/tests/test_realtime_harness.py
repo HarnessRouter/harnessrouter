@@ -241,6 +241,12 @@ def test_ending_hangs_up_on_the_harness_first_then_bills_by_its_tokens_and_keeps
     assert r.end(sid) == out and len(r.posted) == 1 and len(r.kept) == 1          # once
 
 
+def test_the_log_says_what_a_call_was_billed_by_and_how_many_turns_it_had(r, capsys):
+    sid = r.create()["session_id"]
+    r.end(sid)
+    assert f"ended sid={sid} reason=ended minutes=0.0 usd={round(TURNS_USD, 6)} billed_by=tokens turns=2" in capsys.readouterr().out
+
+
 def test_the_tokens_figure_is_under_the_calls_cap(r):
     sid = r.create(max_cost_usd=0.01)["session_id"]
     assert r.end(sid)["spend_usd"] == 0.01

@@ -904,7 +904,8 @@ class Service:
                 await self.ports.turns(sid, {**v, **ended}, turns)
             except Exception as e:  # noqa: BLE001 — the call is ended and metered; its words are the loss
                 print(f"[realtime] transcript not kept sid={sid}: {type(e).__name__}", flush=True)
-        print(f"[realtime] ended sid={sid} reason={reason} minutes={minutes} usd={usd}", flush=True)
+        print(f"[realtime] ended sid={sid} reason={reason} minutes={minutes} usd={usd} billed_by={billed}"
+              + (f" turns={len(turns)}" if turns is not None else ""), flush=True)
         return {"minutes": minutes, "spend_usd": usd}
 
     # ── calls nobody ended ──
