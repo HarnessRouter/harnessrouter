@@ -567,6 +567,10 @@ def _git_pin_args(url: str, pin: str) -> list[str]:
     address and still checks the host key under the name."""
     if not pin:
         return []
+    if "%" in pin:
+        # ipaddress takes ANY text after an IPv6 "%" as a zone id ("2606::1%$(id)" parses), and
+        # core.sshCommand below is run by a shell. The gateway never pins a zone id; refuse one.
+        raise HTTPException(400, "git pin is not host:port:address")
     if pin.startswith("["):
         host, sep, rest = pin[1:].partition("]:")
         try:

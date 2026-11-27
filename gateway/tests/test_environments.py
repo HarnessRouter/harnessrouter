@@ -320,6 +320,18 @@ def test_git_url_refused_brackets_ipv6_literal_pins_and_refuses_internal_spellin
     refused, pin = asyncio.run(app._git_url_refused("https://[fe80::1%25eth0]/org/repo.git"))
     assert refused and pin == "", (refused, pin)
 
+    # A zone id is refused before any lookup, on a public address too: no pin carries one to the
+    # runner, whose ssh command line is run by a shell.
+    async def no_lookup(host: str, port: int):
+        raise AssertionError(f"looked up {host}")
+
+    monkeypatch.setattr(app, "_resolve", no_lookup)
+    for url in ("https://[2606:4700::6810:1%25eth0]/org/repo.git", "ssh://git@[2606:4700::6810:1%251]/org/repo.git",
+                "git@[2606:4700::6810:1%eth0]:org/repo.git", "git@[2606:4700::6810:1%$(id)]:org/repo.git",
+                "ssh://git@[2606:4700::6810:1%25$(id)]/org/repo.git"):
+        refused, pin = asyncio.run(app._git_url_refused(url))
+        assert refused and "interface" in refused and pin == "", (url, refused, pin)
+
     async def fake_resolve(host: str, port: int):
         return [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("2606:4700::6810:1", port, 0, 0))]
 
