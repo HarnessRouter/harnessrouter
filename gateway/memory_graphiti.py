@@ -560,11 +560,12 @@ class Graphiti(mp.Provider):
     async def list(self, mid, req):
         if req.get("as_of"):
             raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
+        at = mp.cursor_at(req)
         types = [t for t in (req.get("types") or []) if t]
         rows = await self._everything(mid, types)
         if req.get("include") != "all":
             rows = [x for x in rows if x["status"] == "active"]
-        at, size = int(req.get("cursor") or 0), int(req.get("limit") or 50)
+        size = int(req.get("limit") or 50)
         return {"records": rows[at:at + size], "next": str(at + size) if at + size < len(rows) else None}
 
     async def recall(self, mid, req):

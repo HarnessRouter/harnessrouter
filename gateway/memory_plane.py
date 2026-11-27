@@ -149,6 +149,20 @@ class MemoryError(Exception):
         self.status, self.code, self.message, self.param = status, code, message, param
 
 
+def cursor_at(req: dict, first: int = 0) -> int:
+    """A cursor is the `next` an earlier page returned."""
+    cursor = req.get("cursor")
+    if cursor is None or cursor == "":
+        return first
+    cursor = str(cursor)
+    if not cursor.isascii() or not cursor.isdecimal() or len(cursor) > 10:
+        raise MemoryError(422, "memory_invalid", "A cursor is the `next` an earlier page returned.", "cursor")
+    at = int(cursor)
+    if at < first or at > 2**31 - 1:
+        raise MemoryError(422, "memory_invalid", "A cursor is the `next` an earlier page returned.", "cursor")
+    return at
+
+
 # ── a memory's workspace: where it is reached from ─────────────────────────────────────────────
 # A memory belongs to the workspace it was made in and is reached only from there (Richard, 2026-11-10): listed, read,
 # written, recalled and shared only by someone acting in that workspace, and used only by that workspace's agents.

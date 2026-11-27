@@ -563,8 +563,9 @@ class Hindsight(mp.Provider):
     async def list(self, mid, req):
         if req.get("as_of"):
             raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
+        at = mp.cursor_at(req)
         types = [t for t in (req.get("types") or []) if t]
-        size, at = int(req.get("limit") or 50), int(req.get("cursor") or 0)
+        size = int(req.get("limit") or 50)
         if types == ["entity"]:
             r = await self._call("GET", self._bank(mid) + "/entities", params={"limit": size, "offset": at})
             doc = r.json() if r.status_code == 200 else {}

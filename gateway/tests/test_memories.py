@@ -315,6 +315,15 @@ def test_recall_and_graph_reject_a_limit_that_is_not_a_whole_number(people, tree
     assert r.status_code == 422 and _code(r) == "memory_invalid" and r.json()["error"]["param"] == "limit"
 
 
+@pytest.mark.parametrize("cursor", ("abc", "1.5", "-3", "+1", " 1"))
+def test_a_list_cursor_is_the_next_an_earlier_page_returned(people, tree, cursor):
+    ada, _ = people
+    url = f"/v1/memories/{tree['acme']}/records"
+    r = ada.get(url, params={"cursor": cursor})
+    assert r.status_code == 422 and _code(r) == "memory_invalid" and r.json()["error"]["param"] == "cursor"
+    assert ada.get(url, params={"cursor": "0"}).status_code == 200
+
+
 def test_a_record_may_carry_a_title_and_it_is_found_and_revised_like_what_it_says(people, tree):
     ada, _ = people
     base = f"/v1/memories/{tree['sales']}/records"

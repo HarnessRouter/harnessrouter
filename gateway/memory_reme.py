@@ -404,9 +404,10 @@ class ReMe(mp.Provider):
     async def list(self, mid, req):
         if req.get("as_of"):
             raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
+        at = mp.cursor_at(req)
         types = [t for t in (req.get("types") or []) if t]
         rows = [x for x in await self._rows(mid, req.get("include") == "all") if not types or x["type"] in types]
-        at, size = int(req.get("cursor") or 0), int(req.get("limit") or 50)
+        size = int(req.get("limit") or 50)
         return {"records": rows[at:at + size], "next": str(at + size) if at + size < len(rows) else None}
 
     async def recall(self, mid, req):
