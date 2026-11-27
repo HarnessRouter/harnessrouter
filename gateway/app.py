@@ -24144,6 +24144,11 @@ async def _git_url_refused(url: str) -> tuple[str | None, str]:
             return "invalid url", ""
     if not host:
         return "url has no host", ""
+    if "%" in host:
+        # A zone id ("[2606::1%eth0]", "%25" in a URL) names one of this side's network interfaces;
+        # no repository needs one, and Python's address parser takes any text after the "%", which
+        # the runner would hand to ssh in a shell-run command (_git_pin_args).
+        return "the host names a network interface (%), which a clone cannot use", ""
     addrs, why = await _classify_target(host, port)
     shown = f"[{host}]" if ":" in host else host
     return (why, "") if why else (None, f"{shown}:{port}:{addrs[0]}")

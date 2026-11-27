@@ -752,6 +752,11 @@ def test_pinned_git_clone_handles_ipv6_literal_hosts(store, monkeypatch):
         ("https://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:443:2606:4700::6810:2"),
         ("https://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:0:2606:4700::6810:1"),
         ("https://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:70000:2606:4700::6810:1"),
+        # a zone id: ipaddress parses any text after "%", and the ssh command line is run by a shell
+        ("ssh://git@[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1%$(id)]:22:2606:4700::6810:1"),
+        ("git@[2606:4700::6810:1]:org/repo.git", "[2606:4700::6810:1%eth0]:22:2606:4700::6810:1"),
+        ("git@git.example:org/repo.git", "git.example:22:2606:4700::6810:1%$(id)"),
+        ("https://[2606:4700::6810:1%25eth0]/org/repo.git", "[2606:4700::6810:1%eth0]:443:2606:4700::6810:1%eth0"),
     ):
         with pytest.raises(HTTPException) as exc:
             E.import_git(eid, url, pin=bad_pin)
