@@ -4,10 +4,11 @@ A voice call is a spoken conversation with a harness: the caller's browser speak
 speech-to-speech model, and the model answers with the harness's own instructions and its plug
 tools. This page is the design of record for the self-hosted server.
 
-**Status.** The three routes are in the gateway and are off until the operator turns them on. They
-are tested against a stand-in for the provider. A call placed through this gateway on a live Azure
-resource has not been run yet, and the console has no page that places a call: a client is written
-against the routes below. Both are listed under [What is not verified](#what-is-not-verified).
+**Status.** The three routes are in the gateway and are off until the operator turns them on.
+Calls have been placed through them on a live Azure resource with a Microsoft Entra sign-in, driven
+by a script in typed text. A spoken call from a browser has not, and the console has no page that
+places one: a client is written against the routes below. See
+[What is verified, and what is not](#what-is-verified-and-what-is-not).
 
 ## What the gateway does, and what it does not
 
@@ -227,14 +228,34 @@ one call each.
 | `HR_REALTIME_USD_PER_MIN` | `0.10` | What a minute of call is metered at. |
 | `HR_REALTIME_SECRET_TTL_S` | `120` | How long a client secret may start a call, 10 to 7200 seconds. Azure has opened a call a few seconds past it, so it is not an exact window. |
 
-## What is not verified
+## What is verified, and what is not
 
-- **A live call through this gateway.** The routes are tested with the provider stood in. The
-  measurements quoted in `gateway/realtime_plane.py` (what `session.update` changes, the secret's
-  lifetime) were taken on Azure with the same code in the hosted service.
-- **An Entra sign-in on the client secret request.** The gateway asks for its token with the scope
-  it uses for every Azure model call (`https://cognitiveservices.azure.com/.default`); Microsoft's
-  sample for this request uses `https://ai.azure.com/.default`. A connection's `entra_scope`
-  field names another scope if the first is refused.
+Run on 2026-11-27 against a live Azure OpenAI resource that takes only a Microsoft Entra sign-in
+(deployment `gpt-realtime-2-1`), on an instance built from this change, by a script and with no
+browser. The call itself was held over a WebSocket opened with the call's client secret, in typed
+text:
+
+- With no Azure connection, placing a call answers `503` and says why.
+- A call is minted with the Entra sign-in. The scope the gateway uses for every Azure model call
+  (`https://cognitiveservices.azure.com/.default`) is accepted on the client secret request;
+  Microsoft's sample uses `https://ai.azure.com/.default`, which was not needed.
+- The session Azure made holds the harness's instructions and the call's own line, and the model
+  answered from the instructions.
+- A tool that is not the call's is refused in words.
+- Ending the call meters it by the clock (6 seconds: 0.103 minutes, $0.0103), ending it again
+  answers the same figures, and the session reads as an ended voice call with its spend.
+- A call whose session is deleted while it is open is metered at that moment.
+- A call nobody ended is ended by the sweep, metered at its `max_minutes`, 110 seconds after a
+  one-minute call started.
+- The gateway's log holds no client secret and no Entra secret.
+
+Not verified:
+
+- **A spoken call over WebRTC.** The script used a WebSocket and text, so the SDP exchange, the
+  audio and a browser were not part of it.
+- **A tool run on a live call.** The harness in the run had no plugs, so a call's tool was listed
+  and run only in the tests, with the plugs server stood in.
 - **A browser client.** None ships here; "The browser's part" is written from Microsoft's guide and
   the routes, not from a client run against them.
+- The measurements quoted in `gateway/realtime_plane.py` (what `session.update` changes, the
+  secret's lifetime) were taken on Azure with the same code in the hosted service, not here.
