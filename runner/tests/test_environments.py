@@ -172,6 +172,57 @@ def test_failed_archive_import_preserves_existing_source(store, tmp_path):
     assert E.source_stat("henv_keep") == {"count": 2, "bytes": 19}
 
 
+def test_an_archive_that_unpacks_past_the_caps_is_refused_and_leaves_nothing(store, tmp_path, monkeypatch):
+    """A small upload can unpack to a full disk (a zip of zeros is about 1000:1), and staging is under
+    /tmp, every organization's disk on a shared runner. The bytes are counted as they are written,
+    never taken from the archive's own size fields, and the entries are counted before any is."""
+    import tempfile
+
+    stage_root = tmp_path / "tmp"
+    stage_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(stage_root))
+    monkeypatch.setattr(E, "ARCHIVE_MAX_BYTES", 10_000)
+    monkeypatch.setattr(E, "ARCHIVE_MAX_MEMBERS", 5)
+    E.write_file("henv_cap", "keep.txt", b"keep\n")
+
+    zbomb = tmp_path / "zeros.zip"
+    with zipfile.ZipFile(zbomb, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("a.txt", b"ok\n")
+        zf.writestr("zeros.bin", b"\0" * 50_000)
+    tbomb = tmp_path / "zeros.tar.gz"
+    with tarfile.open(tbomb, "w:gz") as tf:
+        for name, size in (("a.txt", 3), ("b.bin", 6_000), ("c.bin", 6_000)):   # past the cap only together
+            ti = tarfile.TarInfo(name)
+            ti.size = size
+            tf.addfile(ti, io.BytesIO(b"\0" * size))
+    many_zip = tmp_path / "many.zip"
+    with zipfile.ZipFile(many_zip, "w") as zf:
+        for i in range(6):
+            zf.writestr(f"f{i}.txt", b"x")
+    many_tar = tmp_path / "many.tar"
+    with tarfile.open(many_tar, "w") as tf:
+        for i in range(6):
+            ti = tarfile.TarInfo(f"f{i}.txt")
+            ti.size = 1
+            tf.addfile(ti, io.BytesIO(b"x"))
+
+    for bad, says in ((zbomb, "unpacks to more than 10000 bytes"), (tbomb, "unpacks to more than 10000 bytes"),
+                      (many_zip, "more than 5 entries"), (many_tar, "more than 5 entries")):
+        for replace in (True, False):
+            with pytest.raises(HTTPException) as exc:
+                E.import_archive("henv_cap", str(bad), replace=replace)
+            assert exc.value.status_code == 413 and says in exc.value.detail, (bad.name, exc.value.detail)
+            assert E.source_stat("henv_cap") == {"count": 1, "bytes": 5}, bad.name
+            assert list(stage_root.iterdir()) == [], bad.name
+
+    ok = tmp_path / "five.zip"
+    with zipfile.ZipFile(ok, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for i in range(5):
+            zf.writestr(f"f{i}.txt", b"\0" * 2_000)                   # exactly at both caps
+    assert E.import_archive("henv_cap", str(ok), replace=True)["written"] == 5
+    assert list(stage_root.iterdir()) == []
+
+
 def test_archive_import_refuses_escape_symlink_and_preserves_merge_modes(store, tmp_path):
     E.write_file("henv_sym", "keep.txt", b"ok\n")
     outside = tmp_path / "outside"
