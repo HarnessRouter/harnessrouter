@@ -734,6 +734,209 @@
       },
       "additionalProperties": true
     },
+    "BaseCatalog": {
+      "type": "object",
+      "required": [
+        "bases"
+      ],
+      "properties": {
+        "bases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Base"
+          }
+        },
+        "runtimeDefaults": {
+          "type": "object",
+          "description": "The limits a task gets when neither the request nor the harness sets one.",
+          "properties": {
+            "maxStep": {
+              "type": "integer"
+            },
+            "timeoutSeconds": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": true
+        },
+        "capabilities": {
+          "type": "object",
+          "description": "What every base on this server takes, the same booleans `GET /v1/uhp` reports under\nthese names.\n",
+          "properties": {
+            "input_history": {
+              "type": "boolean"
+            },
+            "input_requests": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "Base": {
+      "type": "object",
+      "required": [
+        "id",
+        "object",
+        "label",
+        "backend",
+        "status",
+        "models",
+        "tools"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The value a harness names in `base`. Opaque to a client (Harnesses §2)."
+        },
+        "object": {
+          "type": "string",
+          "const": "harness.base"
+        },
+        "label": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string",
+          "description": "The key this base's models are grouped under in `GET /v1/models`."
+        },
+        "status": {
+          "type": "string",
+          "description": "`ready` when this server can run a task on the base, `not_installed` when it does not\nhold it. A client treats any other value as not ready.\n",
+          "examples": [
+            "ready",
+            "not_installed"
+          ]
+        },
+        "statusReason": {
+          "type": "string",
+          "description": "Why the base is not ready",
+          "in words. Present only when `status` is not `ready`.": null
+        },
+        "systemPrompt": {
+          "type": "string",
+          "description": "The base's own system prompt."
+        },
+        "defaultModel": {
+          "type": "string",
+          "description": "The model a harness on this base runs when it names none; empty when the server has no default for it."
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BaseModel"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BaseTool"
+          }
+        },
+        "builtinSkills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BaseSkill"
+          }
+        },
+        "builtinSkillsEnumerable": {
+          "type": "boolean",
+          "description": "False when the base also discovers skills of its own at run time that cannot be listed\nfrom outside a task, so `builtinSkills` is not everything the agent has.\n"
+        },
+        "takesSkills": {
+          "type": "boolean",
+          "description": "Whether a harness on this base takes `skills`."
+        },
+        "takesEnvironments": {
+          "type": "boolean",
+          "description": "Whether a harness on this base takes an `environment`; a task that names one on a base that does not is refused."
+        },
+        "takesInputRequests": {
+          "type": "boolean",
+          "description": "Whether a task on this base can end by asking the person (Tasks §3.2)."
+        }
+      },
+      "additionalProperties": true
+    },
+    "BaseModel": {
+      "type": "object",
+      "required": [
+        "id",
+        "available"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Computed",
+          "as on `Model`.": null
+        },
+        "default": {
+          "type": "boolean"
+        },
+        "reasoning": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The reasoning levels the model takes, lowest first; empty when none is known."
+        }
+      },
+      "additionalProperties": true
+    },
+    "BaseTool": {
+      "type": "object",
+      "required": [
+        "name",
+        "enforcement"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The tool's own name, the value `disabled_tools` takes."
+        },
+        "label": {
+          "type": "string"
+        },
+        "enforcement": {
+          "type": "string",
+          "enum": [
+            "hard",
+            "instruction"
+          ],
+          "description": "`hard`: a disabled tool is withheld from the agent. `instruction`: the agent is told\nnot to use it, and can.\n"
+        }
+      },
+      "additionalProperties": true
+    },
+    "BaseSkill": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "defaultEnabled": {
+          "type": "boolean"
+        },
+        "origin": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
     "CreateResponseRequest": {
       "type": "object",
       "required": [

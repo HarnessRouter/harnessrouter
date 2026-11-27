@@ -460,6 +460,94 @@ def test_an_invalid_connection_string_port_is_a_safe_error(api, kit, port):
     assert password not in err["message"]
 
 
+@pytest.mark.parametrize("engine,dsn,want_host", [
+    ("postgres", f"postgresql://u:{PASSWORD}@[2606:4700:4700::1111]:5432/shop", "[2606:4700:4700::1111]:5432"),
+    ("mysql", f"mysql://u:{PASSWORD}@[::1]:3306/shop", "[::1]:3306"),
+    ("postgres", f"postgresql://u:{PASSWORD}@[2606:4700:4700::1111]/shop", "2606:4700:4700::1111"),
+    ("postgres", f"postgresql://u:{PASSWORD}@db.example.com:5432/shop", "db.example.com:5432"),
+])
+def test_db_parse_brackets_ipv6_hosts_only_with_port(engine, dsn, want_host):
+    assert app._db_parse(engine, dsn) == (want_host, "shop")
+
+
+def _stub_ipv6_resolve(monkeypatch, want_host: str) -> list[tuple[str, int]]:
+    seen_targets: list[tuple[str, int]] = []
+
+    async def fake_resolve(host: str, port: int):
+        seen_targets.append((host, port))
+        if host == want_host:
+            return [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (want_host, port, 0, 0))]
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    monkeypatch.setattr(app, "_resolve", fake_resolve)
+    return seen_targets
+
+
+@pytest.mark.parametrize("engine,dsn,want_host,want_target", [
+    ("postgres", f"postgresql://u:{PASSWORD}@[2606:4700:4700::1111]:15432/shop",
+     "[2606:4700:4700::1111]:15432", ("2606:4700:4700::1111", 15432)),
+    ("mysql", f"mysql://u:{PASSWORD}@[2606:4700:4700::1111]/shop",
+     "2606:4700:4700::1111", ("2606:4700:4700::1111", 3306)),
+])
+def test_hosted_database_probe_accepts_public_ipv6_and_preserves_port(
+    api, kit, monkeypatch, engine, dsn, want_host, want_target
+):
+    monkeypatch.setattr(app, "_pool_is_local", lambda: False)
+    seen_targets = _stub_ipv6_resolve(monkeypatch, want_target[0])
+
+    async def fake_introspect(eng, conn, sample_rows=0, timeout=15.0):
+        return {"table_count": 1, "tables": [{"schema": "public", "name": "orders"}]}
+
+    monkeypatch.setattr(sql_plane, "introspect", fake_introspect)
+
+    r = api.post("/v1/mcp-test/database", json={"engine": engine, "connection_string": dsn})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["host"] == want_host and body["database"] == "shop"
+    assert seen_targets == [want_target]
+
+    launch = _launch(api, kit, engine, dsn)
+    assert launch.status_code == 200, launch.text
+    hid = launch.json()["harnessId"]
+    server = api.get(f"/v1/harnesses/{hid}/servers/{ENTRY_ID}")
+    assert server.status_code == 200 and server.json()["connection"]["host"] == want_host
+    assert seen_targets == [want_target, want_target]
+
+
+@pytest.mark.parametrize("engine,dsn,want_host,want_port", [
+    ("postgres", f"postgresql://u:{PASSWORD}@[::1]:5432/shop", "::1", 5432),
+    ("mysql", f"mysql://u:{PASSWORD}@[fe80::1]:3306/shop", "fe80::1", 3306),
+    # Every IPv6 spelling of an internal place, now that an IPv6 literal reaches the check rather
+    # than being refused for its colons: IPv4-mapped loopback and metadata, the unspecified
+    # address (which a connect() takes as this machine), a unique-local address (where one cloud
+    # serves its metadata over IPv6), and NAT64's spelling of the metadata address.
+    ("postgres", f"postgresql://u:{PASSWORD}@[::ffff:127.0.0.1]:5432/shop", "::ffff:127.0.0.1", 5432),
+    ("postgres", f"postgresql://u:{PASSWORD}@[::ffff:169.254.169.254]:5432/shop", "::ffff:169.254.169.254", 5432),
+    ("mysql", f"mysql://u:{PASSWORD}@[::]:3306/shop", "::", 3306),
+    ("postgres", f"postgresql://u:{PASSWORD}@[fd00:ec2::254]:5432/shop", "fd00:ec2::254", 5432),
+    ("postgres", f"postgresql://u:{PASSWORD}@[64:ff9b::a9fe:a9fe]:5432/shop", "64:ff9b::a9fe:a9fe", 5432),
+    # 6to4 and Teredo spellings of the metadata address, refused by name whatever the Python patch level
+    ("postgres", f"postgresql://u:{PASSWORD}@[2002:a9fe:a9fe::1]:5432/shop", "2002:a9fe:a9fe::1", 5432),
+    ("postgres", f"postgresql://u:{PASSWORD}@[2001:0:a9fe:a9fe::]:5432/shop", "2001:0:a9fe:a9fe::", 5432),
+])
+def test_hosted_database_refuses_internal_ipv6_by_full_host(
+    api, kit, monkeypatch, engine, dsn, want_host, want_port
+):
+    monkeypatch.setattr(app, "_pool_is_local", lambda: False)
+    seen_targets = _stub_ipv6_resolve(monkeypatch, want_host)
+
+    for resp in (
+        api.post("/v1/mcp-test/database", json={"engine": engine, "connection_string": dsn}),
+        _launch(api, kit, engine, dsn),
+    ):
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "unreachable_host"
+        assert want_host in err["message"] and "internal" in err["message"]
+        assert PASSWORD not in err["message"]
+    assert seen_targets == [(want_host, want_port), (want_host, want_port)]
+
+
 def test_no_key_to_encrypt_with_is_a_sentence_naming_the_variable(api, kit, monkeypatch):
     """The 501 the operator of a keyless instance must see. Not a 500, and not a plaintext write."""
     monkeypatch.delenv("HR_SECRET_KEY", raising=False)
