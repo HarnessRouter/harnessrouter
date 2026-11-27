@@ -26,6 +26,15 @@ harness) answers `usage()` and is billed by that instead.
 OFF BY DEFAULT. HR_REALTIME=1 turns the three routes on; without it each answers 403
 `realtime_not_enabled` and no call is minted. A call that started is always ended and metered,
 whatever the switch says by then.
+
+TWO PROVIDERS. AzureRealtime hands the caller's browser a client secret and the browser talks to Azure
+itself: nothing sits on the call, so the browser can change its own call's instructions and tools, and
+nothing here can hang up. HarnessRealtime (HR_REALTIME_PROVIDER=harness) places the call on a Realtime
+Harness instead, which relays it: the device talks to the harness, the harness to Azure. The harness
+keeps the configuration the gateway handed it, runs the call's tools itself against the plugs server,
+hangs up when told, and knows what each turn said and used. So a relayed call is ended for real, billed
+by its tokens and leaves a transcript. The provider key still never leaves this process: the harness
+asks for a short-lived credential per connection, with a token good for its one call.
 """
 from __future__ import annotations
 
@@ -111,6 +120,23 @@ NOT_SET_UP = ("Voice calls need an Azure OpenAI connection with a realtime deplo
               "has none.")
 ENDED_DETAIL = "This call has ended."
 
+# Which provider carries a call: "azure" (the browser and Azure, directly) or "harness" (a Realtime Harness
+# relays it). The harness is reached by this gateway at HARNESS_URL and by the caller's device at
+# HARNESS_PUBLIC_URL, a ws:// or wss:// address: a device connects to the harness itself, and the console's
+# own port carries no WebSocket.
+PROVIDER = os.environ.get("HR_REALTIME_PROVIDER", "azure").strip().lower() or "azure"
+HARNESS_URL = os.environ.get("HR_REALTIME_HARNESS_URL", "").strip().rstrip("/")
+HARNESS_PUBLIC_URL = os.environ.get("HR_REALTIME_HARNESS_PUBLIC_URL", "").strip().rstrip("/")
+HARNESS_NOT_SET_UP = ("Voice calls are set to run on a Realtime Harness, and this instance does not say where it "
+                      "is: HR_REALTIME_HARNESS_URL, HR_REALTIME_HARNESS_PUBLIC_URL and HR_REALTIME_HARNESS_KEY.")
+# How many provider credentials one relayed call may be given: its first connection, and the harness's
+# replacements when the provider drops (it makes at most two), with one to spare.
+MAX_UPSTREAM_MINTS = 4
+# Dollars per million tokens, OpenAI's published prices for gpt-realtime-2.1 (read 2026-11-27): what a
+# relayed call is billed by, from the usage the provider reports for each turn. Azure's own page listed no
+# figure that day. A cached token costs the same whether it was text or audio.
+USD_PER_M = {"text_in": 4.00, "audio_in": 32.00, "cached_in": 0.40, "text_out": 24.00, "audio_out": 64.00}
+
 clock = time.time                                     # tests move it
 transport: httpx.AsyncBaseTransport | None = None     # tests: the provider's API
 
@@ -163,17 +189,24 @@ class CallSpec:
     tools: list[dict]
     voice: str
     max_minutes: int
+    # for a provider that carries the call itself (runs_tools): the gateway's own ids for it, and the MCP
+    # servers it reaches the call's tools at, each {name, url, headers}
+    session_id: str = ""
+    harness_id: str = ""
+    harness_name: str = ""
+    servers: tuple = ()
 
 
 @dataclasses.dataclass(frozen=True)
 class Minted:
     client_secret: str               # handed to the caller once, never stored or logged
     expires_at: float                # epoch seconds: the secret starts no call after this
-    webrtc_url: str                  # where the browser posts its SDP offer, with the secret as bearer
+    webrtc_url: str                  # where the device connects: its SDP offer (webrtc), or its socket (websocket)
     deployment: str
     model: str
     voice: str
     ref: dict = dataclasses.field(default_factory=dict)   # the provider's own ids for end/usage; no secret
+    transport: str = "webrtc"        # how the device connects there
 
 
 @dataclasses.dataclass(frozen=True)
@@ -190,12 +223,19 @@ class ProviderError(Exception):
 
 class Provider(typing.Protocol):
     name: str
+    # True: the provider carries the call and runs its tools itself, at the servers in the CallSpec. The tool
+    # calls route then runs nothing for the call, and a caller's page tools cannot join it.
+    runs_tools: bool
 
     async def mint(self, spec: CallSpec) -> Minted: ...
 
     async def end(self, ref: dict) -> None: ...
 
     async def usage(self, ref: dict) -> Usage | None: ...
+
+    async def transcript(self, ref: dict) -> list[dict] | None:
+        """The call's turns once it has ended, as response objects (input: what the person said, output: the
+        model's tool calls and what it said); None from a provider that does not know."""
 
 
 # ── Azure OpenAI ─────────────────────────────────────────────────────────────────────────────────
@@ -279,6 +319,7 @@ class AzureRealtime:
     place. Without `sign_in` such a connection cannot be used and the mint says so."""
 
     name = "azure"
+    runs_tools = False
 
     def __init__(self, integrations: typing.Callable[[], typing.Awaitable[list[dict]]], *, integration: str = "",
                  deployment: str = "", model: str = "", transcribe: str | None = None, ttl_s: int = 0,
@@ -358,6 +399,134 @@ class AzureRealtime:
         # Azure reports a call's tokens in its `response.done` events, on the call's own channels; a server
         # reads them only through a sideband on the call id (above). Until then the clock meters.
         return None
+
+    async def transcript(self, ref: dict) -> list[dict] | None:
+        return None                      # what was said went between the browser and Azure
+
+
+# ── a Realtime Harness ───────────────────────────────────────────────────────────────────────────
+def tokens_usd(responses: list[dict]) -> tuple[float, dict] | None:
+    """What a call's turns cost at USD_PER_M, and the tokens counted; None when no turn reported usage (the
+    clock meters then: a figure is never made up from nothing).
+
+    A turn's usage says how many input tokens were audio and how many were cached, not how many of the
+    cached ones were audio. The cached ones are counted against the text first, the cheaper kind to lose,
+    so the figure is never under what the provider charges for the same tokens."""
+    seen = False
+    t = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "input_audio_tokens": 0, "output_audio_tokens": 0}
+    for r in responses or []:
+        u = r.get("usage") if isinstance(r, dict) else None
+        if not isinstance(u, dict):
+            continue
+        seen = True
+        for k in t:
+            try:
+                t[k] += max(0, int(u.get(k) or 0))
+            except (TypeError, ValueError):
+                pass
+    if not seen:
+        return None
+    audio_in = min(t["input_audio_tokens"], t["input_tokens"])
+    text_in = t["input_tokens"] - audio_in
+    cached = min(t["cache_read_tokens"], t["input_tokens"])
+    cached_text = min(cached, text_in)
+    cached_audio = cached - cached_text
+    audio_out = min(t["output_audio_tokens"], t["output_tokens"])
+    usd = ((text_in - cached_text) * USD_PER_M["text_in"] + (audio_in - cached_audio) * USD_PER_M["audio_in"]
+           + cached * USD_PER_M["cached_in"] + (t["output_tokens"] - audio_out) * USD_PER_M["text_out"]
+           + audio_out * USD_PER_M["audio_out"]) / 1_000_000
+    return round(usd, 6), t
+
+
+class HarnessRealtime:
+    """A Realtime Harness (github.com/HarnessRouter/RealtimeHarness) that relays the call: the device talks to
+    the harness, the harness to the provider. This gateway is the harness's operator: it creates each call
+    there with the call's own configuration (the gateway harness's instructions and voice, the MCP servers
+    the call's tools are reached at, how long it may last) and the call's own way to the provider (`upstream`:
+    a URL on this gateway and a token good for that one call).
+
+    `inner` is the provider that holds the key (AzureRealtime): the harness never does. `key` answers the
+    operator key this gateway calls the harness with, read when asked and sent to the harness's own address
+    only. `upstream` answers (url, token) for one call's id."""
+
+    name = "harness"
+    runs_tools = True
+
+    def __init__(self, inner, *, key: typing.Callable[[], str],
+                 upstream: typing.Callable[[str], tuple[str, str]], base: str = "", public: str = "", model: str = ""):
+        self._inner, self._key, self._upstream = inner, key, upstream
+        self.base = (base or HARNESS_URL).rstrip("/")
+        self.public = (public or HARNESS_PUBLIC_URL).rstrip("/")
+        self.model = model or MODEL
+
+    async def _ask(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
+        key = (self._key() or "").strip()
+        if not (self.base and self.public and key):
+            raise ProviderError(503, HARNESS_NOT_SET_UP)
+        try:
+            async with httpx.AsyncClient(transport=transport, timeout=30.0) as c:
+                r = await c.request(method, self.base + path, json=body,
+                                    headers={"authorization": f"Bearer {key}", "content-type": "application/json"})
+        except httpx.HTTPError as e:
+            raise ProviderError(502, f"The voice service could not be reached ({type(e).__name__}).") from None
+        try:
+            doc = r.json()
+        except ValueError:
+            doc = {}
+        return r.status_code, doc if isinstance(doc, dict) else {}
+
+    async def mint(self, spec: CallSpec) -> Minted:
+        url, token = self._upstream(spec.session_id)
+        harness = {"id": spec.harness_id, "name": spec.harness_name or spec.harness_id,
+                   "instructions": spec.instructions, "voice": spec.voice, "max_call_minutes": spec.max_minutes,
+                   "mcp_servers": [dict(s) for s in spec.servers]}
+        if TRANSCRIBE:
+            harness["transcription_model"] = TRANSCRIBE
+        status, doc = await self._ask("POST", "/v1/realtime/sessions", {
+            "transport": "websocket", "model": self.model, "harness": harness, "upstream": {"url": url, "token": token}})
+        connect = doc.get("connect") if isinstance(doc.get("connect"), dict) else {}
+        secret, rid = str(connect.get("token") or ""), str(doc.get("id") or "")
+        if status != 201 or not secret or not rid:
+            # the harness's own error code, never its message: a message may quote the request
+            code = str((doc.get("error") or {}).get("code") or "")[:64] if isinstance(doc.get("error"), dict) else ""
+            raise ProviderError(502 if status >= 500 or status == 201 else 503,
+                                f"The voice service refused to start the call (HTTP {status}" + (f", {code}" if code else "") + ").")
+        try:
+            expires = datetime.datetime.fromisoformat(str(connect.get("expires_at") or "").replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            expires = clock() + 60
+        return Minted(client_secret=secret, expires_at=expires, webrtc_url=f"{self.public}/v1/realtime/connect",
+                      deployment=self.model, model=self.model, voice=spec.voice, transport="websocket",
+                      ref={"provider": self.name, "session": rid[:80]})
+
+    async def credential(self, voice: str) -> dict:
+        """A provider credential for one connection of a relayed call, in the mint answer's shape. The session it
+        is minted with says nothing: the harness sets the call's instructions and tools on the connection."""
+        m = await self._inner.mint(CallSpec("", [], voice or DEFAULT_VOICE, 1))
+        return {"client_secret": m.client_secret, "webrtc_url": m.webrtc_url, "deployment": m.deployment}
+
+    async def _session(self, ref: dict) -> dict | None:
+        rid = str((ref or {}).get("session") or "")
+        if not rid:
+            return None
+        status, doc = await self._ask("GET", f"/v1/sessions/{urllib.parse.quote(rid)}")
+        return doc if status == 200 else None
+
+    async def end(self, ref: dict) -> None:
+        rid = str((ref or {}).get("session") or "")
+        if rid:
+            await self._ask("POST", f"/v1/sessions/{urllib.parse.quote(rid)}/cancel")      # hangs up: the device's socket closes
+
+    async def usage(self, ref: dict) -> Usage | None:
+        doc = await self._session(ref)
+        priced = tokens_usd((doc or {}).get("responses") or [])
+        return Usage(priced[0], {"tokens": priced[1]}) if priced else None
+
+    async def transcript(self, ref: dict) -> list[dict] | None:
+        doc = await self._session(ref)
+        if doc is None:
+            return None
+        return [r for r in doc.get("responses") or [] if isinstance(r, dict)]
 
 
 # ── what a call is made of ───────────────────────────────────────────────────────────────────────
@@ -521,6 +690,11 @@ class Ports:
     lock: typing.Callable[[str, int], typing.Awaitable[bool]]          # one holder across replicas, for ttl seconds
     unlock: typing.Callable[[str], typing.Awaitable[None]]
     live: typing.Callable[[], typing.Awaitable[list[dict]]]            # every realtime record not yet metered (rt_open)
+    # for a provider that carries the call (runs_tools). servers(harness, session): the MCP servers the call's
+    # tools are reached at, [{name, url, headers}], with a credential for this harness and this call.
+    # turns(session, record, responses): the ended call's turns, kept in the session's conversation.
+    servers: typing.Callable[[str, str], typing.Awaitable[list[dict]]] | None = None
+    turns: typing.Callable[[str, dict, list[dict]], typing.Awaitable[None]] | None = None
 
 
 class Service:
@@ -533,6 +707,10 @@ class Service:
         org = str(p.get("org") or "")
         voice, minutes, cap = voice_of(body.voice), minutes_of(body.max_minutes), cap_of(body.max_cost_usd)
         page = client_tools_of(body.client_tools)
+        relayed = bool(getattr(self.provider, "runs_tools", False))
+        if page and relayed:
+            raise _err(422, "invalid_input", "client_tools are not offered on this instance: its calls run on a "
+                                             "harness, which runs a call's tools itself.", "client_tools")
         meta = body.metadata or {}
         sid = SID_PREFIX + uuid.uuid4().hex
         created = clock()
@@ -550,7 +728,7 @@ class Service:
                "trace_blob": prefix, "rt_max_minutes": str(minutes), "rt_deadline": str(created + minutes * 60),
                "rt_usd_per_min": repr(USD_PER_MIN), "rt_voice": voice, "spend_usd": "0.0",
                # "1" until the call is metered: what the sweep looks for, a deleted session's call included
-               "rt_open": "1",
+               "rt_open": "1", "rt_provider": str(getattr(self.provider, "name", "")), "rt_relayed": "1" if relayed else "0",
                **({"rt_max_cost_usd": repr(cap)} if cap is not None else {})}
         # the record first: no call is minted that nothing would meter
         if not await self.ports.put(sid, rec):
@@ -561,8 +739,10 @@ class Service:
             if any(t["name"] == c["name"] for t in tools for c in page):
                 raise _err(422, "invalid_input", "A client tool has the name of one of the harness's tools.",
                            "client_tools")
+            servers = await self.ports.servers(hid, sid) if relayed and self.ports.servers else []
             minted = await self.provider.mint(CallSpec(instructions(str(hv.get("system_prompt") or "")), tools + page,
-                                                       voice, minutes))
+                                                       voice, minutes, session_id=sid, harness_id=hid,
+                                                       harness_name=str(hv.get("name") or ""), servers=tuple(servers)))
         except ProviderError as e:
             await self.ports.put(sid, {"status": "failed", "rt_open": "0", "rt_end_reason": "not started"})
             raise _err(e.status, "provider_error", e.text) from None
@@ -570,9 +750,10 @@ class Service:
             await self.ports.put(sid, {"status": "failed", "rt_open": "0", "rt_end_reason": "not started"})
             raise
         names = [t["name"] for t in tools]
-        # rt_tools: the tools the tool calls route may run, the harness's alone; page tools are only listed
+        # rt_tools: the tools the tool calls route may run, the harness's alone; page tools are only listed.
+        # None for a relayed call: the harness runs them, at the plugs server, and that route runs nothing.
         live = {"status": LIVE, "rt_deployment": minted.deployment, "rt_voice": minted.voice,
-                "rt_expires_at": str(minted.expires_at), "rt_tools": json.dumps(names),
+                "rt_expires_at": str(minted.expires_at), "rt_tools": json.dumps([] if relayed else names),
                 "rt_client_tools": json.dumps([c["name"] for c in page]),
                 "rt_ref": json.dumps(minted.ref)}
         await self.ports.put(sid, live)
@@ -581,7 +762,9 @@ class Service:
         print(f"[realtime] started sid={sid} harness={hid} provider={self.provider.name} tools={len(names)} "
               f"max_minutes={minutes}", flush=True)
         return {"session_id": sid, "client_secret": minted.client_secret, "expires_at": _iso(minted.expires_at),
-                "webrtc_url": minted.webrtc_url, "deployment": minted.deployment, "voice": minted.voice,
+                "transport": minted.transport, "connect_url": minted.webrtc_url,
+                **({"webrtc_url": minted.webrtc_url} if minted.transport == "webrtc" else {}),
+                "deployment": minted.deployment, "voice": minted.voice,
                 "tools": names, "client_tools": [c["name"] for c in page], "max_minutes": minutes}
 
     # ── a session the caller may use ──
@@ -605,6 +788,8 @@ class Service:
         if clock() >= _f(v.get("rt_deadline")):
             await self._finish(v, "max_minutes")
             return {"status": "refused", "detail": ENDED_DETAIL}
+        if str(v.get("rt_relayed")) == "1":
+            return {"status": "refused", "detail": "This call's tools are run by the harness that carries it."}
         try:
             offered = json.loads(v.get("rt_tools") or "[]")
         except ValueError:
@@ -625,6 +810,29 @@ class Service:
                 self._answers.clear()
             self._answers[key] = answer
         return answer
+
+    # ── a relayed call's way to the provider ──
+    async def upstream(self, sid: str) -> dict:
+        """A provider credential for one connection of a relayed call. The caller is the harness that carries
+        the call, already checked by the route against the token made for this one call; this checks the call:
+        relayed, live, within its time, and not asking more often than a call's connections can need."""
+        credential = getattr(self.provider, "credential", None)
+        try:
+            v = await self.ports.get(sid) if _SID_RE.match(sid or "") else None
+        except Exception:  # noqa: BLE001 — unread is not absent
+            raise _err(503, "server_error", "The call could not be read just now. Try again.") from None
+        if (credential is None or not v or str(v.get("kind") or "") != KIND or str(v.get("rt_relayed")) != "1"
+                or str(v.get("status")) != LIVE or clock() >= _f(v.get("rt_deadline"))):
+            raise _err(403, "call_ended", ENDED_DETAIL)
+        asked = int(_f(v.get("rt_upstream")))
+        if asked >= MAX_UPSTREAM_MINTS:
+            raise _err(429, "rate_limited", "This call has been given every provider credential a call can need.")
+        if not await self.ports.put(sid, {"rt_upstream": str(asked + 1)}):
+            raise _err(503, "server_error", "The call could not be recorded just now. Try again.")
+        try:
+            return await credential(str(v.get("rt_voice") or ""))
+        except ProviderError as e:
+            raise _err(e.status, "provider_error", e.text) from None
 
     # ── the end ──
     async def end(self, p: dict, sid: str) -> dict:
@@ -658,15 +866,24 @@ class Service:
                 ref = json.loads(v.get("rt_ref") or "{}")
             except ValueError:
                 ref = {}
+            turns: list[dict] | None = None
+            billed = "clock"
+            try:
+                # the hang-up first: a provider that carries the call knows its last turn only once it is over
+                await self.provider.end(ref)
+            except Exception as e:  # noqa: BLE001 — the record and the meter stop whatever the provider does
+                print(f"[realtime] provider end failed sid={sid}: {type(e).__name__}", flush=True)
             try:
                 said = await self.provider.usage(ref)
                 if said is not None:
                     usd = round(min(said.usd, cap) if cap is not None else said.usd, 6)
-                await self.provider.end(ref)
+                    billed = "tokens"
+                turns = await self.provider.transcript(ref)
             except Exception as e:  # noqa: BLE001 — the clock still meters
-                print(f"[realtime] provider end or usage failed sid={sid}: {type(e).__name__}", flush=True)
+                print(f"[realtime] provider usage or transcript failed sid={sid}: {type(e).__name__}", flush=True)
             ended = {"status": ENDED, "rt_open": "0", "rt_ended_at": str(now), "rt_minutes": repr(minutes),
-                     "spend_usd": repr(usd), "rt_end_reason": reason}
+                     "spend_usd": repr(usd), "rt_end_reason": reason, "rt_billed_by": billed,
+                     **({"rt_turns": str(len(turns))} if turns is not None else {})}
             if str(v.get("status")) != LIVE:
                 ended.pop("status")                       # a session deleted or retired keeps its status; its call is billed
             await self.ports.put(sid, ended)
@@ -681,6 +898,12 @@ class Service:
             await self.ports.card(sid, {**v, **ended})
         except Exception as e:  # noqa: BLE001 — the record is the truth; the list takes the next write
             print(f"[realtime] card not written sid={sid}: {type(e).__name__}", flush=True)
+        # what was said, kept in the session's conversation: not for a session that is being deleted
+        if turns and self.ports.turns and str(v.get("status")) == LIVE and reason != "deleted":
+            try:
+                await self.ports.turns(sid, {**v, **ended}, turns)
+            except Exception as e:  # noqa: BLE001 — the call is ended and metered; its words are the loss
+                print(f"[realtime] transcript not kept sid={sid}: {type(e).__name__}", flush=True)
         print(f"[realtime] ended sid={sid} reason={reason} minutes={minutes} usd={usd}", flush=True)
         return {"minutes": minutes, "spend_usd": usd}
 

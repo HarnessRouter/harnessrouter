@@ -9,6 +9,7 @@ plugs server and Azure were asked, and that nothing happens while the switch is 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import pathlib
@@ -418,3 +419,66 @@ def test_the_control_stores_lock_is_let_go_by_unlock(tmp_path, monkeypatch):
     asyncio.run(cs.unlock("realtime-end:x"))
     asyncio.run(cs.unlock("realtime-end:x"))                        # letting go of nothing is not an error
     assert asyncio.run(cs.try_lock("realtime-end:x", 60)) is True
+
+
+# ── a call relayed by a Realtime Harness: the gateway's own part ────────────────────────────────
+def test_an_upstream_token_names_one_call_and_is_no_other_credential(monkeypatch):
+    sid = rp.SID_PREFIX + "c" * 32
+    tok = gw._mint_realtime_upstream(sid)
+    assert tok.startswith("hru_") and gw._verify_realtime_upstream(tok) == sid
+    assert gw._verify_realtime_upstream(tok[:-1] + ("0" if tok[-1] != "0" else "1")) == ""      # a changed signature
+    head, sig = tok.rsplit(".", 1)
+    forged = "hru_" + base64.urlsafe_b64encode(f"upstream|{rp.SID_PREFIX}{'d' * 32}|9999999999".encode()).decode().rstrip("=")
+    assert gw._verify_realtime_upstream(f"{forged}.{sig}") == ""                                # another call, the old signature
+    assert gw._verify_realtime_upstream("") == "" and gw._verify_realtime_upstream("hru_junk") == ""
+    # it is not a plugs credential, and a plugs credential is not it
+    assert gw._verify_hosted_cred(tok) is None
+    assert gw._verify_realtime_upstream(gw._mint_hosted_cred("chrn_a", sid, PLUGS_RECORD)) == ""
+    now = gw.time.time()
+    monkeypatch.setattr(gw.time, "time", lambda: now + gw._REALTIME_UPSTREAM_TTL_S + 1)
+    assert gw._verify_realtime_upstream(tok) == ""                                              # past a call's longest life
+    assert gw._REALTIME_UPSTREAM_TTL_S > rp.MAX_MINUTES * 60
+
+
+def test_the_upstream_route_answers_only_the_holder_of_a_calls_token(w, monkeypatch):
+    asked = []
+
+    async def upstream(sid):
+        asked.append(sid)
+        return {"client_secret": "ek_x", "webrtc_url": "https://voice-res.openai.azure.com/x", "deployment": "d"}
+    monkeypatch.setattr(gw.REALTIME, "upstream", upstream)
+    sid = rp.SID_PREFIX + "e" * 32
+    for headers in ({}, {"authorization": "Bearer nope"}, {"authorization": "Bearer " + gw._mint_hosted_cred("chrn_a", sid, PLUGS_RECORD)}):
+        e = _refused(lambda: asyncio.run(gw.realtime_upstream(_Req(headers))))
+        assert e.status_code == 401 and _code(e) == "invalid_credential"
+    assert asked == []
+    out = asyncio.run(gw.realtime_upstream(_Req({"authorization": "Bearer " + gw._mint_realtime_upstream(sid)})))
+    assert asked == [sid] and out["client_secret"] == "ek_x"
+    w.off()                                              # a call that started goes on after the switch
+    asyncio.run(gw.realtime_upstream(_Req({"authorization": "Bearer " + gw._mint_realtime_upstream(sid)})))
+    assert asked == [sid, sid]
+
+
+def test_a_relayed_calls_tools_are_reached_at_the_plugs_server_with_a_credential_for_this_harness_and_call(w):
+    sid = rp.SID_PREFIX + "f" * 32
+    (server,) = asyncio.run(gw._realtime_servers("chrn_a", sid))
+    assert server["name"] == "plugs" and server["url"] == gw._own_origins()[0] + "/v1/mcp/plugs"
+    scheme, cred = server["headers"]["Authorization"].split(" ", 1)
+    assert scheme == "Bearer" and gw._verify_hosted_cred(cred) == ("chrn_a", sid, PLUGS_RECORD)
+    assert asyncio.run(gw._realtime_servers("chrn_bare", sid)) == []          # a harness with no plugs: no server
+
+
+def test_the_harness_calls_this_gateway_back_at_the_address_a_runner_beside_it_uses(monkeypatch):
+    sid = rp.SID_PREFIX + "a" * 32
+    url, tok = gw._realtime_upstream_of(sid)
+    assert url == gw._own_origins()[0] + "/v1/realtime/upstream" and gw._verify_realtime_upstream(tok) == sid
+    monkeypatch.setattr(gw, "_own_origins", lambda: [])
+    with pytest.raises(rp.ProviderError) as e:
+        gw._realtime_upstream_of(sid)
+    assert e.value.status == 503
+
+
+def test_as_shipped_calls_run_on_azure_and_the_relay_is_wired_for_when_they_do_not():
+    assert rp.PROVIDER == "azure" and gw.REALTIME.provider.name == "azure" and gw.REALTIME.provider.runs_tools is False
+    assert gw.REALTIME.ports.servers is not None
+    assert "/v1/realtime/upstream" in [r.path for r in gw.app.routes]

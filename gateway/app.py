@@ -27151,14 +27151,79 @@ async def _realtime_card(sid: str, rec: dict) -> None:
     await _index_manifest(str(rec.get("trace_blob") or ""), realtime_plane.card_of(sid, rec))
 
 
+# ── a call relayed by a Realtime Harness (HR_REALTIME_PROVIDER=harness) ──
+# The harness is a server beside this one. It holds no provider key and no harness of its own: for each
+# call this gateway hands it the call's configuration and two credentials, each good for that call alone.
+# One opens the plugs server, the credential a text turn's agent is given. The other is the upstream token
+# below, which the harness presents to POST /v1/realtime/upstream for a short-lived provider credential
+# each time it opens a connection to the provider.
+_REALTIME_UPSTREAM_PREFIX = "hru_"
+_REALTIME_UPSTREAM_TTL_S = (realtime_plane.MAX_MINUTES + 5) * 60      # a call's longest life, and a margin
+
+
+def _mint_realtime_upstream(sid: str) -> str:
+    """session.exp.hmac, the hosted credential's construction under its own prefix and its own claim: it names
+    one call and opens one route, so it is worth nothing at the model broker or the plugs server."""
+    body = f"upstream|{sid}|{int(time.time()) + _REALTIME_UPSTREAM_TTL_S}"
+    sig = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{_REALTIME_UPSTREAM_PREFIX}{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
+
+
+def _verify_realtime_upstream(tok: str) -> str:
+    """The call a valid unexpired upstream token names, else ""."""
+    if not tok or not tok.startswith(_REALTIME_UPSTREAM_PREFIX):
+        return ""
+    try:
+        b64, sig = tok[len(_REALTIME_UPSTREAM_PREFIX):].rsplit(".", 1)
+        body = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode()
+        what, sid, exp = body.split("|")
+    except Exception:  # noqa: BLE001 — a malformed token is simply invalid
+        return ""
+    want = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
+    if what != "upstream" or not hmac.compare_digest(sig, want) or int(exp) < time.time():
+        return ""
+    return sid
+
+
+def _realtime_origin() -> str:
+    """Where a harness beside this gateway reaches it: the address a runner beside it does."""
+    origins = _own_origins()
+    if not origins:
+        raise realtime_plane.ProviderError(503, "This instance does not know its own address, so a harness cannot "
+                                                "call it back for a call.")
+    return origins[0]
+
+
+def _realtime_upstream_of(sid: str) -> tuple[str, str]:
+    return _realtime_origin() + "/v1/realtime/upstream", _mint_realtime_upstream(sid)
+
+
+async def _realtime_servers(hid: str, sid: str) -> list[dict]:
+    """The MCP servers a relayed call's tools are reached at: the harness's plugs, at the plugs server, with the
+    credential a text turn's agent is given for it (this harness, this call, its plugs record). None for a
+    harness with no plugs."""
+    key = _realtime_plugs_key(await _harness_vertex(hid))
+    if not key:
+        return []
+    return [{"name": _PLUGS_SERVER, "url": _realtime_origin() + _HOSTED_MCP_PREFIX + _PLUGS_SERVER, "transport": "http",
+             "headers": {"Authorization": f"Bearer {_mint_hosted_cred(hid, sid, key)}"}}]
+
+
+_REALTIME_AZURE = realtime_plane.AzureRealtime(lambda: _integrations_doc(), sign_in=lambda conn: _entra_token(conn))
+if realtime_plane.PROVIDER not in ("azure", "harness"):
+    print(f"[realtime] HR_REALTIME_PROVIDER is {realtime_plane.PROVIDER!r}, which is neither azure nor harness: "
+          "calls run on azure", flush=True)
 REALTIME = realtime_plane.Service(
-    realtime_plane.AzureRealtime(lambda: _integrations_doc(), sign_in=lambda conn: _entra_token(conn)),
+    realtime_plane.HarnessRealtime(_REALTIME_AZURE, key=lambda: os.environ.get("HR_REALTIME_HARNESS_KEY", ""),
+                                   upstream=lambda sid: _realtime_upstream_of(sid))
+    if realtime_plane.PROVIDER == "harness" else _REALTIME_AZURE,
     realtime_plane.Ports(
         plugs=lambda *a: _realtime_plugs(*a), put=lambda *a: _realtime_put(*a), get=lambda *a: _vertex_get(*a),
         card=lambda *a: _realtime_card(*a), prefix=lambda org, sid, created: f"{org}/{_inv_ts(created)}_{sid}",
         reach=lambda *a: _realtime_reach(*a), usage=lambda *a, **k: _report_usage(*a, **k),
         lock=lambda *a: _realtime_lock(*a), unlock=lambda *a: _realtime_unlock(*a),
-        live=lambda: BACKING.graph.find("HarnessSession", {"kind": realtime_plane.KIND, "rt_open": "1"})))
+        live=lambda: BACKING.graph.find("HarnessSession", {"kind": realtime_plane.KIND, "rt_open": "1"}),
+        servers=lambda *a: _realtime_servers(*a)))
 
 
 async def _realtime_caller(request: Request) -> dict:
@@ -27198,6 +27263,18 @@ async def realtime_session_end(sid: str, request: Request) -> dict:
         raise HTTPException(400, "no org resolved for this principal")
     await _owned_session(request, sid)
     return await REALTIME.end(p, sid)
+
+
+@app.post("/v1/realtime/upstream", include_in_schema=False)
+async def realtime_upstream(request: Request) -> dict:
+    """A provider credential for one connection of a relayed call, asked by the harness that carries it. The
+    caller is nobody's sign-in or API key: it is the holder of the token this gateway made for that one call
+    when it placed it (_mint_realtime_upstream), and the token names the call, so the path does not. No switch
+    check, as on the end: a call that started goes on."""
+    sid = _verify_realtime_upstream(_broker_token(request))
+    if not sid:
+        raise uhp_error(401, "invalid_credential", "The credential is not valid for a call.")
+    return await REALTIME.upstream(sid)
 
 
 @app.on_event("startup")
