@@ -46,7 +46,7 @@ def socket_url(base_url: str, model: str) -> str:
 
 def build(provider, auth, model, prompt, cwd, env, *, relay, driver_cmd, resume_session_id=None,
           mcp_servers=None, tools_disabled=None, max_turns=None, timeout_seconds=None, agent_doc="",
-          partial=False):
+          partial=False, skills=None):
     """One realtime turn's command line, its job in the environment (driver_cmd).
 
     `relay(base_url, api_key) -> (relay base, placeholder)` registers the turn's route. The driver
@@ -70,7 +70,11 @@ def build(provider, auth, model, prompt, cwd, env, *, relay, driver_cmd, resume_
            "mcp_servers": [s for s in (mcp_servers or []) if isinstance(s, dict) and (s.get("url") or s.get("command"))],
            "tools_disabled": [str(t) for t in (tools_disabled or []) if t],
            "max_turns": max_turns, "timeout_seconds": timeout_seconds,
-           "agent_doc": agent_doc or "", "partial": bool(partial)}
+           "agent_doc": agent_doc or "", "partial": bool(partial),
+           # what the runner wrote into the workspace for this turn (server.py _write_skills): each
+           # skill's name, its description and its SKILL.md's path. The files stay in the workspace.
+           "skills": [{"name": str(s.get("name") or ""), "desc": str(s.get("desc") or ""),
+                       "entry": str(s.get("entry") or "")} for s in (skills or []) if isinstance(s, dict)]}
     return driver_cmd(PYTHON, DRIVER, job, env)
 
 

@@ -5575,7 +5575,7 @@ maintainer's confirmation of each:
 
 Known limits, each stated in realtime.md: an Azure connection with an API key only (a Microsoft
 Entra sign-in and an instance outside owner trust are refused before the turn starts); MCP servers
-by URL only; no skills and no environment layer. The served model is reported once the Realtime
+by URL only; skills as loaded instructions, none that runs scripts; no environment layer. The served model is reported once the Realtime
 Harness pin includes its `session.created` model field; on the current pin a turn names none.
 
 ### Claude Code 2.1.311 (0.41.12)

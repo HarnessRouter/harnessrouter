@@ -18924,7 +18924,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                                       for s in (req.mcp_servers or [])],
                                          tools_disabled=req.tools_disabled, max_turns=req.max_turns,
                                          timeout_seconds=req.timeout_seconds, agent_doc=agent_doc,
-                                         partial=bool(req.partial_messages))
+                                         partial=bool(req.partial_messages), skills=installed_skills)
         elif backend == "jcode":
             model = model or JCODE_DEFAULT_MODEL
             cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,

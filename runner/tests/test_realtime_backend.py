@@ -79,6 +79,16 @@ def test_a_turn_with_nothing_optional_says_so_in_plain_values():
     job = calls["job"]
     assert job["resume_session_id"] == "" and job["mcp_servers"] == [] and job["tools_disabled"] == []
     assert job["agent_doc"] == "" and job["partial"] is False and job["max_turns"] is None
+    assert job["skills"] == []
+
+
+def test_the_job_names_the_turns_skills_and_carries_none_of_their_files():
+    written = [{"name": "refunds", "desc": "How to refund.", "entry": ".harness/skills/refunds/SKILL.md",
+                "files": [{"path": "SKILL.md", "content": "x" * 5000}]}, "nonsense", {"name": "plain"}]
+    _cmd, calls, _env = build(skills=written)
+    assert calls["job"]["skills"] == [
+        {"name": "refunds", "desc": "How to refund.", "entry": ".harness/skills/refunds/SKILL.md"},
+        {"name": "plain", "desc": "", "entry": ""}]
 
 
 @pytest.mark.parametrize("kw, word", [

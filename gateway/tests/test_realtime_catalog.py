@@ -2,7 +2,8 @@
 
 A realtime speech model is reached over a WebSocket and answers no chat call, so its id lives in
 the one vendor table whose provider the base is wired to, and only the realtime base lists it.
-The base has nothing built in: no tools of its own, no skills, no environment layer. Its
+The base has nothing built in: no tools of its own and no environment layer. Skills reach it as
+a list and a tool that loads one. Its
 connection's key stays on the runner's relay, which the broker cannot stand in for, so a brokered
 connection is refused in words.
 """
@@ -72,13 +73,25 @@ def test_the_base_is_in_the_catalog_with_nothing_built_in():
     assert not b.get("remote")                  # one process per turn on this box
 
 
-def test_the_base_takes_no_skills_and_none_are_mounted_for_a_turn(monkeypatch):
-    assert gw._BASE_CATALOG["realtime"]["skills"] is False
-    assert not gw._base_takes_skills("realtime")
+def test_the_base_takes_skills_and_a_turn_is_sent_them(monkeypatch):
+    # which of them it can use is the driver's to say (runner/realtime_skills.py), where the files are
+    assert "skills" not in gw._BASE_CATALOG["realtime"] and gw._base_takes_skills("realtime")
     monkeypatch.setattr(gw, "_builtin_skills", lambda: {"pdf": {"title": "PDF", "description": "", "default_enabled": True,
                                                                   "origin": "image", "files": [{"path": "SKILL.md", "content": "x"}]}})
     _, skills, _, _, _ = asyncio.run(gw._harness_plugins("realtime", "local", None, hv=None))
-    assert skills == []
+    assert [s.get("name") for s in skills] == ["pdf"]
+
+
+def test_a_skill_the_base_could_not_offer_is_said_on_the_reply_with_its_reason():
+    def note(skills):
+        out = gw._blocks_from_canonical({"type": "system", "subtype": "skills_unavailable", "skills": skills})
+        return out[0][1] if out else ""
+    one = note([{"name": "pdf", "reason": "it runs scripts, and this base has no shell"}])
+    assert 'the skill was not offered on this reply: "pdf" (it runs scripts, and this base has no shell)' in one
+    two = note([{"name": "a", "reason": "r"}, {"name": "b"}])
+    assert 'the skills were not offered on this reply: "a" (r); "b"' in two
+    assert "and 3 more" in note([{"name": f"s{i}", "reason": "r"} for i in range(15)])
+    assert note([]) == "" and note([{"reason": "no name"}]) == ""
 
 
 def test_the_base_mounts_no_environment_layer(monkeypatch):
@@ -96,7 +109,7 @@ def test_the_base_mounts_no_environment_layer(monkeypatch):
     monkeypatch.setattr(gw, "_pub_org_member", org_member)
     monkeypatch.setattr(gw, "_servable_models", servable)
     base = {b["id"]: b for b in asyncio.run(gw.list_bases(None))["bases"]}["realtime"]
-    assert base["takesEnvironments"] is False and base["takesSkills"] is False
+    assert base["takesEnvironments"] is False and base["takesSkills"] is True
     assert base["tools"] == [] and base["builtinSkills"] == []
 
 
@@ -149,12 +162,13 @@ def test_a_deployment_named_otherwise_is_reached_by_the_connections_own_row(monk
 
 
 def test_setup_never_picks_it_automatically(monkeypatch):
-    """Auto builds an agent that reads skills from a workspace; this base takes none."""
+    """Auto builds a coding agent, with a shell and a workspace; this base has neither."""
     async def servable(_org, _backend):
         return None
 
     monkeypatch.setattr(gw, "_servable_models", servable)
     bases = asyncio.run(gw._setup_bases("local"))
     if "realtime" in bases:                     # absent where the instance did not install it
-        assert bases["realtime"]["auto"] is False and bases["realtime"]["skills"] is False
+        assert bases["realtime"]["auto"] is False and bases["realtime"]["skills"] is True
         assert bases["realtime"]["default"] == MODEL
+    assert "realtime" in gw._SETUP_NOT_AUTO      # it takes skills, and Auto still never picks it

@@ -7,7 +7,7 @@ that takes calls also answer a typed task, with the same instructions and the sa
 lets the verification suites drive it the way they drive every other base.
 
 It is not a coding agent. The model has no shell and no file tools. What it can do is answer,
-and call the tools of the MCP servers the harness configures.
+call the tools of the MCP servers the harness configures, and load the harness's skills.
 
 Voice calls themselves are not part of this base. They are a separate piece of work.
 
@@ -103,8 +103,8 @@ other base's dependencies, and are not redistributed in the image.
 - **MCP servers are reached by URL** (streamable HTTP or SSE). A stdio server, such as one a
   plugin declares, cannot be started by this base. It is named in `system/mcp_unavailable`,
   and so is a server that cannot be reached; the turn still runs with the rest.
-- **Skills** are not offered. A skill is prose an agent reads and scripts it runs from a
-  shell, and this base has neither.
+- **Skills** are offered as instructions the model loads when it needs them. See
+  [Skills](#skills) below.
 - **Environments** are not mounted. A turn that names one is refused.
 - **Step budget.** `max_turns` is the number of model steps the turn may take. A turn that
   reaches it ends incomplete at its budget, and a tool call it never answered is not kept in
@@ -113,12 +113,50 @@ other base's dependencies, and are not redistributed in the image.
   relay sees no model call on this base. When the provider reports no usage the turn carries
   none, rather than an estimate.
 
+## Skills
+
+A skill is a folder with a `SKILL.md`: a name and a description, then instructions, sometimes
+with reference files and scripts beside it. An agent with a file tool reads the folder. A
+realtime model reads no files, so this base does what the
+[skill format's client guide](https://agentskills.io) gives for that case:
+
+- The name and description of each skill are added to the session's instructions, after the
+  harness's own.
+- A tool, `load_skill`, returns one skill's instructions when the model asks for them. A skill
+  longer than 12,000 characters comes in numbered parts, and nothing is cut.
+- A second tool, `read_skill_resource`, returns a text reference file of a skill. It is offered
+  only when a skill has one. A file is read only by a path the skill itself listed.
+
+Nothing is executed. This base has no shell, so **a skill that carries scripts is not
+offered**: any file under `scripts/`, or a file with a script's extension. That covers the
+built-in skills that work by running code. A skill is also left out when its `SKILL.md` is
+missing or empty, or when the list has no room for it. Each skill left out is named on the
+reply with the reason, and the turn runs with the rest.
+
+Limits to know:
+
+- **The list is capped at 6,000 characters.** A realtime session's instructions and tools share
+  one ceiling (16,384 tokens on `gpt-realtime-2.1`), which the harness's instructions and its
+  MCP tools also draw on.
+- **A loaded skill is part of the conversation, not of the instructions.** It is replayed with
+  the session on a follow-up turn. When a long session fills the model's window the provider
+  drops the oldest items, a loaded skill among them, and the model has to load it again.
+- **Disabling `load_skill`** on the harness withdraws every skill, and the reply says so. So
+  does an MCP server that already has a tool of that name: the server's tool keeps the name.
+- No published implementation of skills on a realtime model was found to adopt (Pipecat,
+  LiveKit Agents and OpenAI's realtime agents were checked on 2026-11-26), so this follows the
+  format's guide directly.
+
+Not measured yet: whether a live model loads the right skill unprompted. The tests below run
+against a scripted provider.
+
 ## Verification
 
 The unit and registration tests need no provider key:
 
 ```sh
 python -m pytest runner/tests/test_realtime_backend.py runner/tests/test_realtime_route.py
+python -m pytest runner/tests/test_realtime_skills.py
 python -m pytest gateway/tests/test_realtime_catalog.py gateway/tests/test_instruction_file_label.py
 ```
 
@@ -131,6 +169,6 @@ anywhere else), against a scripted provider on the OpenAI realtime wire:
 ```
 
 These tests check the event stream, that the key never reaches the turn, the one-request
-relay route, session replay, tool policy, unavailable servers, the step budget and a refused
-mint. They do **not** establish a live provider column. No support-matrix result exists for
+relay route, session replay, tool policy, skills, unavailable servers, the step budget and a
+refused mint. They do **not** establish a live provider column. No support-matrix result exists for
 this base yet, and none has been copied from another base.

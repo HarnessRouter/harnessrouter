@@ -371,6 +371,71 @@ def test_a_stdio_server_and_an_unreachable_one_are_named_and_the_turn_still_runs
     assert "weather" in offered and result["subtype"] == "success"
 
 
+def _skill(tmp_path, name, files, desc=""):
+    """A skill as the runner writes it for this base, and the entry the job carries."""
+    for rel, content in files.items():
+        path = tmp_path / ".harness" / "skills" / name / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return {"name": name, "desc": desc, "entry": f".harness/skills/{name}/SKILL.md"}
+
+
+REFUNDS = "---\nname: refunds\ndescription: How to refund an order.\n---\n\n# Refunds\n\nAsk for the order number first.\n"
+
+
+def test_a_skill_is_listed_in_the_instructions_and_loaded_through_a_tool(tmp_path, mint, mcp_url):
+    script = [("call", "load_skill", {"name": "refunds"}),
+              lambda s: ("say", "What is your order number?" if "order number first" in s["items"][-1].get("output", "")
+                         else "No skill.")]
+    with FakeRealtime(script) as fake:
+        events, result = turn(tmp_path, fake, mint, prompt="I want a refund.", agent_doc="You answer for the store.",
+                              mcp_servers=[{"name": "desk", "url": mcp_url}],
+                              skills=[_skill(tmp_path, "refunds", {"SKILL.md": REFUNDS}, "How to refund an order.")])
+        told, offered = fake.sessions[0]["instructions"], fake.sessions[0]["tools"]
+    assert told.startswith("You answer for the store.") and "- refunds: How to refund an order." in told
+    assert "load_skill" in offered and "weather" in offered and "read_skill_resource" not in offered
+    assert kinds(events) == ["system/init", "tool_use", "tool_result", "text", "result"]
+    use = events[1]["message"]["content"][0]
+    assert use["name"] == "load_skill" and use["input"] == {"name": "refunds"}      # no server ran it
+    res = events[2]["message"]["content"][0]
+    assert res["is_error"] is False and '<skill_content name="refunds">' in res["content"]
+    assert result["result"] == "What is your order number?"
+    # the loaded skill is in the session's record, so a follow-up turn replays it with the rest
+    kept = json.loads((tmp_path / ".harness" / "realtime" / result["session_id"] / "items.json").read_text(encoding="utf-8"))
+    assert [i["type"] for i in kept] == ["message", "function_call", "function_call_output", "message"]
+
+
+def test_a_skill_that_runs_scripts_is_not_offered_and_the_turn_says_which(tmp_path, mint):
+    with FakeRealtime() as fake:
+        events, result = turn(tmp_path, fake, mint, agent_doc="You answer for the store.", skills=[
+            _skill(tmp_path, "pdf", {"SKILL.md": REFUNDS, "scripts/fill.py": "print(1)"}),
+            _skill(tmp_path, "refunds", {"SKILL.md": REFUNDS, "references/policy.md": "Thirty days."})])
+        told, offered = fake.sessions[0]["instructions"], fake.sessions[0]["tools"]
+    left = [e["skills"] for e in events if e["type"] == "system" and e["subtype"] == "skills_unavailable"]
+    assert left == [[{"name": "pdf", "reason": "it runs scripts, and this base has no shell"}]]
+    assert "- refunds" in told and "pdf" not in told
+    assert "load_skill" in offered and "read_skill_resource" in offered
+    assert result["subtype"] == "success"
+
+
+def test_a_turn_with_no_skills_tells_the_model_nothing_about_them(tmp_path, mint):
+    with FakeRealtime() as fake:
+        events, _ = turn(tmp_path, fake, mint, agent_doc="You answer for the store.")
+        told, offered = fake.sessions[0]["instructions"], fake.sessions[0]["tools"]
+    assert told == "You answer for the store." and "load_skill" not in offered
+    assert not [e for e in events if e["type"] == "system" and e["subtype"] == "skills_unavailable"]
+
+
+def test_a_harness_that_disables_load_skill_gets_no_skills_and_is_told_so(tmp_path, mint):
+    with FakeRealtime() as fake:
+        events, _ = turn(tmp_path, fake, mint, tools_disabled=["load_skill"],
+                         skills=[_skill(tmp_path, "refunds", {"SKILL.md": REFUNDS})])
+        told, offered = fake.sessions[0]["instructions"], fake.sessions[0]["tools"]
+    assert "Skills" not in told and "load_skill" not in offered
+    left = [e["skills"] for e in events if e["type"] == "system" and e["subtype"] == "skills_unavailable"]
+    assert left == [[{"name": "refunds", "reason": "the load_skill tool is disabled on this harness"}]]
+
+
 def test_a_turn_over_its_step_budget_ends_error_max_turns_and_keeps_no_unanswered_call(tmp_path, mint, mcp_url):
     script = [("call", "step", {"n": 1}), ("call", "step", {"n": 2}), ("say", "DONE")]
     with FakeRealtime(script) as fake:

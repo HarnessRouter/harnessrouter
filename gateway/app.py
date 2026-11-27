@@ -7825,6 +7825,17 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
             word = "server" if len(names) == 1 else "servers"
             out.append(("text", f"\n\n_Note: the MCP {word} {quoted} could not be reached, so this "
                                 "reply ran without those tools._\n"))
+    elif t == "system" and ev.get("subtype") == "skills_unavailable":
+        # A base that cannot use a skill it was given (the realtime base has no shell, so a skill
+        # that runs scripts is not offered to the model) says which, and why, in the driver's own
+        # words: without this a person sees a skill enabled on the harness and never used.
+        left = [(str(s.get("name") or ""), str(s.get("reason") or "")) for s in ev.get("skills") or []
+                if isinstance(s, dict) and s.get("name")]
+        if left:
+            said = "; ".join(f'"{n}" ({why[:120]})' if why else f'"{n}"' for n, why in left[:12])
+            more = f", and {len(left) - 12} more" if len(left) > 12 else ""
+            word = "skill was" if len(left) == 1 else "skills were"
+            out.append(("text", f"\n\n_Note: the {word} not offered on this reply: {said}{more}._\n"))
     return out
 
 
@@ -21622,10 +21633,12 @@ _BASE_CATALOG: dict[str, dict] = {
         # runner/tests/test_realtime_driver.py).
         "tools": [],
         "tool_enforcement": "hard",
-        # No skills, built-in or added: a skill is prose an agent reads from the workspace and
-        # scripts it runs from a shell, and this base has neither. Guidance reaches it as
-        # instructions; a skill's scripts reach it as tools of an MCP server (the systemone precedent).
-        "skills": False,
+        # Skills are taken, the way the skill format gives for a model that reads no files: their
+        # names and descriptions ride in the session's instructions and a `load_skill` tool returns
+        # one's instructions when the model asks (runner/realtime_skills.py). A skill that carries
+        # scripts needs a shell, which this base does not have: the driver does not offer it and
+        # names it on the turn (system/skills_unavailable), so a built-in that runs scripts is sent
+        # like any other and left out there, in one place.
         # No environment layer: a layer is files and binaries mounted for a shell, and nothing on this
         # base reads them. A turn that names one is refused (_backend_takes_environments) rather than
         # run without it. MCP servers are reached by URL; a plugin's stdio server cannot be started
@@ -25411,8 +25424,9 @@ class SetupBuildBody(BaseModel):
 
 
 # A base Auto never picks although it takes skills: qoder runs on its own remote runtime, which mounts
-# no environment and reads none of this instance's keys.
-_SETUP_NOT_AUTO = frozenset({"qoder"})
+# no environment and reads none of this instance's keys; realtime is a speech model with no shell and
+# no workspace, where Auto builds an agent that writes files.
+_SETUP_NOT_AUTO = frozenset({"qoder", "realtime"})
 _SETUP_MEDIA_DECL = {"name": "media", "id": "mcp.media"}
 
 

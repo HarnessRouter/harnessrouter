@@ -35,6 +35,11 @@ The events are Claude Code's stream-json, so the runner's passthrough normaliser
 TOOLS ARE MCP SERVERS REACHED BY URL. The Realtime Harness speaks Streamable HTTP and SSE. A
 stdio server is a process on this box that it has no way to start, so it is named in
 `system/mcp_unavailable` and the turn runs without it, the remote-runtime precedent (qoder).
+
+SKILLS ARE A LIST IN THE INSTRUCTIONS AND A TOOL THAT LOADS ONE (realtime_skills.py). The model
+reads no files, so the harness's skills are named in the session's instructions and `load_skill`
+returns one's instructions when the model asks. A skill this base cannot use (it runs scripts, and
+there is no shell here) is not offered and is named in `system/skills_unavailable`.
 """
 from __future__ import annotations
 
@@ -47,6 +52,9 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import realtime_skills  # noqa: E402
 
 SECRET_TTL_S = 120          # how long the minted secret may START a session; the turn opens it at once
 MINT_TIMEOUT_S = 20
@@ -198,7 +206,8 @@ async def _run(job: dict, emit, connect=None) -> dict:
         **({"tool_timeout_seconds": float(job["tool_timeout_seconds"])} if job.get("tool_timeout_seconds") else {}))
     history = load_items(cwd, sid) if resume and sid == resume else []
     text = str(job.get("prompt") or "")
-    executor = ToolExecutor(harness)
+    skills, skills_out = realtime_skills.read(cwd, job.get("skills"))
+    executor = realtime_skills.SkillTools(ToolExecutor(harness), skills, harness.disabled_tools)
     server_of: dict[str, str] = {}          # the name the model sees -> its server, for the trace
 
     seen: list[dict] = []                   # every item as it finished, for a turn its own time cut short
@@ -237,6 +246,10 @@ async def _run(job: dict, emit, connect=None) -> dict:
     reason = ""
     try:
         await executor.open()
+        executor.settle()
+        skills_out += executor.not_offered
+        if skills_out:         # the same rule as a server that cannot be reached: the turn runs, and it is said
+            emit({"type": "system", "subtype": "skills_unavailable", "skills": skills_out})
         server_of.update({name: tool.server for name, tool in executor.tools.items()})
         unreachable = [{"name": k.split(":", 1)[1]} for k, why in executor.left_out.items()
                        if k.startswith("server:") and str(why).startswith("unreachable")]
@@ -250,7 +263,8 @@ async def _run(job: dict, emit, connect=None) -> dict:
             conn = Connection(url=str(job.get("ws_url") or ""), headers={"Authorization": f"Bearer {secret}"},
                               model=model, ref={})
         max_step = int(job["max_turns"]) if job.get("max_turns") else None
-        turn = run_text_turn(conn, instructions=harness.instructions, executor=executor, history=history,
+        instructions = realtime_skills.with_catalog(harness.instructions, executor.skills)
+        turn = run_text_turn(conn, instructions=instructions, executor=executor, history=history,
                              text=text, listener=Trace(), cancelled=asyncio.Event(), max_step=max_step)
         timeout = float(job["timeout_seconds"]) if job.get("timeout_seconds") else None
         if timeout:
