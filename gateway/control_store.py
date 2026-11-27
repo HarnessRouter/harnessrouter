@@ -550,6 +550,16 @@ async def try_lock(name: str, ttl_s: int) -> bool:
         return False
 
 
+async def unlock(name: str) -> None:
+    """Let a try_lock go before its TTL: the holder is done (or failed), the next claimant may run."""
+    cex = _exceptions()
+    cont = await _container()
+    try:
+        await cont.delete_item(f"lock::{name}", partition_key="org::_system")
+    except cex.CosmosResourceNotFoundError:
+        pass
+
+
 # ── API-key hot-read cache (HR-INF-010) ────────────────────────────────────────────────
 # The public Bearer auth read (_apikey_resolve) hit the graph on EVERY public
 # request. These make the control store the hot-path read: a SELF-KEYED doc (pk == id == the token
