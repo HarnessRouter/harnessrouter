@@ -27209,6 +27209,87 @@ async def _realtime_servers(hid: str, sid: str) -> list[dict]:
              "headers": {"Authorization": f"Bearer {_mint_hosted_cred(hid, sid, key)}"}}]
 
 
+# What a relayed call's turn keeps of each item the harness recorded. A turn is what was SAID and which tools
+# were called, so it is read in the session's conversation as a text turn is; audio is never kept.
+_REALTIME_TURNS_MAX = 400               # turns of one call (a 30 minute call has far fewer)
+_REALTIME_TEXT_MAX = 20000              # characters of one thing said, one tool's arguments or one tool's answer
+_REALTIME_TURN_STATUS = {"completed": "completed", "incomplete": "incomplete", "failed": "failed"}
+
+
+def _realtime_said(content, kinds: tuple[str, ...]) -> str:
+    if isinstance(content, str):
+        return content[:_REALTIME_TEXT_MAX]
+    return "".join(str(c.get("text") or "") for c in content or []
+                   if isinstance(c, dict) and c.get("type") in kinds)[:_REALTIME_TEXT_MAX]
+
+
+def _realtime_turn_items(turn: dict, rid: str) -> tuple[list[dict], list[dict]]:
+    """(input, output) of one turn as this gateway's response records hold them: the person's words as input
+    text, the model's as output text, each tool call and its answer. Anything else an item carries is dropped."""
+    said = "".join(_realtime_said(i.get("content"), ("input_text", "text")) for i in turn.get("input") or []
+                   if isinstance(i, dict) and i.get("type", "message") == "message")[:_REALTIME_TEXT_MAX]
+    inp = [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": said}]}] if said else []
+    out: list[dict] = []
+    for n, i in enumerate(turn.get("output") or []):
+        if not isinstance(i, dict):
+            continue
+        kind = i.get("type")
+        if kind == "message":
+            text = _realtime_said(i.get("content"), ("output_text", "text"))
+            if text:
+                out.append({"id": f"msg_{rid.removeprefix('resp_')}_{n}", "type": "message", "status": "completed",
+                            "role": "assistant", "content": [{"type": "output_text", "text": text, "annotations": []}]})
+        elif kind == "function_call":
+            args = i.get("arguments")
+            out.append({"type": "function_call", "call_id": str(i.get("call_id") or "")[:200], "name": str(i.get("name") or "")[:200],
+                        "arguments": (args if isinstance(args, str) else json.dumps(args, default=str))[:_REALTIME_TEXT_MAX]})
+        elif kind == "function_call_output":
+            ans = i.get("output")
+            out.append({"type": "function_call_output", "call_id": str(i.get("call_id") or "")[:200],
+                        "output": (ans if isinstance(ans, str) else json.dumps(ans, default=str))[:_REALTIME_TEXT_MAX]})
+    return inp, out
+
+
+async def _realtime_turns(sid: str, rec: dict, responses: list[dict]) -> None:
+    """A relayed call's turns as its session's response records, oldest first, so the call reads in the
+    session's conversation as a text task does (who said what, and which tools ran). Each turn gets an id of
+    this gateway's own and is chained to the one before; the harness's id for it is kept in its metadata. A
+    turn with nothing said and nothing called is not a turn of the conversation. Raises when a record cannot
+    be written: the plane logs it, and the call stays ended and metered."""
+    org, member, model = str(rec.get("tenant") or ""), str(rec.get("member_id") or ""), str(rec.get("model") or "")
+    at, prev = float(rec.get("created_at") or time.time()), None
+    for turn in (responses or [])[:_REALTIME_TURNS_MAX]:
+        if not isinstance(turn, dict):
+            continue
+        rid = _rid("resp")
+        inp, out = _realtime_turn_items(turn, rid)
+        if not inp and not out:
+            continue
+        try:
+            born = float(turn.get("created_at") or 0)
+        except (TypeError, ValueError):
+            born = 0.0
+        at = max(born, at + 0.001)                      # in the order they were said, whatever the harness's clock says
+        usage = turn.get("usage") if isinstance(turn.get("usage"), dict) else None
+        # a turn cut off by the caller or by the hang-up is cancelled, as the harness says; one it never closed too
+        status = _REALTIME_TURN_STATUS.get(str(turn.get("status") or ""), "cancelled")
+        stored = {"id": rid, "object": "response", "created_at": int(at), "status": status, "error": None,
+                  "served_model": model or None, "reasoning": None, "incomplete_details": None,
+                  "previous_response_id": prev, "model": model, "store": True, "output": out,
+                  # the provider's own count for the turn, or none: never a zero it did not report
+                  "usage": ({k: int(usage.get(k) or 0) for k in ("input_tokens", "output_tokens", "total_tokens")}
+                            if usage else None),
+                  "metadata": {"session_id": sid, "realtime": True, "realtime_turn": str(turn.get("id") or "")[:80]},
+                  "_session_id": sid, "_org": org, "_member": member, "_input": inp, "_backend": realtime_plane.KIND,
+                  "_realtime": True, "_created_ms": int(at * 1000)}
+        _resp_cache_forget(rid)
+        if not await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB):
+            raise RuntimeError("a turn's record was refused")
+        await _vg_upsert("HarnessResponse", rid, {"org": org, "session_id": sid, "previous_response_id": prev or "",
+                                                  "status": status, "created_at": str(at), "store": "1"}, raise_on_fail=True)
+        prev = rid
+
+
 _REALTIME_AZURE = realtime_plane.AzureRealtime(lambda: _integrations_doc(), sign_in=lambda conn: _entra_token(conn))
 if realtime_plane.PROVIDER not in ("azure", "harness"):
     print(f"[realtime] HR_REALTIME_PROVIDER is {realtime_plane.PROVIDER!r}, which is neither azure nor harness: "
@@ -27223,7 +27304,7 @@ REALTIME = realtime_plane.Service(
         reach=lambda *a: _realtime_reach(*a), usage=lambda *a, **k: _report_usage(*a, **k),
         lock=lambda *a: _realtime_lock(*a), unlock=lambda *a: _realtime_unlock(*a),
         live=lambda: BACKING.graph.find("HarnessSession", {"kind": realtime_plane.KIND, "rt_open": "1"}),
-        servers=lambda *a: _realtime_servers(*a)))
+        servers=lambda *a: _realtime_servers(*a), turns=lambda *a: _realtime_turns(*a)))
 
 
 async def _realtime_caller(request: Request) -> dict:

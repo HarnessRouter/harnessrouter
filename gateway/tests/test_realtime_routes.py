@@ -482,3 +482,91 @@ def test_as_shipped_calls_run_on_azure_and_the_relay_is_wired_for_when_they_do_n
     assert rp.PROVIDER == "azure" and gw.REALTIME.provider.name == "azure" and gw.REALTIME.provider.runs_tools is False
     assert gw.REALTIME.ports.servers is not None
     assert "/v1/realtime/upstream" in [r.path for r in gw.app.routes]
+
+
+# ── what a relayed call said, kept in its session's conversation ────────────────────────────────
+CALL_TURNS = [
+    {"id": "resp_h1", "status": "completed", "created_at": 1_900_000_010,
+     "input": [{"id": "item_1", "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "Any open pull requests?"}]}],
+     "output": [{"type": "function_call", "call_id": "c1", "name": "github__list_pull_requests", "arguments": "{\"state\":\"open\"}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "2 open pull requests"},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Two are open."}],
+                 "audio": "AAAA"}],
+     "usage": {"input_tokens": 900, "output_tokens": 120, "total_tokens": 1020, "input_audio_tokens": 500}},
+    {"id": "resp_h2", "status": "in_progress", "created_at": 1_900_000_005, "input": [], "usage": None,
+     "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "And the first one is"}]}]},
+    {"id": "resp_h3", "status": "cancelled", "input": [], "output": [], "usage": None},
+    "junk",
+]
+
+
+def _keep(w, monkeypatch, turns=CALL_TURNS, sid=None):
+    blobs: dict[str, bytes] = {}
+
+    async def blob_put(file_id, data, kb=None):
+        blobs[file_id] = data
+        return w.blob_ok
+
+    async def blob_get(file_id, kb=None):
+        return blobs.get(file_id)
+
+    async def find_strict(label, where=None, **kw):
+        return [{**v, "id": k} for k, v in w.graph.items() if all(str(v.get(f)) == str(x) for f, x in (where or {}).items())]
+    w.blob_ok = True
+    monkeypatch.setattr(gw, "_blob_put", blob_put)
+    monkeypatch.setattr(gw, "_blob_get", blob_get)
+    monkeypatch.setattr(gw.BACKING.graph, "find_strict", find_strict)
+    sid = sid or rp.SID_PREFIX + "9" * 32
+    rec = {"tenant": ORG, "member_id": "ana@example.com", "model": "gpt-realtime-2.1", "created_at": str(T0)}
+    return sid, rec, blobs
+
+
+def test_a_relayed_calls_turns_read_in_the_sessions_conversation_as_a_text_tasks_do(w, monkeypatch):
+    sid, rec, blobs = _keep(w, monkeypatch)
+    asyncio.run(gw._realtime_turns(sid, rec, CALL_TURNS))
+    turns = asyncio.run(gw._session_turns_data(sid))["turns"]
+    assert len(turns) == 2                                           # the turn with nothing said is not one
+    first, second = turns
+    assert first["user"] == "Any open pull requests?" and first["assistant"] == "Two are open."
+    assert first["tools"] == [{"name": "github__list_pull_requests", "arguments": "{\"state\":\"open\"}"}]
+    assert first["status"] == "completed" and first["model"] == "gpt-realtime-2.1"
+    assert second["user"] == "" and second["assistant"] == "And the first one is" and second["status"] == "cancelled"
+    assert first["created_at"] <= second["created_at"]              # in the order said, whatever the harness's clock says
+    stored = [json.loads(b) for b in blobs.values()]
+    a = next(x for x in stored if x["metadata"]["realtime_turn"] == "resp_h1")
+    b = next(x for x in stored if x["metadata"]["realtime_turn"] == "resp_h2")
+    assert a["id"].startswith("resp_") and a["id"] != "resp_h1" and b["previous_response_id"] == a["id"]
+    assert a["previous_response_id"] is None and a["_session_id"] == sid and a["_org"] == ORG and a["_backend"] == "realtime"
+    assert a["usage"] == {"input_tokens": 900, "output_tokens": 120, "total_tokens": 1020} and b["usage"] is None
+    assert "AAAA" not in json.dumps(stored) and "item_1" not in json.dumps(stored)      # words only, no audio, no foreign ids
+    idx = [v for v in w.graph.values() if v.get("session_id") == sid]
+    assert len(idx) == 2 and {v["org"] for v in idx} == {ORG} and {v["store"] for v in idx} == {"1"}
+
+
+def test_what_was_said_is_cut_to_a_length_and_a_call_to_a_number_of_turns(w, monkeypatch):
+    sid, rec, blobs = _keep(w, monkeypatch)
+    monkeypatch.setattr(gw, "_REALTIME_TEXT_MAX", 10)
+    monkeypatch.setattr(gw, "_REALTIME_TURNS_MAX", 3)
+    long = {"id": "t", "status": "completed", "input": [{"type": "message", "content": "x" * 50}],
+            "output": [{"type": "function_call", "call_id": "c", "name": "n", "arguments": {"q": "y" * 50}},
+                       {"type": "function_call_output", "call_id": "c", "output": {"rows": "z" * 50}},
+                       {"type": "message", "content": [{"type": "output_text", "text": "w" * 50}]},
+                       {"type": "reasoning", "summary": "not a thing a call's record keeps"}]}
+    asyncio.run(gw._realtime_turns(sid, rec, [long] * 5))
+    stored = [json.loads(b) for b in blobs.values()]
+    assert len(stored) == 3
+    one = stored[0]
+    assert one["_input"][0]["content"][0]["text"] == "x" * 10
+    assert [o["type"] for o in one["output"]] == ["function_call", "function_call_output", "message"]
+    assert len(one["output"][0]["arguments"]) == 10 and len(one["output"][1]["output"]) == 10
+    assert one["output"][2]["content"][0]["text"] == "w" * 10
+
+
+def test_a_turn_that_cannot_be_written_is_an_error_the_plane_logs(w, monkeypatch):
+    sid, rec, blobs = _keep(w, monkeypatch)
+    w.blob_ok = False
+    with pytest.raises(RuntimeError):
+        asyncio.run(gw._realtime_turns(sid, rec, CALL_TURNS))
+    assert [v for v in w.graph.values() if v.get("session_id") == sid] == []       # no index entry for a record that is not there
+    assert gw.REALTIME.ports.turns is not None
