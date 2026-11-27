@@ -6629,6 +6629,9 @@ async def delete_trace(sid: str, request: Request) -> dict:
     # follow-up that reached the tombstone rewrote the card as "?", 2026-09-07), and this button
     # is the only way a person has to remove it; refusing the second delete with 404 left the
     # ghost in the list for good. Every step below is idempotent.
+    # A voice call still open is metered now: the delete keeps only a marker of the session, and the
+    # marker no longer says the call was open, so the sweep would never find it.
+    await REALTIME.settle(sid, v, "deleted")
     # The tombstone goes down FIRST. Stopping a live turn below triggers its finalize, and a
     # reconcile can land at any moment; both write session cards, and the indexer drops a write
     # whose session is tombstoned. Written last, the tombstone missed exactly those writes and

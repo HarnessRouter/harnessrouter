@@ -339,6 +339,49 @@ def test_an_instance_with_no_azure_connection_says_so_and_keeps_no_open_call(w):
     assert rec["status"] == "failed" and rec["rt_open"] == "0" and w.usage == []
 
 
+# ── a call whose session is deleted ─────────────────────────────────────────────────────────────
+def _delete(w, sid, monkeypatch):
+    """DELETE /v1/sessions/{sid} with its storage steps stood in; what the record said when the tombstone landed."""
+    seen = {}
+
+    async def tombstone(label, vid, props, **kw):
+        seen.update(w.graph.get(vid) or {})
+        w.graph.setdefault(vid, {}).update(props)
+
+    async def nothing(*a, **k):
+        return None
+
+    async def strip(vid, v):
+        w.graph[vid] = {k: w.graph[vid][k] for k in gw._SESSION_MARKER if w.graph[vid].get(k)}
+    monkeypatch.setattr(gw, "_vg_upsert", tombstone)
+    monkeypatch.setattr(gw, "_session_purge", nothing)
+    monkeypatch.setattr(gw, "_session_strip", strip)
+    out = asyncio.run(gw.delete_trace(sid, _Req(method="DELETE")))
+    return out, seen
+
+
+def test_a_call_still_open_when_its_session_is_deleted_is_metered_before_the_record_is_reduced(w, monkeypatch):
+    sid = w.create()["session_id"]
+    w.now[0] += 90
+    out, at_tombstone = _delete(w, sid, monkeypatch)
+    assert out["deleted"] is True
+    assert [(u[0], u[1]) for u in w.usage] == [(ORG, rp.METRIC)] and w.usage[0][2] == pytest.approx(0.15)
+    assert at_tombstone["rt_open"] == "0" and at_tombstone["rt_end_reason"] == "deleted"
+    assert w.graph[sid]["status"] == "deleted" and "rt_open" not in w.graph[sid]      # the marker says nothing of a call
+    assert asyncio.run(gw.REALTIME.sweep()) == 0 and len(w.usage) == 1                # and nothing is left to find
+
+
+def test_deleting_a_call_that_was_ended_or_a_session_that_is_no_call_meters_nothing_more(w, monkeypatch):
+    sid = w.create()["session_id"]
+    w.now[0] += 60
+    w.end(sid)
+    _delete(w, sid, monkeypatch)
+    assert len(w.usage) == 1
+    w.graph["sess_text"] = {"tenant": ORG, "workspace": "space.a", "status": "done"}
+    _delete(w, "sess_text", monkeypatch)
+    assert len(w.usage) == 1 and w.graph["sess_text"]["status"] == "deleted"
+
+
 # ── the ports ───────────────────────────────────────────────────────────────────────────────────
 def test_a_record_that_cannot_be_written_is_answered_not_raised(w, monkeypatch, capsys):
     sid = rp.SID_PREFIX + "a" * 32
