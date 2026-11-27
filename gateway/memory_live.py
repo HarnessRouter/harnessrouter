@@ -181,7 +181,7 @@ class _record_lock:
             await held[0].acquire()
         except BaseException:
             held[1] -= 1
-            if not held[1]:
+            if not held[1] and _locks.get(self.key) is held:   # never drop a newer entry for the same key
                 del _locks[self.key]
             raise
 
