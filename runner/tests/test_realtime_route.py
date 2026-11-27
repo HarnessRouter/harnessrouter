@@ -207,3 +207,25 @@ def test_a_turn_that_names_a_session_whose_file_is_gone_is_told_so(tmp_path):
     assert rs._resume_lost("realtime", [], "rt_here", str(tmp_path)) is None
     assert rs._resume_lost("realtime", [], "rt_gone", str(tmp_path)) == "rt_gone"
     assert rs._resume_lost("realtime", [], None, str(tmp_path)) is None
+
+
+def test_the_skills_the_runner_writes_are_the_ones_the_driver_reads(tmp_path):
+    """The two halves of a skill's road to this base: the runner writes the turn's skills into the
+    workspace and returns their entries, and the driver's reader takes those entries as they are."""
+    import realtime_skills
+    refunds = "---" + chr(10) + "name: refunds" + chr(10) + "description: How to refund an order." + chr(10) + "---" + chr(10) + chr(10) + "Ask for the order number first." + chr(10)
+    written = rs._write_skills(str(tmp_path), [
+        {"name": "refunds", "files": [{"path": "SKILL.md", "content": refunds},
+                                      {"path": "references/policy.md", "content": "Thirty days."}]},
+        {"name": "pdf", "files": [{"path": "SKILL.md", "content": refunds},
+                                  {"path": "scripts/fill.py", "content": "print(1)"}]}], "realtime")
+    assert [w["name"] for w in written] == ["refunds", "pdf"]
+    assert written[0]["entry"] == ".harness/skills/refunds/SKILL.md"       # under .harness/: never a produced file
+    assert written[0]["desc"] == "How to refund an order."
+    skills, left = realtime_skills.read(tmp_path, written)
+    assert [(s.name, s.description, s.body, s.resources) for s in skills] == [
+        ("refunds", "How to refund an order.", "Ask for the order number first.", ("references/policy.md",))]
+    assert left == [{"name": "pdf", "reason": realtime_skills.HAS_SCRIPTS}]
+    # and the job the driver is started with carries those entries (realtime_backend.build)
+    import inspect
+    assert "skills=installed_skills" in inspect.getsource(rs._start_turn).split('backend == "realtime"')[1].split("elif backend")[0]
