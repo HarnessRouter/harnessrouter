@@ -4,6 +4,10 @@
 self-assessment, not passing most of it. The suite is in this repository, it runs against any server
 over HTTP, and anyone can run it against anyone's implementation.
 
+For native servers, adapters, and remote services, see [Implement a server](../SERVING.md).
+The guide compares open-source and closed-source paths, test layers, and the evidence needed
+for a scoped conformance claim. Both source models use the same suite and acceptance criteria.
+
 ## Running it
 
 ```bash
@@ -229,8 +233,10 @@ and exists only for a class that fully passed with no skips; it says the class, 
 version the server served, and nothing else. An implementation that did not pass has no badge.
 
 To be measured, open an issue or comment on your listing pull request with either a reachable
-server root and the credential to use, or the commands that install and start your server, and
-a maintainer dispatches the workflow. A bring-your-own-key host can be measured too: the suite's
+server root or the commands that install and start your server, and a maintainer dispatches the
+workflow. Never post a credential there: the maintainer arranges the test credential with you
+privately and keeps it as a repository secret the workflow reads (see
+[Implement a server](../SERVING.md)). A bring-your-own-key host can be measured too: the suite's
 `--header` flag sends the header your server wants, with a key the measurer pays for. Each run
 costs about six small model tasks. Re-measure whenever you release: the newest report wins, and
 older ones stay as history.

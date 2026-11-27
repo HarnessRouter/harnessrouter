@@ -137,7 +137,8 @@ of an existing field. A client that ignores every UHP extension still gets a wor
 Two role-specific guides walk through this in order:
 [Implement a client](CONNECTING.md) — discovery, task submission, event handling, and
 artifact retrieval — and [Implement a server](SERVING.md) — the operations a server answers
-and how it connects one or more harnesses.
+and how open-source and closed-source harnesses connect, which tests to run, and what evidence
+supports a conformance claim.
 
 ## Contributing
 
