@@ -557,25 +557,55 @@ def _copy_without_links(src_root: str, dst: pathlib.Path) -> tuple[int, int]:
 def _git_pin_args(url: str, pin: str) -> list[str]:
     """`git -c` settings that make the clone connect to the address the gateway classified.
 
-    `pin` is "<host>:<port>:<address>" from the gateway, on a deployment shared by several
-    organizations; empty otherwise. Without it git resolved the name again when it connected, so a
-    name that answered a public address to the gateway's check and an internal one a moment later
-    reached the internal one. Over http(s), curl is told the address for that host and port, and
-    redirects are not followed (one to another host would be resolved afresh); over ssh, ssh
-    connects to the address and still checks the host key under the name."""
+    `pin` is "<host>:<port>:<address>" (with an IPv6 host bracketed as "[<host>]:<port>:<address>")
+    from the gateway, on a deployment shared by several organizations; empty otherwise. Without it
+    git resolved the name again when it connected, so a name that answered a public address to the
+    gateway's check and an internal one a moment later reached the internal one. Over http(s), curl
+    is told the address for that host and port (unless the URL host is already a matching IPv6
+    literal, which curl rejects in CURLOPT_RESOLVE and does not resolve via DNS), and redirects are
+    not followed (one to another host would be resolved afresh); over ssh, ssh connects to the
+    address and still checks the host key under the name."""
     if not pin:
         return []
-    host, _, rest = pin.partition(":")
-    port, _, addr = rest.partition(":")
+    if "%" in pin:
+        # ipaddress takes ANY text after an IPv6 "%" as a zone id ("2606::1%$(id)" parses), and
+        # core.sshCommand below is run by a shell. The gateway never pins a zone id; refuse one.
+        raise HTTPException(400, "git pin is not host:port:address")
+    if pin.startswith("["):
+        host, sep, rest = pin[1:].partition("]:")
+        try:
+            host_ip = ipaddress.ip_address(host) if sep else None
+        except ValueError:
+            host_ip = None
+        if host_ip is None or host_ip.version != 6:
+            raise HTTPException(400, "git pin is not host:port:address")
+    else:
+        host, sep, rest = pin.partition(":")
+        if not sep:
+            raise HTTPException(400, "git pin is not host:port:address")
+        host_ip = None
+    port, sep2, addr = rest.partition(":")
     try:
         ip = ipaddress.ip_address(addr)
     except ValueError:
         raise HTTPException(400, "git pin is not host:port:address")
-    if not (host and port.isdigit()):
+    if not (host and sep2 and port.isdigit() and 1 <= int(port) <= 65535):
         raise HTTPException(400, "git pin is not host:port:address")
     if url.startswith(("https://", "http://")):
+        if host_ip is not None:
+            try:
+                p = urllib.parse.urlparse(url)
+                url_ip = ipaddress.ip_address(p.hostname or "")
+                url_port = p.port or (80 if p.scheme == "http" else 443)
+            except ValueError:
+                raise HTTPException(400, "git pin does not match git url")
+            if url_ip != host_ip or ip != host_ip or p.port == 0 or url_port != int(port):
+                raise HTTPException(400, "git pin does not match git url")
+            return ["-c", "http.followRedirects=false"]
         shown = f"[{ip}]" if ip.version == 6 else str(ip)
         return ["-c", f"http.curloptResolve={host}:{port}:{shown}", "-c", "http.followRedirects=false"]
+    if host_ip is not None:
+        return ["-c", f"core.sshCommand=ssh -o HostName={ip} -o HostKeyAlias={host_ip}"]
     if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
         raise HTTPException(400, "git pin names an invalid host")
     return ["-c", f"core.sshCommand=ssh -o HostName={ip} -o HostKeyAlias={host}"]

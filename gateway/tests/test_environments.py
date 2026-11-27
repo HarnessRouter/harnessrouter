@@ -292,3 +292,81 @@ def test_a_git_address_on_a_private_network_is_refused_on_a_shared_deployment(ap
         (None, "140.82.112.3:443:140.82.112.3")
     monkeypatch.setattr(app, "_pool_is_local", lambda: True)
     assert __import__("asyncio").run(app._git_url_refused("https://10.0.0.5/team/repo.git")) == (None, "")
+
+
+def test_git_url_refused_brackets_ipv6_literal_pins_and_refuses_internal_spellings(monkeypatch):
+    import asyncio
+    import socket
+
+    monkeypatch.setattr(app, "_pool_is_local", lambda: False)
+    for url, want in (
+        ("https://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:443:2606:4700::6810:1"),
+        ("http://[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:80:2606:4700::6810:1"),
+        ("https://[2606:4700:0000::6810:1]/org/repo.git", "[2606:4700:0000::6810:1]:443:2606:4700::6810:1"),
+        ("https://[2606:4700::6810:1]:8443/org/repo.git", "[2606:4700::6810:1]:8443:2606:4700::6810:1"),
+        ("ssh://git@[2606:4700::6810:1]/org/repo.git", "[2606:4700::6810:1]:22:2606:4700::6810:1"),
+        ("git@[2606:4700::6810:1]:org/repo.git", "[2606:4700::6810:1]:22:2606:4700::6810:1"),
+    ):
+        assert asyncio.run(app._git_url_refused(url)) == (None, want), url
+
+    assert asyncio.run(app._git_url_refused("git@[2606:4700::6810:1/org/repo.git")) == ("invalid url", "")
+
+    for addr in ("::1", "0:0:0:0:0:0:0:1", "fe80::1", "::ffff:127.0.0.1", "::ffff:169.254.169.254", "::",
+                 "FD00::1", "fd00:ec2::254", "64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::1", "2001:0:a9fe:a9fe::"):
+        for url in (f"https://[{addr}]/org/repo.git", f"ssh://git@[{addr}]/org/repo.git", f"git@[{addr}]:org/repo.git"):
+            refused, pin = asyncio.run(app._git_url_refused(url))
+            assert refused and "internal" in refused and pin == "", (url, refused, pin)
+
+    refused, pin = asyncio.run(app._git_url_refused("https://[fe80::1%25eth0]/org/repo.git"))
+    assert refused and pin == "", (refused, pin)
+
+    # A zone id is refused before any lookup, on a public address too: no pin carries one to the
+    # runner, whose ssh command line is run by a shell.
+    async def no_lookup(host: str, port: int):
+        raise AssertionError(f"looked up {host}")
+
+    monkeypatch.setattr(app, "_resolve", no_lookup)
+    for url in ("https://[2606:4700::6810:1%25eth0]/org/repo.git", "ssh://git@[2606:4700::6810:1%251]/org/repo.git",
+                "git@[2606:4700::6810:1%eth0]:org/repo.git", "git@[2606:4700::6810:1%$(id)]:org/repo.git",
+                "ssh://git@[2606:4700::6810:1%25$(id)]/org/repo.git"):
+        refused, pin = asyncio.run(app._git_url_refused(url))
+        assert refused and "interface" in refused and pin == "", (url, refused, pin)
+
+    async def fake_resolve(host: str, port: int):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("2606:4700::6810:1", port, 0, 0))]
+
+    monkeypatch.setattr(app, "_resolve", fake_resolve)
+    assert asyncio.run(app._git_url_refused("https://git.example/org/repo.git")) == (
+        None, "git.example:443:2606:4700::6810:1"
+    )
+
+
+def test_hosted_git_import_round_trips_ipv6_literal_urls_through_runner(api, monkeypatch):
+    import pathlib
+
+    monkeypatch.setattr(app, "_pool_is_local", lambda: False)
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        os.makedirs(cmd[-1], exist_ok=True)
+        pathlib.Path(cmd[-1], "README.md").write_text("hi\n")
+        return None
+
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    eid = api.post("/v1/environments", json={"name": "ipv6-git-env"}).json()["id"]
+
+    r_https = api.post(f"/v1/environments/{eid}/import",
+                       json={"git": {"url": "https://[2606:4700::6810:1]/org/repo.git"}})
+    assert r_https.status_code == 200, r_https.text
+    r_ssh = api.post(f"/v1/environments/{eid}/import",
+                     json={"git": {"url": "ssh://git@[2606:4700::6810:1]/org/repo.git"}})
+    assert r_ssh.status_code == 200, r_ssh.text
+    r_scp = api.post(f"/v1/environments/{eid}/import",
+                     json={"git": {"url": "git@[2606:4700::6810:1]:org/repo.git"}})
+    assert r_scp.status_code == 200, r_scp.text
+
+    https_cmd, ssh_cmd, scp_cmd = seen
+    assert https_cmd[:4] == ["git", "-c", "http.followRedirects=false", "clone"]
+    assert ssh_cmd[:3] == ["git", "-c", "core.sshCommand=ssh -o HostName=2606:4700::6810:1 -o HostKeyAlias=2606:4700::6810:1"]
+    assert scp_cmd[:3] == ["git", "-c", "core.sshCommand=ssh -o HostName=2606:4700::6810:1 -o HostKeyAlias=2606:4700::6810:1"]
