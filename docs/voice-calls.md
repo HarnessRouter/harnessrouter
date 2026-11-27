@@ -215,6 +215,70 @@ Two limits follow from the provider, not from this gateway:
 This gateway has no spend limit per organization for calls. `max_minutes` and `max_cost_usd` bound
 one call each.
 
+## A call relayed by a Realtime Harness
+
+Everything above describes a **direct** call: the browser and Azure, with nothing between them. Its
+two limits come from that. `HR_REALTIME_PROVIDER=harness` places calls on a
+[Realtime Harness](https://github.com/HarnessRouter/RealtimeHarness) instead, which **relays** them:
+
+```
+device ══ audio and events, WebSocket ══▶ Realtime Harness ══ the provider's wire ══▶ Azure OpenAI
+                                              │  ▲
+              the call's tools, over MCP      │  │  a provider credential per connection
+                                              ▼  │
+                                            gateway (places the call, ends it, meters it, keeps what was said)
+```
+
+| | Direct | Relayed |
+|---|---|---|
+| Who can change the call's instructions and tools | The browser, with `session.update` | Nobody: the harness keeps what the gateway handed it, and a device can only mute, cancel an answer and hang up |
+| Ending a call | The record and the meter stop; the gateway cannot hang up | The gateway tells the harness, and the device's connection closes |
+| Tools | The browser passes each call to the tool calls route | The harness runs them at the plugs server; the tool calls route runs nothing |
+| Billed by | The clock | The tokens the provider reported for each turn; the clock when it reported none |
+| What was said | Not kept | Kept in the session's conversation |
+| Page tools (`client_tools`) | Yes | Refused with `422` |
+| The device connects over | WebRTC, to Azure | WebSocket, to the harness |
+
+**Placing the call.** The first route is the same, with the same checks. The gateway creates the
+call on the harness with the call's own configuration: the gateway harness's instructions and voice,
+`max_minutes`, and the plugs server's address with the credential a text turn's agent is given for
+it. The answer's `transport` is `websocket`, `connect_url` is where the device opens its socket, and
+`client_secret` is the harness's connect token, good for one connection within about a minute.
+(A direct call answers `transport: "webrtc"`, and `webrtc_url` beside `connect_url`.) What the device
+sends and receives on that socket is the harness's device protocol, in its README.
+
+**The provider key stays here.** The harness holds no key and no harness of its own. Each time it
+opens a connection to Azure, it asks `POST /v1/realtime/upstream` for a short-lived credential, with
+a token the gateway made for that one call. The token names the call, opens that route only, and is
+worth nothing at the model broker or the plugs server. A call is given at most four credentials: its
+first connection, and the harness's replacements when the provider drops.
+
+**Billing.** A relayed call's turns each carry the provider's own usage. The gateway prices those
+tokens at OpenAI's published prices for `gpt-realtime-2.1` (read 2026-11-27; Azure's page listed no
+figure that day), per million: text in $4, audio in $32, cached input $0.40, text out $24, audio
+out $64. Usage says how many input tokens were cached, not how many of those were audio, so the
+cached ones are counted against the text first. The figure is therefore never under what the
+provider charges for the same tokens, and can be over it. It is still capped by `max_cost_usd`.
+
+**What was said.** When the call ends, each turn is written as one of the session's response
+records: the person's words, the model's, and each tool call with its answer. Audio is never kept.
+A turn the hang-up cut off reads as cancelled. A session that is being deleted has its call metered
+and its words not written.
+
+**Running the harness.** The harness is a second process, started with the operator key and nothing
+else (`rth serve`, in its README). It needs RealtimeHarness's operator support
+(HarnessRouter/RealtimeHarness#4). Three addresses matter:
+
+- the gateway reaches the harness at `HR_REALTIME_HARNESS_URL` (`http://127.0.0.1:8790` beside it);
+- the harness reaches the gateway where a runner beside it does, for the plugs server and the
+  credential route;
+- a person's device reaches the harness at `HR_REALTIME_HARNESS_PUBLIC_URL`, a `ws://` or `wss://`
+  address. The console's own port carries no WebSocket, so the harness's port is published on its
+  own (`-p 8790:8790`), behind TLS wherever the console is.
+
+This image does not start the harness yet. And the harness's other transport, WebRTC, is not used:
+its media library's wheels bundle GPL codecs.
+
 ## Settings
 
 | Variable | Default | |
@@ -226,6 +290,10 @@ one call each.
 | `HR_REALTIME_TRANSCRIBE_DEPLOYMENT` | none | A transcription deployment on the same resource (`gpt-4o-transcribe`, for one). Without it the provider does not transcribe the caller's speech. |
 | `HR_REALTIME_VOICE` | `marin` | The voice of a call that names none. |
 | `HR_REALTIME_USD_PER_MIN` | `0.10` | What a minute of call is metered at. |
+| `HR_REALTIME_PROVIDER` | `azure` | `harness` relays calls through a Realtime Harness. |
+| `HR_REALTIME_HARNESS_URL` | none | Where the gateway reaches the harness. |
+| `HR_REALTIME_HARNESS_PUBLIC_URL` | none | Where a device reaches it: `ws://` or `wss://`. |
+| `HR_REALTIME_HARNESS_KEY` | none | The operator key the gateway calls the harness with. A secret: give it from your secret store, as you give the harness its `RTH_OPERATOR_KEYS`. |
 | `HR_REALTIME_SECRET_TTL_S` | `120` | How long a client secret may start a call, 10 to 7200 seconds. Azure has opened a call a few seconds past it, so it is not an exact window. |
 
 ## What is verified, and what is not
@@ -251,6 +319,10 @@ text:
 
 Not verified:
 
+- **A relayed call, anywhere but in tests.** The gateway's side is tested against a stand-in for
+  the harness, and the harness's side against a stand-in for the gateway. The two have not run
+  against each other, and no relayed call has reached a real provider. The token figure has not been
+  compared with a provider's bill.
 - **A spoken call over WebRTC.** The script used a WebSocket and text, so the SDP exchange, the
   audio and a browser were not part of it.
 - **A tool run on a live call.** The harness in the run had no plugs, so a call's tool was listed
