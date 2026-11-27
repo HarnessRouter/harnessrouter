@@ -760,6 +760,68 @@ def test_a_build_that_stopped_reads_failed_or_saved_by_whether_its_setup_exists(
     assert out["status"] == "saved" and out["setupId"] == hid
 
 
+def test_reads_discard_events_for_unknown_and_expired_builds(env):
+    keys = [f"b1unknown{i}" for i in range(3)]
+    for key in keys:
+        assert env["c"].get(f"/v1/harnesses/builds/{key}", headers=INT).status_code == 404
+    assert sb.RECORDS.events == {}
+
+    member = ADA["member"]
+    key = "b1expired1"
+    rk = sb.record_key(ORG_A, member, key)
+    row = {"v": 1, "key": key, "status": "saved", "startedAt": int(time.time() * 1000)}
+    sb.RECORDS.set(rk, row)
+    assert env["c"].get(f"/v1/harnesses/builds/{key}", headers=INT).status_code == 200
+    assert rk in sb.RECORDS.rows and rk in sb.RECORDS.events
+    sb.RECORDS.rows[rk] = (time.time() - 1, row)
+    assert env["c"].get(f"/v1/harnesses/builds/{key}", headers=INT).status_code == 404
+    assert rk not in sb.RECORDS.rows and rk not in sb.RECORDS.events
+
+
+def test_records_sweep_keeps_live_events_and_wakes_expired_ones():
+    records = sb._Records()
+    live = "live"
+    live_row = {"key": live, "status": "saved"}
+    records.set(live, live_row)
+    live_event = records.changed(live)
+    assert live in records.events
+    assert records.get(live) == live_row
+    assert records.events[live] is live_event and not live_event.is_set()
+
+    expired = "expired"
+    expired_row = {"key": expired, "status": "saved"}
+    records.set(expired, expired_row)
+    expired_event = records.changed(expired)
+    assert expired in records.events
+    records.rows[expired] = (time.time() - 1, expired_row)
+    assert records.get(expired) is None
+    assert expired not in records.rows and expired not in records.events
+    assert expired_event.is_set()
+
+
+def test_a_follower_is_woken_when_its_record_expires(env):
+    async def follow_expired():
+        member = ADA["member"]
+        key = "b1follow01"
+        rk = sb.record_key(ORG_A, member, key)
+        rec = {"v": 1, "key": key, "status": "saved", "startedAt": int(time.time() * 1000)}
+        sb.RECORDS.set(rk, rec)
+
+        async def exists(_hid):
+            return False
+
+        task = asyncio.create_task(sb.follow(ORG_A, member, key, after=sb.mark(rec), exists=exists, wait=2))
+        await asyncio.sleep(0)
+        assert rk in sb.RECORDS.events and not task.done()
+        started = time.monotonic()
+        sb.RECORDS.rows[rk] = (time.time() - 1, rec)
+        assert sb.RECORDS.get(rk) is None
+        assert await asyncio.wait_for(task, 1) is None
+        assert time.monotonic() - started < 1
+
+    asyncio.run(follow_expired())
+
+
 def test_nothing_of_the_job_or_the_answer_is_logged(env, capsys):
     start(env)
     settled(env)
