@@ -34,6 +34,7 @@ import errno
 import grp
 import hashlib
 import json
+import lzma
 import mimetypes
 import platform
 import pwd
@@ -54,6 +55,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -409,22 +411,11 @@ def _member_ok(name: str) -> str | None:
     return n.strip("/")
 
 
-def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dict:
-    """Extract a zip or tar archive into the source. Only regular files and directories land:
-    symlinks, hard links, devices and any member that names a path outside the source are
-    dropped and counted, never written. A single wrapping directory is stripped.
-
-    The lock is held from the replace through the last member, so a build snapshotting while this
-    runs waits instead of copying a tree half-refilled. The wait is bounded by the archive."""
-    with _source_lock(env_id):
-        return _import_archive(env_id, data_path, replace=replace)
+_ARCHIVE_ERRORS = (zipfile.BadZipFile, tarfile.TarError, EOFError, zlib.error, lzma.LZMAError)
 
 
-def _import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dict:
-    src = source_dir(env_id)
-    if replace and src.exists():
-        shutil.rmtree(src)
-    src = _source(env_id)
+def _extract_archive(data_path: str, dst: pathlib.Path) -> tuple[int, int]:
+    """Extract a zip or tar archive into a private staging directory."""
     written = skipped = 0
     if zipfile.is_zipfile(data_path):
         with zipfile.ZipFile(data_path) as zf:
@@ -442,10 +433,12 @@ def _import_archive(env_id: str, data_path: str, *, replace: bool = False) -> di
                 if stat.S_ISLNK(mode):
                     skipped += 1
                     continue
-                dest = _safe_rel(src, rel)
+                dest = _safe_rel(dst, rel)
                 if info.is_dir():
                     dest.mkdir(parents=True, exist_ok=True)
                     continue
+                if info.flag_bits & 0x1:
+                    raise HTTPException(400, "encrypted zip archives are not supported")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as fin, open(dest, "wb") as fout:
                     shutil.copyfileobj(fin, fout)
@@ -467,7 +460,7 @@ def _import_archive(env_id: str, data_path: str, *, replace: bool = False) -> di
                 if not (m.isreg() or m.isdir()):
                     skipped += 1
                     continue
-                dest = _safe_rel(src, rel)
+                dest = _safe_rel(dst, rel)
                 if m.isdir():
                     dest.mkdir(parents=True, exist_ok=True)
                     continue
@@ -483,12 +476,56 @@ def _import_archive(env_id: str, data_path: str, *, replace: bool = False) -> di
                 written += 1
     else:
         raise HTTPException(400, "the upload is neither a zip nor a tar archive")
-    return {"written": written, "skipped": skipped, **source_stat(env_id)}
+    return written, skipped
+
+
+def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dict:
+    """Extract a zip or tar archive into the source. Only regular files and directories land:
+    symlinks, hard links, devices and any member that names a path outside the source are
+    dropped and counted, never written. A single wrapping directory is stripped.
+
+    Extraction runs in a private staging directory outside the source lock so an invalid,
+    corrupt or self-conflicting upload fails with 400 without touching the existing source and a
+    build snapshot never waits on decompression."""
+    _check_id(env_id)
+    with tempfile.TemporaryDirectory(prefix="hr-env-archive-") as tmp:
+        stage = pathlib.Path(tmp) / "stage"
+        stage.mkdir(mode=0o700)
+        try:
+            written, skipped = _extract_archive(data_path, stage)
+        except (*_ARCHIVE_ERRORS, NotImplementedError) as e:
+            raise HTTPException(400, f"the archive is corrupt or unreadable: {e}")
+        except (FileExistsError, IsADirectoryError, NotADirectoryError):
+            raise HTTPException(400, "the archive contains conflicting file and directory paths")
+        except OSError as e:
+            # Corrupt gzip (BadGzipFile) and bz2 streams raise OSError with errno=None.
+            # Real disk errors carry an errno.
+            if e.errno is None:
+                raise HTTPException(400, f"the archive is corrupt or unreadable: {e}")
+            raise
+        with _source_lock(env_id):
+            src = source_dir(env_id)
+            if replace and src.exists():
+                shutil.rmtree(src)
+            # Member counts come from extraction. _copy_without_links checks containment and skips links.
+            _copy_without_links(str(stage), _source(env_id))
+            stat_out = source_stat(env_id)
+    return {"written": written, "skipped": skipped, **stat_out}
 
 
 def _copy_without_links(src_root: str, dst: pathlib.Path) -> tuple[int, int]:
     """Copy a tree's regular files and directories into dst; a link, a device or a fifo is counted
     and left behind, never followed. Returns (written, skipped)."""
+    # Check every destination path up front so an escaping symlink already in dst refuses the
+    # whole copy instead of writing outside dst or leaving partial files behind.
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+        rel = os.path.relpath(dirpath, src_root)
+        if rel != ".":
+            _safe_rel(dst, rel)
+        for f in filenames:
+            if stat.S_ISREG(os.lstat(os.path.join(dirpath, f)).st_mode):
+                _safe_rel(dst, f if rel == "." else os.path.join(rel, f))
     written = skipped = 0
     for dirpath, dirnames, filenames in os.walk(src_root):   # os.walk does not descend a linked directory
         keep = []
@@ -499,7 +536,7 @@ def _copy_without_links(src_root: str, dst: pathlib.Path) -> tuple[int, int]:
                 keep.append(d)
         dirnames[:] = keep
         rel = os.path.relpath(dirpath, src_root)
-        out = dst if rel == "." else dst / rel
+        out = dst if rel == "." else _safe_rel(dst, rel)
         out.mkdir(parents=True, exist_ok=True)
         for f in filenames:
             p = os.path.join(dirpath, f)
