@@ -177,7 +177,13 @@ class _record_lock:
     async def __aenter__(self):
         held = _locks.setdefault(self.key, [asyncio.Lock(), 0])
         held[1] += 1
-        await held[0].acquire()
+        try:
+            await held[0].acquire()
+        except BaseException:
+            held[1] -= 1
+            if not held[1] and _locks.get(self.key) is held:   # never drop a newer entry for the same key
+                del _locks[self.key]
+            raise
 
     async def __aexit__(self, *_):
         held = _locks[self.key]
