@@ -603,6 +603,9 @@ class _Records:
         now = time.time()
         for k in [k for k, (exp, _r) in self.rows.items() if exp < now]:
             self.rows.pop(k, None)
+        for k, ev in [(k, ev) for k, ev in self.events.items() if k not in self.rows]:
+            if self.events.get(k) is ev and k not in self.rows:
+                self.events.pop(k).set()
 
     def get(self, rk: str) -> dict | None:
         self._sweep()
