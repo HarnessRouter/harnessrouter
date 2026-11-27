@@ -66,6 +66,10 @@ ENV_MOUNT = os.environ.get("HR_ENV_MOUNT", "/env")
 BUILD_TIMEOUT = int(os.environ.get("HR_ENV_BUILD_TIMEOUT", "1800"))     # the whole build, seconds
 LOG_MAX = 200_000                                                        # characters of build log kept
 TREE_MAX = 20_000                                                        # entries a tree listing returns
+# What one archive import may unpack to. The upload's own size says little (a zip of zeros is ~1000:1),
+# and extraction stages under /tmp, which on a shared runner is every organization's disk.
+ARCHIVE_MAX_BYTES = int(os.environ.get("HR_ENV_ARCHIVE_MAX_BYTES", str(2 * 1024 ** 3)))   # unpacked bytes
+ARCHIVE_MAX_MEMBERS = int(os.environ.get("HR_ENV_ARCHIVE_MAX_MEMBERS", "100000"))          # entries
 # Dependency and cache directories never copied from the source into a build: the build installs
 # its own, from the manifests, in the image's own toolchain (a venv copied from a laptop is the
 # thing SPI-001 says not to trust).
@@ -414,11 +418,48 @@ def _member_ok(name: str) -> str | None:
 _ARCHIVE_ERRORS = (zipfile.BadZipFile, tarfile.TarError, EOFError, zlib.error, lzma.LZMAError)
 
 
+class _Budget:
+    """The bytes an archive may still unpack to, counted as they are written: a member's declared size
+    is the archive's own claim and is not trusted."""
+
+    def __init__(self) -> None:
+        self.left = ARCHIVE_MAX_BYTES
+
+    def copy(self, fin, fout) -> None:
+        while True:
+            chunk = fin.read(1024 * 1024)
+            if not chunk:
+                return
+            self.left -= len(chunk)
+            if self.left < 0:
+                raise HTTPException(413, f"the archive unpacks to more than {ARCHIVE_MAX_BYTES} bytes")
+            fout.write(chunk)
+
+
+def _too_many_members() -> HTTPException:
+    return HTTPException(413, f"the archive holds more than {ARCHIVE_MAX_MEMBERS} entries")
+
+
+def _tar_members(tf: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    """The members, read one header at a time and stopped past the cap: getmembers() reads every
+    header first, and a small compressed tar can hold millions."""
+    out = []
+    while (m := tf.next()) is not None:
+        out.append(m)
+        if len(out) > ARCHIVE_MAX_MEMBERS:
+            raise _too_many_members()
+    return out
+
+
 def _extract_archive(data_path: str, dst: pathlib.Path) -> tuple[int, int]:
-    """Extract a zip or tar archive into a private staging directory."""
+    """Extract a zip or tar archive into a private staging directory, at most ARCHIVE_MAX_MEMBERS
+    entries and ARCHIVE_MAX_BYTES unpacked."""
     written = skipped = 0
+    budget = _Budget()
     if zipfile.is_zipfile(data_path):
         with zipfile.ZipFile(data_path) as zf:
+            if len(zf.infolist()) > ARCHIVE_MAX_MEMBERS:
+                raise _too_many_members()
             names = [i.filename for i in zf.infolist()]
             root = _strip_common_root(names)
             for info in zf.infolist():
@@ -441,13 +482,13 @@ def _extract_archive(data_path: str, dst: pathlib.Path) -> tuple[int, int]:
                     raise HTTPException(400, "encrypted zip archives are not supported")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as fin, open(dest, "wb") as fout:
-                    shutil.copyfileobj(fin, fout)
+                    budget.copy(fin, fout)
                 if mode & 0o111:
                     os.chmod(dest, 0o755)
                 written += 1
     elif tarfile.is_tarfile(data_path):
         with tarfile.open(data_path) as tf:
-            members = tf.getmembers()
+            members = _tar_members(tf)
             root = _strip_common_root([m.name for m in members])
             for m in members:
                 rel = _member_ok(m.name)
@@ -470,7 +511,7 @@ def _extract_archive(data_path: str, dst: pathlib.Path) -> tuple[int, int]:
                     skipped += 1
                     continue
                 with fin, open(dest, "wb") as fout:
-                    shutil.copyfileobj(fin, fout)
+                    budget.copy(fin, fout)
                 if m.mode & 0o111:
                     os.chmod(dest, 0o755)
                 written += 1
