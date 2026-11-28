@@ -25,6 +25,26 @@ def test_bundled_schema_matches_the_specification():
     )
 
 
+def test_bundled_schema_has_no_null_valued_keys():
+    """Unquoted commas in OpenAPI flow mappings split into null-valued keys (#768)."""
+    import json
+
+    doc = json.loads(resources.files("uhp_conformance").joinpath(SCHEMA_NAME).read_text())
+
+    def find_nulls(node, path=""):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                p = f"{path}.{k}" if path else str(k)
+                if k is None or v is None:
+                    yield p
+                yield from find_nulls(v, p)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                yield from find_nulls(v, f"{path}[{i}]")
+
+    assert list(find_nulls(doc)) == []
+
+
 def _run(*args, cwd):
     result = subprocess.run(
         [sys.executable, "-I", *args], cwd=cwd, text=True, capture_output=True,

@@ -557,8 +557,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "description": "The SKILL.md frontmatter name",
-          "equal to the directory name.": null
+          "description": "The SKILL.md frontmatter name, equal to the directory name."
         },
         "description": {
           "type": "string"
@@ -627,8 +626,7 @@
         },
         "environment": {
           "type": "string",
-          "description": "An environment id of the caller's scope",
-          "or empty. Requires the `environments` capability.": null
+          "description": "An environment id of the caller's scope, or empty. Requires the `environments` capability."
         },
         "disabled_tools": {
           "type": "array",
@@ -812,8 +810,7 @@
         },
         "statusReason": {
           "type": "string",
-          "description": "Why the base is not ready",
-          "in words. Present only when `status` is not `ready`.": null
+          "description": "Why the base is not ready, in words. Present only when `status` is not `ready`."
         },
         "systemPrompt": {
           "type": "string",
@@ -872,8 +869,7 @@
         },
         "available": {
           "type": "boolean",
-          "description": "Computed",
-          "as on `Model`.": null
+          "description": "Computed, as on `Model`."
         },
         "default": {
           "type": "boolean"
@@ -1234,8 +1230,7 @@
         },
         "arguments": {
           "type": "string",
-          "description": "JSON",
-          "as a string": null
+          "description": "JSON, as a string"
         },
         "output": {
           "type": "string"
@@ -1557,8 +1552,7 @@
             "integer",
             "null"
           ],
-          "description": "The active build",
-          "the one sessions read; null until one is ready.": null
+          "description": "The active build, the one sessions read; null until one is ready."
         },
         "latestVersion": {
           "type": [
@@ -2004,8 +1998,7 @@
         },
         "count": {
           "type": "integer",
-          "description": "Files",
-          "not directories.": null
+          "description": "Files, not directories."
         },
         "bytes": {
           "type": "integer"
@@ -2048,8 +2041,7 @@
         },
         "skipped": {
           "type": "integer",
-          "description": "Members that must not land (links",
-          "escapes) and were dropped.": null
+          "description": "Members that must not land (links, escapes) and were dropped."
         },
         "count": {
           "type": "integer"
@@ -2099,8 +2091,7 @@
         },
         "environment": {
           "type": "string",
-          "description": "The environment the session's turns read",
-          "when one did.": null
+          "description": "The environment the session's turns read, when one did."
         },
         "title": {
           "type": "string"
