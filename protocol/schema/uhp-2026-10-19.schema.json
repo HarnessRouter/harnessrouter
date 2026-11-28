@@ -434,7 +434,60 @@
       "required": [
         "name"
       ],
-      "description": "An Agent Plugins package installed into a harness: `plugin.json` at the root, MCP servers in\n`mcp.json`, skills under `skills/`. A client writes `files` (or passes back `blob`) and\noptionally `name` and `enabled`; the server derives `manifest`, `mcpServers`, `skills` and\n`skipped` from the package on every write and ignores those fields on input. A refused\npackage leaves the harness unchanged.\n",
+      "description": "An Agent Plugins package installed into a harness: `plugin.json` at the root, MCP servers in\n`mcp.json`, skills under `skills/`. Returned on reads (`Harness.plugins`,\n`exportHarnessPlugin`) with server-derived `name`, `manifest`, `mcpServers`, `skills` and\n`skipped`. Writes (`HarnessCreate.plugins`) use `PluginWrite`, where `name` is optional.\n",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^(?!.*(--|\\.\\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+          "maxLength": 64,
+          "description": "The manifest's `name`. Present on read; optional on write via `PluginWrite` (if sent it must equal the manifest's)."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "false keeps the plugin installed and inert; nothing in it is materialised or contacted."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillFile"
+          },
+          "description": "The package. Must contain `plugin.json` at its root."
+        },
+        "blob": {
+          "type": "string",
+          "description": "Server-assigned handle for a package stored out of line. A client passes it back unchanged\nand reads the files from the plugin files endpoint.\n"
+        },
+        "manifest": {
+          "$ref": "#/$defs/PluginManifest"
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginMcpServer"
+          },
+          "description": "Derived from `mcp.json`. Placeholders are reported unexpanded; `enabled` is always true,\nthe plugin's own `enabled` governs.\n"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginSkill"
+          },
+          "description": "Derived from `skills/`, one entry per immediate child directory with a SKILL.md."
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginSkipped"
+          },
+          "description": "What the server found and could not load. Present on every plugin object the server\nreturns, empty when nothing was skipped.\n"
+        }
+      },
+      "additionalProperties": true
+    },
+    "PluginWrite": {
+      "type": "object",
+      "description": "Write shape of `Plugin` in `HarnessCreate.plugins`: a client sends `files` (or passes back\na `blob` handle) and optionally `name` and `enabled`. If `name` is sent it must equal the\nmanifest's `name`; the server derives `name`, `manifest`, `mcpServers`, `skills` and\n`skipped` from the package on every write and ignores derived fields on input. A refused\npackage leaves the harness unchanged.\n",
       "properties": {
         "name": {
           "type": "string",
@@ -621,7 +674,7 @@
         "plugins": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/Plugin"
+            "$ref": "#/$defs/PluginWrite"
           },
           "description": "Requires the `plugins` capability. Each item needs `files` or `blob`."
         },
