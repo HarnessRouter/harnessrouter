@@ -54,6 +54,7 @@ from pydantic_core import PydanticCustomError
 import backing               # pluggable graph/blob/secret stores (vg | local)
 import media_plane           # the media plane (capability catalog, provider adapters, ffmpeg)
 import plugs_plane           # the plugs surface: the vendor tools behind the hosted plugs server
+import realtime_plane        # voice calls on a harness: the provider's session mint, the tool bridge and the meter
 from public_artifacts import public_artifact_headers
 import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
@@ -6628,6 +6629,9 @@ async def delete_trace(sid: str, request: Request) -> dict:
     # follow-up that reached the tombstone rewrote the card as "?", 2026-09-07), and this button
     # is the only way a person has to remove it; refusing the second delete with 404 left the
     # ghost in the list for good. Every step below is idempotent.
+    # A voice call still open is metered now: the delete keeps only a marker of the session, and the
+    # marker no longer says the call was open, so the sweep would never find it.
+    await REALTIME.settle(sid, v, "deleted")
     # The tombstone goes down FIRST. Stopping a live turn below triggers its finalize, and a
     # reconcile can land at any moment; both write session cards, and the indexer drops a write
     # whose session is tombstoned. Written last, the tombstone missed exactly those writes and
@@ -27039,3 +27043,322 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid, deleted_ok=True)
     return {"id": hid, "deleted": True, **await _harness_delete(org, hid, v, _caller)}
+
+
+# ── voice calls on a harness ────────────────────────────────────────────────────────────────────────
+# The gateway's half of a call is realtime_plane.py: the provider (Azure OpenAI's realtime API on one of
+# this instance's Azure connections), the contract and the meter. This block only wires it to what this
+# gateway has: the checks a turn makes on its caller and harness, the plugs server, the session record and
+# card, the usage meter and a one-holder lock. Every port looks its function up when called, so a test's
+# stand-in is the one used.
+#
+# OFF BY DEFAULT. The three routes answer 403 until the operator sets HR_REALTIME=1, and the sweep that
+# ends calls nobody hung up is not started. Ending a call is the one thing the switch does not close: a
+# call that started is ended and metered whatever the switch says now.
+#
+# What a call can use is the harness's plugs, through the plugs server and its own checks, exactly as a
+# text turn's CLI reaches them. This gateway's plugs server has no step where a call waits for a person's
+# approval, so a call's tool never does: the plane keeps that answer in its contract and it is not given.
+realtime_plane.error = lambda *a, **k: uhp_error(*a, **k)
+_REALTIME_LOCKS: dict[str, float] = {}          # the lock where no control store is configured (one process)
+
+
+def _realtime_request(tok: str, raw: bytes) -> Request:
+    """The request an agent's CLI sends the plugs server, made in process: the same route, credential and checks."""
+    sent = [False]
+
+    async def receive() -> dict:
+        if sent[0]:
+            return {"type": "http.disconnect"}
+        sent[0] = True
+        return {"type": "http.request", "body": raw, "more_body": False}
+    return Request({"type": "http", "method": "POST", "path": "/v1/mcp/plugs", "raw_path": b"/v1/mcp/plugs",
+                    "query_string": b"", "headers": [(b"authorization", f"Bearer {tok}".encode()),
+                                                     (b"content-type", b"application/json")]}, receive)
+
+
+def _realtime_plugs_key(hv: dict | None) -> str:
+    """The record the harness's plugs entry names, as a turn reads it (_harness_plugins): "" when the harness
+    has no plugs entry, or one that names no record this server holds."""
+    for s in _mcp_list(hv):
+        if isinstance(s, dict) and _hosted_server_name(s) == _PLUGS_SERVER:
+            key = _vault_key(s.get("auth"))
+            if key.startswith(_HOSTED_SECRET_PREFIX):
+                return key
+    return ""
+
+
+async def _realtime_plugs(hid: str, sid: str, method: str, params: dict) -> tuple[dict, dict | None]:
+    """One call on the harness's plugs server, made as the agent's CLI makes it: a hosted credential for this
+    harness, this call's session and its plugs record, through plugs_mcp itself. So a call's tools are listed,
+    refused, recorded and run exactly as a text turn's are. The second value is always None here: this
+    gateway's plugs server holds no call for a person's approval."""
+    key = _realtime_plugs_key(await _harness_vertex(hid))
+    if not key:
+        return ({"tools": []} if method == "tools/list"
+                else _tool_text("No plugins are included on this agent.", True)), None
+    raw = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    try:
+        resp = await plugs_mcp(_realtime_request(_mint_hosted_cred(hid, sid, key), raw))
+        doc = json.loads(bytes(getattr(resp, "body", b"") or b"{}"))
+    except (HTTPException, ValueError):
+        doc = {}
+    if not isinstance(doc, dict) or "result" not in doc:
+        err = doc.get("error") if isinstance(doc, dict) and isinstance(doc.get("error"), dict) else {}
+        if method == "tools/list":
+            print(f"[realtime] the plugs of {hid} could not be listed for a call "
+                  f"(code {err.get('code') if isinstance(err.get('code'), int) else 'none'}): it starts with none", flush=True)
+            return {"tools": []}, None
+        return _tool_text(str(err.get("message") or "The tool could not be called."), True), None
+    return doc["result"], None
+
+
+async def _realtime_put(sid: str, props: dict) -> bool:
+    """A call's record fields, and whether they were written (a turn's _vertex_upsert, which does not say)."""
+    if not await _session_write_allowed(sid, props):
+        return False
+    try:
+        await BACKING.graph.upsert("HarnessSession", sid, props)
+    except Exception as e:  # noqa: BLE001 — unwritten is answered, not raised: the plane refuses the call
+        print(f"[realtime] the record of {sid} could not be written: {type(e).__name__}", flush=True)
+        return False
+    return True
+
+
+async def _realtime_reach(p: dict, v: dict) -> bool:
+    """Whether a call's session is this caller's to use: _owned_session's rule, on a record already read."""
+    inner = _calibration_inner(p)
+    return _scope_keeps(p, v.get("workspace")) and (not inner or str(v.get("harness_id") or "") == inner)
+
+
+async def _realtime_lock(name: str, ttl_s: int) -> bool:
+    if control_store.enabled():
+        return await control_store.try_lock(name, ttl_s)
+    now = time.time()
+    if _REALTIME_LOCKS.get(name, 0.0) > now:
+        return False
+    _REALTIME_LOCKS[name] = now + ttl_s
+    return True
+
+
+async def _realtime_unlock(name: str) -> None:
+    _REALTIME_LOCKS.pop(name, None)
+    if control_store.enabled():
+        await control_store.unlock(name)
+
+
+async def _realtime_card(sid: str, rec: dict) -> None:
+    await _index_manifest(str(rec.get("trace_blob") or ""), realtime_plane.card_of(sid, rec))
+
+
+# ── a call relayed by a Realtime Harness (HR_REALTIME_PROVIDER=harness) ──
+# The harness is a server beside this one. It holds no provider key and no harness of its own: for each
+# call this gateway hands it the call's configuration and two credentials, each good for that call alone.
+# One opens the plugs server, the credential a text turn's agent is given. The other is the upstream token
+# below, which the harness presents to POST /v1/realtime/upstream for a short-lived provider credential
+# each time it opens a connection to the provider.
+_REALTIME_UPSTREAM_PREFIX = "hru_"
+_REALTIME_UPSTREAM_TTL_S = (realtime_plane.MAX_MINUTES + 5) * 60      # a call's longest life, and a margin
+
+
+def _mint_realtime_upstream(sid: str) -> str:
+    """session.exp.hmac, the hosted credential's construction under its own prefix and its own claim: it names
+    one call and opens one route, so it is worth nothing at the model broker or the plugs server."""
+    body = f"upstream|{sid}|{int(time.time()) + _REALTIME_UPSTREAM_TTL_S}"
+    sig = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{_REALTIME_UPSTREAM_PREFIX}{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
+
+
+def _verify_realtime_upstream(tok: str) -> str:
+    """The call a valid unexpired upstream token names, else ""."""
+    if not tok or not tok.startswith(_REALTIME_UPSTREAM_PREFIX):
+        return ""
+    try:
+        b64, sig = tok[len(_REALTIME_UPSTREAM_PREFIX):].rsplit(".", 1)
+        body = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode()
+        what, sid, exp = body.split("|")
+    except Exception:  # noqa: BLE001 — a malformed token is simply invalid
+        return ""
+    want = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
+    if what != "upstream" or not hmac.compare_digest(sig, want) or int(exp) < time.time():
+        return ""
+    return sid
+
+
+def _realtime_origin() -> str:
+    """Where a harness beside this gateway reaches it: the address a runner beside it does."""
+    origins = _own_origins()
+    if not origins:
+        raise realtime_plane.ProviderError(503, "This instance does not know its own address, so a harness cannot "
+                                                "call it back for a call.")
+    return origins[0]
+
+
+def _realtime_upstream_of(sid: str) -> tuple[str, str]:
+    return _realtime_origin() + "/v1/realtime/upstream", _mint_realtime_upstream(sid)
+
+
+async def _realtime_servers(hid: str, sid: str) -> list[dict]:
+    """The MCP servers a relayed call's tools are reached at: the harness's plugs, at the plugs server, with the
+    credential a text turn's agent is given for it (this harness, this call, its plugs record). None for a
+    harness with no plugs."""
+    key = _realtime_plugs_key(await _harness_vertex(hid))
+    if not key:
+        return []
+    return [{"name": _PLUGS_SERVER, "url": _realtime_origin() + _HOSTED_MCP_PREFIX + _PLUGS_SERVER, "transport": "http",
+             "headers": {"Authorization": f"Bearer {_mint_hosted_cred(hid, sid, key)}"}}]
+
+
+# What a relayed call's turn keeps of each item the harness recorded. A turn is what was SAID and which tools
+# were called, so it is read in the session's conversation as a text turn is; audio is never kept.
+_REALTIME_TURNS_MAX = 400               # turns of one call (a 30 minute call has far fewer)
+_REALTIME_TEXT_MAX = 20000              # characters of one thing said, one tool's arguments or one tool's answer
+_REALTIME_TURN_STATUS = {"completed": "completed", "incomplete": "incomplete", "failed": "failed"}
+
+
+def _realtime_said(content, kinds: tuple[str, ...]) -> str:
+    if isinstance(content, str):
+        return content[:_REALTIME_TEXT_MAX]
+    return "".join(str(c.get("text") or "") for c in content or []
+                   if isinstance(c, dict) and c.get("type") in kinds)[:_REALTIME_TEXT_MAX]
+
+
+def _realtime_turn_items(turn: dict, rid: str) -> tuple[list[dict], list[dict]]:
+    """(input, output) of one turn as this gateway's response records hold them: the person's words as input
+    text, the model's as output text, each tool call and its answer. Anything else an item carries is dropped."""
+    said = "".join(_realtime_said(i.get("content"), ("input_text", "text")) for i in turn.get("input") or []
+                   if isinstance(i, dict) and i.get("type", "message") == "message")[:_REALTIME_TEXT_MAX]
+    inp = [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": said}]}] if said else []
+    out: list[dict] = []
+    for n, i in enumerate(turn.get("output") or []):
+        if not isinstance(i, dict):
+            continue
+        kind = i.get("type")
+        if kind == "message":
+            text = _realtime_said(i.get("content"), ("output_text", "text"))
+            if text:
+                out.append({"id": f"msg_{rid.removeprefix('resp_')}_{n}", "type": "message", "status": "completed",
+                            "role": "assistant", "content": [{"type": "output_text", "text": text, "annotations": []}]})
+        elif kind == "function_call":
+            args = i.get("arguments")
+            out.append({"type": "function_call", "call_id": str(i.get("call_id") or "")[:200], "name": str(i.get("name") or "")[:200],
+                        "arguments": (args if isinstance(args, str) else json.dumps(args, default=str))[:_REALTIME_TEXT_MAX]})
+        elif kind == "function_call_output":
+            ans = i.get("output")
+            out.append({"type": "function_call_output", "call_id": str(i.get("call_id") or "")[:200],
+                        "output": (ans if isinstance(ans, str) else json.dumps(ans, default=str))[:_REALTIME_TEXT_MAX]})
+    return inp, out
+
+
+async def _realtime_turns(sid: str, rec: dict, responses: list[dict]) -> None:
+    """A relayed call's turns as its session's response records, oldest first, so the call reads in the
+    session's conversation as a text task does (who said what, and which tools ran). Each turn gets an id of
+    this gateway's own and is chained to the one before; the harness's id for it is kept in its metadata. A
+    turn with nothing said and nothing called is not a turn of the conversation. Raises when a record cannot
+    be written: the plane logs it, and the call stays ended and metered."""
+    org, member, model = str(rec.get("tenant") or ""), str(rec.get("member_id") or ""), str(rec.get("model") or "")
+    at, prev = float(rec.get("created_at") or time.time()), None
+    for turn in (responses or [])[:_REALTIME_TURNS_MAX]:
+        if not isinstance(turn, dict):
+            continue
+        rid = _rid("resp")
+        inp, out = _realtime_turn_items(turn, rid)
+        if not inp and not out:
+            continue
+        try:
+            born = float(turn.get("created_at") or 0)
+        except (TypeError, ValueError):
+            born = 0.0
+        at = max(born, at + 0.001)                      # in the order they were said, whatever the harness's clock says
+        usage = turn.get("usage") if isinstance(turn.get("usage"), dict) else None
+        # a turn cut off by the caller or by the hang-up is cancelled, as the harness says; one it never closed too
+        status = _REALTIME_TURN_STATUS.get(str(turn.get("status") or ""), "cancelled")
+        stored = {"id": rid, "object": "response", "created_at": int(at), "status": status, "error": None,
+                  "served_model": model or None, "reasoning": None, "incomplete_details": None,
+                  "previous_response_id": prev, "model": model, "store": True, "output": out,
+                  # the provider's own count for the turn, or none: never a zero it did not report
+                  "usage": ({k: int(usage.get(k) or 0) for k in ("input_tokens", "output_tokens", "total_tokens")}
+                            if usage else None),
+                  "metadata": {"session_id": sid, "realtime": True, "realtime_turn": str(turn.get("id") or "")[:80]},
+                  "_session_id": sid, "_org": org, "_member": member, "_input": inp, "_backend": realtime_plane.KIND,
+                  "_realtime": True, "_created_ms": int(at * 1000)}
+        _resp_cache_forget(rid)
+        if not await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB):
+            raise RuntimeError("a turn's record was refused")
+        await _vg_upsert("HarnessResponse", rid, {"org": org, "session_id": sid, "previous_response_id": prev or "",
+                                                  "status": status, "created_at": str(at), "store": "1"}, raise_on_fail=True)
+        prev = rid
+
+
+_REALTIME_AZURE = realtime_plane.AzureRealtime(lambda: _integrations_doc(), sign_in=lambda conn: _entra_token(conn))
+if realtime_plane.PROVIDER not in ("azure", "harness"):
+    print(f"[realtime] HR_REALTIME_PROVIDER is {realtime_plane.PROVIDER!r}, which is neither azure nor harness: "
+          "calls run on azure", flush=True)
+REALTIME = realtime_plane.Service(
+    realtime_plane.HarnessRealtime(_REALTIME_AZURE, key=lambda: os.environ.get("HR_REALTIME_HARNESS_KEY", ""),
+                                   upstream=lambda sid: _realtime_upstream_of(sid))
+    if realtime_plane.PROVIDER == "harness" else _REALTIME_AZURE,
+    realtime_plane.Ports(
+        plugs=lambda *a: _realtime_plugs(*a), put=lambda *a: _realtime_put(*a), get=lambda *a: _vertex_get(*a),
+        card=lambda *a: _realtime_card(*a), prefix=lambda org, sid, created: f"{org}/{_inv_ts(created)}_{sid}",
+        reach=lambda *a: _realtime_reach(*a), usage=lambda *a, **k: _report_usage(*a, **k),
+        lock=lambda *a: _realtime_lock(*a), unlock=lambda *a: _realtime_unlock(*a),
+        live=lambda: BACKING.graph.find("HarnessSession", {"kind": realtime_plane.KIND, "rt_open": "1"}),
+        servers=lambda *a: _realtime_servers(*a), turns=lambda *a: _realtime_turns(*a)))
+
+
+async def _realtime_caller(request: Request) -> dict:
+    """The caller of a voice call (_principal, as a turn's), on an instance that serves them."""
+    p = await _principal(request)
+    if not p.get("org"):
+        raise HTTPException(400, "no org resolved for this principal")
+    if not realtime_plane.enabled():
+        raise uhp_error(403, "realtime_not_enabled", realtime_plane.NOT_OPEN)
+    return p
+
+
+@app.post("/v1/harnesses/{harness_id}/realtime/sessions", status_code=201, include_in_schema=False)
+async def realtime_session_create(harness_id: str, request: Request,
+                                  body: realtime_plane.SessionBody | None = None) -> dict:
+    """A voice call on a harness, checked as a turn on it is: the harness the caller's organization's, not
+    deleted, and in a workspace the caller reaches (_harness_in_reach, _turn_harness_owned). A built-in base
+    has no record, so no call."""
+    body = body or realtime_plane.SessionBody()
+    p = await _realtime_caller(request)
+    hv = await _harness_in_reach(p, harness_id)
+    _turn_harness_owned(p, hv)
+    return await REALTIME.create(p, harness_id, hv, body, acting_for=str(p.get("member") or "")[:200])
+
+
+@app.post("/v1/realtime/sessions/{sid}/tool-calls", include_in_schema=False)
+async def realtime_tool_call(sid: str, body: realtime_plane.ToolCallBody, request: Request) -> dict:
+    p = await _realtime_caller(request)
+    await _owned_session(request, sid)                     # the gateway's own rule for a session named by id
+    return await REALTIME.tool_call(p, sid, body)          # and the call's own checks: realtime_plane.Service._own
+
+
+@app.post("/v1/realtime/sessions/{sid}/end", include_in_schema=False)
+async def realtime_session_end(sid: str, request: Request) -> dict:
+    p = await _principal(request)        # no switch check: a call that started is always ended and metered
+    if not p.get("org"):
+        raise HTTPException(400, "no org resolved for this principal")
+    await _owned_session(request, sid)
+    return await REALTIME.end(p, sid)
+
+
+@app.post("/v1/realtime/upstream", include_in_schema=False)
+async def realtime_upstream(request: Request) -> dict:
+    """A provider credential for one connection of a relayed call, asked by the harness that carries it. The
+    caller is nobody's sign-in or API key: it is the holder of the token this gateway made for that one call
+    when it placed it (_mint_realtime_upstream), and the token names the call, so the path does not. No switch
+    check, as on the end: a call that started goes on."""
+    sid = _verify_realtime_upstream(_broker_token(request))
+    if not sid:
+        raise uhp_error(401, "invalid_credential", "The credential is not valid for a call.")
+    return await REALTIME.upstream(sid)
+
+
+@app.on_event("startup")
+async def _start_realtime_sweep() -> None:
+    if realtime_plane.enabled():
+        _spawn_forever("realtime-sweep", REALTIME.sweep_forever)
