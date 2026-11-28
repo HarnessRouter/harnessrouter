@@ -45,6 +45,7 @@ import sys
 import os
 import pathlib
 import shutil
+import signal
 import stat
 import subprocess
 import tarfile
@@ -70,6 +71,14 @@ TREE_MAX = 20_000                                                        # entri
 # and extraction stages under /tmp, which on a shared runner is every organization's disk.
 ARCHIVE_MAX_BYTES = int(os.environ.get("HR_ENV_ARCHIVE_MAX_BYTES", str(2 * 1024 ** 3)))   # unpacked bytes
 ARCHIVE_MAX_MEMBERS = int(os.environ.get("HR_ENV_ARCHIVE_MAX_MEMBERS", "100000"))          # entries
+# What one environment's source may hold in all, across every write, merge and import: each of those
+# is capped on its own, and without a total, repeated ones grow the source without limit.
+SOURCE_MAX_BYTES = int(os.environ.get("HR_ENV_SOURCE_MAX_BYTES", str(2 * 1024 ** 3)))     # file bytes
+SOURCE_MAX_ENTRIES = int(os.environ.get("HR_ENV_SOURCE_MAX_ENTRIES", "100000"))            # files + dirs
+# What a git import may download (its .git, under /tmp). The tree it checks out is one import, held
+# to ARCHIVE_MAX_BYTES and ARCHIVE_MAX_MEMBERS as an archive is.
+GIT_MAX_BYTES = int(os.environ.get("HR_ENV_GIT_MAX_BYTES", str(2 * 1024 ** 3)))
+GIT_TIMEOUT = 600                                                        # the whole git import, seconds
 # Dependency and cache directories never copied from the source into a build: the build installs
 # its own, from the manifests, in the image's own toolchain (a venv copied from a laptop is the
 # thing SPI-001 says not to trust).
@@ -349,6 +358,72 @@ def source_stat(env_id: str) -> dict:
     return {"count": n, "bytes": b}
 
 
+def _usage(root: pathlib.Path | str) -> tuple[int, int]:
+    """(entries, bytes) under root: every file, directory and other entry, and the bytes of the
+    regular files. Not tree(): that stops at TREE_MAX, and a quota must count everything. Links
+    are counted as entries and never followed."""
+    n = b = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        n += len(dirnames)
+        for f in filenames:
+            n += 1
+            try:
+                st = os.lstat(os.path.join(dirpath, f))
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                b += st.st_size
+    return n, b
+
+
+def _merged_usage(src: pathlib.Path, staged: str, replace: bool) -> tuple[int, int]:
+    """What the source holds once `staged` is copied in: the staged tree alone on a replace, else
+    the source plus every staged entry it does not have yet, with a file it does have counted at
+    its new size. A staged link is not counted: _copy_without_links leaves it behind."""
+    merge = not replace and src.is_dir()
+    n, b = _usage(src) if merge else (0, 0)
+    for dirpath, dirnames, filenames in os.walk(staged):
+        rel = os.path.relpath(dirpath, staged)
+        for name in dirnames:
+            if not os.path.islink(os.path.join(dirpath, name)) and not (merge and os.path.lexists(src / rel / name)):
+                n += 1
+        for name in filenames:
+            try:
+                st = os.lstat(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue                                  # a link, a fifo: left behind by the copy
+            try:
+                ost = os.lstat(src / rel / name) if merge else None
+            except OSError:
+                ost = None
+            if ost is None:
+                n, b = n + 1, b + st.st_size
+            else:
+                b += st.st_size - (ost.st_size if stat.S_ISREG(ost.st_mode) else 0)
+    return n, b
+
+
+def _check_quota(before: tuple[int, int], after: tuple[int, int]) -> None:
+    """413 when the change takes the source past a cap and grows it. A source that is already
+    past one (the cap was lowered) can still shrink and be overwritten; it only cannot grow."""
+    if after[1] > SOURCE_MAX_BYTES and after[1] > before[1]:
+        raise HTTPException(413, f"the environment's source would hold more than {SOURCE_MAX_BYTES} bytes")
+    if after[0] > SOURCE_MAX_ENTRIES and after[0] > before[0]:
+        raise HTTPException(413, f"the environment's source would hold more than {SOURCE_MAX_ENTRIES} entries")
+
+
+def _missing_dirs(src: pathlib.Path, p: pathlib.Path) -> int:
+    """How many directories from src down to p (p included) do not exist yet. p is resolved
+    (_safe_rel), so src is too: under a linked ENV_ROOT the two never compare equal otherwise."""
+    src, n = src.resolve(), 0
+    while p != src and p != p.parent and not os.path.lexists(p):
+        n += 1
+        p = p.parent
+    return n
+
+
 def read_file(env_id: str, rel: str) -> tuple[bytes, str]:
     p = _safe_rel(source_dir(env_id), rel)
     if not p.is_file():
@@ -357,11 +432,18 @@ def read_file(env_id: str, rel: str) -> tuple[bytes, str]:
 
 
 def write_file(env_id: str, rel: str, data: bytes) -> dict:
-    src = _source(env_id)
-    p = _safe_rel(src, rel)
-    if p.is_dir():
-        raise HTTPException(409, "a directory is at that path")
     with _source_lock(env_id):
+        src = _source(env_id)
+        p = _safe_rel(src, rel)
+        if p.is_dir():
+            raise HTTPException(409, "a directory is at that path")
+        before = _usage(src)
+        try:
+            ost = os.lstat(p)
+            n, old = before[0], (ost.st_size if stat.S_ISREG(ost.st_mode) else 0)
+        except OSError:
+            n, old = before[0] + 1 + _missing_dirs(src, p.parent), 0
+        _check_quota(before, (n, before[1] - old + len(data)))
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + ".hr-tmp")
         tmp.write_bytes(data)
@@ -370,9 +452,11 @@ def write_file(env_id: str, rel: str, data: bytes) -> dict:
 
 
 def make_dir(env_id: str, rel: str) -> dict:
-    src = _source(env_id)
-    p = _safe_rel(src, rel)
     with _source_lock(env_id):
+        src = _source(env_id)
+        p = _safe_rel(src, rel)
+        before = _usage(src)
+        _check_quota(before, (before[0] + _missing_dirs(src, p), before[1]))
         p.mkdir(parents=True, exist_ok=True)
     return {"path": rel.strip("/"), "dir": True}
 
@@ -546,6 +630,7 @@ def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dic
             raise
         with _source_lock(env_id):
             src = source_dir(env_id)
+            _check_quota(_usage(src), _merged_usage(src, str(stage), replace))
             if replace and src.exists():
                 shutil.rmtree(src)
             # Member counts come from extraction. _copy_without_links checks containment and skips links.
@@ -652,30 +737,172 @@ def _git_pin_args(url: str, pin: str) -> list[str]:
     return ["-c", f"core.sshCommand=ssh -o HostName={ip} -o HostKeyAlias={host}"]
 
 
+_GIT_POLL = 0.25   # seconds between two looks at a running clone's download
+
+
+def _git_step(cmd: list[str], env: dict, deadline: float, err_path: str, *, watch: str = "",
+              watch_max: int = 0) -> int:
+    """Run one git command in its own process group, stdout dropped and stderr to a file (a pipe
+    nobody reads fills and stalls git). With `watch`, the bytes under that directory are measured
+    every _GIT_POLL seconds and the group is killed past `watch_max`: git has no cap on what a
+    clone downloads (receive.maxInputSize is the server's, on a push). Past the deadline the group
+    is killed too. Whatever happens, the group is gone when this returns."""
+    with open(err_path, "wb") as err:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
+                                env=env, start_new_session=True)
+    try:
+        while True:
+            try:
+                code = proc.wait(timeout=_GIT_POLL)
+            except subprocess.TimeoutExpired:
+                code = None
+            # measured once more after it ends: a fast link finishes between two looks
+            if watch and _usage(watch)[1] > watch_max:
+                raise HTTPException(413, f"the repository is more than {watch_max} bytes to download")
+            if code is not None:
+                return code
+            if time.monotonic() > deadline:
+                raise HTTPException(504, "git clone did not finish in 10 minutes")
+    finally:
+        _kill_group(proc)
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Kill a git step still running, with every process it started (git-remote-https, index-pack,
+    ssh), and reap it. One that ended on its own is left: its group id may already be reused."""
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _git_err(err_path: str) -> str:
+    """The end of what git wrote to stderr: only the end is read, since a remote may send gigabytes."""
+    try:
+        with open(err_path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - 400))
+            return f.read(400).decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+
+
+def _repo_within_caps(entries: int, size: int) -> None:
+    if entries > ARCHIVE_MAX_MEMBERS:
+        raise HTTPException(413, f"the repository holds more than {ARCHIVE_MAX_MEMBERS} entries")
+    if size > ARCHIVE_MAX_BYTES:
+        raise HTTPException(413, f"the repository checks out to more than {ARCHIVE_MAX_BYTES} bytes")
+
+
+def _tree_within_caps(repo: str, env: dict, deadline: float) -> bool:
+    """Read the commit's tree as `git ls-tree` lists it, every entry with its blob's size, before
+    a single file is checked out, and refuse it past ARCHIVE_MAX_MEMBERS or ARCHIVE_MAX_BYTES as an
+    archive is. The listing is read as it comes and cut off at the cap: a tree that names one tree
+    ten times, ten levels deep, downloads in a few kilobytes and lists ten billion entries.
+    False for a repository with no commit, which has nothing to check out."""
+    try:
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "-q", "HEAD^{tree}"],
+                              capture_output=True, env=env, timeout=max(1.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "git clone did not finish in 10 minutes")
+    if head.returncode != 0:
+        return False
+    # Type and size only, never the path: a chain of 4,000 directories with long names makes every
+    # path tens of kilobytes, and listing them was gigabytes through this pipe for a small tree.
+    proc = subprocess.Popen(["git", "-C", repo, "ls-tree", "-r", "-t", "--full-tree",
+                             "--format=%(objecttype) %(objectsize)", "HEAD"],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            env=env, start_new_session=True)
+    entries = size = 0
+    rest = b""
+    try:
+        while chunk := proc.stdout.read1(64 * 1024):   # what is there now, not a full 64 KiB
+            records = (rest + chunk).split(b"\n")
+            rest = records.pop()
+            for rec in records:
+                kind, _, n = rec.partition(b" ")
+                entries += 1
+                if kind == b"blob" and n.isdigit():
+                    size += int(n)
+            _repo_within_caps(entries, size)
+            if time.monotonic() > deadline:
+                raise HTTPException(504, "git clone did not finish in 10 minutes")
+        try:
+            code = proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "git clone did not finish in 10 minutes")
+        if code != 0:
+            raise HTTPException(400, "git clone failed: the commit's tree could not be read")
+    finally:
+        _kill_group(proc)
+        proc.stdout.close()
+    return True
+
+
+# Every path checked out as the blob holds it: no filter (an LFS smudge would download again, past
+# every cap here), no end-of-line or working-tree-encoding conversion (UTF-16 doubles a file). The
+# repository's own .gitattributes cannot undo it: info/attributes is read after it and wins.
+_CHECKOUT_ATTRIBUTES = "* -text -eol -filter -ident -working-tree-encoding\n"
+
+
+def _fetch_repo(cmd: list[str], *, env: dict) -> None:
+    """Run a `git clone --no-checkout` command line (its last argument is the directory) and check
+    the tree out only once its entries and bytes are known to be within the caps. The download is
+    held to GIT_MAX_BYTES while it runs, and the whole of it to GIT_TIMEOUT."""
+    repo = cmd[-1]
+    # git's, curl's and ssh's own temporary files land in the directory being measured, as does
+    # stderr (a remote can send any amount of it), so all of it counts against GIT_MAX_BYTES
+    env = {**env, "TMPDIR": os.path.dirname(repo)}
+    deadline = time.monotonic() + GIT_TIMEOUT
+    err = os.path.join(os.path.dirname(repo), "git-stderr")
+    if _git_step(cmd, env, deadline, err, watch=os.path.dirname(repo), watch_max=GIT_MAX_BYTES) != 0:
+        raise HTTPException(400, f"git clone failed: {_git_err(err)}")
+    if not _tree_within_caps(repo, env, deadline):
+        return
+    info = pathlib.Path(repo, ".git", "info")
+    info.mkdir(parents=True, exist_ok=True)
+    (info / "attributes").write_text(_CHECKOUT_ATTRIBUTES)
+    checkout = ["git", "-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+                "-c", "submodule.recurse=false", "checkout", "--quiet", "--force", "HEAD"]
+    if _git_step(checkout, env, deadline, err) != 0:
+        raise HTTPException(400, f"git clone failed: {_git_err(err)}")
+
+
 def import_git(env_id: str, url: str, ref: str = "", *, replace: bool = False, pin: str = "") -> dict:
     """Clone a repository's tree (shallow, one ref) into the source, without its .git. As with an
     archive, only regular files and directories land: a link the repository commits is dropped and
     counted, never followed. The copy runs as root, and following a committed link (say, to
     /proc/self/environ) wrote what it pointed at into the source, where the files route reads it
     back (reported privately, GHSA-mw9j-m5jf-5r56). The clone runs with the environment a build's
-    commands get, without the runner's own secrets."""
+    commands get, without the runner's own secrets. What it downloads, the tree it checks out and
+    the source it leaves are each capped (_fetch_repo, _check_quota), and past any cap the source
+    is as it was."""
     if not str(url).startswith(("https://", "http://", "git@", "ssh://")):
         raise HTTPException(400, "git url must be https://, http://, ssh:// or git@")
     with tempfile.TemporaryDirectory(prefix="hr-env-git-") as tmp:
-        cmd = (["git"] + _git_pin_args(url, pin) + ["clone", "--depth", "1", "--quiet"]
+        # --no-tags: one loose ref file per tag on the commit, and a repository can carry a million.
+        # --template= and hooksPath: none of the host's hooks run on someone else's repository.
+        # unpackLimit=1: below 100 objects git runs unpack-objects, which holds each object in memory
+        # and writes nothing the watch can see until it ends (measured over smart HTTP, git 2.47);
+        # index-pack writes the pack as it arrives.
+        cmd = (["git"] + _git_pin_args(url, pin)
+               + ["clone", "--depth", "1", "--no-checkout", "--no-tags", "--template=", "--quiet",
+                  "--config", "core.hooksPath=/dev/null", "--config", "transfer.unpackLimit=1",
+                  "--config", "fetch.unpackLimit=1"]
                + (["--branch", ref] if ref else []) + [url, tmp + "/repo"])
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600,
-                           env={**_tool_env(), "GIT_TERMINAL_PROMPT": "0"})
-        except subprocess.CalledProcessError as e:
-            raise HTTPException(400, f"git clone failed: {(e.stderr or '')[-400:].strip()}")
-        except subprocess.TimeoutExpired:
-            raise HTTPException(504, "git clone did not finish in 10 minutes")
+        _fetch_repo(cmd, env={**_tool_env(), "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"})
         shutil.rmtree(tmp + "/repo/.git", ignore_errors=True)
+        # Checked again on disk, whatever git did: the listing is the plan, this is what landed.
+        _repo_within_caps(*_usage(tmp + "/repo"))
         # The clone ran outside the lock, into its own temporary directory, so a slow network never
         # holds up a build. Only swapping the source in needs ordering against a snapshot.
         with _source_lock(env_id):
             src = source_dir(env_id)
+            _check_quota(_usage(src), _merged_usage(src, tmp + "/repo", replace))
             if replace and src.exists():
                 shutil.rmtree(src)
             written, skipped = _copy_without_links(tmp + "/repo", _source(env_id))

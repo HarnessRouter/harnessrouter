@@ -409,7 +409,7 @@ def test_the_snapshot_holds_every_change_to_the_source_not_only_a_write(store, m
             class R:
                 returncode, stdout, stderr = 0, "", ""
             return R()
-        monkeypatch.setattr(E.subprocess, "run", no_clone)
+        monkeypatch.setattr(E, "_fetch_repo", no_clone)
 
     inside_copy, release, landed = threading.Event(), threading.Event(), threading.Event()
     real_copytree = E.shutil.copytree
@@ -770,7 +770,7 @@ def test_a_git_import_lands_files_and_directories_and_never_follows_a_link(store
         os.symlink(outside / "dir", repo / "src" / "linked-dir")
         os.symlink("README.md", repo / "readme-alias")
         return None
-    monkeypatch.setattr(E.subprocess, "run", fake_clone)
+    monkeypatch.setattr(E, "_fetch_repo", fake_clone)
     out = E.import_git("henv_g", "https://example.com/repo.git")
     assert out["written"] == 2 and out["skipped"] == 3, out
     files = {e["path"] for e in E.tree("henv_g") if not e["dir"]}
@@ -822,7 +822,7 @@ def test_a_pinned_git_clone_connects_to_the_address_the_gateway_classified(store
         os.makedirs(cmd[-1], exist_ok=True)
         pathlib.Path(cmd[-1], "README.md").write_text("hi\n")
         return None
-    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    monkeypatch.setattr(E, "_fetch_repo", fake_run)
     E.import_git("henv_" + "c" * 32, "https://git.example/team/repo.git", pin="git.example:443:140.82.112.3")
     E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git", pin="git.example:22:140.82.112.3")
     E.import_git("henv_" + "c" * 32, "https://git.example/team/repo.git")
@@ -854,7 +854,7 @@ def test_pinned_git_clone_handles_ipv6_literal_hosts(store, monkeypatch):
         pathlib.Path(cmd[-1], "README.md").write_text("hi\n")
         return None
 
-    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    monkeypatch.setattr(E, "_fetch_repo", fake_run)
     eid = "henv_" + "e" * 32
     E.import_git(eid, "https://[2606:4700::6810:1]/org/repo.git",
                  pin="[2606:4700::6810:1]:443:2606:4700::6810:1")
@@ -1086,3 +1086,213 @@ def test_an_apt_epoch_is_a_spec_the_check_recommends_and_both_the_check_and_the_
     for ok in ("requests==2.31.0", "numpy==1.4.*", "numpy>=1.4", "lodash@^4.17.0", "lodash@4.x",
                "@types/node@24.1.0", "lodash@latest", "jq"):
         assert E.clean_specs([ok]) == [ok], ok
+
+
+# ── #761: a total for the source, and a cap on a git clone ─────────────────────────────────────────
+def test_the_source_has_a_total_and_a_change_past_it_leaves_the_source_as_it_was(store, tmp_path, monkeypatch):
+    """Each write, merge and import is capped on its own; without a total, repeated ones grow one
+    environment's source without limit. Every way in is checked before anything changes."""
+    monkeypatch.setattr(E, "SOURCE_MAX_BYTES", 100)
+    monkeypatch.setattr(E, "SOURCE_MAX_ENTRIES", 5)
+    E.write_file("henv_q", "a.txt", b"x" * 60)
+    with pytest.raises(HTTPException) as exc:
+        E.write_file("henv_q", "b.txt", b"x" * 41)                 # 101 bytes in all
+    assert exc.value.status_code == 413 and "more than 100 bytes" in exc.value.detail
+    assert E.source_stat("henv_q") == {"count": 1, "bytes": 60}
+    E.write_file("henv_q", "a.txt", b"x" * 100)                    # an overwrite counts its new size only
+    E.write_file("henv_q", "a.txt", b"x" * 10)
+    with pytest.raises(HTTPException) as exc:
+        E.make_dir("henv_q", "d1/d2/d3/d4/d5")                     # 1 + 5 entries
+    assert exc.value.status_code == 413 and "more than 5 entries" in exc.value.detail
+    with pytest.raises(HTTPException) as exc:
+        E.write_file("henv_q", "d1/d2/d3/d4/f.txt", b"x")          # the parents it makes count too
+    assert exc.value.status_code == 413 and "more than 5 entries" in exc.value.detail
+    assert {e["path"] for e in E.tree("henv_q")} == {"a.txt"}
+    E.write_file("henv_q", "d1/d2/f.txt", b"x")                    # a.txt, d1, d2, f.txt: 4 entries
+    E.make_dir("henv_q", "d1/d3")                                  # 5: exactly at the cap
+    assert E._usage(E.source_dir("henv_q")) == (5, 11)
+
+    def zip_of(files):
+        path = tmp_path / f"{len(list(tmp_path.iterdir()))}.zip"
+        with zipfile.ZipFile(path, "w") as zf:
+            for name, data in files.items():
+                zf.writestr(name, data)
+        return str(path)
+    before = {e["path"] for e in E.tree("henv_q")}
+    with pytest.raises(HTTPException) as exc:                      # a merge: one more entry is one too many
+        E.import_archive("henv_q", zip_of({"new.txt": b"x"}))
+    assert exc.value.status_code == 413 and {e["path"] for e in E.tree("henv_q")} == before
+    E.import_archive("henv_q", zip_of({"a.txt": b"y" * 50}))      # merged over an existing file: its new size
+    assert E._usage(E.source_dir("henv_q")) == (5, 51)
+    with pytest.raises(HTTPException) as exc:
+        E.import_archive("henv_q", zip_of({"a.txt": b"y" * 100}))  # 100 + 1: past the bytes
+    assert exc.value.status_code == 413 and E._usage(E.source_dir("henv_q")) == (5, 51)
+    with pytest.raises(HTTPException) as exc:
+        E.import_archive("henv_q", zip_of({"big.bin": b"z" * 101}), replace=True)
+    assert exc.value.status_code == 413 and E._usage(E.source_dir("henv_q")) == (5, 51)
+    out = E.import_archive("henv_q", zip_of({"big.bin": b"z" * 100}), replace=True)   # a replace counts only itself
+    assert out["count"] == 1 and out["bytes"] == 100
+
+    def fake_clone(cmd, **kw):
+        repo = pathlib.Path(cmd[-1])
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "pack").write_bytes(b"p" * 500)          # the clone's own data is not the source's
+        (repo / "one.txt").write_bytes(b"x")
+    monkeypatch.setattr(E, "_fetch_repo", fake_clone)
+    with pytest.raises(HTTPException) as exc:
+        E.import_git("henv_q", "https://example.com/repo.git")    # 100 + 1 bytes
+    assert exc.value.status_code == 413 and E.source_stat("henv_q") == {"count": 1, "bytes": 100}
+    assert E.import_git("henv_q", "https://example.com/repo.git", replace=True)["bytes"] == 1
+
+
+def test_a_source_already_past_the_total_can_shrink_but_not_grow(store, monkeypatch):
+    """A cap lowered under an environment that holds more must not lock it: its owner can still
+    overwrite, delete and replace their way back under it."""
+    E.write_file("henv_over", "a.bin", b"x" * 300)
+    E.write_file("henv_over", "b.bin", b"x" * 300)
+    monkeypatch.setattr(E, "SOURCE_MAX_BYTES", 100)
+    E.write_file("henv_over", "a.bin", b"x" * 200)                 # 500: still past, but less
+    with pytest.raises(HTTPException):
+        E.write_file("henv_over", "a.bin", b"x" * 201)
+    E.delete_path("henv_over", "b.bin")
+    assert E.source_stat("henv_over") == {"count": 1, "bytes": 200}
+
+
+def _git_repo(path, files: dict, attrs: str = ""):
+    """A real repository with one commit of `files`, served to the clone as file://."""
+    import subprocess
+    path.mkdir(parents=True)
+    run = lambda *a: subprocess.run(["git", "-C", str(path), *a], check=True, capture_output=True,
+                                    env={**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
+    run("init", "-q", "-b", "main")
+    if attrs:
+        (path / ".gitattributes").write_text(attrs)
+    for name, data in files.items():
+        (path / name).parent.mkdir(parents=True, exist_ok=True)
+        (path / name).write_bytes(data)
+    run("add", "-A")
+    run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one")
+    return "file://" + str(path)
+
+
+def _bomb_repo(path):
+    """A commit whose tree names one tree ten times, seven levels deep: a few kilobytes to download,
+    ten million files to check out."""
+    import subprocess
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    path.mkdir(parents=True)
+    git = lambda *a, inp=None: subprocess.run(["git", "-C", str(path), *a], check=True, capture_output=True,
+                                              input=inp, env=env).stdout.decode().strip()
+    git("init", "-q", "-b", "main")
+    blob = git("hash-object", "-w", "--stdin", inp=b"x")
+    tree = git("mktree", inp=f"100644 blob {blob}\tf\n".encode())
+    for _ in range(7):
+        tree = git("mktree", inp="".join(f"040000 tree {tree}\td{i}\n" for i in range(10)).encode())
+    commit = git("-c", "user.email=t@t", "-c", "user.name=t", "commit-tree", tree, "-m", "bomb")
+    git("update-ref", "refs/heads/main", commit)
+    return "file://" + str(path)
+
+
+@pytest.fixture
+def local_git(monkeypatch, tmp_path):
+    """import_git, cloning the file:// address given instead of the https one it is handed (the
+    route refuses file://), through the real _fetch_repo and the real git."""
+    import shutil as sh
+    if not sh.which("git"):
+        pytest.skip("git not installed")
+    real, steps, target = E._fetch_repo, [], {}
+    real_step = E._git_step
+
+    def step(cmd, *a, **kw):
+        steps.append(cmd)
+        return real_step(cmd, *a, **kw)
+    monkeypatch.setattr(E, "_git_step", step)
+    monkeypatch.setattr(E, "_fetch_repo", lambda cmd, **kw: real(cmd[:-2] + [target["url"], cmd[-1]], **kw))
+    stage_root = tmp_path / "tmp"
+    stage_root.mkdir()
+    import tempfile
+    monkeypatch.setattr(tempfile, "tempdir", str(stage_root))
+
+    def clone(env_id, url, **kw):
+        target["url"] = url
+        return E.import_git(env_id, "https://example.invalid/repo.git", **kw)
+    clone.steps, clone.stage_root = steps, stage_root
+    return clone
+
+
+def test_a_git_import_past_a_cap_is_refused_before_a_file_is_checked_out(store, tmp_path, monkeypatch, local_git):
+    """The tree's entries and bytes are read from git before anything is checked out, and the
+    download is measured while it runs. Past any cap: 413, nothing checked out, the temporary
+    directory gone and the source as it was."""
+    monkeypatch.setattr(E, "ARCHIVE_MAX_BYTES", 10_000)
+    monkeypatch.setattr(E, "ARCHIVE_MAX_MEMBERS", 5)
+    E.write_file("henv_gc", "keep.txt", b"keep\n")
+    big = _git_repo(tmp_path / "big", {"a.bin": os.urandom(10_001)})
+    many = _git_repo(tmp_path / "many", {f"f{i}.txt": b"x" for i in range(6)})
+    bomb = _bomb_repo(tmp_path / "bomb")
+    for url, says in ((big, "checks out to more than 10000 bytes"), (many, "more than 5 entries"),
+                      (bomb, "more than 5 entries")):
+        for replace in (True, False):
+            local_git.steps.clear()
+            started = time.monotonic()
+            with pytest.raises(HTTPException) as exc:
+                local_git("henv_gc", url, replace=replace)
+            assert exc.value.status_code == 413 and says in exc.value.detail, (url, exc.value.detail)
+            assert time.monotonic() - started < 30, url
+            assert not any("checkout" in c for c in local_git.steps), local_git.steps
+            assert E.source_stat("henv_gc") == {"count": 1, "bytes": 5}
+            assert list(local_git.stage_root.iterdir()) == []
+
+    monkeypatch.setattr(E, "ARCHIVE_MAX_BYTES", 10 ** 9)
+    monkeypatch.setattr(E, "GIT_MAX_BYTES", 5_000)                  # random bytes do not compress
+    with pytest.raises(HTTPException) as exc:
+        local_git("henv_gc", big)
+    assert exc.value.status_code == 413 and "more than 5000 bytes to download" in exc.value.detail
+    assert E.source_stat("henv_gc") == {"count": 1, "bytes": 5}
+    assert list(local_git.stage_root.iterdir()) == []
+
+
+def test_a_git_import_within_the_caps_lands_each_file_at_its_size_in_git(store, tmp_path, monkeypatch, local_git):
+    """The listing is the plan for what lands, so a checkout must write each blob as git holds it:
+    a working-tree-encoding or eol attribute in the repository's own .gitattributes changes nothing."""
+    monkeypatch.setattr(E, "ARCHIVE_MAX_MEMBERS", 5)                # .gitattributes, a.txt, b.crlf, sub, sub/c
+    url = _git_repo(tmp_path / "ok", {"a.txt": "hello\n".encode("utf-16-le"), "b.crlf": b"l1\nl2\n",
+                                      "sub/c.sh": b"echo hi\n"},
+                    attrs="*.txt working-tree-encoding=UTF-16LE\n*.crlf text eol=crlf\n")
+    out = local_git("henv_gok", url)
+    assert out["written"] == 4, out
+    src = E.source_dir("henv_gok")
+    assert (src / "b.crlf").read_bytes() == b"l1\nl2\n"
+    assert (src / "a.txt").read_bytes() == b"hello\n"               # as stored: UTF-8, not re-encoded
+    assert not (src / ".git").exists() and list(local_git.stage_root.iterdir()) == []
+    # no loose ref file per tag (a repository can tag one commit a million times), no host
+    # template hooks in the clone, no hooks at all at checkout
+    clone_cmd, checkout_cmd = local_git.steps
+    assert {"--no-tags", "--template=", "--no-checkout", "core.hooksPath=/dev/null",
+            "transfer.unpackLimit=1", "fetch.unpackLimit=1"} <= set(clone_cmd), clone_cmd
+    assert "core.hooksPath=/dev/null" in checkout_cmd and "core.fsmonitor=false" in checkout_cmd
+    empty = _git_repo(tmp_path / "empty", {})                     # one commit with an empty tree
+    assert local_git("henv_gempty", empty)["written"] == 0
+
+
+def test_a_git_import_of_a_tag_or_of_a_repository_with_no_commit(store, tmp_path, local_git):
+    """--no-tags skips the tags a clone would otherwise write, not the one asked for; and a repository
+    with no commit at all has no tree to list, so it lands nothing rather than failing the listing."""
+    import subprocess
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    url = _git_repo(tmp_path / "tagged", {"v.txt": b"one\n"})
+    repo = url.removeprefix("file://")
+    git = lambda *a: subprocess.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True, env=env)
+    git("tag", "-a", "v1", "-m", "first")
+    pathlib.Path(repo, "v.txt").write_bytes(b"two\n")
+    git("commit", "-q", "-am", "two")
+    local_git("henv_gtag", url, ref="v1")
+    assert E.read_file("henv_gtag", "v.txt")[0] == b"one\n"
+    assert list(local_git.stage_root.iterdir()) == []
+
+    unborn = tmp_path / "unborn"
+    subprocess.run(["git", "init", "-q", str(unborn)], check=True, capture_output=True, env=env)
+    local_git.steps.clear()
+    assert local_git("henv_gunborn", "file://" + str(unborn))["written"] == 0
+    assert not any("checkout" in c for c in local_git.steps)

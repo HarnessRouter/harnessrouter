@@ -1019,8 +1019,13 @@ Where it lives: `/data/environments/<id>/` on the data volume (`source/`, `versi
 `active`), with the `/env/<slug>` links remade after a restart. A build runs in the runner with the
 image's own `python3` and `npm` and the network, for at most `HR_ENV_BUILD_TIMEOUT` seconds
 (1800); an import may be `HR_ENV_IMPORT_MAX_BYTES` (512 MiB) and a file `HR_ENV_FILE_MAX_BYTES`
-(64 MiB). System packages are the image's (`ffmpeg`, LibreOffice, Playwright are there); a
-`setup.sh` runs with the build's privileges, so it is yours to trust. The API is under
+(64 MiB). An archive or a git repository may unpack to `HR_ENV_ARCHIVE_MAX_BYTES` (2 GiB) in
+`HR_ENV_ARCHIVE_MAX_MEMBERS` entries (100,000), and a git clone may download `HR_ENV_GIT_MAX_BYTES`
+(2 GiB). The source as a whole may hold `HR_ENV_SOURCE_MAX_BYTES` (2 GiB) in
+`HR_ENV_SOURCE_MAX_ENTRIES` entries (100,000), across every write and import; past it a change is
+refused and the source stays as it was. While a git import checks out, its download and its tree are
+both in `/tmp`: up to `HR_ENV_GIT_MAX_BYTES` plus `HR_ENV_ARCHIVE_MAX_BYTES` (4 GiB) per import.
+System packages are the image's (`ffmpeg`, LibreOffice, Playwright are there); a `setup.sh` runs with the build's privileges, so it is yours to trust. The API is under
 `/v1/environments`, in the [API reference](#using-the-api) and in the
 [Environments chapter](../protocol/versions/2026-09-28/environments.md) of the protocol.
 
