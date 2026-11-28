@@ -180,6 +180,27 @@ def _need(args: dict, key: str):
     return v
 
 
+def _whole(args: dict, key: str, default=None) -> int:
+    v = args.get(key)
+    if v is None or (isinstance(v, str) and not v.strip()):
+        if default is not None:
+            return default
+        raise PlugToolError(f"{key} is required")
+    if isinstance(v, bool):
+        raise PlugToolError(f"{key} must be a whole number")
+    if isinstance(v, int):
+        whole = v
+    elif isinstance(v, float) and v.is_integer():
+        whole = int(v)
+    elif isinstance(v, str) and re.fullmatch(r"[+-]?[0-9]{1,20}", v.strip()):
+        whole = int(v)
+    else:
+        raise PlugToolError(f"{key} must be a whole number")
+    if whole == 0 and default is not None:
+        return default
+    return whole
+
+
 # ── Microsoft 365: the organization's own Entra application, as the person or as the application ──
 # The workspace registers ITS OWN Microsoft Entra application (directory id, application id, client
 # secret). Two identities, chosen on the record (`config.mode`):
@@ -364,7 +385,7 @@ async def _(c, f, cfg, a):
        _obj({"query": _s("A name, part of a name, or an address"), "top": _i("How many, at most 50")}, ("query",)))
 async def _(c, f, cfg, a):
     q = str(_need(a, "query")).replace('"', "")
-    top = min(int(a.get("top") or 10), 50)
+    top = min(_whole(a, "top", 10), 50)
     d = await _graph(c, f, cfg, "GET", "/users",
                      params={"$search": f'"displayName:{q}" OR "mail:{q}" OR "userPrincipalName:{q}"',
                              "$select": "id,displayName,userPrincipalName,mail,jobTitle,department", "$top": top},
@@ -379,7 +400,7 @@ async def _(c, f, cfg, a):
 async def _(c, f, cfg, a):
     q = str(a.get("query") or "*").replace("'", "")
     d = await _graph(c, f, cfg, "GET", "/sites", params={"search": q, "$select": "id,name,displayName,webUrl",
-                                                           "$top": min(int(a.get("top") or 25), 100)})
+                                                           "$top": min(_whole(a, "top", 25), 100)})
     return [{"site": _site_ref(s), **_pick(s, ("name", "displayName", "webUrl", "id"))} for s in d.get("value") or []]
 
 
@@ -393,7 +414,7 @@ async def _(c, f, cfg, a):
     path = _m365_path(a)
     url = f"{root}/root/children" if not path else f"{root}/root:/{path}:/children"
     d = await _graph(c, f, cfg, "GET", url, params={"$select": "name,id,size,lastModifiedDateTime,webUrl,folder,file,parentReference",
-                                                    "$top": min(int(a.get("top") or 50), 200)})
+                                                    "$top": min(_whole(a, "top", 50), 200)})
     return {"resource": where, "path": "/" + path, "items": [_item_out(x) for x in d.get("value") or []]}
 
 
@@ -405,7 +426,7 @@ async def _(c, f, cfg, a):
     root, where = _m365_drive(cfg, a)
     q = str(_need(a, "query")).replace("'", "''")
     d = await _graph(c, f, cfg, "GET", f"{root}/root/search(q='{q}')",
-                     params={"$select": "name,id,size,lastModifiedDateTime,webUrl,folder,file,parentReference", "$top": min(int(a.get("top") or 25), 100)})
+                     params={"$select": "name,id,size,lastModifiedDateTime,webUrl,folder,file,parentReference", "$top": min(_whole(a, "top", 25), 100)})
     return {"resource": where, "query": a.get("query"), "items": [_item_out(x) for x in d.get("value") or []]}
 
 
@@ -419,6 +440,7 @@ async def _(c, f, cfg, a):
     path = _m365_path(a)
     if not path:
         raise PlugToolError("path names the file to read.")
+    cap = max(1, min(_whole(a, "max_chars", 20_000), M365_MAX_CHARS))
     meta = await _graph(c, f, cfg, "GET", f"{root}/root:/{path}", params={"$select": "name,id,size,lastModifiedDateTime,webUrl,file,folder"})
     if "folder" in meta:
         raise PlugToolError(f"{path} is a folder; list_files reads its entries.")
@@ -429,7 +451,6 @@ async def _(c, f, cfg, a):
     if not texty:
         out["note"] = "Not a text file: its bytes are not read here. The person can open it at webUrl."
         return out
-    cap = max(1, min(int(a.get("max_chars") or 20_000), M365_MAX_CHARS))
     r = await _graph(c, f, cfg, "GET", f"{root}/root:/{path}:/content", raw=True)
     text = r.content.decode("utf-8", "replace")
     out["content"] = text[:cap]
@@ -454,7 +475,7 @@ def _addr(x) -> str:
 async def _(c, f, cfg, a):
     prefix, who = _m365_person(cfg, a)
     folder = str(a.get("folder") or "inbox").strip()
-    params = {"$select": "id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink", "$top": min(int(a.get("top") or 20), 50)}
+    params = {"$select": "id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink", "$top": min(_whole(a, "top", 20), 50)}
     if a.get("search"):
         params["$search"] = '"' + str(a["search"]).replace('"', "") + '"'
     else:
@@ -488,7 +509,7 @@ async def _(c, f, cfg, a):
     d = await _graph(c, f, cfg, "GET", f"{prefix}/calendarView",
                      params={"startDateTime": str(_need(a, "start")), "endDateTime": str(_need(a, "end")),
                              "$select": "id,subject,start,end,location,organizer,attendees,isAllDay,webLink",
-                             "$orderby": "start/dateTime", "$top": min(int(a.get("top") or 50), 100)})
+                             "$orderby": "start/dateTime", "$top": min(_whole(a, "top", 50), 100)})
     out = []
     for e in d.get("value") or []:
         out.append({**_pick(e, ("id", "subject", "isAllDay", "webLink")),
@@ -602,7 +623,7 @@ async def _(c, f, cfg, a):
              "per_page": _i("How many, at most 100")}))
 async def _(c, f, cfg, a):
     params = {k: a[k] for k in ("sha", "path") if a.get(k)}
-    params["per_page"] = min(int(a.get("per_page") or 30), 100)
+    params["per_page"] = min(_whole(a, "per_page", 30), 100)
     return [_commit_out(x) for x in await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/commits", params=params)]
 
 
@@ -625,20 +646,20 @@ async def _(c, f, cfg, a):
              "per_page": _i("How many, at most 100")}))
 async def _(c, f, cfg, a):
     params = {k: a[k] for k in ("state", "labels") if a.get(k)}
-    params["per_page"] = min(int(a.get("per_page") or 30), 100)
+    params["per_page"] = min(_whole(a, "per_page", 30), 100)
     d = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/issues", params=params)
     return [_issue_out(x) for x in d if "pull_request" not in x]
 
 
 @_tool("github", "get_issue", "read", "One issue.", _obj({"number": _i("Issue number")}, ("number",)))
 async def _(c, f, cfg, a):
-    return _issue_out(await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/issues/{int(_need(a, 'number'))}"))
+    return _issue_out(await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/issues/{_whole(a, 'number')}"))
 
 
 @_tool("github", "get_issue_comments", "read", "Comments on an issue or pull request.",
        _obj({"number": _i("Issue or pull request number")}, ("number",)))
 async def _(c, f, cfg, a):
-    d = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/issues/{int(_need(a, 'number'))}/comments", params={"per_page": 100})
+    d = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/issues/{_whole(a, 'number')}/comments", params={"per_page": 100})
     return [{**_pick(x, ("id", "body", "created_at", "html_url")), "user": _user(x)} for x in d]
 
 
@@ -652,26 +673,26 @@ async def _(c, f, cfg, a):
 @_tool("github", "list_pull_requests", "read", "Pull requests of the repository.",
        _obj({"state": _s("open, closed or all", enum=["open", "closed", "all"]), "per_page": _i("How many, at most 100")}))
 async def _(c, f, cfg, a):
-    params = {"state": a.get("state") or "open", "per_page": min(int(a.get("per_page") or 30), 100)}
+    params = {"state": a.get("state") or "open", "per_page": min(_whole(a, "per_page", 30), 100)}
     return [_pull_out(x) for x in await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/pulls", params=params)]
 
 
 @_tool("github", "get_pull_request", "read", "One pull request.", _obj({"number": _i("Pull request number")}, ("number",)))
 async def _(c, f, cfg, a):
-    return _pull_out(await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/pulls/{int(_need(a, 'number'))}"))
+    return _pull_out(await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/pulls/{_whole(a, 'number')}"))
 
 
 @_tool("github", "get_pull_request_files", "read", "Files a pull request changes.",
        _obj({"number": _i("Pull request number")}, ("number",)))
 async def _(c, f, cfg, a):
-    d = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/pulls/{int(_need(a, 'number'))}/files", params={"per_page": 100})
+    d = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/pulls/{_whole(a, 'number')}/files", params={"per_page": 100})
     return [_pick(x, ("filename", "status", "additions", "deletions", "patch")) for x in d]
 
 
 @_tool("github", "get_pull_request_diff", "read", "The unified diff of a pull request.",
        _obj({"number": _i("Pull request number")}, ("number",)))
 async def _(c, f, cfg, a):
-    return await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/pulls/{int(_need(a, 'number'))}",
+    return await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/pulls/{_whole(a, 'number')}",
                      accept="application/vnd.github.diff", text=True)
 
 
@@ -685,7 +706,7 @@ async def _(c, f, cfg, a):
        _obj({"workflow_id": _s("Workflow id or file name (ci.yml); all workflows when omitted"),
              "branch": _s("Only runs on this branch"), "per_page": _i("How many, at most 100")}))
 async def _(c, f, cfg, a):
-    params = {"per_page": min(int(a.get("per_page") or 20), 100)}
+    params = {"per_page": min(_whole(a, "per_page", 20), 100)}
     if a.get("branch"):
         params["branch"] = a["branch"]
     path = (f"/repos/{_repo(cfg, a)}/actions/workflows/{a['workflow_id']}/runs" if a.get("workflow_id")
@@ -697,7 +718,7 @@ async def _(c, f, cfg, a):
 
 @_tool("github", "get_workflow_run", "read", "One workflow run with its jobs.", _obj({"run_id": _i("Run id")}, ("run_id",)))
 async def _(c, f, cfg, a):
-    rid = int(_need(a, "run_id"))
+    rid = _whole(a, "run_id")
     d = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/actions/runs/{rid}")
     jobs = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/actions/runs/{rid}/jobs")
     return {**_pick(d, ("id", "name", "head_branch", "head_sha", "status", "conclusion", "html_url", "created_at", "updated_at")),
@@ -706,7 +727,7 @@ async def _(c, f, cfg, a):
 
 @_tool("github", "get_job_logs", "read", "The log of one workflow job (the tail, when long).", _obj({"job_id": _i("Job id")}, ("job_id",)))
 async def _(c, f, cfg, a):
-    text = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/actions/jobs/{int(_need(a, 'job_id'))}/logs", accept="*/*", text=True)
+    text = await _gh(c, f, "GET", f"/repos/{_repo(cfg, a)}/actions/jobs/{_whole(a, 'job_id')}/logs", accept="*/*", text=True)
     return text if len(text) <= 60_000 else "…" + text[-60_000:]
 
 
@@ -796,13 +817,13 @@ async def _(c, f, cfg, a):
              "labels": {"type": "array", "items": {"type": "string"}, "description": "Label names (replaces the set)"}}, ("number",)))
 async def _(c, f, cfg, a):
     body = {k: a[k] for k in ("title", "body", "state", "labels") if a.get(k) is not None}
-    return _issue_out(await _gh(c, f, "PATCH", f"/repos/{_repo(cfg, a)}/issues/{int(_need(a, 'number'))}", body=body))
+    return _issue_out(await _gh(c, f, "PATCH", f"/repos/{_repo(cfg, a)}/issues/{_whole(a, 'number')}", body=body))
 
 
 @_tool("github", "add_issue_comment", "write", "Comment on an issue or pull request.",
        _obj({"number": _i("Issue or pull request number"), "body": _s("Comment (markdown)")}, ("number", "body")))
 async def _(c, f, cfg, a):
-    d = await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/issues/{int(_need(a, 'number'))}/comments", body={"body": _need(a, "body")})
+    d = await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/issues/{_whole(a, 'number')}/comments", body={"body": _need(a, "body")})
     return {**_pick(d, ("id", "html_url", "created_at")), "user": _user(d)}
 
 
@@ -820,7 +841,7 @@ async def _(c, f, cfg, a):
              "state": _s("open or closed", enum=["open", "closed"]), "base": _s("New base branch")}, ("number",)))
 async def _(c, f, cfg, a):
     body = {k: a[k] for k in ("title", "body", "state", "base") if a.get(k) is not None}
-    return _pull_out(await _gh(c, f, "PATCH", f"/repos/{_repo(cfg, a)}/pulls/{int(_need(a, 'number'))}", body=body))
+    return _pull_out(await _gh(c, f, "PATCH", f"/repos/{_repo(cfg, a)}/pulls/{_whole(a, 'number')}", body=body))
 
 
 @_tool("github", "create_pull_request_review", "write", "Review a pull request: approve, request changes or comment.",
@@ -828,7 +849,7 @@ async def _(c, f, cfg, a):
              "body": _s("Review text")}, ("number", "event")))
 async def _(c, f, cfg, a):
     body = {"event": _need(a, "event"), **({"body": a["body"]} if a.get("body") else {})}
-    d = await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/pulls/{int(_need(a, 'number'))}/reviews", body=body)
+    d = await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/pulls/{_whole(a, 'number')}/reviews", body=body)
     return {**_pick(d, ("id", "state", "html_url", "submitted_at")), "user": _user(d)}
 
 
@@ -837,7 +858,7 @@ async def _(c, f, cfg, a):
              "commit_title": _s("Title of the merge commit")}, ("number",)))
 async def _(c, f, cfg, a):
     body = {k: a[k] for k in ("merge_method", "commit_title") if a.get(k)}
-    d = await _gh(c, f, "PUT", f"/repos/{_repo(cfg, a)}/pulls/{int(_need(a, 'number'))}/merge", body=body)
+    d = await _gh(c, f, "PUT", f"/repos/{_repo(cfg, a)}/pulls/{_whole(a, 'number')}/merge", body=body)
     return _pick(d, ("sha", "merged", "message"))
 
 
@@ -852,14 +873,16 @@ async def _(c, f, cfg, a):
 
 @_tool("github", "rerun_workflow_run", "write", "Re-run a workflow run.", _obj({"run_id": _i("Run id")}, ("run_id",)))
 async def _(c, f, cfg, a):
-    await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/actions/runs/{int(_need(a, 'run_id'))}/rerun")
-    return {"rerun": True, "run_id": a["run_id"]}
+    rid = _whole(a, "run_id")
+    await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/actions/runs/{rid}/rerun")
+    return {"rerun": True, "run_id": rid}
 
 
 @_tool("github", "cancel_workflow_run", "write", "Cancel a workflow run.", _obj({"run_id": _i("Run id")}, ("run_id",)))
 async def _(c, f, cfg, a):
-    await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/actions/runs/{int(_need(a, 'run_id'))}/cancel")
-    return {"cancelled": True, "run_id": a["run_id"]}
+    rid = _whole(a, "run_id")
+    await _gh(c, f, "POST", f"/repos/{_repo(cfg, a)}/actions/runs/{rid}/cancel")
+    return {"cancelled": True, "run_id": rid}
 
 
 # ── Vercel: the company project, through a project-scoped token ───────────────────────────────
@@ -919,7 +942,7 @@ async def _(c, f, cfg, a):
        _obj({"limit": _i("How many, at most 100"), "state": _s("Only this state (READY, ERROR, BUILDING, QUEUED, CANCELED)"),
              "target": _s("production or preview", enum=["production", "preview"])}))
 async def _(c, f, cfg, a):
-    params = {"projectId": _project(cfg), "limit": min(int(a.get("limit") or 20), 100)}
+    params = {"projectId": _project(cfg), "limit": min(_whole(a, "limit", 20), 100)}
     for k in ("state", "target"):
         if a.get(k):
             params[k] = a[k]
@@ -936,7 +959,7 @@ async def _(c, f, cfg, a):
        _obj({"id": _s("Deployment id"), "limit": _i("How many lines, at most 500")}, ("id",)))
 async def _(c, f, cfg, a):
     d = await _vc(c, f, cfg, "GET", f"/v3/deployments/{_need(a, 'id')}/events",
-                  params={"limit": min(int(a.get("limit") or 200), 500), "builds": 1, "direction": "backward"})
+                  params={"limit": min(_whole(a, "limit", 200), 500), "builds": 1, "direction": "backward"})
     rows = d if isinstance(d, list) else d.get("events") or []
     lines = []
     for e in rows:
@@ -1114,7 +1137,7 @@ async def _(c, f, cfg, a):
              "order": _s("Column with direction, e.g. created_at.desc"), "limit": _i("At most this many rows (default 100)"),
              "offset": _i("Skip this many rows")}, ("table",)))
 async def _(c, f, cfg, a):
-    params = {**_filters(a), "limit": min(int(a.get("limit") or 100), 1000)}
+    params = {**_filters(a), "limit": min(_whole(a, "limit", 100), 1000)}
     for k in ("select", "order", "offset"):
         if a.get(k) not in (None, ""):
             params[k] = a[k]
