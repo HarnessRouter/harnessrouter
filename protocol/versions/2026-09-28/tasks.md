@@ -28,7 +28,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `input` | string \| item[] | yes | The work. A bare string is shorthand for one user message. See §2. |
 | `model` | string | no | Canonical model id. Omitted means the harness's default. |
-| `metadata` | object | no | Client metadata. `harness_id` selects the configured harness. See §1.2. |
+| `metadata` | object | no | Client metadata. `harness_id` selects the configured harness. See §1.2. `environment` names the environment this task reads, overriding the harness's; refused with `environment_not_found` or `environment_not_ready` before the task starts, and requires the `environments` capability ([Environments §5](environments.md#5-attaching-an-environment)). |
 | `stream` | boolean | no | `true` streams Server-Sent Events; default `false` returns one JSON object. |
 | `previous_response_id` | string | no | Continue the session that produced that response. See [Sessions](sessions.md). |
 | `instructions` | string | no | Additional system guidance for this task only. |
@@ -36,7 +36,6 @@ Content-Type: application/json
 | `max_output_tokens` | integer | no | Upper bound on generated tokens. |
 | `max_step` | integer | no | Upper bound on agent steps (tool-call rounds) for this task. |
 | `timeout_seconds` | integer | no | Wall-clock budget for this task. |
-| `environment` | string | no | The environment this task reads, overriding the harness's; refused with `environment_not_found` or `environment_not_ready` before the task starts. Requires the `environments` capability ([Environments §5](environments.md#5-attaching-an-environment)). |
 | `tools` | array | no | **Reserved and ignored.** Accepted, never acted on. See §1.4. |
 | `include` | string[] | no | **Reserved and ignored.** Accepted, never acted on. See §1.4. |
 | `background` | boolean | no | Return as soon as the task is accepted; follow it with the events endpoint. |
