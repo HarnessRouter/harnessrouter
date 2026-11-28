@@ -2048,9 +2048,54 @@ components:
       required: [name]
       description: |
         An Agent Plugins package installed into a harness: `plugin.json` at the root, MCP servers in
-        `mcp.json`, skills under `skills/`. A client writes `files` (or passes back `blob`) and
-        optionally `name` and `enabled`; the server derives `manifest`, `mcpServers`, `skills` and
-        `skipped` from the package on every write and ignores those fields on input. A refused
+        `mcp.json`, skills under `skills/`. Returned on reads (`Harness.plugins`,
+        `exportHarnessPlugin`) with server-derived `name`, `manifest`, `mcpServers`, `skills` and
+        `skipped`. Writes (`HarnessCreate.plugins`) use `PluginWrite`, where `name` is optional.
+      properties:
+        name:
+          type: string
+          pattern: '^(?!.*(--|\.\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
+          maxLength: 64
+          description: The manifest's `name`. Present on read; optional on write via `PluginWrite` (if sent it must equal the manifest's).
+        enabled:
+          type: boolean
+          default: true
+          description: false keeps the plugin installed and inert; nothing in it is materialised or contacted.
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/SkillFile' }
+          description: The package. Must contain `plugin.json` at its root.
+        blob:
+          type: string
+          description: |
+            Server-assigned handle for a package stored out of line. A client passes it back unchanged
+            and reads the files from the plugin files endpoint.
+        manifest: { $ref: '#/components/schemas/PluginManifest' }
+        mcpServers:
+          type: array
+          items: { $ref: '#/components/schemas/PluginMcpServer' }
+          description: |
+            Derived from `mcp.json`. Placeholders are reported unexpanded; `enabled` is always true,
+            the plugin's own `enabled` governs.
+        skills:
+          type: array
+          items: { $ref: '#/components/schemas/PluginSkill' }
+          description: Derived from `skills/`, one entry per immediate child directory with a SKILL.md.
+        skipped:
+          type: array
+          items: { $ref: '#/components/schemas/PluginSkipped' }
+          description: |
+            What the server found and could not load. Present on every plugin object the server
+            returns, empty when nothing was skipped.
+      additionalProperties: true
+
+    PluginWrite:
+      type: object
+      description: |
+        Write shape of `Plugin` in `HarnessCreate.plugins`: a client sends `files` (or passes back
+        a `blob` handle) and optionally `name` and `enabled`. If `name` is sent it must equal the
+        manifest's `name`; the server derives `name`, `manifest`, `mcpServers`, `skills` and
+        `skipped` from the package on every write and ignores derived fields on input. A refused
         package leaves the harness unchanged.
       properties:
         name:
@@ -2155,7 +2200,7 @@ components:
         skills: { type: array, items: { $ref: '#/components/schemas/Skill' } }
         plugins:
           type: array
-          items: { $ref: '#/components/schemas/Plugin' }
+          items: { $ref: '#/components/schemas/PluginWrite' }
           description: Requires the `plugins` capability. Each item needs `files` or `blob`.
         environment: { type: string, description: An environment id of the caller's scope, or empty. Requires the `environments` capability. }
         disabled_tools: { type: array, items: { type: string } }
