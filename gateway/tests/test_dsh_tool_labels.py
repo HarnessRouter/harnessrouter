@@ -93,7 +93,8 @@ def test_the_base_itself_stays_one_the_runner_asks():
 
 def test_every_other_base_is_labelled_by_its_own_word():
     for bid, b in gw._BASE_CATALOG.items():
-        if bid in ("dsh", "hermes"):          # each held to its runner by its own test (hermes: test_hermes_tool_labels.py)
+        # each held to its runner by its own test (hermes: test_hermes_tool_labels.py, agy: test_agy_catalog.py)
+        if bid in ("dsh", "hermes", "agy"):
             continue
         assert "hard_tools" not in b, bid
         assert {gw._tool_enforcement(b, n) for n, _ in b["tools"]} <= {b["tool_enforcement"]}, bid

@@ -9,6 +9,12 @@ test.each(['vibe', 'docker-agent', 'fast-agent', 'dcode'])('%s has a mark that e
   expect(fs.existsSync(path.join(__dirname, '..', '..', 'public', src))).toBe(true);
 });
 
+test('the Antigravity CLI draws Antigravity\'s own mark', () => {
+  const src = harnessLogoSrc('agy');
+  expect(src).toBe('/logos/antigravity.png');
+  expect(fs.existsSync(path.join(__dirname, '..', '..', 'public', src))).toBe(true);
+});
+
 test('a base with no mark draws none', () => {
   expect(harnessLogoSrc('no-such-base')).toBe('');
 });

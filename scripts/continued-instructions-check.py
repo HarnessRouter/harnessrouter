@@ -641,7 +641,9 @@ def main() -> int:
     code, b = call("GET", f"{GATEWAY}/v1/bases", local)
     items = b.get("data") or b.get("bases") or []
     only = {s for s in args.only.split(",") if s}
-    items = [x for x in items if (not only or x.get("id") in only) and x.get("status") != "not_installed"]
+    # a base no task can start on here (not installed, or waiting on its operator's switch) has nothing to check
+    items = [x for x in items if (not only or x.get("id") in only)
+             and x.get("status") not in ("not_installed", "unavailable")]
     code, integ = call("GET", f"{GATEWAY}/v1/admin/integrations", local)
     claimed = {str(k).lower() for k in (integ.get("model_map") or {})} if code == 200 else None
     if claimed is None:
