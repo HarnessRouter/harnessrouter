@@ -2055,7 +2055,7 @@ components:
       properties:
         name:
           type: string
-          pattern: '^(?!.*(--|\.\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
+          pattern: '^[a-z0-9]+(?:(?:\.(?:-\.)*-?|-(?:\.-)*\.?)[a-z0-9]+)*$'
           maxLength: 64
           description: The manifest's `name`. Optional on write; if sent it must equal the manifest's.
         enabled:
@@ -2104,7 +2104,7 @@ components:
           type: string
           minLength: 1
           maxLength: 64
-          pattern: '^(?!.*(--|\.\.))[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
+          pattern: '^[a-z0-9]+(?:(?:\.(?:-\.)*-?|-(?:\.-)*\.?)[a-z0-9]+)*$'
         version: { type: string }
         description: { type: string }
         author:
