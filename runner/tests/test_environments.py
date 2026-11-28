@@ -1268,7 +1268,31 @@ def test_a_git_import_within_the_caps_lands_each_file_at_its_size_in_git(store, 
     # no loose ref file per tag (a repository can tag one commit a million times), no host
     # template hooks in the clone, no hooks at all at checkout
     clone_cmd, checkout_cmd = local_git.steps
-    assert {"--no-tags", "--template=", "--no-checkout"} <= set(clone_cmd), clone_cmd
+    assert {"--no-tags", "--template=", "--no-checkout", "core.hooksPath=/dev/null",
+            "transfer.unpackLimit=1", "fetch.unpackLimit=1"} <= set(clone_cmd), clone_cmd
     assert "core.hooksPath=/dev/null" in checkout_cmd and "core.fsmonitor=false" in checkout_cmd
-    empty = _git_repo(tmp_path / "empty", {})
+    empty = _git_repo(tmp_path / "empty", {})                     # one commit with an empty tree
     assert local_git("henv_gempty", empty)["written"] == 0
+
+
+def test_a_git_import_of_a_tag_or_of_a_repository_with_no_commit(store, tmp_path, local_git):
+    """--no-tags skips the tags a clone would otherwise write, not the one asked for; and a repository
+    with no commit at all has no tree to list, so it lands nothing rather than failing the listing."""
+    import subprocess
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    url = _git_repo(tmp_path / "tagged", {"v.txt": b"one\n"})
+    repo = url.removeprefix("file://")
+    git = lambda *a: subprocess.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True, env=env)
+    git("tag", "-a", "v1", "-m", "first")
+    pathlib.Path(repo, "v.txt").write_bytes(b"two\n")
+    git("commit", "-q", "-am", "two")
+    local_git("henv_gtag", url, ref="v1")
+    assert E.read_file("henv_gtag", "v.txt")[0] == b"one\n"
+    assert list(local_git.stage_root.iterdir()) == []
+
+    unborn = tmp_path / "unborn"
+    subprocess.run(["git", "init", "-q", str(unborn)], check=True, capture_output=True, env=env)
+    local_git.steps.clear()
+    assert local_git("henv_gunborn", "file://" + str(unborn))["written"] == 0
+    assert not any("checkout" in c for c in local_git.steps)

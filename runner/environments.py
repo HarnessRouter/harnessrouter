@@ -415,9 +415,10 @@ def _check_quota(before: tuple[int, int], after: tuple[int, int]) -> None:
 
 
 def _missing_dirs(src: pathlib.Path, p: pathlib.Path) -> int:
-    """How many directories from src down to p (p included) do not exist yet."""
-    n = 0
-    while p != src and not os.path.lexists(p):
+    """How many directories from src down to p (p included) do not exist yet. p is resolved
+    (_safe_rel), so src is too: under a linked ENV_ROOT the two never compare equal otherwise."""
+    src, n = src.resolve(), 0
+    while p != src and p != p.parent and not os.path.lexists(p):
         n += 1
         p = p.parent
     return n
@@ -810,20 +811,23 @@ def _tree_within_caps(repo: str, env: dict, deadline: float) -> bool:
         raise HTTPException(504, "git clone did not finish in 10 minutes")
     if head.returncode != 0:
         return False
-    proc = subprocess.Popen(["git", "-C", repo, "ls-tree", "-r", "-t", "-l", "-z", "--full-tree", "HEAD"],
+    # Type and size only, never the path: a chain of 4,000 directories with long names makes every
+    # path tens of kilobytes, and listing them was gigabytes through this pipe for a small tree.
+    proc = subprocess.Popen(["git", "-C", repo, "ls-tree", "-r", "-t", "--full-tree",
+                             "--format=%(objecttype) %(objectsize)", "HEAD"],
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             env=env, start_new_session=True)
     entries = size = 0
     rest = b""
     try:
-        while chunk := proc.stdout.read(64 * 1024):
-            records = (rest + chunk).split(b"\0")
+        while chunk := proc.stdout.read1(64 * 1024):   # what is there now, not a full 64 KiB
+            records = (rest + chunk).split(b"\n")
             rest = records.pop()
             for rec in records:
-                meta = rec.split(b"\t", 1)[0].split()
+                kind, _, n = rec.partition(b" ")
                 entries += 1
-                if len(meta) == 4 and meta[1] == b"blob" and meta[3].isdigit():
-                    size += int(meta[3])
+                if kind == b"blob" and n.isdigit():
+                    size += int(n)
             _repo_within_caps(entries, size)
             if time.monotonic() > deadline:
                 raise HTTPException(504, "git clone did not finish in 10 minutes")
@@ -834,8 +838,8 @@ def _tree_within_caps(repo: str, env: dict, deadline: float) -> bool:
         if code != 0:
             raise HTTPException(400, "git clone failed: the commit's tree could not be read")
     finally:
-        proc.stdout.close()
         _kill_group(proc)
+        proc.stdout.close()
     return True
 
 
@@ -881,9 +885,14 @@ def import_git(env_id: str, url: str, ref: str = "", *, replace: bool = False, p
         raise HTTPException(400, "git url must be https://, http://, ssh:// or git@")
     with tempfile.TemporaryDirectory(prefix="hr-env-git-") as tmp:
         # --no-tags: one loose ref file per tag on the commit, and a repository can carry a million.
-        # --template=: none of the host's template hooks in a clone of someone else's repository.
+        # --template= and hooksPath: none of the host's hooks run on someone else's repository.
+        # unpackLimit=1: below 100 objects git runs unpack-objects, which holds each object in memory
+        # and writes nothing the watch can see until it ends (measured over smart HTTP, git 2.47);
+        # index-pack writes the pack as it arrives.
         cmd = (["git"] + _git_pin_args(url, pin)
-               + ["clone", "--depth", "1", "--no-checkout", "--no-tags", "--template=", "--quiet"]
+               + ["clone", "--depth", "1", "--no-checkout", "--no-tags", "--template=", "--quiet",
+                  "--config", "core.hooksPath=/dev/null", "--config", "transfer.unpackLimit=1",
+                  "--config", "fetch.unpackLimit=1"]
                + (["--branch", ref] if ref else []) + [url, tmp + "/repo"])
         _fetch_repo(cmd, env={**_tool_env(), "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"})
         shutil.rmtree(tmp + "/repo/.git", ignore_errors=True)
