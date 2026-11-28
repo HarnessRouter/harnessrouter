@@ -1222,7 +1222,13 @@ _NATIVE_ONLY_BACKENDS = {"gemini",
                          # qoder: the driver speaks Qoder's own control API (sessions, events, files),
                          # which the broker's model doors do not carry; the runner's loopback relay is
                          # its credential boundary, and that needs the connection's key on the box
-                         "qoder"}
+                         "qoder",
+                         # realtime: the model is reached over a WebSocket on the provider's own host,
+                         # opened with a client secret the provider mints for the connection's key
+                         # (runner/realtime_backend.py). The broker carries neither the mint nor a
+                         # socket, so a brokered connection (Microsoft Entra sign-in included) is
+                         # refused in words rather than dialled at the broker's address
+                         "realtime"}
 
 
 # ── A harness that drives another harness ─────────────────────────────────────────────────────
@@ -1711,6 +1717,10 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # qoder runs on Qoder's own hosted runtime and bills through Qoder's model access: a connection
     # carries a Qoder PAT or SAT and nothing else drives it, so the one pair is its own provider.
     ("qoder", "qoder"): "qoder",
+    # realtime speaks the OpenAI realtime wire over a WebSocket, and Azure OpenAI is the one provider
+    # it is measured on (Realtime Harness design §1.7, gpt-realtime-2.1). No aggregator carries that
+    # socket and no custom format names it, so this is its one row until another provider has a column.
+    ("azure-foundry", "realtime"): "azure",
     ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
@@ -7815,6 +7825,17 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
             word = "server" if len(names) == 1 else "servers"
             out.append(("text", f"\n\n_Note: the MCP {word} {quoted} could not be reached, so this "
                                 "reply ran without those tools._\n"))
+    elif t == "system" and ev.get("subtype") == "skills_unavailable":
+        # A base that cannot use a skill it was given (the realtime base has no shell, so a skill
+        # that runs scripts is not offered to the model) says which, and why, in the driver's own
+        # words: without this a person sees a skill enabled on the harness and never used.
+        left = [(str(s.get("name") or ""), str(s.get("reason") or "")) for s in ev.get("skills") or []
+                if isinstance(s, dict) and s.get("name")]
+        if left:
+            said = "; ".join(f'"{n}" ({why[:120]})' if why else f'"{n}"' for n, why in left[:12])
+            more = f", and {len(left) - 12} more" if len(left) > 12 else ""
+            word = "skill was" if len(left) == 1 else "skills were"
+            out.append(("text", f"\n\n_Note: the {word} not offered on this reply: {said}{more}._\n"))
     return out
 
 
@@ -9116,6 +9137,10 @@ _VENDOR_MODELS["openrouter"].update({"jev-1.13": "typesafe/jev-1.13", "jev-lates
 # the pinned id stays OpenRouter's alone and the preview stays TypeSafe's: a harness resolves the id
 # it names through the table of the connection that serves it, and nothing is guessed across them.
 _VENDOR_MODELS["typesafe"] = {"jev-latest": "jev-latest", "jev-preview": "jev-preview"}
+# A realtime speech model: it is reached over a WebSocket and answers no chat or Responses call, so
+# it is added to the one table whose provider the realtime base is wired to, after the tables above
+# were built, and only that base lists it in its catalog. On Azure the id is the deployment's name.
+_VENDOR_MODELS["azure-foundry"]["gpt-realtime-2.1"] = "gpt-realtime-2.1"
 # Qoder's own catalogue, as GET /api/v1/cloud/models lists it for the tenant: the ids are Qoder's
 # names and reach the Agent verbatim. `ultimate` is the one the public reference documents; the
 # column measures the tenant's list and this table grows from what ran.
@@ -9852,7 +9877,7 @@ _MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
 # catalog-wide rules for a measured base (gpt-6.1-sol leads the measured gpt-6 family wherever it is offered,
 # and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
 # place that exception is written; a base leaves the set when its live column is in.
-_STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
+_STILL_QUALIFYING: frozenset[str] = frozenset({"roder", "realtime"})
 
 # _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
 # on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
@@ -9886,6 +9911,11 @@ _MODEL_CATALOG["qoder"] = {"default": "ultimate",
                            # the five console scenarios. Qoder also lists cmodel (Cantus), not measured
                            # and not offered: one turn there costs about 16 credits
                            "models": list(_VENDOR_MODELS["qoder"])}
+# realtime: the one realtime speech model the Realtime Harness is measured on (its eleven realtime
+# checks, on Azure OpenAI). A chat model is not offered here: this base opens the provider's realtime
+# socket, which a chat model does not answer. Opt-in and still qualifying (_STILL_QUALIFYING): this
+# instance's own provider column has not run.
+_MODEL_CATALOG["realtime"] = {"default": "gpt-realtime-2.1", "models": ["gpt-realtime-2.1"]}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
@@ -21589,6 +21619,32 @@ _BASE_CATALOG: dict[str, dict] = {
         "environments": False,
         "remote": True,
     },
+    "realtime": {
+        "label": "Realtime Harness", "backend": "realtime", "status": "ready",
+        # Delivered as the realtime session's instructions on every turn, before the harness's own
+        # (runner/realtime_driver.py): this base reads no instruction file from the workspace.
+        "system_prompt": ("You are a realtime assistant. Answer briefly and plainly, in the language "
+                          "the person uses. Use a tool when the task needs one, and say what it "
+                          "returned."),
+        # Nothing is built into this base. A realtime model has no shell and no file tools: what it
+        # can call is the tools of the MCP servers the harness configures, read from those servers at
+        # the start of every turn. A tool disabled on the harness is withheld by OMISSION: it is left
+        # out of the session's tool list, so the model is never offered it (pinned by
+        # runner/tests/test_realtime_driver.py).
+        "tools": [],
+        "tool_enforcement": "hard",
+        # Skills are taken, the way the skill format gives for a model that reads no files: their
+        # names and descriptions ride in the session's instructions and a `load_skill` tool returns
+        # one's instructions when the model asks (runner/realtime_skills.py). A skill that carries
+        # scripts needs a shell, which this base does not have: the driver does not offer it and
+        # names it on the turn (system/skills_unavailable), so a built-in that runs scripts is sent
+        # like any other and left out there, in one place.
+        # No environment layer: a layer is files and binaries mounted for a shell, and nothing on this
+        # base reads them. A turn that names one is refused (_backend_takes_environments) rather than
+        # run without it. MCP servers are reached by URL; a plugin's stdio server cannot be started
+        # by this base and is named as unavailable on the turn.
+        "environments": False,
+    },
     "qwen": {
         "label": "Qwen Code", "backend": "qwen", "status": "ready",
         "system_prompt": ("You are Qwen Code, an autonomous coding agent. You work on a real git "
@@ -25368,8 +25424,9 @@ class SetupBuildBody(BaseModel):
 
 
 # A base Auto never picks although it takes skills: qoder runs on its own remote runtime, which mounts
-# no environment and reads none of this instance's keys.
-_SETUP_NOT_AUTO = frozenset({"qoder"})
+# no environment and reads none of this instance's keys; realtime is a speech model with no shell and
+# no workspace, where Auto builds an agent that writes files.
+_SETUP_NOT_AUTO = frozenset({"qoder", "realtime"})
 _SETUP_MEDIA_DECL = {"name": "media", "id": "mcp.media"}
 
 

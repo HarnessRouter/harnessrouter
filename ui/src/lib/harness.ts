@@ -24,7 +24,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | 'roder' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | 'roder' | 'realtime' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -230,6 +230,14 @@ export const OOB: OobHarness[] = [
     models: ['auto', 'ultimate', 'performance', 'smodel', 'qmodel_38max', 'qmodel', 'kmodel_latest', 'gmodel', 'gfmodel', 'dmodel', 'dfmodel', 'mmodel'], defaultModel: 'ultimate', moreModels: 0,
     systemPrompt: 'You are Qoder, an autonomous coding agent running in a cloud sandbox with shell and file access. Read, edit and run what the task needs, and deliver every file the user should receive with DeliverArtifacts.',
     tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ImageSearch', 'ImageGen', 'DeliverArtifacts'], skills: [] },
+  { id: 'realtime', name: 'Realtime Harness', version: '0.1.0.dev0', backend: 'realtime', status: 'ready',
+    // Placeholder only: the gateway's catalog wins once fetched. One realtime speech model, the one
+    // the Realtime Harness is measured on. There is no chat model on this base: it opens the
+    // provider's realtime socket, which a chat model does not answer. Nothing is built in, so the
+    // tools are the harness's MCP servers'.
+    models: ['gpt-realtime-2.1'], defaultModel: 'gpt-realtime-2.1', moreModels: 0,
+    systemPrompt: 'You are a realtime assistant. Answer briefly and plainly, in the language the person uses. Use a tool when the task needs one, and say what it returned.',
+    tools: [], skills: [] },
   { id: 'mimo', name: 'MiMo Code', version: 'v0.1.15', backend: 'mimo', status: 'ready',
     // Placeholder only, like every list above: the gateway's catalog wins once fetched. MiMo Code is
     // an opencode fork and reaches what opencode reaches, so the list is opencode's.
@@ -689,14 +697,15 @@ export async function testDatabase(engine: string, connectionString: string):
 // gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
 // next base that chooses its own name cannot drift the same way.
 //
-// systemone and qoder have no file at all: systemone reads no workspace and its instructions travel
-// in the job, and qoder's travel with the hosted session it drives, so the page calls the box
-// "Instructions".
+// systemone, qoder and realtime have no file at all: systemone and realtime read no workspace file
+// and their instructions travel in the job, and qoder's travel with the hosted session it drives,
+// so the page calls the box "Instructions".
 export const INSTRUCTION_FILE: Record<string, string> = {
   qwen: 'QWEN.md',
   gemini: 'GEMINI.md',
   systemone: 'Instructions',
   qoder: 'Instructions',
+  realtime: 'Instructions',
 };
 const AGENTS_MD_BASES = [
   'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',

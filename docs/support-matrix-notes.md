@@ -5551,6 +5551,33 @@ process suite covers the released binary's Responses and JSON-RPC contracts. Liv
 columns, custom-harness measurement, the family tour, browser/environment columns, and
 benchmarks have not been measured. No other harness's verified results apply to Roder.
 
+## The realtime base: a text turn on a realtime speech model, NO column yet
+
+The base is documented in [realtime.md](realtime.md). What exists is measured without a provider:
+the driver against a scripted provider on the OpenAI realtime wire, the relay route against a
+recording upstream, and the gateway's registration. No support-matrix column, custom-harness
+measurement, family tour or benchmark has run, and no other base's results apply to it.
+
+It is the second base that is not a coding agent (after `systemone`), and the first whose model is
+reached over a WebSocket. The matrix's five scenarios assume an agent that can write a file; on
+this base the artifact scenario has nothing to act through, so its column will be read the way
+systemone's is, under its own rules, and those rules are still to be written with the first run.
+
+Against the UHP conformance suite (111 checks), eight are expected not to apply, pending the
+maintainer's confirmation of each:
+
+| Check | Why it cannot apply on this base |
+|---|---|
+| X-07 | The model cannot write a file, so a session has no artifact to download |
+| B-01, B-02 | The branching fixture creates and replaces a file |
+| B-03, B-05, B-06 | The rule holds for a conversation without files, but the suite reaches it only through the file fixture |
+| T-13, T-14 | The server's `ask_user` tool is served to the claude base only |
+
+Known limits, each stated in realtime.md: an Azure connection with an API key only (a Microsoft
+Entra sign-in and an instance outside owner trust are refused before the turn starts); MCP servers
+by URL only; skills as loaded instructions, none that runs scripts; no environment layer. The served model is reported once the Realtime
+Harness pin includes its `session.created` model field; on the current pin a turn names none.
+
 ### Claude Code 2.1.311 (0.41.12)
 
 Claude Code 2.1.280 refused Claude Fable 5.2 ("version 2.1.290 or newer is required"), so the image moves to

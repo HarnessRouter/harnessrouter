@@ -45,8 +45,10 @@ def _bases_in_dimension() -> list:
 
 
 # The driver's own exclusion: a System One model chooses among offered actions and runs no shell, so
-# the fixture's script has nothing to run on it.
-EXCLUDED = {"systemone"}
+# the fixture's script has nothing to run on it. The realtime base the same way: a realtime model
+# has no shell, no file tools and no skills, so the fixture's script, files and skill have nothing
+# to act through; its tools are its MCP servers' alone.
+EXCLUDED = {"systemone", "realtime"}
 
 
 def _tool_ids(spec: dict) -> list:

@@ -93,6 +93,7 @@ import reasoning      # how much a model thinks on a turn: levels and what sets 
 import tracecontext   # the caller's W3C trace context: its checks and a child for the relay (#473)
 import ask_user_mcp   # the `ask_user` tool a base asks the person through, and what its arguments mean (#476)
 import roder_backend   # Roder's app-server base: its builder, tool table and stream (runner/roder_backend.py)
+import realtime_backend   # the realtime base: its builder, its one-call relay route and its session probe (runner/realtime_backend.py)
 
 app = FastAPI(title="harness-runner")
 
@@ -659,6 +660,9 @@ _SESSION_PRESENT = {
     # zeroclaw: the driver asks for `session/resume` on every turn that has an id and starts a new
     # session when the store says it is not there, so the store is asked here too.
     "zeroclaw": _zeroclaw_session_present,
+    # realtime: the session is one file in the workspace, which the driver replays to a new
+    # connection every turn; a turn that names a session whose file is gone starts from nothing.
+    "realtime": realtime_backend.session_present,
 }
 
 
@@ -2494,7 +2498,7 @@ def _compose_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_met
     instructions and its managed block (_write_agent_doc says what is in it); "" for a base that reads
     no workspace. Made from the turn's request alone, with nothing read from the workspace, so it is
     the owner's text whatever the agent has written there."""
-    if backend in ("systemone", "qoder"):
+    if backend in ("systemone", "qoder", "realtime"):
         return ""
     base = (agent_doc or "").strip()
     lines = [_AGENTS_BEGIN, "## Workspace", "",
@@ -7153,6 +7157,17 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if not realtime_backend.route_allows(flags, self.command, tail):
+            # A route registered for one call forwards that call and nothing else (the realtime
+            # route: the client-secret mint, _realtime_relay_route). Refused here, before the key is
+            # put on anything.
+            data = b'{"error": "this route does not forward that request"}'
+            self.send_response(403)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         drop = {"host", "content-length", "authorization", "x-goog-api-key", "x-api-key", "connection",
                 "accept-encoding", "transfer-encoding", "baggage"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
@@ -8187,6 +8202,34 @@ def _qoder_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
         tok = "hr-relay-" + uuid.uuid4().hex
         _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key,
                                         _turn_route({"passthrough": True, **_route_trace_flag()}))
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
+def _realtime_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
+    """Register one realtime turn's route; → (relay base, placeholder).
+
+    A realtime model is reached over a WebSocket, which this relay does not forward, so the route
+    carries the ONE call that needs the key: the provider's client-secret mint. The driver opens
+    the socket itself with the secret that call answers (runner/realtime_driver.py).
+
+    Pass-through, because the mint's answer is a session object whose `"model"` is the model that
+    was ASKED for: through the model-call taps it would be recorded as a served model the turn
+    never ran (the qoder route's reason, _passthrough). The driver reports the served model and
+    the usage from the socket instead.
+
+    `only` holds the route to that call. Its placeholder is in a sandbox's environment for the
+    length of a turn, and without the limit it would open everything the connection's key does on
+    that base: every model deployed there, files, batches. With it, a placeholder mints a session
+    secret and nothing else (realtime_backend.route_allows, asked in _forward)."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key,
+                                        _turn_route({"passthrough": True, "only": realtime_backend.ROUTE_ONLY,
+                                                     **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -16022,6 +16065,10 @@ BACKENDS = {
     # Roder runs its native app-server through a separate one-turn driver.
     "roder": {"providers": sorted(roder_backend.PROVIDERS), "default_model": roder_backend.DEFAULT_MODEL,
               "normalize": roder_backend.normalize},
+    # A text turn on a realtime speech model, run by the Realtime Harness in a one-turn driver that
+    # emits claude's stream-json itself, so its normaliser is the passthrough, as systemone's is.
+    "realtime": {"providers": sorted(realtime_backend.PROVIDERS), "default_model": realtime_backend.DEFAULT_MODEL,
+                 "normalize": _claude_passthrough},
     # jcode's NDJSON is its OWN schema (src/cli/commands.rs emit_ndjson_event), including a `tokens`
     # event the turn has to ACCUMULATE because its own `done.usage` holds only the last request's.
     "jcode": {"providers": sorted(JCODE_PROVIDERS), "default_model": JCODE_DEFAULT_MODEL,
@@ -18866,6 +18913,18 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                       mcp_servers=[{**s, "auth": None, "headers": _mcp_headers(s)}
                                                    for s in (req.mcp_servers or [])],
                                       tools_disabled=req.tools_disabled, thinking=_TURN_THINKING.get())
+        elif backend == "realtime":
+            model = model or realtime_backend.DEFAULT_MODEL
+            # The agent doc is the model's instructions and travels in the job: nothing on this box
+            # reads a workspace file for it (the systemone precedent).
+            cmd = realtime_backend.build(req.provider, auth, model, req.prompt, cwd, env,
+                                         relay=_realtime_relay_route, driver_cmd=_driver_cmd,
+                                         resume_session_id=req.resume_session_id,
+                                         mcp_servers=[{**s, "auth": None, "headers": _mcp_headers(s)}
+                                                      for s in (req.mcp_servers or [])],
+                                         tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                                         timeout_seconds=req.timeout_seconds, agent_doc=agent_doc,
+                                         partial=bool(req.partial_messages), skills=installed_skills)
         elif backend == "jcode":
             model = model or JCODE_DEFAULT_MODEL
             cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,

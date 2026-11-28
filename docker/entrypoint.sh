@@ -349,6 +349,9 @@ backend_bin() {
     # runner/qoder_driver.py on Qoder's SDK, in a venv of its own (install_qoder). The venv's
     # interpreter is what "installed" means here.
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
+    # realtime has no binary of its own either: the turn process is runner/realtime_driver.py on
+    # the Realtime Harness, in a venv of its own (install_realtime).
+    realtime) echo "$TOOLS/realtime-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
     roder)  echo "$TOOLS/bin/roder" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
@@ -448,7 +451,7 @@ install_base() {
 # can gain no privilege (--no-new-privs: no setuid program in the image changes its uid back).
 INSTALL_UID_BASE=19000
 # A new base goes at the END, so no base's uid moves.
-INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder "
+INSTALL_UID_ORDER=" claude codex hermes pi dsh opencode kilo qwen gemini cline omp goose kimi minimax grok aider openhands agentzero systemone cheetahclaws mimo jcode opensquilla nanobot zeroclaw qoder vibe docker-agent fast-agent dcode roder realtime "
 IU_UID=""; IU_HOME=""
 declare -A IU_HELD=()
 # Every directory the current install has filled, held or given back (a base can fill more than one:
@@ -1055,6 +1058,37 @@ have = systemone_harness.__version__
 if have != sys.argv[1]:
     print(f"systemone-harness {have} installed, {sys.argv[1]} pinned", file=sys.stderr); sys.exit(1)
 ' "$SYSTEMONE_PIN" || { rm -rf "$TOOLS/systemone-venv"; return 1; }
+}
+
+# The Realtime Harness (github.com/HarnessRouter/RealtimeHarness, Apache-2.0): a harness for
+# realtime speech models, on Pipecat (BSD-2-Clause). The realtime base runs one text turn of it per
+# process, runner/realtime_driver.py. OPT-IN: it is not in the default HR_BACKENDS above, because
+# its tree is Pipecat's (numpy, numba, onnxruntime among its 70 distributions) and an instance that
+# runs no realtime model should not carry it; add `realtime` to HR_BACKENDS to install it.
+# Its own venv, for the reason systemone has one and one more: its MCP SDK is a major version ahead
+# of the runner's. From docker/locks/realtime.lock.txt, rebuilt when the pin or the lock moves.
+# The project has no release yet, so the pin is a COMMIT of its main branch (the systemone
+# precedent: a commit cannot be moved), fetched as GitHub's source archive of it, whose sha256 the
+# lock holds. Two distributions of the lock are built here, by the base's install uid with
+# setuptools from build.lock.txt: that archive, and docopt (a dependency of Pipecat's num2words),
+# which publishes no wheel.
+REALTIME_REF="${HR_REALTIME_REF:-9749de1adff8e36529c6a24da28313ee73e8c481}"
+# HR_REALTIME_SPEC overrides where pip takes the package from (a mirror, a fork, a local tree
+# copied into a derived image), unlocked.
+REALTIME_SPEC="${HR_REALTIME_SPEC:-realtime-harness @ https://github.com/HarnessRouter/RealtimeHarness/archive/${REALTIME_REF}.tar.gz}"
+REALTIME_REQS=("$REALTIME_SPEC")
+install_realtime() {
+  # A failed install leaves NO venv behind: the executable is the definition of installed.
+  install_pinned_venv realtime "${HR_REALTIME_BASE_PYTHON:-python3}" "$TOOLS/realtime-venv" "realtime-harness,docopt" "${REALTIME_REQS[@]}"     || { rm -rf "$TOOLS/realtime-venv"; return 1; }
+  # Every name runner/realtime_driver.py takes from the package, and the two libraries a turn
+  # runs on: an install that cannot import them is a base that dies on its first turn.
+  iu "$TOOLS/realtime-venv/bin/python" -c '
+from realtime_harness.config import HarnessConfig, McpServer  # noqa: F401
+from realtime_harness.credentials import Connection  # noqa: F401
+from realtime_harness.textturn import Listener, TurnResult, run_text_turn  # noqa: F401
+from realtime_harness.tools import ToolExecutor  # noqa: F401
+import mcp, pipecat, websockets  # noqa: F401
+' || { rm -rf "$TOOLS/realtime-venv"; return 1; }
 }
 
 # Agent Zero, MIT (agent0ai/agent-zero), pinned to v2.13 — a FRAMEWORK, not a CLI.
@@ -2120,6 +2154,11 @@ install_backends() {
     install_base qoder "Qoder SDK" install_qoder || true
   fi
   [ -x "$TOOLS/qoder-venv/bin/python" ] && export HR_QODER_PYTHON="$TOOLS/qoder-venv/bin/python"
+  if wanted realtime && ! current realtime "$(pinned_ident realtime "${REALTIME_REQS[@]}")"; then
+    echo "[harnessrouter] installing the Realtime Harness ${REALTIME_REF:0:7} (Apache-2.0), ~540 MB…"
+    install_base realtime "Realtime Harness" install_realtime || true
+  fi
+  [ -x "$TOOLS/realtime-venv/bin/python" ] && export HR_REALTIME_PYTHON="$TOOLS/realtime-venv/bin/python"
   # The archive's digest and the lock its dependencies come from. The lock is used only when the
   # archive yields the requirements it was compiled from, which the pinned archive does (its digest
   # is checked first), so the pin and the default ipython are what decide it here.

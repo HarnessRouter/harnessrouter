@@ -1525,3 +1525,11 @@ Set `HR_BACKENDS=roder` for a Roder-only installation. Roder uses its native app
 and a Responses connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, or a custom
 endpoint with `api_format=responses`). See [Roder setup and verification](roder.md) for
 installation, session state, tool policy, MCP, and qualification limits.
+
+### Realtime Harness
+
+Add `realtime` to `HR_BACKENDS` to install the Realtime Harness, which runs a text turn on a
+realtime speech model. It is opt-in, and needs an Azure OpenAI connection with an API key. It is
+not a coding agent: its tools are the harness's MCP servers' and nothing else. See
+[Realtime Harness setup and verification](realtime.md) for connections, installation, sessions
+and what is not measured yet.
