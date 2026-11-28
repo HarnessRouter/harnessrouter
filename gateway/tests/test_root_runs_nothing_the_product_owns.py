@@ -42,6 +42,8 @@ def test_python_as_root_takes_no_module_from_its_directory():
             continue
         if line.lstrip().startswith("install_pinned_venv "):   # runs it as "$pv_py" -I, checked below
             continue
+        if stripped == 'antigravity) echo "$PY" ;;':      # backend_bin names the runner's interpreter; it runs nothing
+            continue
         assert '"$PY" -I ' in line, line
     for helper in ("lv_py", "uv_py"):
         assert f'"${helper}" -I -m venv' in EP, helper

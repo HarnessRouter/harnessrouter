@@ -277,7 +277,9 @@ different model fails rather than quietly succeeding.
 
 A remote runtime is a harness whose agent loop runs somewhere this runner does not spawn it: a
 hosted session reached over an API, with the turn process here an HTTP client to it. Qoder Cloud
-Agent (`qoder`, `runner/qoder_driver.py`) is the first. The registry entry declares it —
+Agent (`qoder`, `runner/qoder_driver.py`) is the first; Google's managed Antigravity agent
+(`antigravity`, `runner/antigravity_driver.py`) the second, on the standard library alone, with its key
+on a relay route that forwards that agent's calls only. The registry entry declares it —
 `BACKENDS[...]["remote"] = True` — and that flag is what the runner keys the differences below on,
 so the second one follows the same shape instead of rediscovering it. The per-turn contract does
 not change: one process per turn, `__hr_init`, one `{"m","p"}` line per event, `__hr_result`, and
