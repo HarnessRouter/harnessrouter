@@ -353,7 +353,7 @@ def test_hosted_git_import_round_trips_ipv6_literal_urls_through_runner(api, mon
         pathlib.Path(cmd[-1], "README.md").write_text("hi\n")
         return None
 
-    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    monkeypatch.setattr(E, "_fetch_repo", fake_run)   # the clone, the tree check and the checkout
     eid = api.post("/v1/environments", json={"name": "ipv6-git-env"}).json()["id"]
 
     r_https = api.post(f"/v1/environments/{eid}/import",
