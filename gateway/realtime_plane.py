@@ -518,8 +518,21 @@ class HarnessRealtime:
             await self._ask("POST", f"/v1/sessions/{urllib.parse.quote(rid)}/cancel")      # hangs up: the device's socket closes
 
     async def usage(self, ref: dict) -> Usage | None:
+        """What the call's turns used. Three cases, told apart on purpose:
+
+        - the harness's record of the call cannot be read: None, and the clock meters, so a call is never
+          free because a read failed;
+        - the record is read and holds no turn: nothing was said, the model generated nothing, and the call
+          is billed nothing. (The clock billed such a call its whole length, more than one in which people
+          talked: measured 2026-11-27, a silent minute $0.10 against a nine second exchange $0.0044.);
+        - the record holds turns: their tokens, or None when not one of them reported usage."""
         doc = await self._session(ref)
-        priced = tokens_usd((doc or {}).get("responses") or [])
+        if doc is None:
+            return None
+        turns = [r for r in doc.get("responses") or [] if isinstance(r, dict)]
+        if not turns and isinstance(doc.get("responses"), list):
+            return Usage(0.0, {"tokens": {}, "turns": 0})
+        priced = tokens_usd(turns)
         return Usage(priced[0], {"tokens": priced[1]}) if priced else None
 
     async def transcript(self, ref: dict) -> list[dict] | None:

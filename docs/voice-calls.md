@@ -260,6 +260,12 @@ out $64. Usage says how many input tokens were cached, not how many of those wer
 cached ones are counted against the text first. The figure is therefore never under what the
 provider charges for the same tokens, and can be over it. It is still capped by `max_cost_usd`.
 
+Three cases are told apart at the end of a relayed call. The harness's record holds turns: their
+tokens are billed. The record is read and holds no turn, because nobody spoke and the model
+generated nothing: the call is billed nothing. The record cannot be read, or no turn in it reported
+usage: the clock bills it, as a direct call, so a call is never free because a read failed. The line
+that logs a call's end says which (`billed_by=tokens` or `billed_by=clock`).
+
 **What was said.** When the call ends, each turn is written as one of the session's response
 records: the person's words, the model's, and each tool call with its answer. Audio is never kept.
 A turn the hang-up cut off reads as cancelled. A session that is being deleted has its call metered

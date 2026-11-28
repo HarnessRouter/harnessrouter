@@ -260,6 +260,40 @@ def test_a_call_whose_turns_report_no_usage_is_billed_by_the_clock(r):
     assert r.records[sid]["rt_billed_by"] == "clock" and len(r.kept) == 1
 
 
+def test_a_call_in_which_nothing_was_said_is_billed_nothing(r):
+    r.rth.turns = []
+    sid = r.create(max_minutes=1)["session_id"]
+    r.now[0] = T0 + 60
+    assert r.end(sid) == {"minutes": 1.0, "spend_usd": 0.0}                # not the clock's $0.10
+    rec = r.records[sid]
+    assert rec["rt_billed_by"] == "tokens" and rec["rt_turns"] == "0" and r.kept == []
+    assert [(u[1], u[2]) for u in r.posted] == [(rp.METRIC, 0.0)]
+
+
+def test_a_record_that_does_not_say_it_has_no_turns_is_not_read_as_a_silent_call(r):
+    class NoList(type(r.rth)):
+        def handle(self, req):
+            out = super().handle(req)
+            if req.method == "GET":
+                return httpx.Response(200, json={"id": "hsess_relay1", "status": "ended"})     # no `responses` at all
+            return out
+    r.rth.__class__ = NoList
+    sid = r.create()["session_id"]
+    r.now[0] = T0 + 60
+    assert r.end(sid) == {"minutes": 1.0, "spend_usd": 0.1} and r.records[sid]["rt_billed_by"] == "clock"
+
+
+def test_a_record_the_harness_will_not_give_is_not_read_as_a_silent_call(r):
+    class Gone(type(r.rth)):
+        def handle(self, req):
+            out = super().handle(req)
+            return httpx.Response(500, json={"error": {"code": "server_error"}}) if req.method == "GET" else out
+    r.rth.__class__ = Gone
+    sid = r.create()["session_id"]
+    r.now[0] = T0 + 60
+    assert r.end(sid) == {"minutes": 1.0, "spend_usd": 0.1} and r.records[sid]["rt_billed_by"] == "clock" and r.kept == []
+
+
 def test_a_harness_that_is_away_at_the_end_leaves_a_call_that_is_ended_and_billed_by_the_clock(r, capsys):
     sid = r.create()["session_id"]
     r.rth.down = True
