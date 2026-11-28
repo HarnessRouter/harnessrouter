@@ -1914,7 +1914,7 @@ components:
           type: string
           description: |
             The environment (`henv_`) this harness's tasks read, mounted read-only at its `mount`;
-            empty when none. A task may name another with its own `environment` field.
+            empty when none. A task may name another in `metadata.environment`.
         disabledTools: { type: array, items: { type: string } }
         maxStep: { type: [integer, 'null'] }
         timeoutSeconds: { type: [integer, 'null'] }

@@ -202,7 +202,7 @@
         },
         "environment": {
           "type": "string",
-          "description": "The environment (`henv_`) this harness's tasks read, mounted read-only at its `mount`;\nempty when none. A task may name another with its own `environment` field.\n"
+          "description": "The environment (`henv_`) this harness's tasks read, mounted read-only at its `mount`;\nempty when none. A task may name another in `metadata.environment`.\n"
         },
         "disabledTools": {
           "type": "array",
