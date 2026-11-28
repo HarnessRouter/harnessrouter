@@ -43,10 +43,29 @@ def rewrite_refs(node):
     return node
 
 
-def build() -> dict:
-    spec = yaml.safe_load(SRC.read_text())
+def find_null_keys(node, path: str = "") -> list[str]:
+    """Return paths of any mapping entry whose key or value is null.
+
+    An unquoted comma inside a YAML flow mapping (e.g. `{ type: string, description: a, b }`)
+    splits the scalar and leaves PyYAML with a stray `b: null` key.
+    """
+    hits: list[str] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            p = f"{path}.{k}" if path else str(k)
+            if k is None or v is None:
+                hits.append(p)
+            hits.extend(find_null_keys(v, p))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            hits.extend(find_null_keys(v, f"{path}[{i}]"))
+    return hits
+
+
+def build(src: pathlib.Path | None = None) -> dict:
+    spec = yaml.safe_load((src if src is not None else SRC).read_text())
     defs = rewrite_refs(spec["components"]["schemas"])
-    return {
+    doc = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": f"https://unifiedharnessprotocol.org/schema/uhp-{VERSION}.schema.json",
         "title": "Unified Harness Protocol",
@@ -56,10 +75,21 @@ def build() -> dict:
         ),
         "$defs": defs,
     }
+    null_keys = find_null_keys(doc)
+    if null_keys:
+        raise ValueError(
+            "null-valued key(s) in generated schema (likely an unquoted comma in a YAML flow mapping): "
+            + ", ".join(null_keys)
+        )
+    return doc
 
 
 def main() -> int:
-    doc = build()
+    try:
+        doc = build()
+    except ValueError as err:
+        print(str(err), file=sys.stderr)
+        return 1
     text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
     if "--check" in sys.argv:
         if not OUT.exists() or OUT.read_text() != text:

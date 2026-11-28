@@ -2128,7 +2128,7 @@ components:
       type: object
       required: [name]
       properties:
-        name: { type: string, description: The SKILL.md frontmatter name, equal to the directory name. }
+        name: { type: string, description: "The SKILL.md frontmatter name, equal to the directory name." }
         description: { type: string }
       additionalProperties: true
 
@@ -2157,7 +2157,7 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Plugin' }
           description: Requires the `plugins` capability. Each item needs `files` or `blob`.
-        environment: { type: string, description: An environment id of the caller's scope, or empty. Requires the `environments` capability. }
+        environment: { type: string, description: "An environment id of the caller's scope, or empty. Requires the `environments` capability." }
         disabled_tools: { type: array, items: { type: string } }
         max_step: { type: [integer, 'null'] }
         timeout_seconds: { type: [integer, 'null'] }
@@ -2249,7 +2249,7 @@ components:
             `ready` when this server can run a task on the base, `not_installed` when it does not
             hold it. A client treats any other value as not ready.
           examples: [ready, not_installed]
-        statusReason: { type: string, description: Why the base is not ready, in words. Present only when `status` is not `ready`. }
+        statusReason: { type: string, description: "Why the base is not ready, in words. Present only when `status` is not `ready`." }
         systemPrompt: { type: string, description: The base's own system prompt. }
         defaultModel: { type: string, description: 'The model a harness on this base runs when it names none; empty when the server has no default for it.' }
         models: { type: array, items: { $ref: '#/components/schemas/BaseModel' } }
@@ -2270,7 +2270,7 @@ components:
       required: [id, available]
       properties:
         id: { type: string }
-        available: { type: boolean, description: Computed, as on `Model`. }
+        available: { type: boolean, description: "Computed, as on `Model`." }
         default: { type: boolean }
         reasoning:
           type: array
@@ -2463,7 +2463,7 @@ components:
           items: { type: object, additionalProperties: true }
         call_id: { type: string }
         name: { type: string }
-        arguments: { type: string, description: JSON, as a string }
+        arguments: { type: string, description: "JSON, as a string" }
         output: { type: string }
         kind:
           type: string
@@ -2635,7 +2635,7 @@ components:
         mount:
           type: string
           description: Where a session finds the environment, read-only. `/env/<slug>` on the reference server.
-        version: { type: [integer, 'null'], description: The active build, the one sessions read; null until one is ready. }
+        version: { type: [integer, 'null'], description: "The active build, the one sessions read; null until one is ready." }
         latestVersion: { type: [integer, 'null'] }
         files:
           type: object
@@ -2796,7 +2796,7 @@ components:
       required: [entries]
       properties:
         entries: { type: array, items: { $ref: '#/components/schemas/EnvironmentFileEntry' } }
-        count: { type: integer, description: Files, not directories. }
+        count: { type: integer, description: "Files, not directories." }
         bytes: { type: integer }
       additionalProperties: true
 
@@ -2819,7 +2819,7 @@ components:
       type: object
       properties:
         written: { type: integer }
-        skipped: { type: integer, description: Members that must not land (links, escapes) and were dropped. }
+        skipped: { type: integer, description: "Members that must not land (links, escapes) and were dropped." }
         count: { type: integer }
         bytes: { type: integer }
       additionalProperties: true
@@ -2842,7 +2842,7 @@ components:
               minimum: 1
               description: Where that response stood in its session, counting from 1 (Sessions §3).
           additionalProperties: false
-        environment: { type: string, description: The environment the session's turns read, when one did. }
+        environment: { type: string, description: "The environment the session's turns read, when one did." }
         title: { type: string }
         status: { type: string }
         created_at: { type: integer }
